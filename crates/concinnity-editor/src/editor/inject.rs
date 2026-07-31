@@ -71,6 +71,10 @@ pub(crate) fn editor_hud(world: &mut World) {
     // frame with world-space AABBs. Runs on every injection, so a live-preview
     // rebuild keeps the index alive.
     world.insert_resource(crate::ecs::PickIndex::default());
+    // Baked asset thumbnails join the sprite atlas pool at graphics init; the
+    // Content panel's cell sprites sample them by reserved handle. Captured on
+    // every injection so a rebuild picks up freshly baked images.
+    world.insert_resource(super::thumbs::capture_for_injection());
     // An editor session never touches the user's real save files: the systems
     // that persist play state sample this at init and sandbox their saves, so
     // every preview run starts fresh (see the protocol type).

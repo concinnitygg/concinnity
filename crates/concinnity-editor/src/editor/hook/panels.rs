@@ -277,7 +277,6 @@ impl Panel for PreviewPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        let _ = world;
         match preview::hit_test(mx, my, o) {
             Some(PreviewAction::TogglePlay) => {
                 hook.sim_toggle_play();
@@ -307,6 +306,10 @@ impl Panel for PreviewPanel {
                 hook.snap.rotate.cycle(&snap::ROTATE_STEPS);
                 true
             }
+            Some(PreviewAction::DropToFloor) => {
+                hook.drop_selection_to_floor(world);
+                true
+            }
             Some(PreviewAction::Consume) => true,
             None => false,
         }
@@ -326,6 +329,92 @@ impl Panel for PreviewPanel {
     }
     fn hide(&self, world: &mut World) {
         preview::hide_all(world);
+    }
+}
+
+pub(crate) struct ContentPanel;
+
+impl Panel for ContentPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Content
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Content")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.content_open
+    }
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.content_open = !hook.content_open;
+        if hook.content_open {
+            hook.tree_stale = true;
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.content_open = false;
+        hook.content_search_focus = false;
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        content_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        content_panel::default_origin(vp)
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        content_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        content_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        content_panel::all_field_ids()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let shown = hook.content_cells(world).0.len();
+        match content_panel::hit_test(mx, my, o, shown) {
+            Some(action) => {
+                hook.apply_content_action(action, world, [mx, my]);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(
+        &self,
+        _hook: &EditorHook,
+        _world: &World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        content_panel::cursor_over_body(mx, my, o)
+    }
+    fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
+        hook.scroll_content(delta, world);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let (cells, total) = hook.content_cells(world);
+        content_panel::apply(
+            world,
+            &content_panel::ContentView {
+                cells: &cells,
+                total,
+                type_caption: hook.content_type_caption(),
+                search_focus: hook.content_search_focus,
+                mouse,
+            },
+            o,
+        );
+    }
+    fn hide(&self, world: &mut World) {
+        content_panel::hide_all(world);
     }
 }
 

@@ -151,6 +151,7 @@ impl EditorHook {
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;
+        self.content_drag = None;
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
         if self.lighting_open {

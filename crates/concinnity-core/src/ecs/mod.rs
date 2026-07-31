@@ -26,9 +26,9 @@ mod system;
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
-    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, PickEntry,
-    PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal,
-    TransientSaves, WorldLines,
+    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
+    OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
+    TraceRequest, TraceStep, TraceVal, TransientSaves, WorldLines,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

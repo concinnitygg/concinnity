@@ -209,6 +209,27 @@ pub struct PickIndex {
     pub entries: Vec<PickEntry>,
 }
 
+// One extra RGBA8 image for the sprite/text atlas pool, bound to a reserved
+// [TextureHandle](crate::assets) the inserting tool chose. The handle space
+// must stay clear of the compiled world's dense texture handles (tools use a
+// high base).
+#[derive(Debug, Clone)]
+pub struct OverlayImage {
+    pub handle: crate::ecs::TextureHandle,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+// Extra images appended to the sprite/text atlas pool at graphics init: a
+// sprite whose `texture` names one of these handles samples the image like any
+// compiled texture. Opt-in like [PickIndex]: inserted before start (the `cn
+// editor` HUD injection adds baked asset thumbnails); absent everywhere else,
+// so a shipped runtime never pays for it. Read once at init -- images added to
+// the resource later join the pool on the next world rebuild.
+#[derive(Debug, Clone, Default)]
+pub struct OverlayImages(pub Vec<OverlayImage>);
+
 // The latest sampled cursor state (window pixels, top-left origin), published
 // by InputSystem after each poll. GraphicsSystem reads it when building the
 // next frame's draw list: `follow_cursor` sprites are positioned a frame after

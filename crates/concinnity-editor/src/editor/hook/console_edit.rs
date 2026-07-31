@@ -129,9 +129,9 @@ impl EditorHook {
             Some(Key::Enter) => {
                 let line = widget::field_text(world, console_panel::INPUT);
                 widget::seed_field(world, console_panel::INPUT, "");
-                let line = line.trim();
+                let line = line.trim().to_string();
                 if !line.is_empty() {
-                    self.run_console_line(line);
+                    self.run_console_line(world, &line);
                 }
             }
             Some(Key::Tab) => self.accept_console_ghost(world),
@@ -156,7 +156,7 @@ impl EditorHook {
 
     // Echo and dispatch one submitted line. Submitting re-pins the log to the
     // tail so the response is visible.
-    pub(super) fn run_console_line(&mut self, line: &str) {
+    pub(super) fn run_console_line(&mut self, world: &mut World, line: &str) {
         self.console_sink
             .push(console::Severity::Command, &format!("> {line}"));
         self.console_pinned = true;
@@ -169,6 +169,14 @@ impl EditorHook {
             Ok(console::Command::Del { name }) => self.console_del(&name),
             Ok(console::Command::Cook) => self.console_build(),
             Ok(console::Command::Snap(cmd)) => self.console_snap(cmd),
+            Ok(console::Command::Dup) => {
+                let made = self.duplicate_selection();
+                self.console_sink.info(&format!("duplicated {made}"));
+            }
+            Ok(console::Command::Floor) => {
+                let moved = self.drop_selection_to_floor(world);
+                self.console_sink.info(&format!("dropped {moved}"));
+            }
             Ok(console::Command::Help) => {
                 for l in console::help_lines() {
                     self.console_sink.info(&l);

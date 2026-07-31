@@ -81,6 +81,13 @@ pub fn write_build_outputs(
         shadowed,
         &pack_result.blob_paths,
     )?;
+    // Thumbnails are a best-effort side product: a bake failure must never
+    // fail the build that produced valid blobs.
+    match crate::thumbnail::bake_thumbnails(result) {
+        Ok(r) if r.baked > 0 => println!("Baked {} thumbnail(s) ({} reused)", r.baked, r.reused),
+        Ok(_) => {}
+        Err(e) => println!("Thumbnail bake skipped: {e}"),
+    }
     Ok(pack_result)
 }
 

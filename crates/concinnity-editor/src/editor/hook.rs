@@ -38,6 +38,7 @@ use super::axes;
 use super::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
 use super::console::{self, ConsoleSink};
 use super::console_panel::{self, ConsoleAction, ConsoleView};
+use super::content_panel;
 use super::form::{self, FormField};
 use super::form_panel::{self, FormAction, FormFocus, FormView};
 use super::health::HealthState;
@@ -250,6 +251,15 @@ pub(crate) struct EditorHook {
     // the tree.
     picker_open: bool,
     picker_scroll: usize,
+    // The Content panel (the visual-asset thumbnail grid): shown state, the
+    // grid's first visible row, the type-chip cycle position (0 = All, i =
+    // VISUAL_TYPES[i-1]), whether its search field holds keyboard focus, and
+    // an in-flight drag-out placement (`hook/content_drag.rs`), if any.
+    content_open: bool,
+    content_scroll: usize,
+    content_type: usize,
+    content_search_focus: bool,
+    content_drag: Option<content_drag::ContentDrag>,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -440,6 +450,10 @@ mod billboard_drive;
 mod browse;
 // Named to avoid colliding with the `use super::console` module import.
 mod console_edit;
+mod content_drag;
+mod content_edit;
+mod drop_floor;
+mod duplicate;
 mod editing;
 mod edits;
 mod fly;
@@ -541,6 +555,11 @@ impl EditorHook {
             row_menu: None,
             picker_open: false,
             picker_scroll: 0,
+            content_open: false,
+            content_scroll: 0,
+            content_type: 0,
+            content_search_focus: false,
+            content_drag: None,
             preview_open: true,
             health_open: false,
             health: HealthState::new(),
@@ -605,6 +624,16 @@ impl EditorHook {
         }
     }
 
+    // The frontmost open floating panel, if any: the keyboard target for
+    // per-frame editing keys and the arbiter for shortcuts a panel claims.
+    fn frontmost_open_panel(&self) -> Option<PanelKey> {
+        self.panel_order
+            .iter()
+            .rev()
+            .copied()
+            .find(|&k| registry::panel(k).is_open(self))
+    }
+
     fn text_focus_active(&self) -> bool {
         self.non_console_text_focus() || self.console_focus
     }
@@ -614,6 +643,7 @@ impl EditorHook {
     // while any other field is (a backtick there is just a character).
     fn non_console_text_focus(&self) -> bool {
         self.search_focus
+            || self.content_search_focus
             || self.picker_open
             || self.selected_type.is_some()
             || self.lighting_focus.is_some()
@@ -683,11 +713,17 @@ impl DebugHook for EditorHook {
                 if self.marquee.is_some() {
                     self.drive_marquee(input, vp, world);
                 }
+                // A drag-out placement from the Content panel: ghost follow,
+                // cancel, or commit.
+                if self.content_drag.is_some() {
+                    self.drive_content_drag(input, vp, world);
+                }
                 if input.left_click
                     && self.drag.is_none()
                     && self.resize.is_none()
                     && self.gizmo_drag.is_none()
                     && self.marquee.is_none()
+                    && self.content_drag.is_none()
                 {
                     self.route_click(input, vp, world);
                 }
@@ -716,7 +752,10 @@ impl DebugHook for EditorHook {
                 // Ctrl+Z / Ctrl+Y step the entry list through the history,
                 // unless the world owns the keyboard (play mode), a text
                 // field does (its own editing keys must win), or a gizmo drag
-                // is mid-flight (its commit has not landed yet).
+                // is mid-flight (its commit has not landed yet). Ctrl+D
+                // duplicates the selection and Ctrl+Down drops it to the
+                // floor, under the same guards; a frontmost Behavior panel
+                // keeps its own Ctrl+D (row duplicate, via frame_keys below).
                 if input.ctrl
                     && !self.sim.playing()
                     && !self.text_focus_active()
@@ -725,6 +764,14 @@ impl DebugHook for EditorHook {
                     match input.captured_key {
                         Some(crate::assets::Key::Z) => self.undo(world),
                         Some(crate::assets::Key::Y) => self.redo(world),
+                        Some(crate::assets::Key::D)
+                            if self.frontmost_open_panel() != Some(PanelKey::Behavior) =>
+                        {
+                            self.duplicate_selection();
+                        }
+                        Some(crate::assets::Key::Down) => {
+                            self.drop_selection_to_floor(world);
+                        }
                         _ => {}
                     }
                 }
@@ -732,13 +779,7 @@ impl DebugHook for EditorHook {
                 // running world is their whole point).
                 self.sim_keys(input);
                 // Per-frame editing keys go to the frontmost open panel.
-                let front = self
-                    .panel_order
-                    .iter()
-                    .rev()
-                    .copied()
-                    .find(|&k| registry::panel(k).is_open(self));
-                if let Some(key) = front {
+                if let Some(key) = self.frontmost_open_panel() {
                     registry::panel(key).frame_keys(self, world, input);
                 }
                 // Wheel routing: the frontmost scrollable panel under the cursor

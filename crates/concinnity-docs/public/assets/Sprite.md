@@ -28,7 +28,7 @@ Without one, the tint is drawn as a solid-coloured rectangle.
 - `y`: A float. Top edge in screen pixels from the window's top-left. Defaults to `0.0`.
 - `width`: A float. Width in screen pixels. Defaults to `100.0`.
 - `height`: A float. Height in screen pixels. Defaults to `100.0`.
-- `texture`: A string. [Texture](Texture.md) to draw (reserved; not yet sampled). Optional.
+- `texture`: A string. [Texture](Texture.md) to draw, sampled over the sprite's rect and multiplied by `tint`. Omitted, the sprite is a solid `tint` fill.
 - `tint`: An array of 4 floats. RGBA colour the rectangle is filled with, each channel in [0, 1]. Defaults to `[1.0, 1.0, 1.0, 1.0]`.
 - `follow_cursor`: A boolean. When true, the sprite acts as an in-engine cursor: it is drawn on top of the other overlays as an arrow pointer tracking the mouse, with the pointer at the arrow's tip. `tint` is the arrow fill (a contrasting outline is added automatically) and `height` its size; `width` is ignored so the arrow keeps its shape. The system cursor is hidden while a visible `follow_cursor` sprite exists. Defaults to `false`.
 - `visible`: A boolean. When false the sprite is skipped each frame. Defaults to `true`.

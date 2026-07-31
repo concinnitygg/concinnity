@@ -63,6 +63,7 @@ pub mod scene_partition;
 pub mod shader;
 pub mod texture;
 pub mod tga;
+pub mod thumbnail;
 pub mod wavefront;
 pub mod world;
 

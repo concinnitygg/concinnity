@@ -29,12 +29,14 @@ pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
 #[cfg(test)]
 pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
 
-const PREVIEW_W: f32 = 200.0;
-// The capture row, the fly row, the world-axes row, and the two snap rows.
-const ROWS: usize = 5;
+const PREVIEW_W: f32 = 232.0;
+// The capture row, the fly row, the world-axes row, the two snap rows, and
+// the drop-to-floor action row.
+const ROWS: usize = 6;
 // The snap rows' indices: their clicks split into toggle vs step-cycle.
 const SNAP_MOVE_ROW: usize = 3;
 const SNAP_ROTATE_ROW: usize = 4;
+const DROP_FLOOR_ROW: usize = 5;
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -67,6 +69,8 @@ pub(crate) enum PreviewAction {
     CycleSnapMoveStep,
     ToggleSnapRotate,
     CycleSnapRotateStep,
+    // The action row: drop the selection onto the surface below it.
+    DropToFloor,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -87,14 +91,15 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
                 PreviewAction::ToggleSnapMove
             });
         }
-        Some(_) => {
+        Some(SNAP_ROTATE_ROW) => {
             return Some(if on_value(SNAP_ROTATE_ROW) {
                 PreviewAction::CycleSnapRotateStep
             } else {
                 PreviewAction::ToggleSnapRotate
             });
         }
-        None => {}
+        Some(DROP_FLOOR_ROW) => return Some(PreviewAction::DropToFloor),
+        Some(_) | None => {}
     }
     point_in(mx, my, panel_rect(o)).then_some(PreviewAction::Consume)
 }
@@ -118,6 +123,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
             .with_value(format!("{} m", state.snap.translate.step)),
         Row::checkbox("Snap rotate", state.snap.rotate.enabled)
             .with_value(format!("{} deg", state.snap.rotate.step)),
+        Row::label("Drop to floor (Ctrl+Down)"),
     ];
     list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
 }

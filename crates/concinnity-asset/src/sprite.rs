@@ -34,7 +34,8 @@ pub struct Sprite {
     pub width: f32,
     /// Height in screen pixels.
     pub height: f32,
-    /// [Texture](#texture) to draw (reserved; not yet sampled).
+    /// [Texture](#texture) to draw, sampled over the sprite's rect and
+    /// multiplied by `tint`. Omitted, the sprite is a solid `tint` fill.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
     /// RGBA colour the rectangle is filled with, each channel in [0, 1].

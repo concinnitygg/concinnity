@@ -22,6 +22,7 @@ pub mod overlay;
 pub mod pick;
 pub mod profile;
 pub mod range_alloc;
+pub mod raster;
 pub mod render_types;
 pub mod root_motion;
 pub mod rt_reflections;

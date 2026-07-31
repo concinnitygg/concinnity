@@ -2069,6 +2069,23 @@ impl GraphicsSystem {
             }
         }
 
+        // Tool-provided overlay images (e.g. asset thumbnails) ride the same
+        // pool, keyed by the reserved handles the inserting tool chose.
+        if let Some(overlay) = ctx.resource::<crate::ecs::OverlayImages>() {
+            for image in &overlay.0 {
+                if image.rgba.len() != (image.width as usize) * (image.height as usize) * 4 {
+                    tracing::warn!(
+                        "GraphicsSystem: overlay image {:?} byte length mismatch; skipped",
+                        image.handle
+                    );
+                    continue;
+                }
+                self.sprite_texture_slots
+                    .insert(image.handle, text_atlas_data.len());
+                text_atlas_data.push((image.width, image.height, image.rgba.clone()));
+            }
+        }
+
         let font_blob_indices: Vec<u32> = font_table.blob_indices().into_iter().collect();
         Some(TextAtlases {
             atlases: text_atlas_data,

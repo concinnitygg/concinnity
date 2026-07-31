@@ -58,11 +58,23 @@ pub fn screen_ray(
     })
 }
 
-/// The distance along `ray` to the world-space AABB `[bb_min, bb_max]`, via
-/// the slab test. `Some(0.0)` when the ray starts inside the box; `None` when
-/// the ray misses, the box is entirely behind the origin, or the box is not
-/// finite (the renderer's non-cullable sentinel).
-pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32> {
+/// The face a ray enters a world-space AABB through: the entry distance `t`,
+/// the axis index of the face's plane (0 = X, 1 = Y, 2 = Z), and the outward
+/// sign of the face normal along that axis (`+1.0` / `-1.0`). The normal is
+/// `sign` on `axis` and zero elsewhere -- an AABB face normal, not a surface
+/// normal of the geometry inside the box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AabbFace {
+    pub t: f32,
+    pub axis: usize,
+    pub sign: f32,
+}
+
+/// [ray_aabb](#method.ray_aabb) keeping the entered face. For a ray starting
+/// inside the box `t` is 0 and the face is the last slab that bounded the
+/// entry interval; a degenerate all-zero direction inside the box reports
+/// `sign` 0 (no face was crossed).
+pub fn ray_aabb_face(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<AabbFace> {
     for i in 0..3 {
         if !bb_min[i].is_finite() || !bb_max[i].is_finite() {
             return None;
@@ -70,6 +82,7 @@ pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32
     }
     let mut t_enter = f32::NEG_INFINITY;
     let mut t_exit = f32::INFINITY;
+    let mut enter_axis = None;
     for i in 0..3 {
         if ray.dir[i] == 0.0 {
             // Parallel to this slab: inside it or a clean miss, with no
@@ -85,7 +98,10 @@ pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32
             (bb_max[i] - ray.origin[i]) * inv,
         );
         let (near, far) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-        t_enter = t_enter.max(near);
+        if near > t_enter {
+            t_enter = near;
+            enter_axis = Some(i);
+        }
         t_exit = t_exit.min(far);
         if t_enter > t_exit {
             return None;
@@ -94,7 +110,24 @@ pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32
     if t_exit < 0.0 {
         return None;
     }
-    Some(t_enter.max(0.0))
+    let (axis, sign) = match enter_axis {
+        // The entered face opposes the ray on its axis.
+        Some(a) => (a, -ray.dir[a].signum()),
+        None => (0, 0.0),
+    };
+    Some(AabbFace {
+        t: t_enter.max(0.0),
+        axis,
+        sign,
+    })
+}
+
+/// The distance along `ray` to the world-space AABB `[bb_min, bb_max]`, via
+/// the slab test. `Some(0.0)` when the ray starts inside the box; `None` when
+/// the ray misses, the box is entirely behind the origin, or the box is not
+/// finite (the renderer's non-cullable sentinel).
+pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32> {
+    ray_aabb_face(ray, bb_min, bb_max).map(|f| f.t)
 }
 
 #[cfg(test)]
@@ -209,6 +242,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t, 0.0);
+    }
+
+    #[test]
+    fn entered_face_reports_axis_and_outward_sign() {
+        let (mn, mx) = ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]);
+        // Downward onto the top: the +Y face.
+        let f = ray_aabb_face(&ray([0.0, 5.0, 0.0], [0.0, -1.0, 0.0]), mn, mx).unwrap();
+        assert_eq!((f.axis, f.sign), (1, 1.0));
+        assert!((f.t - 4.0).abs() < 1e-6);
+        // From the left: the -X face.
+        let f = ray_aabb_face(&ray([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0]), mn, mx).unwrap();
+        assert_eq!((f.axis, f.sign), (0, -1.0));
+        // A shallow diagonal still enters through the near +Z face first.
+        let f = ray_aabb_face(&ray([0.0, 0.5, 5.0], [0.0, -0.0995, -0.995]), mn, mx).unwrap();
+        assert_eq!((f.axis, f.sign), (2, 1.0));
+        // A zero direction inside the box has no face to report.
+        let f = ray_aabb_face(&ray([0.0; 3], [0.0; 3]), mn, mx).unwrap();
+        assert_eq!((f.t, f.sign), (0.0, 0.0));
     }
 
     #[test]

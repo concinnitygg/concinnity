@@ -125,7 +125,14 @@ impl EditorHook {
             })
             .collect();
         billboards::place_icons(world, &icons);
-        self.drive_trigger_outline(world, vp);
+        // The outline pool has one tenant per frame: an in-flight drag-out
+        // ghost takes it over the trigger wireframe.
+        if self.content_ghost_pose().is_some() {
+            billboards::hide_outline(world);
+            self.drive_content_ghost(world, vp);
+        } else {
+            self.drive_trigger_outline(world, vp);
+        }
     }
 
     // The active selection member's TriggerVolume collider as a screen-space

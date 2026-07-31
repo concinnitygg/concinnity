@@ -188,6 +188,15 @@ pub fn cache_dir() -> PathBuf {
     state_dir().join("cache")
 }
 
+/// Directory holding baked asset thumbnails: content-addressed `<sha256>.png`
+/// files plus an `index.json` mapping asset names to keys. Deterministic
+/// products of the build like [`cache_dir`]'s payloads, but kept apart so they
+/// can be listed and cleared independently (and never ship: `cn export` copies
+/// neither).
+pub fn thumbnails_dir() -> PathBuf {
+    state_dir().join("thumbnails")
+}
+
 /// Directory the renderer writes compiled built-in shader binaries to, keyed by
 /// a hash of their compile inputs. Resolves under the writable-state dir, since
 /// a shipped install's content root may be read-only. Distinct from

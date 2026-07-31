@@ -18,7 +18,7 @@ use gizmo::GizmoMode;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.
-fn round3(v: f32) -> f32 {
+pub(super) fn round3(v: f32) -> f32 {
     (v * 1000.0).round() / 1000.0
 }
 
@@ -38,13 +38,13 @@ const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 // entity. Members without the mode's editable arg, generated assets (no entry
 // to write back), parented entities (the drag works in world axes; a rotated
 // parent would skew it), and entities without a Transform are skipped.
-struct GizmoTarget {
-    idx: usize,
-    entity: crate::ecs::Entity,
+pub(super) struct GizmoTarget {
+    pub(super) idx: usize,
+    pub(super) entity: crate::ecs::Entity,
     // Whether the entry takes a written-back `position`: rotate and scale
     // move members about the pivot, and a type without the arg must only
     // spin / stretch in place.
-    has_position: bool,
+    pub(super) has_position: bool,
 }
 
 // A member's `Transform` fields at the press: the drag base and the cancel
@@ -76,7 +76,12 @@ pub(super) struct GizmoDrag {
 }
 
 impl EditorHook {
-    fn member_target(&self, world: &World, mode: GizmoMode, name: &str) -> Option<GizmoTarget> {
+    pub(super) fn member_target(
+        &self,
+        world: &World,
+        mode: GizmoMode,
+        name: &str,
+    ) -> Option<GizmoTarget> {
         let idx = self
             .entries
             .iter()
@@ -415,7 +420,12 @@ impl EditorHook {
         }
     }
 
-    fn write_arg(entries: &mut [serde_json::Value], idx: usize, key: &str, value: [f32; 3]) {
+    pub(super) fn write_arg(
+        entries: &mut [serde_json::Value],
+        idx: usize,
+        key: &str,
+        value: [f32; 3],
+    ) {
         if let Some(obj) = entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())

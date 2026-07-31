@@ -196,6 +196,9 @@ pub(crate) enum Command {
     // Compile the current world's blobs (named "cook" in user-facing text).
     Cook,
     Snap(SnapCmd),
+    // Duplicate the selection / drop it onto the surface below.
+    Dup,
+    Floor,
     Help,
 }
 
@@ -251,6 +254,18 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         usage: "/snap [move|rot] [on|off|<step>]",
         blurb: "gizmo grid / angle snapping (bare /snap shows the settings)",
         parse: parse_snap,
+    },
+    CommandSpec {
+        name: "dup",
+        usage: "/dup",
+        blurb: "duplicate the selection in place (Ctrl+D)",
+        parse: parse_dup,
+    },
+    CommandSpec {
+        name: "floor",
+        usage: "/floor",
+        blurb: "drop the selection onto the surface below it (Ctrl+Down)",
+        parse: parse_floor,
     },
     CommandSpec {
         name: "help",
@@ -335,6 +350,22 @@ fn parse_snap(rest: &str) -> Result<Command, String> {
         return Err(SNAP_USAGE.to_string());
     }
     Ok(Command::Snap(cmd))
+}
+
+fn parse_dup(rest: &str) -> Result<Command, String> {
+    if rest.is_empty() {
+        Ok(Command::Dup)
+    } else {
+        Err("usage: /dup".to_string())
+    }
+}
+
+fn parse_floor(rest: &str) -> Result<Command, String> {
+    if rest.is_empty() {
+        Ok(Command::Floor)
+    } else {
+        Err("usage: /floor".to_string())
+    }
 }
 
 fn parse_help(rest: &str) -> Result<Command, String> {

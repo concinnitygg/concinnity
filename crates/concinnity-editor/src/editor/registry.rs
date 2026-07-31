@@ -37,12 +37,13 @@ pub(crate) enum PanelKey {
     Console,
     Behavior,
     Variables,
+    Content,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
 }
 
-pub(crate) const PANEL_COUNT: usize = 13;
+pub(crate) const PANEL_COUNT: usize = 14;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -58,6 +59,7 @@ impl PanelKey {
         PanelKey::Console,
         PanelKey::Behavior,
         PanelKey::Variables,
+        PanelKey::Content,
         PanelKey::TemplateDetail,
     ];
 
@@ -95,6 +97,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // Clear of the Behavior panel's whole block, whose chart segments
             // and card pools run well past 0x3300.
             PanelKey::Variables => 0x4000,
+            PanelKey::Content => 0x5000,
         }
 }
 
@@ -195,6 +198,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::ConsolePanel,
     &panels::BehaviorPanel,
     &panels::VariablesPanel,
+    &panels::ContentPanel,
     &panels::TemplateDetailPanel,
 ];
 
@@ -291,7 +295,8 @@ mod tests {
                 "Health",
                 "Console",
                 "Behavior",
-                "Variables"
+                "Variables",
+                "Content"
             ]
         );
     }

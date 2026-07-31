@@ -3607,14 +3607,15 @@ fn gizmo_rotate_drag_snaps_the_applied_angle() {
 // /snap drives the same settings the Preview panel rows toggle.
 #[test]
 fn console_snap_adjusts_and_reports_the_settings() {
+    let mut world = World::new_empty();
     let mut h = hook(vec![]);
-    h.run_console_line("/snap 0.25");
+    h.run_console_line(&mut world, "/snap 0.25");
     assert!(h.snap.translate.enabled, "a step also enables the family");
     assert_eq!(h.snap.translate.step, 0.25);
-    h.run_console_line("/snap rot 45");
+    h.run_console_line(&mut world, "/snap rot 45");
     assert!(h.snap.rotate.enabled);
     assert_eq!(h.snap.rotate.step, 45.0);
-    h.run_console_line("/snap off");
+    h.run_console_line(&mut world, "/snap off");
     assert!(!h.snap.translate.enabled && !h.snap.rotate.enabled);
     assert_eq!(h.snap.translate.step, 0.25, "off keeps the steps");
     let lines = h.console_sink.window(0, 100);
@@ -3624,6 +3625,333 @@ fn console_snap_adjusts_and_reports_the_settings() {
             .is_some_and(|l| l.text == "snap: move 0.25 m (off), rotate 45 deg (off)"),
         "each /snap reports the resulting state"
     );
+}
+
+// Duplicating the selection clones each authored entry (args included) under
+// a unique name, skips singletons, selects the copies, and is one undo step.
+#[test]
+fn duplicate_selection_clones_entries_and_selects_the_copies() {
+    let mut world = World::new_empty();
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "box", "type": "Prop", "args": { "position": [1.0, 2.0, 3.0] }
+        }),
+        entry("phys", "PhysicsConfig"),
+    ]);
+    h.selection.set(vec!["box".to_string(), "phys".to_string()]);
+
+    h.run_console_line(&mut world, "/dup");
+    assert_eq!(h.entries.len(), 3, "the singleton is skipped");
+    assert_eq!(entry_name(&h.entries[2]), Some("box_1"));
+    assert_eq!(
+        h.entries[2]["args"]["position"],
+        serde_json::json!([1.0, 2.0, 3.0]),
+        "the copy keeps the original's args"
+    );
+    assert_eq!(
+        h.selection.iter().collect::<Vec<_>>(),
+        vec!["box_1"],
+        "the copies become the selection"
+    );
+    assert!(h.dirty);
+    let lines = h.console_sink.window(0, 16);
+    assert!(lines.iter().any(|l| l.text == "duplicated 1"));
+
+    h.undo(&mut world);
+    assert_eq!(h.entries.len(), 2, "one undo step removes the whole batch");
+    assert!(!h.can_undo());
+}
+
+// Ctrl+D duplicates through the tick, except while the Behavior panel is
+// frontmost (its frame_keys own that shortcut for row duplication).
+#[test]
+fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
+    let mut world = world_with_input(FrameInput {
+        ctrl: true,
+        captured_key: Some(crate::assets::Key::D),
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    for id in behavior_panel::all_field_ids() {
+        world.add_component(TextInput {
+            asset_id: id,
+            ..Default::default()
+        });
+    }
+    let mut h = hook(vec![entry("box", "Sprite")]);
+    h.selection.replace("box".to_string());
+    h.tick(&mut world);
+    assert_eq!(h.entries.len(), 2, "Ctrl+D duplicates the selection");
+
+    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    h.selection.replace("box".to_string());
+    let before = h.entries.len();
+    h.tick(&mut world);
+    assert_eq!(
+        h.entries.len(),
+        before,
+        "a frontmost Behavior panel keeps its own Ctrl+D"
+    );
+}
+
+// Drop-to-floor lands an indexed member's bounds on the surface below it,
+// rests a bounds-less member's origin on the ground-plane fallback, and
+// commits the batch as one undo step.
+#[test]
+fn drop_to_floor_lands_the_selection_on_the_surface_below() {
+    crate::ecs::asset_id::reset_interner();
+    let a = crate::ecs::asset_id::intern("box_a");
+    let _g = crate::ecs::asset_id::intern("ground");
+    let lamp_id = crate::ecs::asset_id::intern("lamp");
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![
+            (a, [-1.0, 4.0, -6.0], [1.0, 6.0, -4.0]),
+            (_g, [-10.0, -1.0, -10.0], [10.0, 0.0, 10.0]),
+        ],
+    );
+    let box_e = world.push(crate::assets::Transform {
+        position: [0.0, 5.0, -5.0],
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    });
+    // The lamp has no pick-index bounds and sits clear of the ground box, so
+    // it exercises both the position-as-foot path and the y=0 fallback.
+    let lamp_e = world.push(crate::assets::Transform {
+        position: [100.0, 3.0, 0.0],
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    });
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(a, box_e);
+    by_name.insert(lamp_id, lamp_e);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "box_a", "type": "Prop", "args": { "position": [0.0, 5.0, -5.0] }
+        }),
+        serde_json::json!({
+            "name": "ground", "type": "Prop", "args": { "position": [0.0, 0.0, 0.0] }
+        }),
+        serde_json::json!({
+            "name": "lamp", "type": "PointLight", "args": { "position": [100.0, 3.0, 0.0] }
+        }),
+    ]);
+    h.selection
+        .set(vec!["box_a".to_string(), "lamp".to_string()]);
+
+    h.run_console_line(&mut world, "/floor");
+    assert_eq!(
+        h.entries[0]["args"]["position"],
+        serde_json::json!([0.0, 1.0, -5.0]),
+        "the box bottom (1 below its position) rests on the ground top"
+    );
+    assert_eq!(
+        h.entries[2]["args"]["position"],
+        serde_json::json!([100.0, 0.0, 0.0]),
+        "nothing below the lamp: its origin lands on the y=0 fallback"
+    );
+    let live = world.get::<crate::assets::Transform>(box_e).unwrap();
+    assert_eq!(
+        live.position,
+        [0.0, 1.0, -5.0],
+        "the live transform follows"
+    );
+    let lines = h.console_sink.window(0, 16);
+    assert!(lines.iter().any(|l| l.text == "dropped 2"));
+
+    h.undo(&mut world);
+    assert_eq!(
+        h.entries[0]["args"]["position"],
+        serde_json::json!([0.0, 5.0, -5.0])
+    );
+    assert!(!h.can_undo(), "the whole drop was one step");
+
+    // A selection with no eligible member (no live entity) drops nothing and
+    // records no undo step.
+    h.selection.set(vec!["ground".to_string()]);
+    h.run_console_line(&mut world, "/floor");
+    assert!(!h.can_undo(), "a no-op drop records nothing");
+}
+
+// The Content grid over a world with visual assets: cells list them with
+// icon fallbacks (no thumbnails baked in tests), the type chip narrows, the
+// search query ranks, and a cell click selects the asset.
+#[test]
+fn content_grid_lists_filters_and_selects_visual_assets() {
+    let mut world = World::new_empty();
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "brick_tex", "type": "Texture",
+            "args": { "generator": "brick", "resolution": 32 }
+        }),
+        serde_json::json!({
+            "name": "brick_mat", "type": "Material", "args": { "roughness": 0.5 }
+        }),
+        entry("note", "TextLabel"),
+    ]);
+    h.content_open = true;
+    h.tree_stale = true;
+    h.refresh_tree_if_needed();
+
+    let (cells, total) = h.content_cells(&world);
+    assert_eq!(total, 2, "only the visual types are listed");
+    let names: Vec<&str> = cells.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["brick_mat", "brick_tex"],
+        "sorted, TextLabel absent"
+    );
+    assert!(
+        cells.iter().all(|c| c.thumb.is_none()),
+        "no baked thumbnails in tests: every cell falls back to its icon"
+    );
+
+    // The type chip narrows to one kind.
+    while h.content_type_caption() != "Material" {
+        h.cycle_content_type();
+    }
+    let (cells, total) = h.content_cells(&world);
+    assert_eq!((cells.len(), total), (1, 1));
+    assert_eq!(cells[0].asset_type, "Material");
+    h.content_type = 0;
+
+    // The search field ranks name matches.
+    world.add_component(TextInput {
+        asset_id: content_panel::SEARCH_INPUT,
+        content: "tex".to_string(),
+        ..Default::default()
+    });
+    let (cells, _) = h.content_cells(&world);
+    assert_eq!(cells[0].name, "brick_tex", "the query's best match leads");
+
+    // A cell click selects the asset by name.
+    h.apply_content_action(
+        crate::editor::content_panel::ContentAction::SelectCell(0),
+        &mut world,
+        [0.0, 0.0],
+    );
+    assert_eq!(h.selection.active(), Some("brick_tex"));
+    let (cells, _) = h.content_cells(&world);
+    assert!(cells[0].selected, "the grid highlights the selection");
+}
+
+// Dragging a mesh out of the Content grid places a Prop where the ghost
+// lands: press a cell, pull into the viewport (ghost follows the surface
+// below the cursor), release commits ONE undoable entry and selects it.
+#[test]
+fn drag_out_places_a_prop_where_the_ghost_lands() {
+    crate::ecs::asset_id::reset_interner();
+    let ground = crate::ecs::asset_id::intern("ground");
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![(ground, [-20.0, -1.0, -20.0], [20.0, 0.0, 20.0])],
+    );
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "demo_ball", "type": "ProceduralMesh",
+            "args": { "generator": "sphere" }
+        }),
+        serde_json::json!({
+            "name": "ground", "type": "Prop",
+            "args": { "mesh": "demo_ball", "position": [0.0, -0.5, 0.0] }
+        }),
+    ]);
+    h.content_open = true;
+    h.tree_stale = true;
+    h.refresh_tree_if_needed();
+
+    // Press the first grid cell: selects and arms the drag.
+    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
+    let cell = crate::editor::content_panel::cell_rect(o, 0);
+    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
+    assert!(h.content_drag.is_some(), "the cell press arms a drag");
+    assert_eq!(h.selection.active(), Some("demo_ball"));
+    let before = h.entries.len();
+
+    // Pull into the viewport: the ghost lands on the ground box below.
+    set_input(&mut world, drag_input([640.0, 500.0], true));
+    h.tick(&mut world);
+    let pose = h
+        .content_ghost_pose()
+        .expect("the ghost has a landing point");
+    assert!(pose[1].abs() < 1e-3, "landed on the ground top: {pose:?}");
+
+    // Release commits one entry through the shared path.
+    set_input(&mut world, drag_input([640.0, 500.0], false));
+    h.tick(&mut world);
+    assert!(h.content_drag.is_none());
+    assert_eq!(h.entries.len(), before + 1);
+    let placed = &h.entries[before];
+    assert_eq!(entry_type(placed), Some("Prop"));
+    assert_eq!(placed["args"]["mesh"], "demo_ball");
+    assert!(
+        placed["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,
+        "{placed}"
+    );
+    assert_eq!(h.selection.active(), entry_name(placed));
+    assert!(h.dirty);
+    h.undo(&mut world);
+    assert_eq!(h.entries.len(), before, "one undo removes the placement");
+}
+
+// A press that never travels past the slop is just the selecting click.
+#[test]
+fn a_still_cell_press_places_nothing() {
+    crate::ecs::asset_id::reset_interner();
+    let mut world = pick_world([0.0; 3], vec![]);
+    let mut h = hook(vec![serde_json::json!({
+        "name": "demo_ball", "type": "ProceduralMesh", "args": { "generator": "box" }
+    })]);
+    h.content_open = true;
+    h.tree_stale = true;
+    h.refresh_tree_if_needed();
+    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
+    let cell = crate::editor::content_panel::cell_rect(o, 0);
+    let at = [cell[0] + 10.0, cell[1] + 10.0];
+    click_at(&mut world, &mut h, at);
+    set_input(&mut world, drag_input(at, false));
+    h.tick(&mut world);
+    assert!(h.content_drag.is_none());
+    assert_eq!(h.entries.len(), 1, "no placement from a plain click");
+    assert!(!h.dirty);
+    assert_eq!(h.selection.active(), Some("demo_ball"), "still selected");
+}
+
+// Dragging a Material onto a Prop assigns it instead of placing anything.
+#[test]
+fn material_drag_assigns_to_the_prop_under_the_cursor() {
+    crate::ecs::asset_id::reset_interner();
+    let crate_id = crate::ecs::asset_id::intern("crate_prop");
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![(crate_id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])],
+    );
+    let mut h = hook(vec![
+        serde_json::json!({
+            "name": "wood", "type": "Material", "args": { "roughness": 0.7 }
+        }),
+        serde_json::json!({
+            "name": "crate_prop", "type": "Prop",
+            "args": { "mesh": "demo", "position": [0.0, 0.0, -5.0] }
+        }),
+    ]);
+    h.content_open = true;
+    h.arm_content_drag("wood".to_string(), "Material".to_string(), [1000.0, 300.0]);
+
+    set_input(&mut world, drag_input([640.0, 360.0], true));
+    h.tick(&mut world);
+    set_input(&mut world, drag_input([640.0, 360.0], false));
+    h.tick(&mut world);
+    assert_eq!(
+        h.entries[1]["args"]["material"], "wood",
+        "the hovered Prop gains the material"
+    );
+    assert_eq!(h.entries.len(), 2, "nothing was placed");
+    assert!(h.dirty);
+    h.undo(&mut world);
+    assert!(h.entries[1]["args"].get("material").is_none());
 }
 
 // Two props with live Transforms at `s1` / `s2` (AABB half-extent `half`),
@@ -4218,19 +4546,20 @@ fn selected_trigger_volume_draws_its_box_outline() {
 // and everything they do lands in the log sink.
 #[test]
 fn console_commands_edit_the_working_entries() {
+    let mut world = World::new_empty();
     let mut h = hook(Vec::new());
 
-    h.run_console_line("/add PhysicsConfig phys");
+    h.run_console_line(&mut world, "/add PhysicsConfig phys");
     assert_eq!(h.entries.len(), 1);
     assert_eq!(entry_name(&h.entries[0]), Some("phys"));
     assert_eq!(entry_type(&h.entries[0]), Some("PhysicsConfig"));
     assert!(h.dirty, "an added entry marks the world dirty");
 
-    h.run_console_line("/del phys");
+    h.run_console_line(&mut world, "/del phys");
     assert!(h.entries.is_empty());
 
-    h.run_console_line("/del ghost");
-    h.run_console_line("just a note");
+    h.run_console_line(&mut world, "/del ghost");
+    h.run_console_line(&mut world, "just a note");
     let lines = h.console_sink.window(0, 64);
     let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
     assert!(
