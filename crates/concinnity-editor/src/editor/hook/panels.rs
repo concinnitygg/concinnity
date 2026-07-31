@@ -291,6 +291,22 @@ impl Panel for PreviewPanel {
                 hook.axes_visible = !hook.axes_visible;
                 true
             }
+            Some(PreviewAction::ToggleSnapMove) => {
+                hook.snap.translate.enabled = !hook.snap.translate.enabled;
+                true
+            }
+            Some(PreviewAction::CycleSnapMoveStep) => {
+                hook.snap.translate.cycle(&snap::TRANSLATE_STEPS);
+                true
+            }
+            Some(PreviewAction::ToggleSnapRotate) => {
+                hook.snap.rotate.enabled = !hook.snap.rotate.enabled;
+                true
+            }
+            Some(PreviewAction::CycleSnapRotateStep) => {
+                hook.snap.rotate.cycle(&snap::ROTATE_STEPS);
+                true
+            }
             Some(PreviewAction::Consume) => true,
             None => false,
         }
@@ -303,6 +319,7 @@ impl Panel for PreviewPanel {
                 playing: hook.sim.playing(),
                 fly: hook.fly,
                 axes: hook.axes_visible,
+                snap: hook.snap,
             },
             mouse,
         );

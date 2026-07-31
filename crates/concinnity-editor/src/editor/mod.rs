@@ -39,6 +39,7 @@ mod registry;
 mod resize;
 mod selection;
 mod sim;
+mod snap;
 mod story;
 mod story_panel;
 mod template_panel;

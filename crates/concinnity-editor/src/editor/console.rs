@@ -181,8 +181,8 @@ pub(crate) fn install_tracing(sink: ConsoleSink) {
         .try_init();
 }
 
-// A parsed console input line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// A parsed console input line. (`PartialEq` only: /snap carries a float step.)
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Command {
     // A line without a leading '/': just echoed to the log.
     Echo(String),
@@ -195,7 +195,26 @@ pub(crate) enum Command {
     },
     // Compile the current world's blobs (named "cook" in user-facing text).
     Cook,
+    Snap(SnapCmd),
     Help,
+}
+
+// A /snap adjustment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SnapCmd {
+    // Bare /snap: report the current settings.
+    Status,
+    // /snap on|off: both families at once.
+    All(bool),
+    Move(SnapSet),
+    Rotate(SnapSet),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SnapSet {
+    Enable(bool),
+    // Setting a step also enables the family.
+    Step(f32),
 }
 
 // One registered slash command: its /help row plus its argument parser.
@@ -226,6 +245,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         usage: "/cook",
         blurb: "compile the current world's blobs",
         parse: parse_cook,
+    },
+    CommandSpec {
+        name: "snap",
+        usage: "/snap [move|rot] [on|off|<step>]",
+        blurb: "gizmo grid / angle snapping (bare /snap shows the settings)",
+        parse: parse_snap,
     },
     CommandSpec {
         name: "help",
@@ -271,6 +296,45 @@ fn parse_cook(rest: &str) -> Result<Command, String> {
     } else {
         Err("usage: /cook".to_string())
     }
+}
+
+const SNAP_USAGE: &str = "usage: /snap [move|rot] [on|off|<step>]";
+
+// The shared on|off|<step> tail of a /snap form.
+fn parse_snap_set(word: &str) -> Result<SnapSet, String> {
+    match word {
+        "on" => Ok(SnapSet::Enable(true)),
+        "off" => Ok(SnapSet::Enable(false)),
+        _ => {
+            let step: f32 = word.parse().map_err(|_| SNAP_USAGE.to_string())?;
+            if step > 0.0 && step.is_finite() {
+                Ok(SnapSet::Step(step))
+            } else {
+                Err("snap step must be a positive number".to_string())
+            }
+        }
+    }
+}
+
+fn parse_snap(rest: &str) -> Result<Command, String> {
+    let mut words = rest.split_whitespace();
+    let cmd = match (words.next(), words.next()) {
+        (None, _) => SnapCmd::Status,
+        (Some("on"), None) => SnapCmd::All(true),
+        (Some("off"), None) => SnapCmd::All(false),
+        (Some("move"), Some(w)) => SnapCmd::Move(parse_snap_set(w)?),
+        (Some("rot"), Some(w)) => SnapCmd::Rotate(parse_snap_set(w)?),
+        // A bare number is the common case: the move grid step.
+        (Some(w), None) => match parse_snap_set(w)? {
+            SnapSet::Step(s) => SnapCmd::Move(SnapSet::Step(s)),
+            SnapSet::Enable(_) => return Err(SNAP_USAGE.to_string()),
+        },
+        _ => return Err(SNAP_USAGE.to_string()),
+    };
+    if words.next().is_some() {
+        return Err(SNAP_USAGE.to_string());
+    }
+    Ok(Command::Snap(cmd))
 }
 
 fn parse_help(rest: &str) -> Result<Command, String> {
@@ -438,6 +502,46 @@ mod tests {
         assert_eq!(parse_command("/help"), Ok(Command::Help));
         assert!(parse_command("/cook now").is_err());
         assert!(parse_command("/help me").is_err());
+    }
+
+    #[test]
+    fn snap_parses_status_toggles_and_steps() {
+        assert_eq!(parse_command("/snap"), Ok(Command::Snap(SnapCmd::Status)));
+        assert_eq!(
+            parse_command("/snap on"),
+            Ok(Command::Snap(SnapCmd::All(true)))
+        );
+        assert_eq!(
+            parse_command("/snap off"),
+            Ok(Command::Snap(SnapCmd::All(false)))
+        );
+        assert_eq!(
+            parse_command("/snap 0.5"),
+            Ok(Command::Snap(SnapCmd::Move(SnapSet::Step(0.5)))),
+            "a bare number is the move grid step"
+        );
+        assert_eq!(
+            parse_command("/snap move off"),
+            Ok(Command::Snap(SnapCmd::Move(SnapSet::Enable(false))))
+        );
+        assert_eq!(
+            parse_command("/snap rot 15"),
+            Ok(Command::Snap(SnapCmd::Rotate(SnapSet::Step(15.0))))
+        );
+        assert_eq!(
+            parse_command("/snap rot on"),
+            Ok(Command::Snap(SnapCmd::Rotate(SnapSet::Enable(true))))
+        );
+    }
+
+    #[test]
+    fn snap_rejects_bad_steps_and_extra_words() {
+        assert!(parse_command("/snap 0").is_err());
+        assert!(parse_command("/snap -1").is_err());
+        assert!(parse_command("/snap nan").is_err());
+        assert!(parse_command("/snap rot").is_err());
+        assert!(parse_command("/snap move 0.5 1").is_err());
+        assert!(parse_command("/snap sideways 3").is_err());
     }
 
     #[test]

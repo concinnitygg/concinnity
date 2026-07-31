@@ -3509,6 +3509,123 @@ fn gizmo_scale_drag_stretches_one_axis() {
     assert!(h.entries[0]["args"].get("scale").is_none());
 }
 
+// How far `v` sits from the nearest multiple of `step`, in step units
+// (transform math accumulates float error, so grid checks need a tolerance).
+fn off_grid(v: f32, step: f32) -> f32 {
+    (v / step - (v / step).round()).abs()
+}
+
+// With move snapping on, a translate drag lands on grid multiples of the step;
+// holding Ctrl suspends the snap for the frame; release commits the snapped
+// position.
+#[test]
+fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
+    let start = [-6.11f32, -3.3, -5.0];
+    let (mut world, entity, mut h) = gizmo_rig(start);
+    h.snap.translate = super::super::snap::Snap {
+        enabled: true,
+        step: 0.25,
+    };
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some());
+
+    let target = [layout.tips[0][0] + 50.0, layout.tips[0][1]];
+    set_input(&mut world, drag_input(target, true));
+    h.tick(&mut world);
+    let delta = world
+        .get::<crate::assets::Transform>(entity)
+        .unwrap()
+        .position[0]
+        - start[0];
+    assert!(delta > 0.2, "moved right: {delta}");
+    assert!(off_grid(delta, 0.25) < 1e-4, "on the grid: {delta}");
+
+    let mut ctrl = drag_input(target, true);
+    ctrl.ctrl = true;
+    set_input(&mut world, ctrl);
+    h.tick(&mut world);
+    let free = world
+        .get::<crate::assets::Transform>(entity)
+        .unwrap()
+        .position[0]
+        - start[0];
+    assert!(free > 0.2, "still follows the cursor: {free}");
+    assert!(
+        off_grid(free, 0.25) > 1e-3,
+        "unsnapped while Ctrl is held: {free}"
+    );
+
+    // Releasing Ctrl re-snaps the preview; the commit is what is shown.
+    set_input(&mut world, drag_input(target, true));
+    h.tick(&mut world);
+    set_input(&mut world, drag_input(target, false));
+    h.tick(&mut world);
+    let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap() as f32 - start[0];
+    assert!(
+        off_grid(committed, 0.25) < 1e-3,
+        "the commit is on the grid: {committed}"
+    );
+}
+
+// With rotate snapping on, the applied angle rounds to the step: a ~60 degree
+// swing lands on 45.
+#[test]
+fn gizmo_rotate_drag_snaps_the_applied_angle() {
+    let start = [-6.11f32, -3.3, -5.0];
+    let (mut world, entity, mut h) = gizmo_rig(start);
+    h.gizmo_mode = gizmo::GizmoMode::Rotate;
+    h.snap.rotate = super::super::snap::Snap {
+        enabled: true,
+        step: 45.0,
+    };
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some());
+
+    // Swing from the X tip (screen angle 0) to ~60 degrees of screen angle.
+    let m = [layout.origin[0] + 35.0, layout.origin[1] + 60.6];
+    set_input(&mut world, drag_input(m, true));
+    h.tick(&mut world);
+    let live = world.get::<crate::assets::Transform>(entity).unwrap();
+    assert!(
+        (live.rotation_deg[0] - 45.0).abs() < 1e-3,
+        "snapped to 45: {}",
+        live.rotation_deg[0]
+    );
+
+    set_input(&mut world, drag_input(m, false));
+    h.tick(&mut world);
+    let committed = h.entries[0]["args"]["rotation_deg"][0].as_f64().unwrap();
+    assert!((committed - 45.0).abs() < 0.2, "{committed}");
+}
+
+// /snap drives the same settings the Preview panel rows toggle.
+#[test]
+fn console_snap_adjusts_and_reports_the_settings() {
+    let mut h = hook(vec![]);
+    h.run_console_line("/snap 0.25");
+    assert!(h.snap.translate.enabled, "a step also enables the family");
+    assert_eq!(h.snap.translate.step, 0.25);
+    h.run_console_line("/snap rot 45");
+    assert!(h.snap.rotate.enabled);
+    assert_eq!(h.snap.rotate.step, 45.0);
+    h.run_console_line("/snap off");
+    assert!(!h.snap.translate.enabled && !h.snap.rotate.enabled);
+    assert_eq!(h.snap.translate.step, 0.25, "off keeps the steps");
+    let lines = h.console_sink.window(0, 100);
+    assert!(
+        lines
+            .last()
+            .is_some_and(|l| l.text == "snap: move 0.25 m (off), rotate 45 deg (off)"),
+        "each /snap reports the resulting state"
+    );
+}
+
 // Two props with live Transforms at `s1` / `s2` (AABB half-extent `half`),
 // wired like `gizmo_rig`, for the multi-select flows.
 fn two_prop_rig(

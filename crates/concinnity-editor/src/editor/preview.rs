@@ -3,9 +3,10 @@
 // The editor "Preview" panel: a small floating panel holding the controls that
 // affect how the running world is previewed: the play checkbox (the simulation
 // transport's Play / Pause, mirroring the top-bar chip), the fly-camera
-// checkbox (navigate the frozen world; also the F key), and the world-axes
-// checkbox (the origin axis lines drawn in the viewport). Escape leaves either
-// camera mode. Like the rest of
+// checkbox (navigate the frozen world; also the F key), the world-axes
+// checkbox (the origin axis lines drawn in the viewport), and the two snap
+// rows (grid / angle snapping for gizmo drags; the row toggles, its value
+// strip cycles the step). Escape leaves either camera mode. Like the rest of
 // the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
 // (injected by `inject.rs`), driven each frame by the editor hook. The title
 // bar, close button, and row draw come from the shared `list_panel`; this
@@ -13,6 +14,7 @@
 
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};
+use super::snap::SnapSettings;
 use super::widget::point_in;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -28,8 +30,11 @@ pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
 pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
 
 const PREVIEW_W: f32 = 200.0;
-// The capture row, the fly row, and the world-axes row.
-const ROWS: usize = 3;
+// The capture row, the fly row, the world-axes row, and the two snap rows.
+const ROWS: usize = 5;
+// The snap rows' indices: their clicks split into toggle vs step-cycle.
+const SNAP_MOVE_ROW: usize = 3;
+const SNAP_ROTATE_ROW: usize = 4;
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -56,6 +61,12 @@ pub(crate) enum PreviewAction {
     ToggleFly,
     // The world-axes checkbox: show / hide the origin axis lines.
     ToggleAxes,
+    // The snap rows: the row toggles the family, its value strip cycles the
+    // step through the presets.
+    ToggleSnapMove,
+    CycleSnapMoveStep,
+    ToggleSnapRotate,
+    CycleSnapRotateStep,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -64,21 +75,37 @@ pub(crate) enum PreviewAction {
 // click missed the panel. Title-bar presses never reach this: the hook intercepts
 // them first to start a drag (the shared routing owns the title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
+    let on_value = |i| point_in(mx, my, list_panel::value_rect(o, PREVIEW_W, i));
     match list_panel::hit_row(mx, my, o, PREVIEW_W, ROWS) {
         Some(0) => return Some(PreviewAction::TogglePlay),
         Some(1) => return Some(PreviewAction::ToggleFly),
-        Some(_) => return Some(PreviewAction::ToggleAxes),
+        Some(2) => return Some(PreviewAction::ToggleAxes),
+        Some(SNAP_MOVE_ROW) => {
+            return Some(if on_value(SNAP_MOVE_ROW) {
+                PreviewAction::CycleSnapMoveStep
+            } else {
+                PreviewAction::ToggleSnapMove
+            });
+        }
+        Some(_) => {
+            return Some(if on_value(SNAP_ROTATE_ROW) {
+                PreviewAction::CycleSnapRotateStep
+            } else {
+                PreviewAction::ToggleSnapRotate
+            });
+        }
         None => {}
     }
     point_in(mx, my, panel_rect(o)).then_some(PreviewAction::Consume)
 }
 
-// The panel's checkbox states, in row order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The panel's row states, in row order.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PreviewState {
     pub playing: bool,
     pub fly: bool,
     pub axes: bool,
+    pub snap: SnapSettings,
 }
 
 // Position + show the panel at origin `o`, colouring each checkbox by state.
@@ -87,6 +114,10 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
         Row::checkbox("Play (Ctrl+P)", state.playing),
         Row::checkbox("Fly camera (F)", state.fly),
         Row::checkbox("World axes", state.axes),
+        Row::checkbox("Snap move", state.snap.translate.enabled)
+            .with_value(format!("{} m", state.snap.translate.step)),
+        Row::checkbox("Snap rotate", state.snap.rotate.enabled)
+            .with_value(format!("{} deg", state.snap.rotate.step)),
     ];
     list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
 }
@@ -101,7 +132,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     list_panel::all_sprite_ids(BASE, ROWS, true)
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    list_panel::all_label_ids(BASE, ROWS)
+    list_panel::all_label_ids(BASE, ROWS, true)
 }
 
 #[cfg(test)]
@@ -156,6 +187,62 @@ mod tests {
     }
 
     #[test]
+    fn snap_rows_split_into_toggle_and_step_cycle() {
+        let o = default_origin();
+        let row = list_panel::row_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
+        assert_eq!(
+            hit_test(row[0] + 10.0, row[1] + 10.0, o),
+            Some(PreviewAction::ToggleSnapMove),
+            "the row body toggles"
+        );
+        let v = list_panel::value_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
+        assert_eq!(
+            hit_test(v[0] + 5.0, v[1] + 10.0, o),
+            Some(PreviewAction::CycleSnapMoveStep),
+            "the value strip cycles the step"
+        );
+        let rot = list_panel::row_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
+        assert_eq!(
+            hit_test(rot[0] + 10.0, rot[1] + 10.0, o),
+            Some(PreviewAction::ToggleSnapRotate)
+        );
+        let rv = list_panel::value_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
+        assert_eq!(
+            hit_test(rv[0] + 5.0, rv[1] + 10.0, o),
+            Some(PreviewAction::CycleSnapRotateStep)
+        );
+    }
+
+    #[test]
+    fn apply_shows_the_snap_steps_in_the_value_strips() {
+        let mut world = injected_world();
+        apply(
+            &mut world,
+            default_origin(),
+            PreviewState {
+                playing: false,
+                fly: false,
+                axes: false,
+                snap: SnapSettings::default(),
+            },
+            [0.0, 0.0],
+        );
+        let value = |i| {
+            world
+                .query::<TextLabel>()
+                .find(|l| l.asset_id == list_panel::value_label(BASE, i))
+                .cloned()
+                .unwrap()
+        };
+        let mv = value(SNAP_MOVE_ROW);
+        assert!(mv.visible && mv.content == "0.5 m", "{}", mv.content);
+        let rot = value(SNAP_ROTATE_ROW);
+        assert!(rot.visible && rot.content == "15 deg", "{}", rot.content);
+        let plain = value(0);
+        assert!(!plain.visible, "a value-less row hides its value label");
+    }
+
+    #[test]
     fn apply_shows_heading_and_play_state() {
         let mut world = injected_world();
         let o = default_origin();
@@ -163,6 +250,7 @@ mod tests {
             playing: false,
             fly: false,
             axes: false,
+            snap: SnapSettings::default(),
         };
         apply(&mut world, o, off_state, [0.0, 0.0]);
         let title = world
@@ -201,6 +289,7 @@ mod tests {
                 playing: true,
                 fly: true,
                 axes: true,
+                snap: SnapSettings::default(),
             },
             [0.0, 0.0],
         );

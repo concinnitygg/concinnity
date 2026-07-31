@@ -21,6 +21,8 @@ const BOX_SIZE: f32 = 16.0;
 const PAD: f32 = 8.0;
 // A checkbox row insets its label past the box.
 const CHECK_LABEL_INSET: f32 = 32.0;
+// The right-aligned value strip a row may carry (its own click target).
+const VALUE_W: f32 = 64.0;
 const LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 // Breathing room between the last row and the panel's rounded bottom edge.
 const BOTTOM_PAD: f32 = 6.0;
@@ -57,6 +59,9 @@ pub(crate) const fn check_box(base: u32, i: usize) -> AssetId {
 pub(crate) const fn row_label(base: u32, i: usize) -> AssetId {
     AssetId(base + 0x30 + i as u32)
 }
+pub(crate) const fn value_label(base: u32, i: usize) -> AssetId {
+    AssetId(base + 0x40 + i as u32)
+}
 
 // The "X" close button at the title bar's right end.
 pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
@@ -66,6 +71,13 @@ pub(crate) fn close_rect(o: [f32; 2], w: f32) -> [f32; 4] {
 // Row `i`, stacked below the title bar.
 pub(crate) fn row_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
     [o[0], o[1] + widget::TITLE_H + i as f32 * ROW_H, w, ROW_H]
+}
+
+// The value strip at row `i`'s right end. A caller with a value row resolves a
+// click here separately from the rest of the row (cycle vs toggle).
+pub(crate) fn value_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
+    let r = row_rect(o, w, i);
+    [r[0] + r[2] - VALUE_W, r[1], VALUE_W, ROW_H]
 }
 
 // The panel's footprint (title bar plus `rows` rows plus the bottom pad).
@@ -79,11 +91,13 @@ pub(crate) fn panel_rect(o: [f32; 2], w: f32, rows: usize) -> [f32; 4] {
 }
 
 // One row to draw: its caption, an optional checkbox (`Some(on)` draws a box
-// tinted by its state; `None` is a label-only row), and whether it is the
-// currently selected row (highlighted even without a hover).
+// tinted by its state; `None` is a label-only row), an optional right-aligned
+// value, and whether it is the currently selected row (highlighted even
+// without a hover).
 pub(crate) struct Row {
     pub caption: String,
     pub check: Option<bool>,
+    pub value: Option<String>,
     pub selected: bool,
 }
 
@@ -93,6 +107,7 @@ impl Row {
         Self {
             caption: caption.into(),
             check: None,
+            value: None,
             selected: false,
         }
     }
@@ -102,8 +117,15 @@ impl Row {
         Self {
             caption: caption.into(),
             check: Some(on),
+            value: None,
             selected: false,
         }
+    }
+
+    // Attach a right-aligned value (drawn in the `value_rect` strip).
+    pub(crate) fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
     }
 
     // Mark this row selected (drawn highlighted while idle).
@@ -171,19 +193,37 @@ pub(crate) fn apply(
             }
             None => r[0] + PAD,
         };
+        let label_right = match &row.value {
+            Some(_) => r[0] + r[2] - VALUE_W,
+            None => r[0] + r[2] - PAD,
+        };
         widget::place_message(
             world,
             row_label(base, i),
             [
                 label_x,
                 r[1] + LABEL_TOP,
-                (r[0] + r[2] - label_x - PAD).max(0.0),
+                (label_right - label_x).max(0.0),
                 widget::LINE_H,
             ],
             &row.caption,
             theme::LABEL,
             true,
         );
+        match &row.value {
+            Some(v) => {
+                let vr = value_rect(o, w, i);
+                widget::place_message(
+                    world,
+                    value_label(base, i),
+                    [vr[0], vr[1] + LABEL_TOP, vr[2] - PAD, widget::LINE_H],
+                    v,
+                    theme::LABEL_DIM,
+                    true,
+                );
+            }
+            None => widget::set_label_visible(world, value_label(base, i), false),
+        }
     }
 }
 
@@ -206,11 +246,14 @@ pub(crate) fn all_sprite_ids(base: u32, rows: usize, checkboxes: bool) -> Vec<As
     ids
 }
 
-// The label ids a row-list panel injects: the title / close labels and every row
-// label.
-pub(crate) fn all_label_ids(base: u32, rows: usize) -> Vec<AssetId> {
+// The label ids a row-list panel injects: the title / close labels, every row
+// label, and (when the rows carry values) every value label.
+pub(crate) fn all_label_ids(base: u32, rows: usize, values: bool) -> Vec<AssetId> {
     let mut ids = vec![title_label(base), close_label(base)];
     ids.extend((0..rows).map(|i| row_label(base, i)));
+    if values {
+        ids.extend((0..rows).map(|i| value_label(base, i)));
+    }
     ids
 }
 
@@ -240,7 +283,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        for id in all_label_ids(BASE, rows) {
+        for id in all_label_ids(BASE, rows, true) {
             world.add_component(TextLabel {
                 asset_id: id,
                 ..Default::default()
@@ -390,7 +433,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        for id in all_label_ids(BASE, 1) {
+        for id in all_label_ids(BASE, 1, false) {
             world.add_component(TextLabel {
                 asset_id: id,
                 ..Default::default()
@@ -471,7 +514,7 @@ mod tests {
         hide_all(
             &mut world,
             &all_sprite_ids(BASE, 2, true),
-            &all_label_ids(BASE, 2),
+            &all_label_ids(BASE, 2, true),
         );
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

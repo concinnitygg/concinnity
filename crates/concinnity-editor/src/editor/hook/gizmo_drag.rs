@@ -243,6 +243,9 @@ impl EditorHook {
 
     fn follow_gizmo_drag(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let mouse = [input.mouse_x, input.mouse_y];
+        // Held Ctrl inverts each family's snap toggle for this drag.
+        let translate_snap = self.snap.translate.active_step(input.ctrl);
+        let rotate_snap = self.snap.rotate.active_step(input.ctrl);
         let mode = match &self.gizmo_drag {
             Some(d) => d.mode,
             None => return,
@@ -281,7 +284,13 @@ impl EditorHook {
                     let d = a[0] * fwd[0] + a[1] * fwd[1] + a[2] * fwd[2];
                     if d >= 0.0 { 1.0 } else { -1.0 }
                 };
-                sign * drag.accum_deg
+                // The accumulator stays continuous; only the applied angle
+                // snaps, so toggling snap mid-drag cannot drift the base.
+                let applied = sign * drag.accum_deg;
+                match rotate_snap {
+                    Some(step) => snap::snap_step(applied, step),
+                    None => applied,
+                }
             }
             _ => 0.0,
         };
@@ -303,6 +312,13 @@ impl EditorHook {
                     self.gizmo_drag = Some(drag);
                     return;
                 };
+                // Snapping the shared delta (not each member's absolute
+                // position) keeps the grab offset and the group's relative
+                // offsets intact.
+                let delta = match translate_snap {
+                    Some(step) => snap::snap_step(t - drag.grab_t, step),
+                    None => t - drag.grab_t,
+                };
                 for s in &drag.starts {
                     let Some(target) = self.member_target(world, mode, &s.name) else {
                         continue;
@@ -311,7 +327,7 @@ impl EditorHook {
                         continue;
                     };
                     if mode == GizmoMode::Translate {
-                        tr.position = group_transform::translate(s.position, axis, t - drag.grab_t);
+                        tr.position = group_transform::translate(s.position, axis, delta);
                     } else {
                         let factor =
                             (t / drag.grab_t).clamp(SCALE_FACTOR_RANGE.0, SCALE_FACTOR_RANGE.1);

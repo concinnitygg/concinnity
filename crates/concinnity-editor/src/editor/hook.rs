@@ -50,6 +50,7 @@ use super::list_panel::Row;
 use super::panel::{self, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
+use super::snap;
 use super::story;
 use super::story_panel::{self, StoryAction, StoryView};
 use super::template_panel::{self, TemplateAction, TemplateView};
@@ -300,6 +301,8 @@ pub(crate) struct EditorHook {
     // (`hook/gizmo_drag.rs`), if any.
     gizmo_mode: gizmo::GizmoMode,
     gizmo_drag: Option<gizmo_drag::GizmoDrag>,
+    // Grid / angle snapping for gizmo drags (Preview panel rows + /snap).
+    snap: snap::SnapSettings,
     // The edit-mode fly camera (`hook/fly.rs`): on/off and the frame clock
     // its integration steps against.
     fly: bool,
@@ -557,6 +560,7 @@ impl EditorHook {
             marquee: None,
             gizmo_mode: gizmo::GizmoMode::default(),
             gizmo_drag: None,
+            snap: snap::SnapSettings::default(),
             fly: false,
             fly_clock: None,
             positions: [None; PANEL_COUNT],

@@ -88,7 +88,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     list_panel::all_sprite_ids(BASE, count(), true)
 }
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    list_panel::all_label_ids(BASE, count())
+    list_panel::all_label_ids(BASE, count(), false)
 }
 
 #[cfg(test)]

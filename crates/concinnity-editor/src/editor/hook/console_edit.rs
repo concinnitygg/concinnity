@@ -168,6 +168,7 @@ impl EditorHook {
             }
             Ok(console::Command::Del { name }) => self.console_del(&name),
             Ok(console::Command::Cook) => self.console_build(),
+            Ok(console::Command::Snap(cmd)) => self.console_snap(cmd),
             Ok(console::Command::Help) => {
                 for l in console::help_lines() {
                     self.console_sink.info(&l);
@@ -239,6 +240,31 @@ impl EditorHook {
         }
         self.row_menu = None;
         self.console_sink.info(&format!("removed '{name}' ({ty})"));
+    }
+
+    // /snap: adjust the gizmo snap settings (session state, mirrored by the
+    // Preview panel rows) and report the resulting state.
+    fn console_snap(&mut self, cmd: console::SnapCmd) {
+        use console::{SnapCmd, SnapSet};
+        fn set(snap: &mut snap::Snap, s: SnapSet) {
+            match s {
+                SnapSet::Enable(on) => snap.enabled = on,
+                SnapSet::Step(step) => {
+                    snap.step = step;
+                    snap.enabled = true;
+                }
+            }
+        }
+        match cmd {
+            SnapCmd::Status => {}
+            SnapCmd::All(on) => {
+                self.snap.translate.enabled = on;
+                self.snap.rotate.enabled = on;
+            }
+            SnapCmd::Move(s) => set(&mut self.snap.translate, s),
+            SnapCmd::Rotate(s) => set(&mut self.snap.rotate, s),
+        }
+        self.console_sink.info(&self.snap.describe());
     }
 
     // The build command ("cook" in user-facing text): compile the in-memory
