@@ -186,8 +186,11 @@ Ubuntu; translate them to your distribution's equivalents as needed.
      libxcursor-dev libxi-dev libudev-dev libdbus-1-dev
    ```
 
-   - `build-essential`, `cmake`, `git`, `python3` — build `shaderc` (and GLFW)
-     from source when no prebuilt library is found.
+   - `build-essential`, `cmake`, `git`, `python3` — build `shaderc` from source
+     (and GLFW, when no prebuilt library is found). `shaderc` is always built
+     from source and linked statically, so the binaries carry no
+     `libshaderc_shared.so` dependency. The first build takes a few minutes; the
+     result is cached in `target/`.
    - `libssl-dev` — TLS for the networking client.
    - `libasound2-dev` — ALSA, used by the audio backend.
    - `libglfw3` / `libglfw3-dev` and the `libx*` packages — windowing and input
@@ -196,16 +199,12 @@ Ubuntu; translate them to your distribution's equivalents as needed.
      is built from source (no linkable system GLFW), which compiles both its X11
      and Wayland backends and so requires the Wayland scanner and protocol files.
 
-2. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home). It provides the
-   Vulkan loader, validation layers, and a prebuilt `libshaderc`. Source its
-   environment script so `VULKAN_SDK` (and `shaderc`) are picked up:
+2. Install the Vulkan loader and validation layers, either from your
+   distribution or from the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home):
 
    ```sh
-   source /path/to/vulkan-sdk/setup-env.sh
+   sudo apt install libvulkan1 vulkan-validationlayers
    ```
-
-   If `shaderc` is still built from source, the `build-essential` / `cmake` /
-   `python3` / `git` packages above cover it.
 
 3. To **run** the engine you also need a Vulkan-capable GPU driver (e.g.
    `mesa-vulkan-drivers` for Intel/AMD, or the proprietary NVIDIA driver). The

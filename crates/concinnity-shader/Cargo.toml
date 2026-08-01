@@ -21,7 +21,7 @@ concinnity-device = { path = "../concinnity-device" }
 tracing = "0.1.44"
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
-shaderc = "0.10.1"
+shaderc = { version = "0.10.1", features = ["build-from-source"] }
 
 # The Windows default build is DirectX, which compiles HLSL through the
 # Direct3D `Fxc` compiler from the `windows` crate. `shaderc` is optional and
