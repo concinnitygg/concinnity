@@ -2966,10 +2966,12 @@ impl GraphicsSystem {
         // Reflection probes: hand the backend the declared `ReflectionProbe`
         // placements (Metal bakes a cube per probe; an empty list auto-seeds from
         // the scene bounds). Pushed once here, after construction; DX/VK no-op.
+        // Read, not drained, for the same reason as the lights above: the
+        // placements are static once pushed, but the components keep their
+        // entities so editor tooling can address the authored probes by name.
         if let Some(backend) = self.backend.as_deref_mut() {
             let declared: Vec<crate::gfx::reflection_probe::ProbePlacement> = ctx
-                .drain::<crate::assets::ReflectionProbe>()
-                .into_iter()
+                .query::<crate::assets::ReflectionProbe>()
                 .map(|p| {
                     crate::gfx::reflection_probe::ProbePlacement::from_center_extents(
                         p.position,

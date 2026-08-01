@@ -2899,10 +2899,12 @@ fn declared_reflection_probes_replace_the_auto_seed() {
         lock(&state).saw(&Call::SetReflectionProbes(2)),
         "both declared placements reach the backend"
     );
+    // Read, not drained: draining the only component on a probe entity would
+    // despawn it, and the editor's billboard drive can only address a live one.
     assert_eq!(
         world.ctx().query::<ReflectionProbe>().count(),
-        0,
-        "the probes are drained into placements"
+        2,
+        "the probes stay resident after their placements reach the backend"
     );
 }
 
