@@ -35,6 +35,8 @@ pub(crate) mod ui_spec;
 pub(crate) mod expand;
 mod provenance;
 pub use provenance::Provenance;
+pub(crate) mod shadow;
+pub use shadow::merge_args;
 
 #[allow(unused_imports)]
 pub use config::{DEFAULT_MAX_BLOB_BYTES, WorldConfig};
@@ -53,8 +55,8 @@ pub struct LoadedWorld {
     // Assets a macro expansion produced, paired with the authored asset that
     // produced them, so listings can group them by source.
     pub generated: Vec<GeneratedAsset>,
-    // Generated assets the world declares its own copy of; the copy is in
-    // `assets` and the generated entry was dropped.
+    // Generated assets the world declares a patch of; the merged result is in
+    // `assets` and each record carries the pre-merge generated args.
     pub shadowed: Vec<ShadowedAsset>,
     // Names declared in the world file itself (pre-expansion), for
     // provenance listings.

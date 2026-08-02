@@ -411,12 +411,13 @@ impl EditorHook {
         self.mark_changed();
         // An open form on a moved entry still shows the pre-drag text;
         // re-derive it from the committed args. (Dragging and typing cannot
-        // overlap, so no in-progress field edit is lost.)
+        // overlap, so no in-progress field edit is lost.) Through the by-name
+        // path so a template-derived asset keeps its override state.
         if let Some(idx) = self.form_target.entry()
             && changed.contains(&idx)
-            && let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from)
+            && let Some(name) = self.entries.get(idx).and_then(entry_name).map(String::from)
         {
-            self.open_form(world, ty, FormTarget::Entry(idx));
+            self.open_asset_form(&name, world);
         }
     }
 

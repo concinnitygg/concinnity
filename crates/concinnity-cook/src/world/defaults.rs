@@ -166,6 +166,7 @@ fn inject_loading_overlay(
                 "loading_overlay",
                 "loading_overlay",
                 "LoadingOverlay",
+                None,
             )? {
                 // Unreachable in practice: a same-name same-type asset would
                 // have matched the type scan above.
@@ -224,7 +225,14 @@ fn inject_loading_overlay(
     let mut label_injected = false;
     for (field, piece) in needed {
         let (piece_type, piece_args) = loading_piece(field);
-        if name_claimed(assets, report, "loading_overlay", piece, piece_type)? {
+        if name_claimed(
+            assets,
+            report,
+            "loading_overlay",
+            piece,
+            piece_type,
+            Some(&piece_args),
+        )? {
             continue;
         }
         inject(
@@ -238,15 +246,25 @@ fn inject_loading_overlay(
         label_injected |= field == "label";
     }
 
-    if label_injected && !name_claimed(assets, report, "loading_overlay", HUD_FONT_NAME, "Font")? {
-        inject(
+    if label_injected {
+        let font_args = serde_json::json!({ "size_px": HUD_FONT_SIZE_PX });
+        if !name_claimed(
             assets,
             report,
             "loading_overlay",
             HUD_FONT_NAME,
             "Font",
-            serde_json::json!({ "size_px": HUD_FONT_SIZE_PX }),
-        );
+            Some(&font_args),
+        )? {
+            inject(
+                assets,
+                report,
+                "loading_overlay",
+                HUD_FONT_NAME,
+                "Font",
+                font_args,
+            );
+        }
     }
     Ok(())
 }
@@ -279,7 +297,7 @@ fn inject_story_pause_menu(
     // No MainMenu exists (checked above), so this can only flag a same-name
     // collision with an unrelated asset, which is a hard error rather than a
     // silent skip.
-    if name_claimed(assets, report, "story_pause_menu", &name, "MainMenu")? {
+    if name_claimed(assets, report, "story_pause_menu", &name, "MainMenu", None)? {
         return Ok(());
     }
 
@@ -401,34 +419,39 @@ fn drain_toggles(assets: &mut Vec<serde_json::Value>) -> Result<EngineDefaults, 
 }
 
 // Whether the world already provides `name` as an asset of `asset_type` (the
-// user's version replaces the default). A claimed name is recorded as a shadow,
-// so a listing can show the default the world overrides rather than leaving it
-// unaccounted for. A name held by a different type is a hard error: the default
-// cannot be injected and silently skipping it would hide the conflict.
+// user's line is a patch of the default: the default's args are merged under
+// it, so it overrides exactly the fields it names). A claimed name is recorded
+// as a shadow, so a listing can show the default the world overrides rather
+// than leaving it unaccounted for. A name held by a different type is a hard
+// error: the default cannot be injected and silently skipping it would hide
+// the conflict. `default_args` is the default that would have been injected;
+// None marks call sites where a same-type claim is unreachable.
 fn name_claimed(
-    assets: &[serde_json::Value],
+    assets: &mut [serde_json::Value],
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,
     asset_type: &str,
+    default_args: Option<&serde_json::Value>,
 ) -> Result<bool, String> {
-    for v in assets {
-        if asset_name(v) != name {
-            continue;
-        }
-        if type_norm(v) == asset_type.to_lowercase().replace('_', "") {
-            report.record_shadowed(name, asset_type, injected_by);
-            return Ok(true);
-        }
+    let Some(claim) = assets.iter().find(|v| asset_name(v) == name) else {
+        return Ok(false);
+    };
+    if type_norm(claim) != asset_type.to_lowercase().replace('_', "") {
         return Err(format!(
             "engine default '{}' ({}) collides with your {} asset of the same name; \
              rename that asset or disable the default with an EngineDefaults entry",
             name,
             asset_type,
-            v.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+            claim.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
         ));
     }
-    Ok(false)
+    let template = default_args.cloned().unwrap_or(serde_json::json!({}));
+    report.record_shadowed(name, asset_type, injected_by, template.clone());
+    if default_args.is_some() {
+        super::shadow::merge_into_authored(assets, name, &template);
+    }
+    Ok(true)
 }
 
 // Push one injected asset and record it in the report.
@@ -474,7 +497,7 @@ fn inject_hud(
     let hud_index = match assets.iter().position(|v| type_norm(v) == hud_type_norm) {
         Some(i) => i,
         None => {
-            if name_claimed(assets, report, injected_by, default_name, hud_type)? {
+            if name_claimed(assets, report, injected_by, default_name, hud_type, None)? {
                 // Unreachable in practice: a same-name same-type asset would
                 // have matched the type scan above.
                 return Ok(());
@@ -530,23 +553,41 @@ fn inject_hud(
     }
 
     let mut chip_injected = false;
+    let chip_defaults = chip_args();
     for chip in needed_chips {
-        if name_claimed(assets, report, injected_by, chip, "TextLabel")? {
+        if name_claimed(
+            assets,
+            report,
+            injected_by,
+            chip,
+            "TextLabel",
+            Some(&chip_defaults),
+        )? {
             continue;
         }
         inject(assets, report, injected_by, chip, "TextLabel", chip_args());
         chip_injected = true;
     }
 
-    if chip_injected && !name_claimed(assets, report, injected_by, HUD_FONT_NAME, "Font")? {
-        inject(
+    if chip_injected {
+        let font_args = serde_json::json!({ "size_px": HUD_FONT_SIZE_PX });
+        if !name_claimed(
             assets,
             report,
             injected_by,
             HUD_FONT_NAME,
             "Font",
-            serde_json::json!({ "size_px": HUD_FONT_SIZE_PX }),
-        );
+            Some(&font_args),
+        )? {
+            inject(
+                assets,
+                report,
+                injected_by,
+                HUD_FONT_NAME,
+                "Font",
+                font_args,
+            );
+        }
     }
     Ok(())
 }
@@ -584,7 +625,15 @@ fn inject_sky(
         .unwrap_or(CAMERA_FAR_DEFAULT);
     let size = (far * SKY_FAR_FRACTION).min(SKY_SIZE_MAX);
 
-    let mesh_claimed = name_claimed(assets, report, "sky", "sky_mesh", "ProceduralMesh")?;
+    let mesh_args = serde_json::json!({ "generator": "skybox", "size": size });
+    let mesh_claimed = name_claimed(
+        assets,
+        report,
+        "sky",
+        "sky_mesh",
+        "ProceduralMesh",
+        Some(&mesh_args),
+    )?;
     if !mesh_claimed {
         inject(
             assets,
@@ -592,32 +641,28 @@ fn inject_sky(
             "sky",
             "sky_mesh",
             "ProceduralMesh",
-            serde_json::json!({ "generator": "skybox", "size": size }),
+            mesh_args,
         );
     }
-    if !name_claimed(assets, report, "sky", "mat_sky", "Material")? {
-        inject(
-            assets,
-            report,
-            "sky",
-            "mat_sky",
-            "Material",
-            serde_json::json!({ "roughness": 1.0, "metallic": 0.0, "tint": [1.0, 1.0, 1.0] }),
-        );
+    let mat_args =
+        serde_json::json!({ "roughness": 1.0, "metallic": 0.0, "tint": [1.0, 1.0, 1.0] });
+    if !name_claimed(
+        assets,
+        report,
+        "sky",
+        "mat_sky",
+        "Material",
+        Some(&mat_args),
+    )? {
+        inject(assets, report, "sky", "mat_sky", "Material", mat_args);
     }
-    if !name_claimed(assets, report, "sky", "sky", "Prop")? {
-        inject(
-            assets,
-            report,
-            "sky",
-            "sky",
-            "Prop",
-            serde_json::json!({
-                "mesh": "sky_mesh",
-                "material": "mat_sky",
-                "position": [0.0, 0.0, 0.0],
-            }),
-        );
+    let prop_args = serde_json::json!({
+        "mesh": "sky_mesh",
+        "material": "mat_sky",
+        "position": [0.0, 0.0, 0.0],
+    });
+    if !name_claimed(assets, report, "sky", "sky", "Prop", Some(&prop_args))? {
+        inject(assets, report, "sky", "sky", "Prop", prop_args);
     }
     Ok(())
 }

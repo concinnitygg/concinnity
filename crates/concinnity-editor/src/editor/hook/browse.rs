@@ -44,7 +44,37 @@ impl EditorHook {
             rows: self.tree_rows(world),
             picker_options: self.picker_options(world),
             form_title,
+            form_overrides: self.form_overrides_data(),
         }
+    }
+
+    // The open form's override state (marks, summary count, any open menu's
+    // option labels), owned for the tick. `None` outside a template-derived
+    // form.
+    fn form_overrides_data(&self) -> Option<FormOverridesData> {
+        let marks = self.form_override_marks()?;
+        let count = marks
+            .iter()
+            .filter(|m| **m != overrides::FieldOrigin::Inherited)
+            .count();
+        Some(FormOverridesData {
+            field_menu: self.override_menu.map(|i| {
+                let labels = self
+                    .override_menu_options(i)
+                    .into_iter()
+                    .map(|(_, l)| l)
+                    .collect();
+                (i, labels)
+            }),
+            entity_menu: self.entity_menu_open.then(|| {
+                self.entity_menu_options()
+                    .into_iter()
+                    .map(|(_, l)| l)
+                    .collect()
+            }),
+            marks,
+            count,
+        })
     }
 
     pub(super) fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
@@ -57,6 +87,18 @@ impl EditorHook {
             field_dropdown: self.field_dropdown,
             field_dropdown_scroll: self.field_dropdown_scroll,
             form_error: self.form_error.as_deref(),
+            overrides: d
+                .form_overrides
+                .as_ref()
+                .map(|ovr| form_panel::OverridesView {
+                    marks: &ovr.marks,
+                    count: ovr.count,
+                    field_menu: ovr
+                        .field_menu
+                        .as_ref()
+                        .map(|(i, opts)| (*i, opts.as_slice())),
+                    entity_menu: ovr.entity_menu.as_deref(),
+                }),
             mouse,
         }
     }

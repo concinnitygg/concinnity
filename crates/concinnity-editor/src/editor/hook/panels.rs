@@ -143,10 +143,13 @@ impl Panel for EditPanel {
         ids
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        match hook.field_dropdown.is_some() {
-            true => form_panel::dropdown_ids(),
-            false => Vec::new(),
+        if hook.field_dropdown.is_some() {
+            return form_panel::dropdown_ids();
         }
+        if hook.override_menu.is_some() || hook.entity_menu_open {
+            return form_panel::override_menu_ids();
+        }
+        Vec::new()
     }
     fn press(
         &self,

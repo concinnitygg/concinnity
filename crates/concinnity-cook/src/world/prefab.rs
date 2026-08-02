@@ -1,10 +1,17 @@
 // src/world/prefab.rs
 // Build-time expansion: Prefab templates + Prop instances → concrete assets.
+// Every generated asset is recorded against its instantiating Prop, and an
+// authored line with a generated asset's name is the user's patch of it: the
+// authored fields win and the rest keep the generated values.
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{ExpandReport, asset_name, type_norm};
 use super::preset::load_preset_obj;
 
-pub(crate) fn expand_prefabs(asset_values: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_prefabs(
+    asset_values: &mut Vec<serde_json::Value>,
+    authored: &std::collections::HashMap<String, String>,
+    report: &mut ExpandReport,
+) -> Result<(), String> {
     // Step 1: collect all Prefab definitions.
     let mut prefab_defs: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
@@ -21,8 +28,16 @@ pub(crate) fn expand_prefabs(asset_values: &mut Vec<serde_json::Value>) -> Resul
         }
     }
 
+    // Names already present before any instance expands. A generated name
+    // landing on an authored one is a patch; landing on anything else (an
+    // earlier expansion's output or another instance's) is a conflict.
+    let mut taken: std::collections::HashSet<String> = non_prefab.iter().map(asset_name).collect();
+
     // Step 2: expand Prop entries that reference a prefab.
     let mut result: Vec<serde_json::Value> = Vec::new();
+    // Shadow hits found while expanding: the authored patch line may not be in
+    // `result` yet, so the merges apply after the rebuild.
+    let mut merges: Vec<(String, serde_json::Value)> = Vec::new();
     for value in non_prefab {
         if type_norm(&value) != "prop" {
             result.push(value);
@@ -67,11 +82,68 @@ pub(crate) fn expand_prefabs(asset_values: &mut Vec<serde_json::Value>) -> Resul
             &prefab_defs,
             &mut call_stack,
         )?;
-        result.extend(expanded);
+        for entry in expanded {
+            if resolve_generated(
+                &entry,
+                &instance_name,
+                authored,
+                &mut taken,
+                report,
+                &mut merges,
+            )? {
+                result.push(entry);
+            }
+        }
     }
 
+    for (name, template_args) in &merges {
+        super::shadow::merge_into_authored(&mut result, name, template_args);
+    }
     *asset_values = result;
     Ok(())
+}
+
+// Whether one generated entry should be emitted, recording the outcome so
+// every generated asset is accounted for. `false` means the world declares its
+// own patch of the entry, which the caller merges the generated args under.
+fn resolve_generated(
+    entry: &serde_json::Value,
+    instance_name: &str,
+    authored: &std::collections::HashMap<String, String>,
+    taken: &mut std::collections::HashSet<String>,
+    report: &mut ExpandReport,
+    merges: &mut Vec<(String, serde_json::Value)>,
+) -> Result<bool, String> {
+    let name = asset_name(entry);
+    let entry_type = entry
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("?")
+        .to_string();
+
+    if let Some(authored_type) = authored.get(&name) {
+        if authored_type.to_lowercase().replace('_', "") != type_norm(entry) {
+            return Err(format!(
+                "Prop '{}': generated asset '{}' ({}) collides with your {} asset of the same \
+                 name; rename that asset or the instance",
+                instance_name, name, entry_type, authored_type,
+            ));
+        }
+        let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
+        report.record_shadowed(&name, authored_type, instance_name, args.clone());
+        merges.push((name, args));
+        return Ok(false);
+    }
+
+    if !taken.insert(name.clone()) {
+        return Err(format!(
+            "Prop '{}': generated asset name '{}' collides with another asset; rename the \
+             instance or the prefab entry",
+            instance_name, name
+        ));
+    }
+    report.record_generated(&name, &entry_type, instance_name);
+    Ok(true)
 }
 
 fn expand_prefab_entries(
@@ -262,6 +334,26 @@ mod tests {
             .replace('_', "")
     }
 
+    // Mirror expand_world: snapshot the authored names before expanding.
+    fn expand(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
+        let authored: std::collections::HashMap<String, String> = assets
+            .iter()
+            .map(|v| {
+                (
+                    asset_name(v),
+                    v.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("?")
+                        .to_string(),
+                )
+            })
+            .filter(|(n, _)| !n.is_empty())
+            .collect();
+        let mut report = ExpandReport::default();
+        expand_prefabs(assets, &authored, &mut report)?;
+        Ok(report)
+    }
+
     #[test]
     fn single_instance_expands() {
         let mut assets = vec![
@@ -272,7 +364,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"table_set","position":[3,0,-5]}}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         let names: Vec<&str> = assets
             .iter()
             .filter(|v| type_norm_str(v) == "prop")
@@ -294,7 +386,7 @@ mod tests {
             serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair","position":[0,0,0]}}),
             serde_json::json!({"name":"i2","type":"Prop","args":{"prefab":"pair","position":[10,0,0],"rotation_deg":[0,90,0]}}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         let props: Vec<_> = assets
             .iter()
             .filter(|v| type_norm_str(v) == "prop")
@@ -311,7 +403,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"alcove","position":[5,0,-3]}}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         let lights: Vec<_> = assets
             .iter()
             .filter(|v| type_norm_str(v) == "pointlight")
@@ -331,7 +423,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"pa","position":[0,0,0]}}),
         ];
-        let err = expand_prefabs(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err();
         assert!(err.contains("cycle"));
     }
 
@@ -340,7 +432,7 @@ mod tests {
         let mut assets = vec![
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"ghost","position":[0,0,0]}}),
         ];
-        let err = expand_prefabs(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err();
         assert!(err.contains("ghost"));
     }
 
@@ -360,7 +452,7 @@ mod tests {
                 "prefab":"table","position":[10,0,0],"scale":[3,3,3]
             }}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         let names: Vec<String> = assets.iter().map(asset_name).collect();
         assert_eq!(names, ["inst_top", "inst_set_cup"]);
 
@@ -379,7 +471,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"pa"}}),
         ];
-        let err = expand_prefabs(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err();
         assert!(err.contains("inst_n"), "{err}");
         assert!(err.contains("'prefab' field is empty"), "{err}");
     }
@@ -392,7 +484,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"pa"}}),
         ];
-        let err = expand_prefabs(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err();
         assert!(err.contains("nested prefab 'ghost' not found"), "{err}");
     }
 
@@ -409,7 +501,7 @@ mod tests {
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"crate_set"}}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         let a = &assets[0]["args"];
         assert_eq!(a["model"], "m");
         assert_eq!(a["material"], "mat");
@@ -430,7 +522,7 @@ mod tests {
             serde_json::json!({"type":"Prefab","args":{"props":[{"name":"x","kind":"prop"}]}}),
             serde_json::json!({"name":"lamp","type":"Prop","args":{"mesh":"box"}}),
         ];
-        expand_prefabs(&mut assets).unwrap();
+        expand(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["name"], "lamp");
     }
@@ -448,6 +540,104 @@ mod tests {
             f32_arr3(&mixed, "position", [0.0, 5.0, 0.0]),
             [1.0, 5.0, 3.0]
         );
+    }
+
+    #[test]
+    fn an_authored_patch_overrides_only_the_fields_it_names() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+                {"name":"a","kind":"prop","mesh":"box","position":[1,0,0]},
+            ]}}),
+            serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair","position":[10,0,0]}}),
+            serde_json::json!({"name":"i1_a","type":"Prop","args":{"material":"gold"}}),
+        ];
+        let report = expand(&mut assets).unwrap();
+
+        let a = assets.iter().find(|v| asset_name(v) == "i1_a").unwrap();
+        // The patched field wins; the generated transform survives the merge.
+        assert_eq!(a["args"]["material"], "gold");
+        assert_eq!(a["args"]["position"], serde_json::json!([11.0, 0.0, 0.0]));
+        assert_eq!(a["args"]["mesh"], "box");
+
+        assert_eq!(report.shadowed.len(), 1);
+        let shadow = &report.shadowed[0];
+        assert_eq!(shadow.name, "i1_a");
+        assert_eq!(shadow.generated_by, "i1");
+        // The recorded baseline is the pre-merge generated args.
+        assert_eq!(shadow.args["position"], serde_json::json!([11.0, 0.0, 0.0]));
+        assert!(shadow.args.get("material").is_none());
+        assert!(report.generated.is_empty());
+    }
+
+    #[test]
+    fn generated_assets_are_recorded_against_their_instance() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+                {"name":"a","kind":"prop","mesh":"box"},
+                {"name":"lamp","kind":"point_light","position":[0,2,0]},
+            ]}}),
+            serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair"}}),
+            serde_json::json!({"name":"i2","type":"Prop","args":{"prefab":"pair","position":[5,0,0]}}),
+        ];
+        let report = expand(&mut assets).unwrap();
+        let by: Vec<(&str, &str)> = report
+            .generated
+            .iter()
+            .map(|g| (g.name.as_str(), g.generated_by.as_str()))
+            .collect();
+        assert!(by.contains(&("i1_a", "i1")));
+        assert!(by.contains(&("i1_lamp", "i1")));
+        assert!(by.contains(&("i2_a", "i2")));
+        assert!(by.contains(&("i2_lamp", "i2")));
+    }
+
+    #[test]
+    fn a_patch_with_the_wrong_type_is_a_hard_error() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+                {"name":"a","kind":"prop","mesh":"box"},
+            ]}}),
+            serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair"}}),
+            serde_json::json!({"name":"i1_a","type":"Sprite","args":{}}),
+        ];
+        let err = expand(&mut assets).unwrap_err();
+        assert!(err.contains("collides"), "{err}");
+    }
+
+    #[test]
+    fn two_instances_generating_one_name_is_a_hard_error() {
+        let mut assets = vec![
+            serde_json::json!({"name":"pa","type":"Prefab","args":{"props":[
+                {"name":"b_c","kind":"prop","mesh":"box"},
+            ]}}),
+            serde_json::json!({"name":"pb","type":"Prefab","args":{"props":[
+                {"name":"c","kind":"prop","mesh":"box"},
+            ]}}),
+            serde_json::json!({"name":"a","type":"Prop","args":{"prefab":"pa"}}),
+            serde_json::json!({"name":"a_b","type":"Prop","args":{"prefab":"pb"}}),
+        ];
+        let err = expand(&mut assets).unwrap_err();
+        assert!(err.contains("a_b_c"), "{err}");
+    }
+
+    #[test]
+    fn a_point_light_patch_merges_over_the_generated_light() {
+        let mut assets = vec![
+            serde_json::json!({"name":"alcove","type":"Prefab","args":{"props":[
+                {"name":"lamp","kind":"point_light","position":[0,2,0],
+                 "light_color":[1.0,0.9,0.7],"light_intensity":8.0,"light_range":5.0}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"alcove"}}),
+            serde_json::json!({"name":"inst_lamp","type":"PointLight","args":{"intensity":2.0}}),
+        ];
+        expand(&mut assets).unwrap();
+        let lamp = assets
+            .iter()
+            .find(|v| asset_name(v) == "inst_lamp")
+            .unwrap();
+        assert_eq!(lamp["args"]["intensity"], 2.0);
+        assert_eq!(lamp["args"]["color"], serde_json::json!([1.0, 0.9, 0.7]));
+        assert_eq!(lamp["args"]["range"], 5.0);
     }
 
     #[test]

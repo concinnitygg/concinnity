@@ -11,21 +11,53 @@ impl EditorHook {
     // text field, and focus the name. `target` decides where confirming lands --
     // a fresh line, an existing one, or the promotion of a generated asset.
     pub(super) fn open_form(&mut self, world: &mut World, ty: String, target: FormTarget) {
+        self.open_form_with(world, ty, target, None);
+    }
+
+    // As `open_form`, but seeded from `template`'s effective (merged) args
+    // rather than the target entry's own: a template-derived asset's authored
+    // line is a sparse patch, so seeding from it alone would show type
+    // defaults where the template's values belong.
+    pub(super) fn open_form_with(
+        &mut self,
+        world: &mut World,
+        ty: String,
+        target: FormTarget,
+        template: Option<FormTemplate>,
+    ) {
         // Cloned rather than borrowed: `unique_name` below reads `self` too.
         let existing: Option<serde_json::Value> = match &target {
             FormTarget::Entry(idx) => self.entries.get(*idx).cloned(),
             FormTarget::Promote(entry) => Some(entry.clone()),
             FormTarget::New => None,
         };
-        let seed = existing
-            .as_ref()
-            .and_then(|e| e.get("args"))
-            .and_then(|v| v.as_object())
-            .cloned();
-        let name = match &existing {
-            Some(e) => entry_name(e).unwrap_or_default().to_string(),
-            None => self.unique_name(&ty),
+        let seed = match &template {
+            Some(t) => {
+                let patch = existing
+                    .as_ref()
+                    .and_then(|e| e.get("args"))
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                let effective = concinnity_cook::world::merge_args(
+                    &serde_json::Value::Object(t.baseline.clone()),
+                    &patch,
+                );
+                effective.as_object().cloned()
+            }
+            None => existing
+                .as_ref()
+                .and_then(|e| e.get("args"))
+                .and_then(|v| v.as_object())
+                .cloned(),
         };
+        let name = match (&template, &existing) {
+            (Some(t), _) => t.name.clone(),
+            (None, Some(e)) => entry_name(e).unwrap_or_default().to_string(),
+            (None, None) => self.unique_name(&ty),
+        };
+        self.form_template = template;
+        self.override_menu = None;
+        self.entity_menu_open = false;
         // The working args tree: type defaults with the edited entry merged over
         // them. Add / remove and the controls mutate it; the fields are derived from
         // it so a structural change (a grown / shrunk array) re-derives cleanly.
@@ -148,6 +180,9 @@ impl EditorHook {
         self.form_target = FormTarget::New;
         self.form_fields.clear();
         self.form_args = serde_json::Map::new();
+        self.form_template = None;
+        self.override_menu = None;
+        self.entity_menu_open = false;
         self.vec_expanded.clear();
         self.form_scroll = 0;
         self.form_focus = FormFocus::Name;
@@ -230,9 +265,30 @@ impl EditorHook {
                 }
                 self.form_error = None;
             }
+            FormAction::OpenOverrideMenu(i) => {
+                self.override_menu = if self.override_menu == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.entity_menu_open = false;
+                self.field_dropdown = None;
+            }
+            FormAction::PickOverrideOption(k) => self.pick_override_option(k, world),
+            FormAction::OpenEntityMenu => {
+                self.entity_menu_open = !self.entity_menu_open;
+                self.override_menu = None;
+                self.field_dropdown = None;
+            }
+            FormAction::PickEntityOption(k) => self.pick_entity_option(k, world),
+            FormAction::JumpOverride => self.jump_to_override(world),
             FormAction::Confirm => self.confirm_form(world),
             FormAction::Close => self.close_form(),
-            FormAction::CloseOverlays => self.field_dropdown = None,
+            FormAction::CloseOverlays => {
+                self.field_dropdown = None;
+                self.override_menu = None;
+                self.entity_menu_open = false;
+            }
             FormAction::Consume => {}
         }
     }
@@ -256,6 +312,40 @@ impl EditorHook {
             return;
         }
         let args_val = serde_json::Value::Object(args);
+        // A template-derived asset commits the minimal patch against its
+        // template baseline: only the fields that differ are authored, so
+        // everything else keeps tracking the template. Its name is the link to
+        // the template, so a rename is rejected rather than silently breaking it.
+        if let Some(t) = self.form_template.clone() {
+            if typed != t.name {
+                self.form_error = Some("a template instance keeps its generated name".to_string());
+                return;
+            }
+            let baseline = serde_json::Value::Object(t.baseline);
+            let patch = overrides::minimal_patch(&baseline, &args_val);
+            match (self.form_target.entry(), patch) {
+                (Some(idx), Some(p)) => {
+                    if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
+                        obj.insert("args".to_string(), p);
+                    }
+                    self.mark_changed();
+                }
+                // Every field matches the template again: the patch line has
+                // nothing left to say, so it goes away and the asset returns
+                // to pristine. `remove_entry_at` records the undo step.
+                (Some(idx), None) => self.remove_entry_at(idx),
+                (None, Some(p)) => {
+                    self.entries.push(serde_json::json!({
+                        "name": t.name, "type": ty, "args": p,
+                    }));
+                    self.mark_changed();
+                }
+                // Nothing diverges and nothing is authored: nothing to commit.
+                (None, None) => {}
+            }
+            self.close_form();
+            return;
+        }
         match self.form_target.entry() {
             Some(idx) => {
                 let name = self.finalize_rename(&typed, idx, &ty);

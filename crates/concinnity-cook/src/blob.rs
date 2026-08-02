@@ -513,6 +513,7 @@ mod tests {
             name: "bistro_mat_wood".to_string(),
             asset_type: "Material".to_string(),
             generated_by: "bistro".to_string(),
+            args: serde_json::json!({}),
         }];
 
         write_lock(&named, &resources, &injected, &shadowed, &paths).expect("write_lock");

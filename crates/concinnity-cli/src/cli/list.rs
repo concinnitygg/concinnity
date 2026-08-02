@@ -297,6 +297,7 @@ mod tests {
                 name: "bistro_mat_glass".to_string(),
                 asset_type: "Material".to_string(),
                 generated_by: "bistro".to_string(),
+                args: serde_json::json!({}),
             }],
             authored: vec!["cam".to_string(), "bistro_mat_glass".to_string()],
         }

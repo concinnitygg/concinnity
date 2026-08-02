@@ -109,16 +109,12 @@ impl EditorHook {
         if !self.form_open() {
             return;
         }
-        let Some(idx) = self.selection.active().and_then(|name| {
-            self.entries
-                .iter()
-                .position(|e| entry_name(e) == Some(name))
-        }) else {
+        let Some(name) = self.selection.active().map(String::from) else {
             return;
         };
-        if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
-            self.open_form(world, ty, FormTarget::Entry(idx));
-        }
+        // Through the by-name path so a template-derived asset (an authored
+        // patch line included) opens with its override state.
+        self.open_asset_form(&name, world);
     }
 
     // Drive the selection rings: while the HUD is up in edit mode, project

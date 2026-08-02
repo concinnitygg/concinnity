@@ -35,11 +35,13 @@ fn asset_type_norm(v: &serde_json::Value) -> String {
 }
 
 // Record a skipped companion the world provides itself under the spec's own
-// name: that asset is the user's copy of the companion, and a listing needs to
-// say so rather than leave the companion unaccounted for. A spec skipped because
-// the world has that type under some OTHER name is not an override of this
-// asset, and an injection from an earlier round is our own, so neither counts.
+// name: that asset is the user's patch of the companion, so the spec's args
+// are merged under it and a listing can say so rather than leave the companion
+// unaccounted for. A spec skipped because the world has that type under some
+// OTHER name is not an override of this asset, and an injection from an
+// earlier round is our own, so neither counts.
 fn record_if_overridden(
+    assets: &mut [serde_json::Value],
     snapshot: &[serde_json::Value],
     report: &mut ExpandReport,
     spec: &CompanionSpec,
@@ -49,7 +51,8 @@ fn record_if_overridden(
         .any(|v| v.get("name").and_then(|n| n.as_str()) == Some(spec.name));
     let ours = report.injected.iter().any(|i| i.name == spec.name);
     if claimed && !ours {
-        report.record_shadowed(spec.name, spec.asset_type, "companion");
+        report.record_shadowed(spec.name, spec.asset_type, "companion", spec.args.clone());
+        super::shadow::merge_into_authored(assets, spec.name, &spec.args);
     }
 }
 
@@ -148,7 +151,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         let mut to_inject = Vec::new();
         for spec in candidates {
             if present_types.contains(&type_norm_str(spec.asset_type)) {
-                record_if_overridden(&snapshot, report, &spec);
+                record_if_overridden(assets, &snapshot, report, &spec);
                 continue;
             }
             if !seen_names.insert(spec.name.to_string()) {

@@ -2772,12 +2772,44 @@ fn groups_fold_and_unfold() {
     assert_eq!(h.tree_rows(&world).len(), folded, "and folded again");
 }
 
-// The heart of the merged panel: a generated asset has no world.jsonl line, so
-// clicking it opens a form seeded from what the expansion produced, and ONLY
-// confirming appends that line -- keeping the generated name, which is what
-// makes the new line override the expansion.
+// Change one field of the open template-derived form through its control so a
+// confirm has a divergence to commit: a bool toggles, any other visible
+// scalar/text field gets a distinct value typed over it. Returns the changed
+// field's dotted key.
+fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
+    if let Some(j) = h
+        .form_fields
+        .iter()
+        .position(|f| matches!(f.kind, form::FieldKind::Bool))
+    {
+        let key = h.form_fields[j].key.clone();
+        h.apply_form(FormAction::ToggleField(j), world);
+        return key;
+    }
+    let window = h.form_window();
+    let j = h
+        .form_fields
+        .iter()
+        .position(|f| {
+            matches!(
+                f.kind,
+                form::FieldKind::Str | form::FieldKind::Int | form::FieldKind::Float
+            )
+        })
+        .filter(|&j| j < window)
+        .expect("a visible scalar field to diverge");
+    let key = h.form_fields[j].key.clone();
+    widget::seed_field(world, form_panel::form_input(j), "42424");
+    key
+}
+
+// The heart of the template loop: a generated asset has no world.jsonl line,
+// so clicking it opens a form seeded from what the expansion produced. An
+// unchanged confirm commits NOTHING (the asset stays pristine); diverging a
+// field and confirming appends the minimal patch line -- keeping the generated
+// name, which is what makes it patch the expansion.
 #[test]
-fn editing_a_generated_asset_promotes_it_on_confirm() {
+fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
     let mut h = expandable_hook();
     let mut world = world_with_fields();
     h.refresh_tree_if_needed();
@@ -2790,38 +2822,56 @@ fn editing_a_generated_asset_promotes_it_on_confirm() {
         matches!(h.form_target, FormTarget::Promote(_)),
         "seeded from the expansion, not from an entry"
     );
+    assert!(
+        h.form_template.is_some(),
+        "the form knows its template baseline"
+    );
     assert_eq!(
         widget::field_text(&world, form_panel::NAME_INPUT),
         name,
         "the name heading carries the generated name"
     );
-    assert_eq!(
-        h.entries.len(),
-        before,
-        "opening the form alone adds no line"
-    );
     assert!(h.selection.contains(&name), "and the row selects");
 
     h.apply_form(FormAction::Confirm, &mut world);
-    assert_eq!(h.entries.len(), before + 1, "confirming appends the line");
+    assert_eq!(
+        h.entries.len(),
+        before,
+        "an unchanged confirm authors nothing"
+    );
+
+    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
+    let key = diverge_a_form_field(&mut h, &mut world);
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries.len(), before + 1, "a divergence appends the line");
     let added = h.entries.last().unwrap();
     assert_eq!(
         entry_name(added),
         Some(name.as_str()),
-        "the promoted line keeps the generated name, so it shadows it"
+        "the patch line keeps the generated name, so it patches it"
+    );
+    let root = key.split('.').next().unwrap().to_string();
+    let args = added.get("args").and_then(|a| a.as_object()).unwrap();
+    assert_eq!(
+        args.keys().collect::<Vec<_>>(),
+        vec![&root],
+        "only the diverged field is authored"
     );
     assert!(h.dirty && h.tree_stale);
 }
 
-// After promoting, the asset relists once -- as an authored line under the
-// world group -- rather than staying under its origin or appearing twice.
+// After a divergence is committed, the asset relists once -- still under its
+// ORIGIN group, marked Overridden -- rather than moving to World or appearing
+// twice. Clicking it again edits the patch line in place, template-aware.
 #[test]
-fn a_promoted_asset_relists_as_authored_under_the_world_group() {
+fn a_patched_asset_relists_under_its_origin_as_overridden() {
     let mut h = expandable_hook();
     let mut world = world_with_fields();
     h.refresh_tree_if_needed();
     let (gi, ai, name) = a_promotable_asset(&h);
+    let origin = h.tree_groups[gi].label.clone();
     h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
+    diverge_a_form_field(&mut h, &mut world);
     h.apply_form(FormAction::Confirm, &mut world);
     h.refresh_tree_if_needed();
 
@@ -2833,24 +2883,193 @@ fn a_promoted_asset_relists_as_authored_under_the_world_group() {
         .collect();
     assert_eq!(
         listings,
-        [asset_tree::WORLD_GROUP],
-        "listed once, under World"
+        [origin.as_str()],
+        "listed once, under its origin group"
     );
-    let promoted = h
+    let patched = h
         .tree_groups
         .iter()
         .flat_map(|g| &g.assets)
         .find(|a| a.name == name)
         .unwrap();
-    assert!(promoted.promote.is_none(), "nothing left to promote");
+    assert_eq!(patched.badge, asset_tree::Badge::Overridden);
 
-    // Clicking it again now edits the line in place rather than re-promoting.
+    // Clicking it again edits the patch line in place, still template-aware.
     let (g2, i2) = row_of(&h, &name);
     let before = h.entries.len();
     h.apply_panel(PanelAction::SelectRow(g2, i2), &mut world);
     assert!(matches!(h.form_target, FormTarget::Entry(_)));
+    assert!(h.form_template.is_some());
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), before, "edited in place, not appended");
+}
+
+// The override loop over a prefab world: two instances of one Prefab, the
+// first carrying a patch that pins its position.
+fn prefab_hook() -> EditorHook {
+    isolate_state_dir();
+    let mut h = hook(vec![
+        serde_json::json!({"name":"box","type":"ProceduralMesh","args":{"generator":"box"}}),
+        serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+            {"name":"a","kind":"prop","mesh":"box","position":[1.0,0.0,0.0]}]}}),
+        serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair","position":[10.0,0.0,0.0]}}),
+        serde_json::json!({"name":"i2","type":"Prop","args":{"prefab":"pair"}}),
+        serde_json::json!({"name":"i1_a","type":"Prop","args":{"position":[5.0,0.0,0.0]}}),
+    ]);
+    h.panel_open = true;
+    h
+}
+
+// The patched instance's form marks exactly the pinned field, and its
+// override menu offers Revert plus Apply with the blast radius spelled out.
+#[test]
+fn an_overridden_field_marks_and_offers_revert_and_apply() {
+    let mut h = prefab_hook();
+    let mut world = world_with_fields();
+    h.open_asset_form("i1_a", &mut world);
+    assert!(h.form_template.is_some(), "i1_a derives from the prefab");
+
+    let marks = h.form_override_marks().expect("marks for a template form");
+    let j = h
+        .form_fields
+        .iter()
+        .position(|f| f.key == "position")
+        .expect("a position field");
+    assert_eq!(marks[j], overrides::FieldOrigin::Overridden);
+    assert!(
+        marks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !h.form_fields[*i].key.starts_with("position"))
+            .all(|(_, m)| *m == overrides::FieldOrigin::Inherited),
+        "only the pinned field is marked"
+    );
+
+    let options = h.override_menu_options(j);
+    let labels: Vec<&str> = options.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels[0], "Revert 'position'");
+    assert_eq!(labels[1], "Apply to Prefab 'pair' (updates 2 instances)");
+}
+
+// Reverting the field removes the patch line outright (it pinned nothing
+// else), restoring the pristine instance -- and it is exactly one undo step.
+#[test]
+fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
+    let mut h = prefab_hook();
+    let mut world = world_with_fields();
+    let before = h.entries.len();
+    h.open_asset_form("i1_a", &mut world);
+    let j = h
+        .form_fields
+        .iter()
+        .position(|f| f.key == "position")
+        .unwrap();
+
+    h.apply_form(FormAction::OpenOverrideMenu(j), &mut world);
+    h.apply_form(FormAction::PickOverrideOption(0), &mut world);
+    assert_eq!(h.entries.len(), before - 1, "the patch line is gone");
+    assert!(
+        !h.entries.iter().any(|e| entry_name(e) == Some("i1_a")),
+        "the asset is pristine again"
+    );
+    assert!(h.form_open(), "the form re-derives instead of closing");
+    assert!(
+        h.form_override_marks()
+            .unwrap()
+            .iter()
+            .all(|m| *m == overrides::FieldOrigin::Inherited)
+    );
+
+    h.undo(&mut world);
+    assert_eq!(h.entries.len(), before, "one undo restores the patch line");
+    assert!(h.entries.iter().any(|e| entry_name(e) == Some("i1_a")));
+}
+
+// Applying the override writes the value back into the Prefab definition
+// through the inverse instance transform, drops the patch, and undoes as one
+// step.
+#[test]
+fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
+    let mut h = prefab_hook();
+    let mut world = world_with_fields();
+    let before = h.entries.len();
+    h.open_asset_form("i1_a", &mut world);
+    let j = h
+        .form_fields
+        .iter()
+        .position(|f| f.key == "position")
+        .unwrap();
+
+    h.apply_form(FormAction::OpenOverrideMenu(j), &mut world);
+    h.apply_form(FormAction::PickOverrideOption(1), &mut world);
+
+    let def = h
+        .entries
+        .iter()
+        .find(|e| entry_name(e) == Some("pair"))
+        .unwrap();
+    // World (5,0,0) under instance position (10,0,0) is local (-5,0,0).
+    assert_eq!(
+        def["args"]["props"][0]["position"],
+        serde_json::json!([-5.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        h.entries.len(),
+        before - 1,
+        "the emptied patch line is gone; the template now carries the value"
+    );
+
+    h.undo(&mut world);
+    let def = h
+        .entries
+        .iter()
+        .find(|e| entry_name(e) == Some("pair"))
+        .unwrap();
+    assert_eq!(
+        def["args"]["props"][0]["position"],
+        serde_json::json!([1.0, 0.0, 0.0]),
+        "one undo restores the definition and the patch line together"
+    );
+    assert_eq!(h.entries.len(), before);
+}
+
+// The entity menu on a patched instance offers Revert-all (and no Apply-all
+// for a field set it can fully apply -- position maps, so it is offered too);
+// Revert-all deletes the patch line.
+#[test]
+fn the_entity_menu_reverts_all_overrides() {
+    let mut h = prefab_hook();
+    let mut world = world_with_fields();
+    let before = h.entries.len();
+    h.open_asset_form("i1_a", &mut world);
+
+    let labels: Vec<String> = h
+        .entity_menu_options()
+        .into_iter()
+        .map(|(_, l)| l)
+        .collect();
+    assert!(
+        labels.iter().any(|l| l == "Revert all overrides"),
+        "{labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|l| l == "Apply all to Prefab 'pair' (updates 2 instances)"),
+        "{labels:?}"
+    );
+
+    h.apply_form(FormAction::OpenEntityMenu, &mut world);
+    let k = labels
+        .iter()
+        .position(|l| l == "Revert all overrides")
+        .unwrap();
+    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    assert_eq!(h.entries.len(), before - 1);
+    assert!(!h.entries.iter().any(|e| entry_name(e) == Some("i1_a")));
+
+    h.undo(&mut world);
+    assert_eq!(h.entries.len(), before, "revert-all is one undo step");
 }
 
 // The passes that emit unconditionally cannot be overridden by a copy, so their

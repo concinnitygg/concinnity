@@ -278,6 +278,7 @@ fn badge_color(badge: Badge) -> [f32; 3] {
         Badge::Authored => theme::LABEL_DIM,
         Badge::Imported => [0.45, 0.72, 0.62],
         Badge::Injected => [0.70, 0.58, 0.88],
+        Badge::Overridden => [0.62, 0.76, 1.0],
     }
 }
 
@@ -453,15 +454,16 @@ impl PanelView<'_> {
     }
 
     // The visible slot of the asset the open menu belongs to, when that asset is
-    // still on screen and authored: only an authored line has the Delete the menu
-    // offers, so only those rows open one.
+    // still on screen and has a world.jsonl line to delete: an authored asset's
+    // own line, or an overridden instance's patch line (deleting it reverts the
+    // instance to its template).
     fn menu_target(&self, rows: usize) -> Option<usize> {
         let name = self.row_menu?;
         (0..rows).find(|&slot| {
             matches!(
                 self.rows.get(self.scroll + slot),
                 Some(TreeRow::Asset { name: n, badge, .. })
-                    if n == name && *badge == Badge::Authored
+                    if n == name && matches!(badge, Badge::Authored | Badge::Overridden)
             )
         })
     }
@@ -545,9 +547,12 @@ pub(crate) fn hit_test(
                     PanelAction::ToggleHide(*group, *index)
                 } else if point_in(mx, my, lock_rect(o, w, slot)) {
                     PanelAction::ToggleLock(*group, *index)
-                } else if *badge == Badge::Authored && point_in(mx, my, dot_rect(o, w, slot)) {
-                    // The menu offers only Delete, so it opens for the authored
-                    // rows that have a world.jsonl line to remove.
+                } else if matches!(badge, Badge::Authored | Badge::Overridden)
+                    && point_in(mx, my, dot_rect(o, w, slot))
+                {
+                    // The menu offers only Delete, so it opens for the rows
+                    // with a world.jsonl line to remove (an overridden
+                    // instance's Delete reverts it to its template).
                     PanelAction::OpenRowMenu(*group, *index)
                 } else {
                     PanelAction::SelectRow(*group, *index)
@@ -673,7 +678,7 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
                 // whose menu is open, else the hovered row; its own slot keeps
                 // the type beside it reading either way.
                 let menu_here = view.row_menu == Some(name.as_str());
-                if *badge == Badge::Authored && (menu_here || hovered) {
+                if matches!(badge, Badge::Authored | Badge::Overridden) && (menu_here || hovered) {
                     let over_dots = point_in(view.mouse[0], view.mouse[1], dot_rect(o, w, slot));
                     place_dot(world, o, w, slot, menu_here || over_dots);
                 }

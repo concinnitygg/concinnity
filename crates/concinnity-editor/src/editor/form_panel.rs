@@ -23,6 +23,7 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
+use super::overrides::FieldOrigin;
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
@@ -37,6 +38,11 @@ pub(crate) const CYCLE_MAX: usize = 5;
 pub(crate) const MAX_DROP_ROWS: usize = 8;
 // A field-value dropdown option row's height.
 const DROP_ROW_H: f32 = 28.0;
+// The most options an override / entity menu holds (Revert-all, Apply-all,
+// Materialize, Minimize).
+pub(crate) const MAX_OVR_ROWS: usize = 4;
+const OVR_ROW_H: f32 = 26.0;
+const OVR_MENU_W: f32 = 340.0;
 
 const EDIT: u32 = registry::base(PanelKey::Edit);
 pub(crate) const EDIT_BG: AssetId = AssetId(EDIT);
@@ -82,6 +88,29 @@ pub(crate) fn drop_row_bg(r: usize) -> AssetId {
 }
 pub(crate) fn drop_row_label(r: usize) -> AssetId {
     AssetId(EDIT + 0xE0 + r as u32)
+}
+// Override chrome for a template-derived asset: a per-slot accent bar +
+// action button on overridden rows, a header summary chip + entity-menu
+// button, and a floating Revert / Apply menu.
+pub(crate) fn ovr_bar(r: usize) -> AssetId {
+    AssetId(EDIT + 0x100 + r as u32)
+}
+pub(crate) fn ovr_btn_bg(r: usize) -> AssetId {
+    AssetId(EDIT + 0x120 + r as u32)
+}
+pub(crate) fn ovr_btn_label(r: usize) -> AssetId {
+    AssetId(EDIT + 0x140 + r as u32)
+}
+pub(crate) const OVR_CHIP_BG: AssetId = AssetId(EDIT + 0x160);
+pub(crate) const OVR_CHIP_LABEL: AssetId = AssetId(EDIT + 0x161);
+pub(crate) const ENT_BTN_BG: AssetId = AssetId(EDIT + 0x162);
+pub(crate) const ENT_BTN_LABEL: AssetId = AssetId(EDIT + 0x163);
+pub(crate) const OVR_MENU_BG: AssetId = AssetId(EDIT + 0x164);
+pub(crate) fn ovr_menu_row_bg(r: usize) -> AssetId {
+    AssetId(EDIT + 0x170 + r as u32)
+}
+pub(crate) fn ovr_menu_row_label(r: usize) -> AssetId {
+    AssetId(EDIT + 0x180 + r as u32)
 }
 
 // Which of the form's inputs holds keyboard focus (re-asserted each frame so the
@@ -130,6 +159,10 @@ const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];
 const LABEL_WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
+// Override chrome: the accent marks an overridden row; instance-only fields
+// (no template counterpart) read dimmer.
+const OVERRIDE_LABEL: [f32; 3] = [0.62, 0.76, 1.0];
+const INSTANCE_ONLY_TINT: [f32; 4] = [0.55, 0.58, 0.68, 1.0];
 
 // Where the panel sits until the user drags it: to the left of the Assets
 // panel's default anchor, below the top bar.
@@ -266,6 +299,87 @@ fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
     view.form_fields.len().min(rows_for_height(s[1]))
 }
 
+// The accent bar down an overridden row's left edge.
+fn ovr_bar_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let row = field_row_rect(o, w, r);
+    [row[0] + 3.0, row[1] + 5.0, 3.0, FIELD_H - 10.0]
+}
+
+// The per-row override-menu button, tucked into the caption column's right
+// edge (never under a control, so a text field's opaque background cannot
+// cover it).
+fn ovr_btn_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
+    let row = field_row_rect(o, w, r);
+    let side = 16.0;
+    [
+        row[0] + LABEL_COL - side - 6.0,
+        row[1] + (FIELD_H - side) * 0.5,
+        side,
+        side,
+    ]
+}
+
+// The entity-menu button on the status line's right end.
+fn ent_btn_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    [
+        o[0] + w - PAD - 18.0,
+        widget::header_y(o, PAD) + NAME_H + 4.0,
+        18.0,
+        18.0,
+    ]
+}
+
+// The "N overridden" summary chip to the entity button's left.
+fn ovr_chip_rect(o: [f32; 2], w: f32) -> [f32; 4] {
+    let ent = ent_btn_rect(o, w);
+    [ent[0] - GAP - 110.0, ent[1], 110.0, 18.0]
+}
+
+// One option row of the floating override / entity menu anchored at `anchor`
+// (a row button or the entity button), clamped inside the panel.
+fn ovr_menu_option_rect(o: [f32; 2], w: f32, anchor: [f32; 4], r: usize) -> [f32; 4] {
+    let menu_w = OVR_MENU_W.min(w - 2.0 * PAD);
+    let x = (anchor[0]).min(o[0] + w - PAD - menu_w).max(o[0] + PAD);
+    [
+        x,
+        anchor[1] + anchor[3] + 2.0 + r as f32 * OVR_ROW_H,
+        menu_w,
+        OVR_ROW_H,
+    ]
+}
+
+// The menu's opaque backing behind `shown` option rows.
+fn ovr_menu_backing(o: [f32; 2], w: f32, anchor: [f32; 4], shown: usize) -> [f32; 4] {
+    let first = ovr_menu_option_rect(o, w, anchor, 0);
+    [
+        first[0] - 2.0,
+        first[1] - 2.0,
+        first[2] + 4.0,
+        shown as f32 * OVR_ROW_H + 4.0,
+    ]
+}
+
+// Where the open override / entity menu anchors this frame, if any: the field
+// menu hangs off its row's button (gone when its row scrolls out), the entity
+// menu off the header button.
+fn ovr_menu_anchor(view: &FormView, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
+    let ovr = view.overrides.as_ref()?;
+    if let Some((field, _)) = ovr.field_menu {
+        let slot = field_slot(view, window, field)?;
+        return Some(ovr_btn_rect(o, w, slot));
+    }
+    ovr.entity_menu.is_some().then(|| ent_btn_rect(o, w))
+}
+
+// The open override / entity menu's option labels, if any.
+fn ovr_menu_options<'a>(view: &'a FormView) -> Option<&'a [String]> {
+    let ovr = view.overrides.as_ref()?;
+    if let Some((_, options)) = ovr.field_menu {
+        return Some(options);
+    }
+    ovr.entity_menu
+}
+
 // The slot showing logical field `j`, if it is inside the scroll window of
 // `window` rows.
 fn field_slot(view: &FormView, window: usize, j: usize) -> Option<usize> {
@@ -346,6 +460,16 @@ pub(crate) enum FormAction {
     // Expand / collapse the disclosure of non-colour vector arg field `i` (its
     // per-element leaves).
     ToggleVecExpand(usize),
+    // Open (or close) the override menu of the marked field `i`.
+    OpenOverrideMenu(usize),
+    // Pick option `i` from the open per-field override menu.
+    PickOverrideOption(usize),
+    // Open (or close) the entity-level override menu in the header.
+    OpenEntityMenu,
+    // Pick option `i` from the open entity-level menu.
+    PickEntityOption(usize),
+    // The header summary chip: scroll to the next overridden field.
+    JumpOverride,
     // The Apply / Add button: validate + commit.
     Confirm,
     // The Cancel button: close the panel, discarding the form.
@@ -354,6 +478,19 @@ pub(crate) enum FormAction {
     CloseOverlays,
     // A click inside the panel that hits no control (swallowed).
     Consume,
+}
+
+// Override state for a template-derived asset's form, borrowed from the
+// hook's per-tick data.
+pub(crate) struct OverridesView<'a> {
+    // Per-field origin, parallel to `form_fields`.
+    pub marks: &'a [FieldOrigin],
+    // How many fields diverge from the template.
+    pub count: usize,
+    // The open per-field menu: (logical field index, option labels).
+    pub field_menu: Option<(usize, &'a [String])>,
+    // The open entity-level menu's option labels.
+    pub entity_menu: Option<&'a [String]>,
 }
 
 // The per-frame data the hook hands to `apply` / `hit_test`.
@@ -374,6 +511,8 @@ pub(crate) struct FormView<'a> {
     pub field_dropdown_scroll: usize,
     // A validation error from the last rejected commit.
     pub form_error: Option<&'a str>,
+    // Per-field override state when the form edits a template-derived asset.
+    pub overrides: Option<OverridesView<'a>>,
     pub mouse: [f32; 2],
 }
 
@@ -394,6 +533,26 @@ pub(crate) fn hit_test(
 ) -> Option<FormAction> {
     let w = s[0];
     let window = rows_for_height(s[1]);
+    // An open override / entity menu is modal over the panel: its option rows
+    // pick, anything else dismisses it.
+    if let (Some(anchor), Some(options)) =
+        (ovr_menu_anchor(view, o, w, window), ovr_menu_options(view))
+    {
+        let picking_field = view
+            .overrides
+            .as_ref()
+            .is_some_and(|ovr| ovr.field_menu.is_some());
+        for k in 0..options.len().min(MAX_OVR_ROWS) {
+            if point_in(mx, my, ovr_menu_option_rect(o, w, anchor, k)) {
+                return Some(if picking_field {
+                    FormAction::PickOverrideOption(k)
+                } else {
+                    FormAction::PickEntityOption(k)
+                });
+            }
+        }
+        return Some(FormAction::CloseOverlays);
+    }
     // An open value dropdown is modal over the panel: its option rows pick,
     // anything else dismisses it.
     if let Some(open) = view.field_dropdown
@@ -427,6 +586,27 @@ pub(crate) fn hit_test(
     }
     if point_in(mx, my, name_rect(o, w)) {
         return Some(FormAction::FocusName);
+    }
+    // The override chrome of a template-derived asset: the entity-menu button,
+    // the summary chip, and each marked row's menu button (in the caption
+    // column, so it never contends with a control).
+    if let Some(ovr) = &view.overrides {
+        if point_in(mx, my, ent_btn_rect(o, w)) {
+            return Some(FormAction::OpenEntityMenu);
+        }
+        if ovr.count > 0 && point_in(mx, my, ovr_chip_rect(o, w)) {
+            return Some(FormAction::JumpOverride);
+        }
+        for r in 0..visible_field_count(view, s) {
+            let j = view.form_scroll + r;
+            let marked = ovr
+                .marks
+                .get(j)
+                .is_some_and(|m| *m != FieldOrigin::Inherited);
+            if marked && point_in(mx, my, ovr_btn_rect(o, w, r)) {
+                return Some(FormAction::OpenOverrideMenu(j));
+            }
+        }
     }
 
     // Arg field controls over the visible window: slot `r` is logical field
@@ -675,6 +855,57 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
         }
     }
 
+    // Override chrome for a template-derived asset: per-row accent bars +
+    // menu buttons, and the header summary chip + entity-menu button.
+    if let Some(ovr) = &view.overrides {
+        for r in 0..visible_field_count(view, s) {
+            let j = scroll + r;
+            let Some(mark) = ovr.marks.get(j) else {
+                break;
+            };
+            if *mark == FieldOrigin::Inherited {
+                continue;
+            }
+            let tint = match mark {
+                FieldOrigin::InstanceOnly => INSTANCE_ONLY_TINT,
+                _ => theme::ACCENT_TINT,
+            };
+            place_rounded(world, ovr_bar(r), ovr_bar_rect(o, w, r), tint, 1.5, true);
+            let btn = ovr_btn_rect(o, w, r);
+            let hover = point_in(view.mouse[0], view.mouse[1], btn);
+            let open_here = view
+                .overrides
+                .as_ref()
+                .and_then(|v| v.field_menu)
+                .is_some_and(|(f, _)| f == j);
+            let bg = if hover || open_here {
+                theme::HOVER_TINT
+            } else {
+                CYCLE_TINT
+            };
+            place_rounded(world, ovr_btn_bg(r), btn, bg, 4.0, true);
+            place_center_label(world, ovr_btn_label(r), btn, "*", OVERRIDE_LABEL, true);
+        }
+
+        let ent = ent_btn_rect(o, w);
+        let hover = point_in(view.mouse[0], view.mouse[1], ent);
+        let bg = if hover || ovr.entity_menu.is_some() {
+            theme::HOVER_TINT
+        } else {
+            CYCLE_TINT
+        };
+        place_rounded(world, ENT_BTN_BG, ent, bg, 4.0, true);
+        place_center_label(world, ENT_BTN_LABEL, ent, "...", LABEL, true);
+        if ovr.count > 0 {
+            let chip = ovr_chip_rect(o, w);
+            let hover = point_in(view.mouse[0], view.mouse[1], chip);
+            let bg = if hover { theme::HOVER_TINT } else { CYCLE_TINT };
+            place_rounded(world, OVR_CHIP_BG, chip, bg, 4.0, true);
+            let caption = format!("{} overridden", ovr.count);
+            place_center_label(world, OVR_CHIP_LABEL, chip, &caption, OVERRIDE_LABEL, true);
+        }
+    }
+
     // A scrollbar down the field region's right edge when the form overflows the
     // visible window.
     layout_form_scrollbar(world, view.form_fields.len(), scroll, o, w, window);
@@ -682,6 +913,46 @@ pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
     // The open value dropdown draws last so it floats over the slots below it.
     if let Some(open) = view.field_dropdown {
         layout_field_dropdown(world, view, o, w, window, open);
+    }
+
+    // The open override / entity menu draws over everything else.
+    if let (Some(anchor), Some(options)) =
+        (ovr_menu_anchor(view, o, w, window), ovr_menu_options(view))
+    {
+        let shown = options.len().min(MAX_OVR_ROWS);
+        place_rounded(
+            world,
+            OVR_MENU_BG,
+            ovr_menu_backing(o, w, anchor, shown),
+            DROP_BG_TINT,
+            theme::CONTROL_RADIUS,
+            true,
+        );
+        for (k, option) in options.iter().take(MAX_OVR_ROWS).enumerate() {
+            let rect = ovr_menu_option_rect(o, w, anchor, k);
+            let hovered = point_in(view.mouse[0], view.mouse[1], rect);
+            let tint = if hovered {
+                OPTION_TINT_HOVER
+            } else {
+                OPTION_TINT
+            };
+            place_rounded(
+                world,
+                ovr_menu_row_bg(k),
+                theme::highlight_rect(rect),
+                tint,
+                theme::CONTROL_RADIUS,
+                true,
+            );
+            widget::place_left_label(
+                world,
+                ovr_menu_row_label(k),
+                [rect[0] + PAD, rect[1] + OVR_ROW_H * 0.5 - theme::TEXT_HALF],
+                option,
+                LABEL,
+                true,
+            );
+        }
     }
 }
 
@@ -898,22 +1169,43 @@ pub(crate) fn dropdown_ids() -> Vec<AssetId> {
     ids
 }
 
+// The open override / entity menu's elements, raised above the rest of the
+// panel while one is open (same contract as `dropdown_ids`).
+pub(crate) fn override_menu_ids() -> Vec<AssetId> {
+    let mut ids = vec![OVR_MENU_BG];
+    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_bg));
+    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_label));
+    ids
+}
+
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG];
+    let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG, OVR_CHIP_BG, ENT_BTN_BG];
     ids.extend((0..form::FIELD_POOL_MAX).map(form_toggle_bg));
     ids.extend((0..form::FIELD_POOL_MAX).map(form_swatch));
+    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_bar));
+    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_btn_bg));
     ids.extend([FORM_TRACK, FORM_THUMB, DROP_BG]);
     ids.extend((0..MAX_DROP_ROWS).map(drop_row_bg));
-    ids.extend([DROP_TRACK, DROP_THUMB]);
+    ids.extend([DROP_TRACK, DROP_THUMB, OVR_MENU_BG]);
+    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_bg));
     ids
 }
 // Same draw-order contract; the dropdown's option captions come last so they
 // draw above the slot captions the dropdown floats over.
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, FORM_STATUS];
+    let mut ids = vec![
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        APPLY_LABEL,
+        FORM_STATUS,
+        OVR_CHIP_LABEL,
+        ENT_BTN_LABEL,
+    ];
     ids.extend((0..form::FIELD_POOL_MAX).map(form_row_label));
     ids.extend((0..form::FIELD_POOL_MAX).map(form_enum_label));
+    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_btn_label));
     ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
+    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_label));
     ids
 }
 // Every typed field: the name heading and the arg-field text inputs.
@@ -974,6 +1266,7 @@ mod tests {
             field_dropdown: None,
             field_dropdown_scroll: 0,
             form_error: None,
+            overrides: None,
             mouse: [0.0, 0.0],
         }
     }

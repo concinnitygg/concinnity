@@ -109,6 +109,8 @@ impl EditorHook {
         // date. Recomputed by the frame drive while the panel shows, so a burst
         // of edits costs one expansion rather than one per edit.
         self.tree_stale = true;
+        // Template baselines follow the entries too; rebuilt on demand.
+        self.template_index = None;
     }
 
     // Step the entry list back / forward through the history stacks. No-ops at
@@ -144,6 +146,7 @@ impl EditorHook {
         self.rebuild_preview = true;
         self.sim.on_edit();
         self.tree_stale = true;
+        self.template_index = None;
         self.close_form();
         self.row_menu = None;
         self.picker_open = false;

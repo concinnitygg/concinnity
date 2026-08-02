@@ -30,6 +30,9 @@ pub(crate) enum Badge {
     Authored,
     Imported,
     Injected,
+    // A template-derived asset carrying an authored patch: it diverges from
+    // what its origin generates.
+    Overridden,
 }
 
 // One listed asset: its name, type, provenance badge, and how editing it
@@ -55,23 +58,23 @@ pub(crate) struct TreeGroup {
 }
 
 // Build the grouped model from a cooked world. Every live asset appears exactly
-// once, under whatever produced it; an authored line that shadows a generated
-// asset lists as authored under the world group, since the tree shows the live
-// world rather than a copy-promotion view.
+// once, under whatever produced it. An authored patch of a generated asset
+// lists under its ORIGIN group with the Overridden badge -- divergence shows
+// where the template's other children live, not in the world group.
 pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
     let mut groups: Vec<TreeGroup> = Vec::new();
     for asset in &loaded.assets {
         let prov = loaded.provenance(&asset.name);
-        let (label, badge) = if prov.is_authored() {
-            (WORLD_GROUP, Badge::Authored)
-        } else if let Some(source) = prov.source() {
-            let badge = match prov {
-                concinnity_cook::world::Provenance::Injected { .. } => Badge::Injected,
-                _ => Badge::Imported,
-            };
-            (source, badge)
-        } else {
-            (UNATTRIBUTED, Badge::Imported)
+        let (label, badge) = match &prov {
+            concinnity_cook::world::Provenance::AuthoredShadowing { generated_by } => {
+                (generated_by.as_str(), Badge::Overridden)
+            }
+            _ if prov.is_authored() => (WORLD_GROUP, Badge::Authored),
+            concinnity_cook::world::Provenance::Injected { by } => (by.as_str(), Badge::Injected),
+            _ => match prov.source() {
+                Some(source) => (source, Badge::Imported),
+                None => (UNATTRIBUTED, Badge::Imported),
+            },
         };
         let entry = TreeAsset {
             name: asset.name.clone(),
@@ -252,6 +255,7 @@ mod tests {
                 name: "fox_mat_wood".to_string(),
                 asset_type: "Material".to_string(),
                 generated_by: "fox".to_string(),
+                args: serde_json::json!({}),
             }],
             authored: vec!["cam".to_string(), "fox_mat_wood".to_string()],
         }
@@ -272,18 +276,30 @@ mod tests {
     fn every_live_asset_lists_exactly_once_with_its_badge() {
         let groups = groups_from(&loaded());
         let world = group(&groups, WORLD_GROUP);
-        // Authored order kept, shadowing line included as authored.
         let names: Vec<&str> = world.assets.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, vec!["cam", "fox_mat_wood"]);
+        assert_eq!(names, vec!["cam"]);
         assert!(world.assets.iter().all(|a| a.badge == Badge::Authored));
 
+        // The patched instance lists under its origin, marked Overridden, so
+        // divergence shows next to the template's other children.
         let fox = group(&groups, "fox");
         let names: Vec<&str> = fox.assets.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, vec!["fox_mat_a", "fox_mat_b"], "sorted by name");
-        assert!(fox.assets.iter().all(|a| a.badge == Badge::Imported));
+        assert_eq!(
+            names,
+            vec!["fox_mat_a", "fox_mat_b", "fox_mat_wood"],
+            "sorted by name"
+        );
+        let wood = fox
+            .assets
+            .iter()
+            .find(|a| a.name == "fox_mat_wood")
+            .unwrap();
+        assert_eq!(wood.badge, Badge::Overridden);
         assert!(
-            !fox.assets.iter().any(|a| a.name == "fox_mat_wood"),
-            "the shadowing line lists under World, not twice"
+            fox.assets
+                .iter()
+                .filter(|a| a.name != "fox_mat_wood")
+                .all(|a| a.badge == Badge::Imported)
         );
 
         assert_eq!(group(&groups, "debug_hud").assets[0].badge, Badge::Injected);
@@ -356,14 +372,14 @@ mod tests {
             &open[0],
             TreeRow::Header {
                 group: 0,
-                count: 2,
+                count: 1,
                 open: true,
                 ..
             }
         ));
         assert!(matches!(&open[1], TreeRow::Asset { name, .. } if name == "cam"));
         assert!(
-            matches!(&open[3], TreeRow::Header { group: 1, .. }),
+            matches!(&open[2], TreeRow::Header { group: 1, .. }),
             "only the opened group unfolds"
         );
     }
@@ -388,7 +404,8 @@ mod tests {
     fn a_live_filter_unfolds_matches_and_drops_empty_groups() {
         let groups = groups_from(&loaded());
         let filtered = rows(&groups, &[], "fox_mat");
-        // World's shadowing line and the fox group match; the rest drop.
+        // Only the fox group matches (its patched instance included); the
+        // rest drop.
         let headers: Vec<&str> = filtered
             .iter()
             .filter_map(|r| match r {
@@ -396,7 +413,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(headers, vec![WORLD_GROUP, "fox"]);
+        assert_eq!(headers, vec!["fox"]);
         assert!(
             filtered
                 .iter()
@@ -414,7 +431,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(names, vec!["fox_mat_wood", "fox_mat_a", "fox_mat_b"]);
+        assert_eq!(names, vec!["fox_mat_a", "fox_mat_b", "fox_mat_wood"]);
 
         // A type filter reaches assets by their type string.
         let fonts = rows(&groups, &[], "font");

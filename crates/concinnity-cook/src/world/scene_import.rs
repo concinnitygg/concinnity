@@ -13,12 +13,12 @@ use crate::import::{ImportOptions, entries_from_scene, sanitize_name};
 
 // Replace every SceneImport asset with the asset entries its source file
 // expands to. Generated names are prefixed with the import's (unique) asset
-// name, so they only meet a hand-authored asset when the user copied a
-// generated entry into world.jsonl to edit it; that copy wins and the generated
-// entry is dropped. The same name held by a different type cannot be that copy,
-// so it stays a hard error. The framed Camera3D is emitted only when the world
-// declares no camera of its own (yours always wins) and `emit_camera` is not
-// disabled.
+// name, so they only meet a hand-authored asset when the user declared a patch
+// of a generated entry in world.jsonl; the authored fields win and the rest
+// keep the generated values (`shadow::merge_args`). The same name held by a
+// different type cannot be such a patch, so it stays a hard error. The framed
+// Camera3D is emitted only when the world declares no camera of its own (yours
+// always wins) and `emit_camera` is not disabled.
 pub(crate) fn expand_scene_imports(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
@@ -51,6 +51,9 @@ pub(crate) fn expand_scene_imports(
     let mut taken: HashSet<String> = HashSet::new();
 
     let mut result: Vec<serde_json::Value> = Vec::new();
+    // Shadow hits found while draining: the authored patch line may not be in
+    // `result` yet, so the merges apply after the rebuild.
+    let mut merges: Vec<(String, serde_json::Value)> = Vec::new();
     for value in assets.drain(..) {
         if type_norm(&value) != "sceneimport" {
             result.push(value);
@@ -93,6 +96,9 @@ pub(crate) fn expand_scene_imports(
 
         for entry in entries {
             if !resolve_entry(&entry, &authored, &mut taken, &import_name, report)? {
+                let name = asset_name(&entry);
+                let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
+                merges.push((name, args));
                 continue;
             }
             if type_norm(&entry) == "camera3d" {
@@ -102,13 +108,16 @@ pub(crate) fn expand_scene_imports(
         }
     }
 
+    for (name, template_args) in &merges {
+        super::shadow::merge_into_authored(&mut result, name, template_args);
+    }
     *assets = result;
     Ok(())
 }
 
 // Whether one generated entry should be emitted, recording the outcome so every
 // generated asset is accounted for. `false` means the world declares its own
-// copy of the entry, which wins.
+// patch of the entry, which the caller merges the generated args under.
 fn resolve_entry(
     entry: &serde_json::Value,
     authored: &HashMap<String, String>,
@@ -136,7 +145,8 @@ fn resolve_entry(
                 authored_type,
             ));
         }
-        report.record_shadowed(&name, authored_type, import_name);
+        let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
+        report.record_shadowed(&name, authored_type, import_name, args);
         return Ok(false);
     }
 

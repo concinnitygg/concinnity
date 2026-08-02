@@ -237,12 +237,30 @@ impl EditorHook {
         }
     }
 
-    // Open the editing surface for the asset called `name`: an authored line
-    // edits in place, an asset the build generates opens a form seeded from what
-    // the expansion produced (confirming it appends the line and so overrides
-    // the expansion), and anything else has nothing to edit, so an open form is
+    // Open the editing surface for the asset called `name`. A template-derived
+    // asset (generated or injected, patched or pristine) opens seeded from its
+    // effective args with per-field override state; a plain authored line
+    // edits in place; anything else has nothing to edit, so an open form is
     // closed rather than left pointing at the previous asset.
     pub(super) fn open_asset_form(&mut self, name: &str, world: &mut World) {
+        if let Some(template) = self.form_template_for(name) {
+            let target = match self
+                .entries
+                .iter()
+                .position(|e| entry_name(e) == Some(name))
+            {
+                Some(idx) => FormTarget::Entry(idx),
+                // Pristine: nothing authored yet. The carried entry is unused
+                // (the seed comes from the template), but Promote keeps the
+                // commit path honest about appending.
+                None => FormTarget::Promote(serde_json::json!({
+                    "name": name, "type": template.0, "args": {},
+                })),
+            };
+            let (ty, template) = template;
+            self.open_form_with(world, ty, target, Some(template));
+            return;
+        }
         if let Some(idx) = self
             .entries
             .iter()
@@ -253,20 +271,7 @@ impl EditorHook {
             }
             return;
         }
-        let promote = self
-            .tree_groups
-            .iter()
-            .flat_map(|g| &g.assets)
-            .find(|a| a.name == name)
-            .and_then(|a| a.promote.clone());
-        match promote {
-            Some(entry) => {
-                if let Some(ty) = entry_type(&entry).map(String::from) {
-                    self.open_form(world, ty, FormTarget::Promote(entry));
-                }
-            }
-            None => self.close_form(),
-        }
+        self.close_form();
     }
 
     // Remove the authored line called `name`, if the world has one. Generated

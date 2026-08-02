@@ -48,6 +48,7 @@ use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportVie
 use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
+use super::overrides;
 use super::panel::{self, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
@@ -313,6 +314,17 @@ pub(crate) struct EditorHook {
     // mutated by add / remove (structure) and, on capture, by the controls. Empty
     // outside AddForm.
     form_args: serde_json::Map<String, serde_json::Value>,
+    // The template behind the open form when it edits a template-derived asset:
+    // confirming writes the minimal patch against this baseline, and the rows
+    // show per-field override state. `None` for plain authored / new assets.
+    form_template: Option<FormTemplate>,
+    // The field whose override menu (Revert / Apply-to-template) is open, and
+    // whether the header's entity-level menu is open.
+    override_menu: Option<usize>,
+    entity_menu_open: bool,
+    // Template baselines for every template-derived asset, derived from the
+    // working entries. Invalidated by every edit, rebuilt on demand.
+    template_index: Option<overrides::TemplateIndex>,
     // The paths of the form's non-colour vector fields currently disclosed into
     // per-element leaves. Cleared when the form opens / closes.
     vec_expanded: std::collections::HashSet<String>,
@@ -364,12 +376,32 @@ pub(crate) struct EditorHook {
     panel_order: Vec<PanelKey>,
 }
 
+// The template a form-edited asset derives from.
+#[derive(Debug, Clone)]
+pub(crate) struct FormTemplate {
+    pub name: String,
+    // Effective template args: the type's defaults with the generated args
+    // merged over them, the baseline a field is inherited from.
+    pub baseline: serde_json::Map<String, serde_json::Value>,
+    // The authored asset or injection pass that produced the asset.
+    pub generated_by: String,
+}
+
 // Owned per-tick data backing a `PanelView` (computed from the cooked tree + the
 // live search field, then borrowed for both hit-testing and layout).
 struct PanelData {
     rows: Vec<TreeRow>,
     picker_options: Option<Vec<String>>,
     form_title: String,
+    form_overrides: Option<FormOverridesData>,
+}
+
+// Owned per-tick override state backing a `form_panel::OverridesView`.
+struct FormOverridesData {
+    marks: Vec<overrides::FieldOrigin>,
+    count: usize,
+    field_menu: Option<(usize, Vec<String>)>,
+    entity_menu: Option<Vec<String>>,
 }
 
 // What confirming the open add / edit form commits to.
@@ -495,6 +527,8 @@ mod import_edit;
 mod layout;
 mod marquee_drag;
 mod orbit_drive;
+// Named to avoid colliding with the `use super::overrides` module import.
+mod override_edit;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
@@ -620,6 +654,10 @@ impl EditorHook {
             field_dropdown: None,
             field_dropdown_scroll: 0,
             form_args: serde_json::Map::new(),
+            form_template: None,
+            override_menu: None,
+            entity_menu_open: false,
+            template_index: None,
             vec_expanded: std::collections::HashSet::new(),
             selection: Selection::default(),
             pick_last: None,

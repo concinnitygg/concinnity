@@ -60,16 +60,20 @@ pub struct GeneratedAsset {
     pub generated_by: String,
 }
 
-// One generated asset the world declares itself: the authored entry wins and
-// the generated one is dropped, so a copy edited in world.jsonl overrides what
-// the expansion produces. Recorded so listings can show the override for what
+// One generated asset the world declares itself: the authored entry is a
+// sparse patch merged over the generated args (see `shadow::merge_args`), so a
+// line in world.jsonl overrides exactly the fields it names and tracks the
+// expansion for the rest. Recorded so listings can show the override for what
 // it is rather than leaving the generated asset unaccounted for.
 #[derive(Debug, Clone)]
 pub struct ShadowedAsset {
     pub name: String,
     pub asset_type: String,
-    // The authored asset whose expansion it would have come from.
+    // The authored asset whose expansion it patches.
     pub generated_by: String,
+    // The args the expansion produced before the authored patch was merged:
+    // the template baseline a per-field override is measured against.
+    pub args: serde_json::Value,
 }
 
 // What the expansion passes added, generated, and skipped during one run.
@@ -105,8 +109,15 @@ impl ExpandReport {
     }
 
     // Idempotent: a name can be checked by more than one pass (both HUDs test the
-    // shared font), and the same override must not be listed twice.
-    pub(crate) fn record_shadowed(&mut self, name: &str, asset_type: &str, generated_by: &str) {
+    // shared font), and the same override must not be listed twice. The first
+    // record's args win: the earliest pass to produce the asset is its template.
+    pub(crate) fn record_shadowed(
+        &mut self,
+        name: &str,
+        asset_type: &str,
+        generated_by: &str,
+        args: serde_json::Value,
+    ) {
         if self.shadowed.iter().any(|s| s.name == name) {
             return;
         }
@@ -114,6 +125,7 @@ impl ExpandReport {
             name: name.to_string(),
             asset_type: asset_type.to_string(),
             generated_by: generated_by.to_string(),
+            args,
         });
     }
 }
@@ -123,6 +135,23 @@ impl ExpandReport {
 // failure occurs (e.g. prefab cycle or missing prefab reference).
 pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
     let mut report = ExpandReport::default();
+    // The assets the world declares itself, snapshotted before any pass runs:
+    // a generated entry landing on one of these names is the user's patch of
+    // it, while a collision with anything added later is a conflict between
+    // two expansions.
+    let authored: std::collections::HashMap<String, String> = assets
+        .iter()
+        .map(|v| {
+            (
+                asset_name(v),
+                v.get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+            )
+        })
+        .filter(|(n, _)| !n.is_empty())
+        .collect();
     // Imports expand first so the assets they generate (materials, meshes,
     // props, a framed camera) flow through every later pass, including
     // companion injection.
@@ -134,7 +163,7 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     expand_camera_shots(assets);
     expand_light_rigs(assets);
     expand_material_palettes(assets);
-    expand_prefabs(assets)?;
+    expand_prefabs(assets, &authored, &mut report)?;
     expand_room_textures(assets);
     // First companion round: materialize the GraphicsConfig render marker (and
     // its Window / Shader stack) implied by everything authored or
