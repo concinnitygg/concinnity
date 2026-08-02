@@ -42,9 +42,9 @@ pub(super) fn spawn_watcher(
                 return;
             }
         };
-        if !is_asset_event(&event) {
+        let Some(kind) = classify_event(&event) else {
             return;
-        }
+        };
         let mut last = match last_fire.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -55,54 +55,10 @@ pub(super) fn spawn_watcher(
         }
         *last = now;
         tracing::info!(
-            "asset hot-reload: detected change to {:?}, scheduling asset reload",
+            "asset hot-reload: detected change to {:?}, scheduling {kind:?} reload",
             event.paths
         );
-        // `.jsonl` events kick the world-reload poll and skip the asset
-        // reload: the backend asset payloads (textures, IBL, meshes,
-        // skinned, animations) don't live in the JSONL, only Prop
-        // transforms and the asset-graph topology do. `.metal` / `.hlsl`
-        // / `.glsl` events kick the world-loaded shader reload pass
-        // alone (recompile + pipeline rebuild, no texture / mesh decode
-        // is needed). Everything else (`.glb` / `.png` / `.hdr` / `.cube`)
-        // kicks the asset reload + the animation reload but not the world
-        // or shader passes.
-        let is_shader_event = event.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(is_shader_extension)
-                .unwrap_or(false)
-        });
-        let is_jsonl_event = event.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("jsonl"))
-                .unwrap_or(false)
-        });
-        // `.md` events kick the story re-expansion pass alone: a dialogue
-        // save re-compiles the world's StoryImports and hands the fresh
-        // graphs to the running story system, no asset decode needed.
-        let is_md_event = event.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("md"))
-                .unwrap_or(false)
-        });
-        if is_shader_event {
-            super::set_pending_shader_stages();
-        } else if is_jsonl_event {
-            super::set_pending_world();
-        } else if is_md_event {
-            super::set_pending_stories();
-        } else {
-            flag.store(true, Ordering::SeqCst);
-            // AnimationSystem subscribes via a sibling static flag in
-            // crate::app::dev_flags; the asset map lives on
-            // GraphicsSystem so a separate signal is the simplest way to
-            // notify the animation graph of the same `.glb` save without
-            // plumbing a shared Arc.
-            crate::app::dev_flags::set_pending_animations();
-        }
+        signal(kind, &flag);
     }) {
         Ok(w) => w,
         Err(e) => {
@@ -178,6 +134,69 @@ pub(super) fn spawn_watcher(
         // None of the directories could be watched (likely a packaged binary
         // run from outside its checkout). The debug command path still works.
         None
+    }
+}
+
+// The reload pass a filesystem change kicks. Each save is routed to the
+// narrowest pass that can serve it: the backend asset payloads (textures, IBL,
+// meshes, skinned, animations) do not live in the world JSONL, which carries
+// only Prop transforms and the asset-graph topology, and a shader save needs a
+// recompile plus a pipeline rebuild but no texture or mesh decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReloadKind {
+    // `.metal` / `.hlsl` / `.glsl`.
+    ShaderStages,
+    // `.jsonl`, the world file.
+    World,
+    // `.md`: re-expand the world's StoryImports and hand the fresh graphs to
+    // the running story system.
+    Stories,
+    // `.glb` / `.png` / `.hdr` / `.cube` and the rest: decode the payloads
+    // again, and the animation graph alongside them.
+    Assets,
+}
+
+// The pass `event` kicks, or `None` when it is not a change worth reloading
+// for. Pure, so the routing is decided the same way whether it comes from a
+// live notify callback or a test.
+pub(super) fn classify_event(event: &Event) -> Option<ReloadKind> {
+    if !is_asset_event(event) {
+        return None;
+    }
+    let has_ext = |matches: fn(&str) -> bool| {
+        event.paths.iter().any(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(matches)
+                .unwrap_or(false)
+        })
+    };
+    Some(if has_ext(is_shader_extension) {
+        ReloadKind::ShaderStages
+    } else if has_ext(|e| e.eq_ignore_ascii_case("jsonl")) {
+        ReloadKind::World
+    } else if has_ext(|e| e.eq_ignore_ascii_case("md")) {
+        ReloadKind::Stories
+    } else {
+        ReloadKind::Assets
+    })
+}
+
+// Raise the pending flag for `kind`. Separate from `classify_event` because
+// these are process-global statics: the routing above is what a test drives.
+fn signal(kind: ReloadKind, flag: &AtomicBool) {
+    match kind {
+        ReloadKind::ShaderStages => super::set_pending_shader_stages(),
+        ReloadKind::World => super::set_pending_world(),
+        ReloadKind::Stories => super::set_pending_stories(),
+        ReloadKind::Assets => {
+            flag.store(true, Ordering::SeqCst);
+            // AnimationSystem subscribes via a sibling static flag in
+            // crate::app::dev_flags; the asset map lives on GraphicsSystem so
+            // a separate signal is the simplest way to notify the animation
+            // graph of the same `.glb` save without plumbing a shared Arc.
+            crate::app::dev_flags::set_pending_animations();
+        }
     }
 }
 

@@ -14,9 +14,9 @@ const GLIDE_SECS: f32 = 0.25;
 // An in-flight camera glide: the fixed endpoints and the wall clock the
 // normalized parameter is derived from.
 pub(super) struct CameraGlide {
-    from: CameraPose,
-    to: CameraPose,
-    start: std::time::Instant,
+    pub(super) from: CameraPose,
+    pub(super) to: CameraPose,
+    pub(super) start: std::time::Instant,
 }
 
 impl EditorHook {

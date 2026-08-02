@@ -220,6 +220,131 @@ mod tests {
         assert!(prepare("{ not json\n").is_err());
     }
 
+    fn asset(json: serde_json::Value) -> concinnity_cook::world::WorldJsonlAsset {
+        concinnity_cook::world::WorldJsonlAsset::from_value(&json)
+    }
+
+    // The type match is the cook's normalized one, so `color_lut`, `ColorLut`,
+    // and `colorlut` all name the same kind.
+    #[test]
+    fn the_lut_scan_takes_the_first_source_however_the_type_is_spelled() {
+        for ty in ["ColorLut", "color_lut", "colorlut", "COLOR_LUT"] {
+            let assets = [asset(
+                serde_json::json!({"name":"grade","type":ty,"args":{"source":"luts/warm.cube"}}),
+            )];
+            assert_eq!(
+                scan_color_lut_source(&assets),
+                Some("luts/warm.cube".to_string()),
+                "type {ty}"
+            );
+        }
+
+        // Only the first is used: the runtime binds handle 0.
+        let assets = [
+            asset(serde_json::json!({"name":"a","type":"ColorLut","args":{"source":"first.cube"}})),
+            asset(
+                serde_json::json!({"name":"b","type":"ColorLut","args":{"source":"second.cube"}}),
+            ),
+        ];
+        assert_eq!(
+            scan_color_lut_source(&assets),
+            Some("first.cube".to_string())
+        );
+    }
+
+    // Nothing to watch: no LUT at all, or one with no authored source path.
+    #[test]
+    fn the_lut_scan_yields_nothing_without_a_source() {
+        assert_eq!(scan_color_lut_source(&[]), None);
+        let no_source = [asset(
+            serde_json::json!({"name":"grade","type":"ColorLut","args":{}}),
+        )];
+        assert_eq!(scan_color_lut_source(&no_source), None);
+        let empty = [asset(
+            serde_json::json!({"name":"grade","type":"ColorLut","args":{"source":""}}),
+        )];
+        assert_eq!(scan_color_lut_source(&empty), None);
+        let other_kind = [asset(
+            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{"source":"x.hdr"}}),
+        )];
+        assert_eq!(scan_color_lut_source(&other_kind), None);
+    }
+
+    // A file-backed environment map carries its re-bake inputs so the watcher
+    // can reproduce the original bake; unset ones fall back to the schema
+    // defaults rather than zero.
+    #[test]
+    fn the_environment_map_scan_defaults_the_unset_bake_inputs() {
+        let assets = [asset(
+            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{"source":"studio.hdr"}}),
+        )];
+        let info = scan_environment_map_source(&assets).expect("a file-backed map");
+        assert_eq!(info.source, "studio.hdr");
+        assert_eq!(info.prefilter_face_size, 512);
+        assert_eq!(info.irradiance_face_size, 8);
+        assert_eq!(info.prefilter_samples, 1024);
+        assert_eq!(info.prefilter_clamp, 12.0);
+    }
+
+    #[test]
+    fn the_environment_map_scan_carries_the_authored_bake_inputs() {
+        let assets = [asset(serde_json::json!({
+            "name":"sky","type":"environment_map","args":{
+                "source":"studio.hdr",
+                "prefilter_face_size": 256,
+                "irradiance_face_size": 16,
+                "prefilter_samples": 64,
+                "prefilter_clamp": 4.5
+            }
+        }))];
+        let info = scan_environment_map_source(&assets).expect("a file-backed map");
+        assert_eq!(info.prefilter_face_size, 256);
+        assert_eq!(info.irradiance_face_size, 16);
+        assert_eq!(info.prefilter_samples, 64);
+        assert_eq!(info.prefilter_clamp, 4.5);
+    }
+
+    // A procedural map has no file behind it, so there is nothing to watch --
+    // even when a stale `source` is still authored alongside the generator.
+    #[test]
+    fn the_environment_map_scan_skips_a_procedural_map() {
+        let generated = [asset(serde_json::json!({
+            "name":"sky","type":"EnvironmentMap","args":{"generator":"sky"}
+        }))];
+        assert!(scan_environment_map_source(&generated).is_none());
+
+        let both = [asset(serde_json::json!({
+            "name":"sky","type":"EnvironmentMap","args":{"generator":"sky","source":"studio.hdr"}
+        }))];
+        assert!(scan_environment_map_source(&both).is_none());
+
+        assert!(scan_environment_map_source(&[]).is_none());
+        let no_source = [asset(
+            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{}}),
+        )];
+        assert!(scan_environment_map_source(&no_source).is_none());
+    }
+
+    // The assembled world publishes both dev-only source catalogues, which is
+    // what seeds the hot-reload watcher.
+    #[test]
+    fn the_assembled_world_publishes_the_watcher_source_catalogues() {
+        let loaded =
+            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
+        let world = world_from_loaded(loaded).unwrap();
+        assert!(
+            world
+                .resource::<crate::resource::ColorLutSources>()
+                .is_some_and(|s| s.0.is_none()),
+            "a world with no LUT publishes an empty catalogue, not none at all"
+        );
+        assert!(
+            world
+                .resource::<crate::resource::EnvironmentMapSources>()
+                .is_some()
+        );
+    }
+
     #[test]
     fn world_from_loaded_assembles_an_in_memory_world() {
         let loaded =

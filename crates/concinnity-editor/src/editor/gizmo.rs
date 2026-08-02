@@ -284,6 +284,27 @@ mod tests {
     const VP: [f32; 2] = [1280.0, 720.0];
     const FOV: f32 = core::f32::consts::FRAC_PI_2;
 
+    // Each mode names the authored arg it edits and the caption the mode label
+    // shows, and no two modes share either -- the arg key is what the drag
+    // writes back, so a collision would edit the wrong field.
+    #[test]
+    fn every_mode_has_its_own_arg_key_and_caption() {
+        let modes = [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale];
+        let keys: Vec<&str> = modes.iter().map(|m| m.arg_key()).collect();
+        let captions: Vec<&str> = modes.iter().map(|m| m.caption()).collect();
+
+        assert_eq!(keys, ["position", "rotation_deg", "scale"]);
+        assert_eq!(captions, ["move", "rotate", "scale"]);
+        for list in [&keys, &captions] {
+            let mut seen = list.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            assert_eq!(seen.len(), modes.len(), "{list:?} repeats");
+            assert!(list.iter().all(|s| !s.is_empty()));
+        }
+        assert_eq!(GizmoMode::default(), GizmoMode::Translate);
+    }
+
     #[test]
     fn layout_spans_a_constant_screen_length() {
         let view = view_matrix([0.0; 3], 0.0, 0.0);

@@ -13,3 +13,16 @@ pub(crate) fn lock() -> std::sync::MutexGuard<'static, ()> {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
+
+// Point the cook's content-addressed cache at a private temp dir for the test
+// process, so an in-memory rebuild never touches the working directory. Idempotent:
+// the first caller in the process wins.
+pub(crate) fn isolate_state_dir() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        concinnity_core::paths::set_root(dir);
+    });
+}

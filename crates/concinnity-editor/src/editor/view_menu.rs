@@ -194,6 +194,152 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::{Sprite, TextLabel};
+
+    fn injected_world() -> World {
+        let mut world = World::new_empty();
+        for id in all_sprite_ids() {
+            world.add_component(Sprite {
+                asset_id: id,
+                ..Default::default()
+            });
+        }
+        for id in all_label_ids() {
+            world.add_component(TextLabel {
+                asset_id: id,
+                ..Default::default()
+            });
+        }
+        world
+    }
+
+    fn state() -> MenuState {
+        MenuState {
+            mode: ViewMode::default(),
+            show: ShowFlags::all(),
+            billboards: true,
+            extents: CategorySet::default(),
+        }
+    }
+
+    fn label_of(world: &World, id: AssetId) -> String {
+        world
+            .query::<TextLabel>()
+            .find(|l| l.asset_id == id)
+            .map(|l| l.content.clone())
+            .unwrap_or_default()
+    }
+
+    fn sprite_visible(world: &World, id: AssetId) -> bool {
+        world
+            .query::<Sprite>()
+            .find(|s| s.asset_id == id)
+            .is_some_and(|s| s.visible)
+    }
+
+    // The draw labels every row from `rows()`: mode rows read as plain
+    // captions (the accent background is their radio), and every toggle row
+    // carries its on/off marker.
+    #[test]
+    fn apply_labels_every_row_and_marks_the_toggles() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        apply(&mut world, vw, state(), [0.0, 0.0]);
+
+        assert_eq!(label_of(&world, HEADING), "View mode");
+        for (i, row) in rows().into_iter().enumerate() {
+            let text = label_of(&world, row_label(i));
+            assert!(!text.is_empty(), "row {i} ({row:?}) drew no label");
+            match row {
+                MenuRow::Flag(..) | MenuRow::Billboards | MenuRow::Extent(..) => assert!(
+                    text.starts_with("[x] ") || text.starts_with("[ ] "),
+                    "row {i} ({row:?}) is a toggle but drew {text:?}"
+                ),
+                _ => assert!(
+                    !text.starts_with('['),
+                    "row {i} ({row:?}) is not a toggle but drew {text:?}"
+                ),
+            }
+        }
+    }
+
+    // The markers follow the state: a cleared flag and an unset extent read
+    // as off, and the selected mode is the only row keeping a background with
+    // the cursor away from the menu.
+    #[test]
+    fn apply_reflects_the_selection_state() {
+        let vw = 1280.0;
+        let mut world = injected_world();
+        let mut s = state();
+        s.show = ShowFlags::all().toggled(ShowFlags::FOG);
+        apply(&mut world, vw, s, [0.0, 0.0]);
+
+        for (i, row) in rows().into_iter().enumerate() {
+            let text = label_of(&world, row_label(i));
+            match row {
+                MenuRow::Flag(f, _) => assert_eq!(
+                    text.starts_with("[x]"),
+                    f != ShowFlags::FOG,
+                    "flag row {i} marker disagrees with the state: {text:?}"
+                ),
+                // Nothing is selected in the default set.
+                MenuRow::Extent(..) => assert!(text.starts_with("[ ]"), "{text:?}"),
+                _ => {}
+            }
+        }
+
+        let lit: Vec<usize> = (0..row_count())
+            .filter(|&i| sprite_visible(&world, row_bg(i)))
+            .collect();
+        let selected = rows()
+            .into_iter()
+            .position(|r| r == MenuRow::Mode(s.mode))
+            .expect("the selected mode is a row");
+        assert_eq!(
+            lit,
+            vec![selected],
+            "only the selected mode keeps a background off-hover"
+        );
+    }
+
+    // A hovered actionable row lights up; a hovered heading stays flat,
+    // because there is nothing there to click.
+    #[test]
+    fn apply_lights_a_hovered_row_but_never_a_heading() {
+        let vw = 1280.0;
+        let rows = rows();
+        let flag = rows
+            .iter()
+            .position(|r| matches!(r, MenuRow::Flag(..)))
+            .expect("a flag row");
+        let heading = rows
+            .iter()
+            .position(|r| matches!(r, MenuRow::Heading(_)))
+            .expect("a heading row");
+
+        for (i, expected) in [(flag, true), (heading, false)] {
+            let mut world = injected_world();
+            let r = row_rect(vw, i);
+            apply(&mut world, vw, state(), [r[0] + 2.0, r[1] + 2.0]);
+            assert_eq!(
+                sprite_visible(&world, row_bg(i)),
+                expected,
+                "row {i} ({:?}) hover background",
+                rows[i]
+            );
+        }
+    }
+
+    // The per-frame hide blanks everything the draw shows, so a closed menu
+    // leaves nothing painted over the viewport.
+    #[test]
+    fn hide_blanks_everything_apply_drew() {
+        let mut world = injected_world();
+        apply(&mut world, 1280.0, state(), [0.0, 0.0]);
+        hide(&mut world);
+        assert!(world.query::<Sprite>().all(|s| !s.visible));
+        assert!(world.query::<TextLabel>().all(|l| !l.visible));
+    }
 
     #[test]
     fn rows_cover_every_mode_and_flag_once() {

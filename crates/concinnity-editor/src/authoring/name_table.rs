@@ -93,4 +93,94 @@ mod tests {
         let lock = lock_with(&[("cam", None)], &[("brick", None)]);
         assert!(recorded_names(&lock).is_empty());
     }
+
+    // Restores the previous working directory on drop: LOCK_PATH is
+    // cwd-relative, so these tests have to chdir to reach a written lock.
+    struct CwdGuard(std::path::PathBuf);
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    fn in_temp_cwd() -> (tempfile::TempDir, CwdGuard) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let prev = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(dir.path()).expect("enter temp cwd");
+        (dir, CwdGuard(prev))
+    }
+
+    // The blob-boot path: a lock beside the blobs reinstalls the build's table
+    // so the name-keyed features are live before the first edit.
+    #[test]
+    fn priming_from_a_written_lock_installs_every_recorded_name() {
+        let _guard = crate::test_support::lock();
+        let (_dir, _cwd) = in_temp_cwd();
+        asset_id::reset_interner();
+        let lock = lock_with(
+            &[("cam", Some(0)), ("floor", Some(2))],
+            &[("brick", Some(1))],
+        );
+        std::fs::write(
+            concinnity_cook::blob::LOCK_PATH,
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(prime_from_lock_file().unwrap(), 3);
+        assert_eq!(asset_id::intern("cam"), asset_id::AssetId(0));
+        assert_eq!(asset_id::intern("brick"), asset_id::AssetId(1));
+        assert_eq!(asset_id::intern("floor"), asset_id::AssetId(2));
+    }
+
+    // Best effort: an id-less (old-format) lock installs nothing rather than
+    // erroring, leaving the pre-existing degraded boot.
+    #[test]
+    fn priming_from_an_id_less_lock_installs_nothing() {
+        let _guard = crate::test_support::lock();
+        let (_dir, _cwd) = in_temp_cwd();
+        asset_id::reset_interner();
+        let lock = lock_with(&[("cam", None)], &[]);
+        std::fs::write(
+            concinnity_cook::blob::LOCK_PATH,
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(prime_from_lock_file().unwrap(), 0);
+    }
+
+    // A table an in-process cook already filled is left alone, so priming
+    // cannot renumber names the running session is already using.
+    #[test]
+    fn priming_over_a_filled_table_installs_nothing() {
+        let _guard = crate::test_support::lock();
+        let (_dir, _cwd) = in_temp_cwd();
+        asset_id::reset_interner();
+        asset_id::intern("already_here");
+        let lock = lock_with(&[("cam", Some(0))], &[]);
+        std::fs::write(
+            concinnity_cook::blob::LOCK_PATH,
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(prime_from_lock_file().unwrap(), 0);
+        assert_eq!(asset_id::intern("already_here"), asset_id::AssetId(0));
+    }
+
+    // No lock at all (a source checkout that never built) and a corrupt one
+    // are both reported, so the caller can log rather than boot half-primed.
+    #[test]
+    fn a_missing_or_corrupt_lock_is_an_error() {
+        let _guard = crate::test_support::lock();
+        let (_dir, _cwd) = in_temp_cwd();
+
+        let missing = prime_from_lock_file().expect_err("no lock in a fresh dir");
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+
+        std::fs::write(concinnity_cook::blob::LOCK_PATH, "{ not json").unwrap();
+        let corrupt = prime_from_lock_file().expect_err("a corrupt lock");
+        assert_eq!(corrupt.kind(), std::io::ErrorKind::InvalidData);
+    }
 }

@@ -548,6 +548,16 @@ mod view_menu_drive;
 mod story_edit;
 // Named to avoid colliding with the `use super::variables_panel` import.
 #[cfg(test)]
+mod camera_tests;
+#[cfg(test)]
+mod console_tests;
+#[cfg(test)]
+mod override_tests;
+#[cfg(test)]
+mod panel_tests;
+#[cfg(test)]
+mod select_tests;
+#[cfg(test)]
 mod tests;
 mod variables_edit;
 

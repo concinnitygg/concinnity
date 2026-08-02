@@ -588,6 +588,76 @@ fn shader_extension_matches_case_insensitively() {
     assert!(!is_shader_extension("glb"));
 }
 
+fn modified(path: &str) -> Event {
+    Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(PathBuf::from(path))
+}
+
+// Each source kind routes to the narrowest pass that can serve it, so a
+// dialogue save never pays for a texture decode and a shader save never
+// re-reads the world.
+#[test]
+fn each_extension_routes_to_its_reload_pass() {
+    for (path, expected) in [
+        ("/tmp/lit.metal", ReloadKind::ShaderStages),
+        ("/tmp/lit.hlsl", ReloadKind::ShaderStages),
+        ("/tmp/lit.glsl", ReloadKind::ShaderStages),
+        ("/tmp/LIT.METAL", ReloadKind::ShaderStages),
+        ("/tmp/world.jsonl", ReloadKind::World),
+        ("/tmp/WORLD.JSONL", ReloadKind::World),
+        ("/tmp/intro.md", ReloadKind::Stories),
+        ("/tmp/INTRO.MD", ReloadKind::Stories),
+        ("/tmp/model.glb", ReloadKind::Assets),
+        ("/tmp/albedo.png", ReloadKind::Assets),
+        ("/tmp/studio.hdr", ReloadKind::Assets),
+        ("/tmp/grade.cube", ReloadKind::Assets),
+        ("/tmp/buffer.bin", ReloadKind::Assets),
+    ] {
+        assert_eq!(
+            classify_event(&modified(path)),
+            Some(expected),
+            "{path} routes to {expected:?}"
+        );
+    }
+}
+
+// A change nothing is sourced from kicks no pass at all -- neither does an
+// access event on a file that would otherwise be relevant.
+#[test]
+fn an_irrelevant_change_routes_nowhere() {
+    assert_eq!(classify_event(&modified("/tmp/notes.txt")), None);
+    let accessed = Event::new(EventKind::Access(notify::event::AccessKind::Read))
+        .add_path(PathBuf::from("/tmp/model.glb"));
+    assert_eq!(classify_event(&accessed), None);
+}
+
+// notify reports renames and temp sidecars as multi-path events; the shader
+// pass wins over the broader asset pass whichever slot the shader lands in, so
+// an editor's atomic save still recompiles rather than re-decoding textures.
+#[test]
+fn a_shader_among_several_paths_still_routes_to_the_shader_pass() {
+    let leading = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(PathBuf::from("/tmp/lit.metal"))
+        .add_path(PathBuf::from("/tmp/albedo.png"));
+    let trailing = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+        .add_path(PathBuf::from("/tmp/albedo.png"))
+        .add_path(PathBuf::from("/tmp/lit.metal"));
+    assert_eq!(classify_event(&leading), Some(ReloadKind::ShaderStages));
+    assert_eq!(classify_event(&trailing), Some(ReloadKind::ShaderStages));
+}
+
+// A create or a remove is as much a reload trigger as a modify: an asset added
+// or deleted beside its siblings changes what the world resolves to.
+#[test]
+fn creates_and_removes_route_like_modifies() {
+    for kind in [
+        EventKind::Create(notify::event::CreateKind::File),
+        EventKind::Remove(notify::event::RemoveKind::File),
+    ] {
+        let evt = Event::new(kind).add_path(PathBuf::from("/tmp/model.glb"));
+        assert_eq!(classify_event(&evt), Some(ReloadKind::Assets), "{kind:?}");
+    }
+}
+
 #[test]
 fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
