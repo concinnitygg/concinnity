@@ -31,12 +31,12 @@ const AXIS_COLORS: [[f32; 3]; 3] = [[0.90, 0.10, 0.12], [0.16, 0.75, 0.22], [0.1
 
 const AXES: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
-// The origin axes for a camera whose far plane is `far`: per axis, a solid run
-// out from the origin followed by a run that fades to nothing at the far plane.
-pub(crate) fn lines(far: f32) -> Vec<Line> {
+// Append the origin axes for a camera whose far plane is `far`: per axis, a
+// solid run out from the origin followed by a run that fades to nothing at the
+// far plane. Appends into the frame's shared line buffer.
+pub(crate) fn push_lines(out: &mut Vec<Line>, far: f32) {
     let extent = far.max(MIN_EXTENT);
     let solid = extent * SOLID_FRACTION;
-    let mut out = Vec::with_capacity(AXES.len() * 2);
     for (axis, rgb) in AXES.iter().zip(AXIS_COLORS) {
         let at = |d: f32| [axis[0] * d, axis[1] * d, axis[2] * d];
         let color = |a: f32| [rgb[0], rgb[1], rgb[2], a];
@@ -55,12 +55,17 @@ pub(crate) fn lines(far: f32) -> Vec<Line> {
             width_px: WIDTH_PX,
         });
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lines(far: f32) -> Vec<Line> {
+        let mut out = Vec::new();
+        push_lines(&mut out, far);
+        out
+    }
 
     #[test]
     fn one_solid_and_one_fading_run_per_axis() {

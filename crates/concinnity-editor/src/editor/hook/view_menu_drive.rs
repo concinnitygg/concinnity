@@ -31,11 +31,14 @@ impl EditorHook {
         if let Some(i) = view_menu::hit_row(mx, my, vp[0]) {
             match view_menu::rows()[i] {
                 view_menu::MenuRow::Mode(m) => self.view_mode = m,
-                view_menu::MenuRow::ShowHeading => {}
+                view_menu::MenuRow::ShowHeading | view_menu::MenuRow::ExtentHeading => {}
                 view_menu::MenuRow::Flag(f, _) => {
                     self.show_flags = self.show_flags.toggled(f);
                 }
                 view_menu::MenuRow::Billboards => self.show_billboards = !self.show_billboards,
+                view_menu::MenuRow::Extent(c, _) => {
+                    self.extent_show = self.extent_show.toggled(c);
+                }
             }
             return true;
         }
@@ -64,6 +67,7 @@ impl EditorHook {
                 mode: self.view_mode,
                 show: self.show_flags,
                 billboards: self.show_billboards,
+                extents: self.extent_show,
             },
             mouse,
         );

@@ -10,7 +10,7 @@
 // uses, so the form, tree, and gizmo all follow for free.
 
 use super::*;
-use crate::assets::{Camera3D, Transform, TriggerVolume};
+use crate::assets::{Camera3D, Transform};
 use concinnity_core::gfx::pick::ray_aabb;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
@@ -125,71 +125,13 @@ impl EditorHook {
             })
             .collect();
         billboards::place_icons(world, &icons);
-        // The outline pool has one tenant per frame: an in-flight drag-out
-        // ghost takes it over the trigger wireframe.
-        if self.content_ghost_pose().is_some() {
-            billboards::hide_outline(world);
-            self.drive_content_ghost(world, vp);
-        } else {
-            self.drive_trigger_outline(world, vp);
-        }
-    }
-
-    // The active selection member's TriggerVolume collider as a screen-space
-    // outline: a dotted box (a capsule shows its bounding box) or a circular
-    // ring. Other shape overlays (light cones and radii, camera frusta) are
-    // future work; this is the whole v1 wireframe surface.
-    fn drive_trigger_outline(&self, world: &mut World, vp: [f32; 2]) {
-        let Some(shape) = self.active_trigger_shape(world) else {
-            billboards::hide_outline(world);
-            return;
-        };
-        let Some(cam) = world.query::<Camera3D>().next() else {
-            billboards::hide_outline(world);
-            return;
-        };
-        let (view, fov) = (cam.view_matrix, cam.fov_y_degrees.to_radians());
-        let tint = billboards::tint("TriggerVolume");
+        // The dotted-sprite outline pool has one tenant now: the drag-out
+        // ghost. Extent wireframes draw through the renderer's line pass
+        // (`hook/outline_drive.rs`).
         billboards::hide_outline(world);
-        match shape {
-            TriggerShape::Box(transform, half_extents) => {
-                if let Some(centers) =
-                    billboards::box_outline(&view, fov, vp, &transform.model_matrix(), half_extents)
-                {
-                    billboards::place_box_outline(world, &centers, tint);
-                }
-            }
-            TriggerShape::Sphere(center, radius) => {
-                if let Some((screen, depth)) = billboards::project(&view, fov, vp, center) {
-                    let px = billboards::sphere_radius_px(radius, depth, fov, vp[1]);
-                    billboards::place_sphere_ring(world, screen, px, tint);
-                }
-            }
+        if self.content_ghost_pose().is_some() {
+            self.drive_content_ghost(world, vp);
         }
-    }
-
-    // The active member's trigger collider in world space, positioned by the
-    // seeded Transform so the outline follows a live gizmo drag.
-    fn active_trigger_shape(&self, world: &World) -> Option<TriggerShape> {
-        let entity = entity_by_name(world, self.selection.active()?)?;
-        let volume = world.get::<TriggerVolume>(entity)?;
-        let transform = world
-            .get::<Transform>(entity)
-            .cloned()
-            .unwrap_or(Transform {
-                position: volume.position,
-                rotation_deg: volume.rotation_deg,
-                scale: [1.0; 3],
-            });
-        let c = &volume.collider;
-        Some(match c.shape.as_str() {
-            "ball" => TriggerShape::Sphere(transform.position, c.radius),
-            // A capsule outlines as its bounding box.
-            "capsule" => {
-                TriggerShape::Box(transform, [c.radius, c.half_height + c.radius, c.radius])
-            }
-            _ => TriggerShape::Box(transform, c.half_extents),
-        })
     }
 
     // Offer an unclaimed viewport press to the billboards: `true` when an
@@ -265,10 +207,4 @@ impl EditorHook {
             .filter_map(|e| ray_aabb(&ray, e.bb_min, e.bb_max))
             .min_by(f32::total_cmp)
     }
-}
-
-// A trigger collider reduced to its drawable outline.
-enum TriggerShape {
-    Box(Transform, [f32; 3]),
-    Sphere([f32; 3], f32),
 }

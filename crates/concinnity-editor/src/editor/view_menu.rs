@@ -6,6 +6,7 @@
 // and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
 // hook (`hook/view_menu_drive.rs`) owns the open state and routing.
 
+use super::outlines::{Category, CategorySet};
 use super::registry::ID_BASE;
 use super::theme;
 use super::widget::{self, point_in};
@@ -31,14 +32,17 @@ const HEADING_H: f32 = 22.0;
 const PAD: f32 = 6.0;
 const MARGIN: f32 = 8.0;
 
-// One menu row: a view-mode radio, the show-flags divider, one flag toggle,
-// or the billboard-icons toggle (editor overlay sprites, not a render pass).
+// One menu row: a view-mode radio, a section divider, one show-flag toggle,
+// the billboard-icons toggle (editor overlay sprites, not a render pass), or
+// one always-on extent-outline category.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum MenuRow {
     Mode(ViewMode),
     ShowHeading,
     Flag(ShowFlags, &'static str),
     Billboards,
+    ExtentHeading,
+    Extent(Category, &'static str),
 }
 
 pub(crate) fn rows() -> Vec<MenuRow> {
@@ -52,11 +56,17 @@ pub(crate) fn rows() -> Vec<MenuRow> {
                 .map(|(f, label)| MenuRow::Flag(f, label)),
         )
         .chain(std::iter::once(MenuRow::Billboards))
+        .chain(std::iter::once(MenuRow::ExtentHeading))
+        .chain(
+            Category::LABELED
+                .into_iter()
+                .map(|(c, label)| MenuRow::Extent(c, label)),
+        )
         .collect()
 }
 
 pub(crate) fn row_count() -> usize {
-    ViewMode::ALL.len() + 1 + ShowFlags::LABELED.len() + 1
+    ViewMode::ALL.len() + 1 + ShowFlags::LABELED.len() + 1 + 1 + Category::LABELED.len()
 }
 
 // The menu's top-left: right-aligned under the top bar, where the Display
@@ -97,6 +107,7 @@ pub(crate) struct MenuState {
     pub mode: ViewMode,
     pub show: ShowFlags,
     pub billboards: bool,
+    pub extents: CategorySet,
 }
 
 pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2]) {
@@ -118,6 +129,8 @@ pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
             MenuRow::ShowHeading => ("Show".to_string(), false, false),
             MenuRow::Flag(f, label) => (label.to_string(), state.show.contains(f), true),
             MenuRow::Billboards => ("Billboards".to_string(), state.billboards, true),
+            MenuRow::ExtentHeading => ("Extents".to_string(), false, false),
+            MenuRow::Extent(c, label) => (label.to_string(), state.extents.contains(c), true),
         };
         // A selected mode keeps the accent; other actionable rows light on
         // hover; the divider heading draws label-only.
@@ -128,12 +141,12 @@ pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
         };
         widget::place_rounded(world, row_bg(i), r, tint, theme::CONTROL_RADIUS, bg_visible);
         let color = match row {
-            MenuRow::ShowHeading => theme::HEADING,
+            MenuRow::ShowHeading | MenuRow::ExtentHeading => theme::HEADING,
             MenuRow::Mode(_) => theme::LABEL,
             _ if on => theme::LABEL,
             _ => theme::LABEL_DIM,
         };
-        let indent = if matches!(row, MenuRow::ShowHeading) {
+        let indent = if matches!(row, MenuRow::ShowHeading | MenuRow::ExtentHeading) {
             0.0
         } else {
             6.0
@@ -141,7 +154,7 @@ pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
         let text = match row {
             // Toggle rows carry an on/off marker; mode rows read as a radio
             // via the accent background.
-            MenuRow::Flag(..) | MenuRow::Billboards => {
+            MenuRow::Flag(..) | MenuRow::Billboards | MenuRow::Extent(..) => {
                 format!("{} {}", if on { "[x]" } else { "[ ]" }, caption)
             }
             _ => caption,
@@ -193,6 +206,9 @@ mod tests {
             assert!(rows.contains(&MenuRow::Flag(f, label)));
         }
         assert!(rows.contains(&MenuRow::Billboards));
+        for (c, label) in Category::LABELED {
+            assert!(rows.contains(&MenuRow::Extent(c, label)));
+        }
     }
 
     #[test]

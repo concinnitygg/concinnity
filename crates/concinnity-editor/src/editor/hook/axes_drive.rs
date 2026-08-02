@@ -11,17 +11,18 @@ use crate::assets::Camera3D;
 use concinnity_core::gfx::lines::Line;
 
 impl EditorHook {
-    // The axis lines to publish this frame. Empty while the axes are toggled
-    // off, while the whole HUD is hidden (F1 clears the viewport for a clean
-    // look), or before a camera exists to size them against.
-    pub(super) fn axis_lines(&self, world: &World) -> Vec<Line> {
+    // Append this frame's axis lines to the shared line buffer. Nothing while
+    // the axes are toggled off, while the whole HUD is hidden (F1 clears the
+    // viewport for a clean look), or before a camera exists to size them
+    // against.
+    pub(super) fn push_axis_lines(&self, world: &World, out: &mut Vec<Line>) {
         if !self.axes_visible || !self.hud_visible {
-            return Vec::new();
+            return;
         }
         let Some(cam) = world.query::<Camera3D>().next() else {
-            return Vec::new();
+            return;
         };
-        axes::lines(cam.far)
+        axes::push_lines(out, cam.far);
     }
 }
 
@@ -51,10 +52,16 @@ mod tests {
         EditorHook::new("world.jsonl".to_string(), Vec::new())
     }
 
+    fn axis_lines(h: &EditorHook, world: &World) -> Vec<Line> {
+        let mut out = Vec::new();
+        h.push_axis_lines(world, &mut out);
+        out
+    }
+
     #[test]
     fn axes_are_published_by_default() {
         let world = world_with_camera();
-        let lines = hook().axis_lines(&world);
+        let lines = axis_lines(&hook(), &world);
         assert_eq!(lines.len(), 6, "a solid + fading run per axis");
         // Sized to the camera's far plane, so the runs reach the horizon.
         assert!(lines.iter().any(|l| l.end[0] == 300.0));
@@ -65,7 +72,7 @@ mod tests {
         let world = world_with_camera();
         let mut h = hook();
         h.axes_visible = false;
-        assert!(h.axis_lines(&world).is_empty());
+        assert!(axis_lines(&h, &world).is_empty());
     }
 
     #[test]
@@ -73,11 +80,11 @@ mod tests {
         let world = world_with_camera();
         let mut h = hook();
         h.hud_visible = false;
-        assert!(h.axis_lines(&world).is_empty());
+        assert!(axis_lines(&h, &world).is_empty());
     }
 
     #[test]
     fn a_world_without_a_camera_publishes_nothing() {
-        assert!(hook().axis_lines(&World::new_empty()).is_empty());
+        assert!(axis_lines(&hook(), &World::new_empty()).is_empty());
     }
 }

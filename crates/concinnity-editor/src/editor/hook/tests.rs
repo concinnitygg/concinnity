@@ -4963,10 +4963,12 @@ fn hidden_and_locked_billboards_follow_the_pick_rules() {
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 }
 
-// Selecting a trigger volume draws its collider outline: dotted box segments
-// for a cuboid, and nothing once the selection moves elsewhere.
+// Selecting a trigger volume publishes its collider outline through the line
+// pass (12 box edges alongside the 6 axis runs), the dotted sprite pool stays
+// hidden (it belongs to the drag ghost now), and clearing the selection
+// leaves only the axes.
 #[test]
-fn selected_trigger_volume_draws_its_box_outline() {
+fn selected_trigger_volume_publishes_its_line_outline() {
     crate::ecs::asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], Vec::new());
     for s in billboards::sprites() {
@@ -4986,28 +4988,31 @@ fn selected_trigger_volume_draws_its_box_outline() {
     })]);
 
     // Click the volume's projected icon (viewport center): it selects and its
-    // outline comes up.
+    // outline comes up in the published line buffer.
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("zone"));
-    let ids: std::collections::HashSet<_> = billboards::all_sprite_ids().into_iter().collect();
-    let outline_shown = world
-        .query::<Sprite>()
-        .filter(|s| s.visible && ids.contains(&s.asset_id) && s.width < 4.0)
-        .count();
+    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
     assert_eq!(
-        outline_shown,
-        billboards::BOX_EDGES * billboards::EDGE_SEGMENTS,
-        "every dotted box segment is placed"
+        published,
+        6 + super::super::outlines::shapes::BOX_EDGES,
+        "axes plus the volume's box edges"
+    );
+    let ids: std::collections::HashSet<_> = billboards::all_sprite_ids().into_iter().collect();
+    let icons = billboards::MAX_BILLBOARDS;
+    assert!(
+        world
+            .query::<Sprite>()
+            .filter(|s| s.visible && ids.contains(&s.asset_id))
+            .count()
+            <= icons,
+        "no dotted outline segments show; only the icon chips do"
     );
 
-    // Clearing the selection hides the outline again.
+    // Clearing the selection leaves only the axes.
     h.selection.clear();
     h.tick(&mut world);
-    let outline_shown = world
-        .query::<Sprite>()
-        .filter(|s| s.visible && ids.contains(&s.asset_id) && s.width < 4.0)
-        .count();
-    assert_eq!(outline_shown, 0, "no outline without a selected volume");
+    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
+    assert_eq!(published, 6, "no outline without a selected volume");
 }
 
 // Console commands mutate the working entries like their panel counterparts,

@@ -24,8 +24,8 @@ use crate::ecs::asset_id::AssetId;
 use concinnity_cook::ComponentType;
 
 // Reserved id family: the next free block after the panel families below 0x1000.
-// Icons at +0x00, their glyph labels at +0x40, the trigger-volume outline's
-// dotted box run at +0x100 (0x10 per edge), and its sphere ring at +0x1C0.
+// Icons at +0x00, their glyph labels at +0x40, and the drag ghost's dotted box
+// run at +0x100 (0x10 per edge).
 const BILLBOARD_BASE: u32 = ID_BASE + 0x1000;
 
 // Icon pool size, bounding the per-frame sprite cost; entries past the pool
@@ -46,15 +46,12 @@ const ICON_TINT: [f32; 4] = [0.08, 0.08, 0.10, 0.85];
 // selection's non-active rings.
 const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
-// The trigger-volume outline: a dotted run per box edge, or one circular ring
-// for a sphere.
+// The dotted screen-space box outline: a dotted run per box edge. Its one
+// tenant is the drag-out placement ghost; entity extents draw through the
+// renderer's line pass instead (`editor/outlines`).
 pub(crate) const BOX_EDGES: usize = 12;
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
-const RING_BORDER_W: f32 = 1.5;
-// A ring beyond this radius no longer reads as a shape (the camera is inside
-// or nearly inside the volume); skip it.
-const MAX_RING_RADIUS_PX: f32 = 4000.0;
 
 // Box corners as (x, y, z) sign masks; edges as index pairs into that corner
 // order (corner i has bit 0 = +x, bit 1 = +y, bit 2 = +z).
@@ -85,8 +82,6 @@ fn box_segment_id(edge: usize, seg: usize) -> AssetId {
     AssetId(BILLBOARD_BASE + 0x100 + edge as u32 * 0x10 + seg as u32)
 }
 
-const SPHERE_RING: AssetId = AssetId(BILLBOARD_BASE + 0x1C0);
-
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     let mut out: Vec<AssetId> = (0..MAX_BILLBOARDS).map(icon_id).collect();
     for edge in 0..BOX_EDGES {
@@ -94,7 +89,6 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
             out.push(box_segment_id(edge, seg));
         }
     }
-    out.push(SPHERE_RING);
     out
 }
 
@@ -152,19 +146,25 @@ pub(crate) fn glyph(ty: &str) -> String {
     }
 }
 
-// A stable per-type accent: hue from an FNV-1a hash of the type name at fixed
-// saturation / value, so colours never need registering either.
-pub(crate) fn tint(ty: &str) -> [f32; 4] {
+// A stable per-type hue from an FNV-1a hash of the type name, shared with the
+// extent outlines so an entity's wireframe matches its icon.
+pub(crate) fn hue_deg(ty: &str) -> f32 {
     let mut h: u32 = 0x811c_9dc5;
     for b in ty.bytes() {
         h ^= u32::from(b);
         h = h.wrapping_mul(0x0100_0193);
     }
-    let [r, g, b] = hsv_to_rgb((h % 360) as f32, 0.55, 0.95);
+    (h % 360) as f32
+}
+
+// A stable per-type accent: the hashed hue at fixed saturation / value, so
+// colours never need registering either.
+pub(crate) fn tint(ty: &str) -> [f32; 4] {
+    let [r, g, b] = hsv_to_rgb(hue_deg(ty), 0.55, 0.95);
     [r, g, b, 1.0]
 }
 
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = v - c;
@@ -290,16 +290,6 @@ pub(crate) fn box_outline(
     Some(out)
 }
 
-// Projected pixel radius of a world-space sphere at view depth `depth`.
-pub(crate) fn sphere_radius_px(
-    radius: f32,
-    depth: f32,
-    fov_y_radians: f32,
-    viewport_h: f32,
-) -> f32 {
-    radius * viewport_h / (2.0 * depth * (fov_y_radians * 0.5).tan())
-}
-
 // One placed icon for the frame.
 pub(crate) struct Icon {
     pub screen: [f32; 2],
@@ -309,9 +299,8 @@ pub(crate) struct Icon {
     pub active: bool,
 }
 
-// The injected pools, all hidden: icon chips with their glyph labels, the
-// box-outline dot run, and the sphere ring. Per-frame placement recolours the
-// mutable parts.
+// The injected pools, all hidden: icon chips with their glyph labels and the
+// box-outline dot run. Per-frame placement recolours the mutable parts.
 pub(crate) fn sprites() -> Vec<Sprite> {
     let mut out: Vec<Sprite> = (0..MAX_BILLBOARDS)
         .map(|i| Sprite {
@@ -332,13 +321,6 @@ pub(crate) fn sprites() -> Vec<Sprite> {
             });
         }
     }
-    out.push(Sprite {
-        asset_id: SPHERE_RING,
-        tint: [0.0, 0.0, 0.0, 0.0],
-        border_width: RING_BORDER_W,
-        visible: false,
-        ..Default::default()
-    });
     out
 }
 
@@ -408,35 +390,8 @@ pub(crate) fn place_box_outline(world: &mut World, centers: &[[f32; 2]], tint: [
     }
 }
 
-// Center the sphere ring (a border-only circle) on its projected center, or
-// skip it when the projection no longer reads as a shape.
-pub(crate) fn place_sphere_ring(
-    world: &mut World,
-    center: [f32; 2],
-    radius_px: f32,
-    tint: [f32; 4],
-) {
-    if !(0.0..=MAX_RING_RADIUS_PX).contains(&radius_px) {
-        return;
-    }
-    let Some(s) = sprite_mut(world, SPHERE_RING) else {
-        return;
-    };
-    let size = radius_px * 2.0;
-    s.x = center[0] - radius_px;
-    s.y = center[1] - radius_px;
-    s.width = size;
-    s.height = size;
-    s.corner_radius = radius_px;
-    s.border_color = tint;
-    s.visible = true;
-}
-
 pub(crate) fn hide_outline(world: &mut World) {
     place_box_outline(world, &[], [0.0; 4]);
-    if let Some(s) = sprite_mut(world, SPHERE_RING) {
-        s.visible = false;
-    }
 }
 
 pub(crate) fn hide(world: &mut World) {
@@ -583,20 +538,10 @@ mod tests {
     }
 
     #[test]
-    fn sphere_radius_scales_inversely_with_depth() {
-        // fov 90: tan_half = 1, so r_px = r * vh / (2 * depth).
-        assert!((sphere_radius_px(1.0, 5.0, FOV, 720.0) - 72.0).abs() < 0.1);
-        assert!((sphere_radius_px(1.0, 10.0, FOV, 720.0) - 36.0).abs() < 0.1);
-    }
-
-    #[test]
     fn id_family_is_contiguous_and_unique() {
         let sprites = all_sprite_ids();
         let labels = all_label_ids();
-        assert_eq!(
-            sprites.len(),
-            MAX_BILLBOARDS + BOX_EDGES * EDGE_SEGMENTS + 1
-        );
+        assert_eq!(sprites.len(), MAX_BILLBOARDS + BOX_EDGES * EDGE_SEGMENTS);
         assert_eq!(labels.len(), MAX_BILLBOARDS);
         let unique: std::collections::HashSet<_> = sprites.iter().chain(labels.iter()).collect();
         assert_eq!(unique.len(), sprites.len() + labels.len());

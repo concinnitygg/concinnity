@@ -38,6 +38,7 @@ mod lighting_panel;
 mod list_panel;
 mod marquee;
 mod orbit;
+mod outlines;
 mod overrides;
 mod panel;
 mod preview;

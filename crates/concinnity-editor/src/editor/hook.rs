@@ -76,6 +76,7 @@ use super::highlight;
 use super::history::History;
 use super::marquee;
 use super::orbit;
+use super::outlines;
 use super::resize;
 use super::seeded_content;
 use super::selection::Selection;
@@ -289,6 +290,9 @@ pub(crate) struct EditorHook {
     view_mode: view_menu::ViewMode,
     show_flags: view_menu::ShowFlags,
     show_billboards: bool,
+    // The Display menu's always-on extent-outline categories (selection
+    // outlines regardless; `hook/outline_drive.rs`).
+    extent_show: outlines::CategorySet,
     // The type of the open add / edit form; `None` means the form panel is
     // closed.
     selected_type: Option<String>,
@@ -527,6 +531,7 @@ mod import_edit;
 mod layout;
 mod marquee_drag;
 mod orbit_drive;
+mod outline_drive;
 // Named to avoid colliding with the `use super::overrides` module import.
 mod override_edit;
 mod pick;
@@ -645,6 +650,7 @@ impl EditorHook {
             view_mode: view_menu::ViewMode::default(),
             show_flags: view_menu::ShowFlags::default(),
             show_billboards: true,
+            extent_show: outlines::CategorySet::default(),
             selected_type: None,
             form_target: FormTarget::New,
             form_fields: Vec::new(),
@@ -978,11 +984,6 @@ impl DebugHook for EditorHook {
         // simulated tick reported (pulses, live values, breakpoint hits).
         self.drive_trace(world);
         world.insert_resource(crate::ecs::FlyCam(self.fly && !self.sim.playing()));
-        // Publish the world-origin axes for the renderer's line pass.
-        // Republished every frame (the renderer expands whatever it finds), and
-        // emptied while they are toggled off or the HUD is hidden, which drops
-        // the pass from the frame graph entirely.
-        world.insert_resource(crate::ecs::WorldLines(self.axis_lines(world)));
         // Publish the editor-session hidden set (manual hides composed with an
         // active isolate, resolved to this world's ids) so the renderer
         // collapses those objects this frame.
@@ -1003,6 +1004,19 @@ impl DebugHook for EditorHook {
         // The panels lay out only once the HUD is shown and a real viewport exists
         // (frame 0 keeps the injected-hidden placeholders).
         let shown = self.hud_visible && vp[0] > 0.0;
+        // Publish the world-space editor lines (origin axes + extent outlines)
+        // for the renderer's line pass, refilling last frame's buffer.
+        // Republished every frame (the renderer expands whatever it finds), and
+        // empty while everything is toggled off or the HUD is hidden, which
+        // drops the pass from the frame graph entirely.
+        let mut lines = world
+            .remove_resource::<crate::ecs::WorldLines>()
+            .map(|l| l.0)
+            .unwrap_or_default();
+        lines.clear();
+        self.push_axis_lines(world, &mut lines);
+        self.push_extent_lines(world, vp, &mut lines);
+        world.insert_resource(crate::ecs::WorldLines(lines));
         // Drive the editor's in-engine cursor. It shows while the editor owns the
         // pointer (edit mode); a captured camera (play / fly) owns the pointer
         // instead, so the sprite hides and no stray arrow lingers over the frozen
