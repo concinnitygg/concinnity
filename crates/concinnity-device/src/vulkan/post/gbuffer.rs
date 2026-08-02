@@ -1087,6 +1087,29 @@ impl GbufferResources {
             self.depth_images.push(depth);
             self.framebuffers.push(framebuffer);
         }
+        // Rest the sampled channels in `SHADER_READ_ONLY_OPTIMAL`, where the
+        // pre-pass render pass leaves them, so a consumer that samples one before
+        // the pre-pass has ever run binds a valid layout (the Composite samples
+        // normal+depth and roughness unconditionally for the debug view modes, but
+        // a world hidden behind an opaque menu masks the pre-pass off). The render
+        // pass loads them as `UNDEFINED`, so this changes nothing once it runs.
+        one_shot_submit(device, command_pool, queue, |cmd| {
+            for img in self
+                .normal_depth_images
+                .iter()
+                .chain(&self.roughness_images)
+                .chain(&self.velocity_images)
+            {
+                transition_image_layout(
+                    device,
+                    cmd,
+                    img.image,
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    vk::ImageAspectFlags::COLOR,
+                );
+            }
+        })?;
         Ok(())
     }
 

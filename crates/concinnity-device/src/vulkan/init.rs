@@ -855,9 +855,13 @@ impl VkContext {
         //  framebuffers + the main pass binding 6 bind the pooled `ao_output`.
         let bloom_on = post_process.bloom_intensity > 0.0;
         let transient_pool = super::transient_pool::TransientImagePool::build(
-            &instance,
-            &device,
-            physical_device,
+            &GpuUploadContext {
+                instance: &instance,
+                device: &device,
+                physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
             frames,
             &super::transient_pool::transient_slots(
                 ssao_settings.is_some(),

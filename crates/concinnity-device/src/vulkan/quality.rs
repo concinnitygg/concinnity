@@ -236,9 +236,13 @@ impl VkContext {
         // now-Some `self.ssao`, then re-points binding 6 at the rebuilt views.
         if desired_ssao && self.ssao.is_none() {
             self.transient_pool.rebuild(
-                &self.instance,
-                &self.device,
-                self.physical_device,
+                &super::texture::GpuUploadContext {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
                 self.frames_in_flight,
                 &super::transient_pool::transient_slots(
                     true,

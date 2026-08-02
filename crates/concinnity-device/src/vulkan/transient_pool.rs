@@ -24,7 +24,9 @@
 
 use ash::{Device, vk};
 
-use super::texture::{create_image_view, find_memory_type};
+use super::texture::{
+    GpuUploadContext, create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
+};
 
 // One managed transient image: the graph label plus the concrete Vulkan
 // parameters the pool needs to allocate it. The label is the same string the
@@ -52,6 +54,7 @@ struct PooledImage {
     frame: usize,
     image: vk::Image,
     view: vk::ImageView,
+    aspect: vk::ImageAspectFlags,
 }
 
 // The transient image pool owned by `VkContext`. Resolution-dependent, so it is
@@ -70,16 +73,25 @@ pub(super) struct TransientImagePool {
 
 impl TransientImagePool {
     // Allocate every slot's per-frame backing memory and bind its member images
-    // into it. Each member image is created device-local and left `UNDEFINED`;
-    // its first-use layout is established by its graph producer barrier or its
-    // render pass, exactly as when the feature owned the image.
+    // into it. Each member is pre-transitioned to `SHADER_READ_ONLY_OPTIMAL`, the
+    // resting layout a producing pass leaves it in, so a consumer that samples it
+    // before any producer has run binds a valid layout (the Composite samples
+    // `ao_output` and `bloom_top` unconditionally, but a world hidden behind an
+    // opaque menu masks off every pass that writes them). Producers still open
+    // from `UNDEFINED` and discard, so this costs nothing after the first frame.
+    // Matches the committed bloom mips and the TAA history images.
     pub(super) fn build(
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        ctx: &GpuUploadContext,
         frames: usize,
         slots: &[SlotSpec],
     ) -> Result<Self, String> {
+        let &GpuUploadContext {
+            instance,
+            device,
+            physical_device,
+            command_pool,
+            queue,
+        } = ctx;
         let mut slot_memories = Vec::new();
         let mut images = Vec::new();
         let slot_labels: Vec<Vec<&'static str>> = slots
@@ -139,9 +151,24 @@ impl TransientImagePool {
                         frame: f,
                         image,
                         view,
+                        aspect: spec.aspect,
                     });
                 }
             }
+        }
+        if !images.is_empty() {
+            one_shot_submit(device, command_pool, queue, |cmd| {
+                for p in &images {
+                    transition_image_layout(
+                        device,
+                        cmd,
+                        p.image,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        p.aspect,
+                    );
+                }
+            })?;
         }
         tracing::info!(
             "transient image pool: {} slot allocation(s), {} KiB ({} KiB saved by aliasing)",
@@ -219,14 +246,12 @@ impl TransientImagePool {
     // the caller afterward.
     pub(super) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        physical_device: vk::PhysicalDevice,
+        ctx: &GpuUploadContext,
         frames: usize,
         slots: &[SlotSpec],
     ) -> Result<(), String> {
-        self.destroy(device);
-        *self = Self::build(instance, device, physical_device, frames, slots)?;
+        self.destroy(ctx.device);
+        *self = Self::build(ctx, frames, slots)?;
         Ok(())
     }
 
