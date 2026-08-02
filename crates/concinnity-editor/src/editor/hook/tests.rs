@@ -5013,6 +5013,14 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     h.tick(&mut world);
     let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
     assert_eq!(published, 6, "no outline without a selected volume");
+
+    // Clearing the Lines show flag publishes nothing at all, selection and
+    // axes included: the pass it would feed is masked for the frame anyway.
+    h.selection.replace("zone".to_string());
+    h.show_flags = h.show_flags.toggled(view_menu::ShowFlags::LINES);
+    h.tick(&mut world);
+    let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
+    assert_eq!(published, 0, "the Lines flag gates axes and outlines alike");
 }
 
 // Console commands mutate the working entries like their panel counterparts,

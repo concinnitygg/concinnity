@@ -11,6 +11,18 @@ use crate::assets::{GlassPanel, InstancedProp, Prop, RectAreaLight, SpotLight};
 // toward a hemisphere and the clustered sphere bound stops being useful.
 pub const SPOT_MAX_ANGLE_DEG: f32 = 89.9;
 
+// `v` scaled to unit length, or `fallback` when it is too short to have a
+// direction. The one degenerate-direction policy behind every authored
+// normal / direction field below.
+fn normalize_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-6 {
+        fallback
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
+}
+
 /// Column-major model matrix for a [Prop].
 pub trait PropGeometry {
     fn model_matrix(&self) -> [[f32; 4]; 4];
@@ -105,13 +117,7 @@ impl SpotLightGeometry for SpotLight {
     /// Unit-length cone axis, falling back to straight down when the authored
     /// `direction` is degenerate.
     fn unit_direction(&self) -> [f32; 3] {
-        let d = self.direction;
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        if len < 1e-6 {
-            [0.0, -1.0, 0.0]
-        } else {
-            [d[0] / len, d[1] / len, d[2] / len]
-        }
+        normalize_or(self.direction, [0.0, -1.0, 0.0])
     }
 
     /// Cosine of the inner half-angle: the widest angle still at full brightness.
@@ -141,13 +147,7 @@ impl GlassPanelGeometry for GlassPanel {
     /// `normal` is degenerate. The build-time quad generator and the runtime
     /// shader both rely on a usable normal.
     fn unit_normal(&self) -> [f32; 3] {
-        let n = self.normal;
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-        if len < 1e-6 {
-            [0.0, 0.0, 1.0]
-        } else {
-            [n[0] / len, n[1] / len, n[2] / len]
-        }
+        normalize_or(self.normal, [0.0, 0.0, 1.0])
     }
 }
 
@@ -160,13 +160,7 @@ impl RectAreaLightGeometry for RectAreaLight {
     /// Unit-length emission direction, falling back to straight down when the
     /// authored `normal` is degenerate (the panel default emits downward).
     fn unit_normal(&self) -> [f32; 3] {
-        let n = self.normal;
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-        if len < 1e-6 {
-            [0.0, -1.0, 0.0]
-        } else {
-            [n[0] / len, n[1] / len, n[2] / len]
-        }
+        normalize_or(self.normal, [0.0, -1.0, 0.0])
     }
 }
 

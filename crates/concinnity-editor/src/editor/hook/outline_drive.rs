@@ -16,7 +16,19 @@ use crate::assets::{
 use concinnity_core::gfx::lines::Line;
 use outlines::shapes::{self, Stroke};
 
-type ShapeFn = fn(&World, crate::ecs::Entity, &serde_json::Value, [f32; 2], Stroke, &mut Vec<Line>);
+// What one entity's shape generator reads: its live entity, its authored
+// entry and type, the frame's viewport, and the stroke its row draws with.
+// Passed by reference so a shape takes only what it uses.
+struct ShapeCtx<'a> {
+    world: &'a World,
+    entity: crate::ecs::Entity,
+    ty: &'a str,
+    entry: &'a serde_json::Value,
+    vp: [f32; 2],
+    stroke: Stroke,
+}
+
+type ShapeFn = fn(&ShapeCtx, &mut Vec<Line>);
 
 // Every outlineable component type with its display category and shape. One
 // row per type keeps the category map and the shape dispatch from drifting
@@ -79,11 +91,14 @@ impl EditorHook {
             let before = out.len();
             if let Some((_, _, shape)) = extent {
                 shape(
-                    world,
-                    entity,
-                    e,
-                    vp,
-                    outlines::stroke(ty, selected_pass),
+                    &ShapeCtx {
+                        world,
+                        entity,
+                        ty,
+                        entry: e,
+                        vp,
+                        stroke: outlines::stroke(ty, selected_pass),
+                    },
                     out,
                 );
             }
@@ -97,18 +112,12 @@ impl EditorHook {
     }
 }
 
-fn push_trigger(
-    world: &World,
-    entity: crate::ecs::Entity,
-    _entry: &serde_json::Value,
-    _vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let Some(volume) = world.get::<TriggerVolume>(entity) else {
+fn push_trigger(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let Some(volume) = ctx.world.get::<TriggerVolume>(ctx.entity) else {
         return;
     };
-    let transform = anchored_transform(world, entity, volume.position, volume.rotation_deg);
+    let transform = anchored_transform(ctx.world, ctx.entity, volume.position, volume.rotation_deg);
+    let s = ctx.stroke;
     let c = &volume.collider;
     match c.shape.as_str() {
         "ball" => shapes::push_sphere(out, transform.position, c.radius, s),
@@ -119,33 +128,20 @@ fn push_trigger(
     }
 }
 
-fn push_point_light(
-    world: &World,
-    entity: crate::ecs::Entity,
-    _entry: &serde_json::Value,
-    _vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let Some(light) = world.get::<PointLight>(entity) else {
+fn push_point_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let Some(light) = ctx.world.get::<PointLight>(ctx.entity) else {
         return;
     };
-    let center = anchored_position(world, entity, light.position);
-    shapes::push_sphere(out, center, light.range, s);
+    let center = anchored_position(ctx.world, ctx.entity, light.position);
+    shapes::push_sphere(out, center, light.range, ctx.stroke);
 }
 
-fn push_spot_light(
-    world: &World,
-    entity: crate::ecs::Entity,
-    _entry: &serde_json::Value,
-    _vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let Some(light) = world.get::<SpotLight>(entity) else {
+fn push_spot_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let Some(light) = ctx.world.get::<SpotLight>(ctx.entity) else {
         return;
     };
-    let apex = anchored_position(world, entity, light.position);
+    let s = ctx.stroke;
+    let apex = anchored_position(ctx.world, ctx.entity, light.position);
     let dir = light.unit_direction();
     let outer = light
         .outer_angle
@@ -169,76 +165,57 @@ fn push_spot_light(
     );
 }
 
-fn push_rect_light(
-    world: &World,
-    entity: crate::ecs::Entity,
-    _entry: &serde_json::Value,
-    _vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let Some(light) = world.get::<RectAreaLight>(entity) else {
+fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let Some(light) = ctx.world.get::<RectAreaLight>(ctx.entity) else {
         return;
     };
-    let centre = anchored_position(world, entity, light.centre);
+    let centre = anchored_position(ctx.world, ctx.entity, light.centre);
     shapes::push_rect(
         out,
         centre,
         light.unit_normal(),
         light.half_size,
         light.range,
-        s,
+        ctx.stroke,
     );
 }
 
-fn push_probe(
-    world: &World,
-    entity: crate::ecs::Entity,
-    _entry: &serde_json::Value,
-    _vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let Some(probe) = world.get::<ReflectionProbe>(entity) else {
+fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let Some(probe) = ctx.world.get::<ReflectionProbe>(ctx.entity) else {
         return;
     };
-    let position = anchored_position(world, entity, probe.position);
+    let position = anchored_position(ctx.world, ctx.entity, probe.position);
     let model = Transform {
         position,
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     }
     .model_matrix();
-    shapes::push_box(out, &model, probe.half_extents, s);
+    shapes::push_box(out, &model, probe.half_extents, ctx.stroke);
 }
 
 // The live Camera3D is the editor's own viewpoint (fly moves it), so the
 // frustum builds from the authored args, anchored on the seeded Transform so
-// a gizmo drag carries it. `working_args` has already merged the schema
-// defaults, so a missing key means a degenerate frustum, which draws nothing.
-fn push_camera(
-    world: &World,
-    entity: crate::ecs::Entity,
-    entry: &serde_json::Value,
-    vp: [f32; 2],
-    s: Stroke,
-    out: &mut Vec<Line>,
-) {
-    let args = form::working_args("Camera3D", entry.get("args").and_then(|v| v.as_object()));
-    let num = |key: &str| {
+// a gizmo drag carries it. Each projection key carries a usable fallback: an
+// authored value that is not a number would otherwise collapse the frustum
+// and the outline would silently disappear.
+fn push_camera(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+    let args = form::working_args(ctx.ty, ctx.entry.get("args").and_then(|v| v.as_object()));
+    let num = |key: &str, default: f32| {
         args.get(key)
             .and_then(|v| v.as_f64())
             .map(|v| v as f32)
-            .unwrap_or(0.0)
+            .unwrap_or(default)
     };
     let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
-    let origin = anchored_position(world, entity, authored);
-    let view = concinnity_core::gfx::camera::view_matrix(origin, num("yaw"), num("pitch"));
+    let origin = anchored_position(ctx.world, ctx.entity, authored);
+    let view =
+        concinnity_core::gfx::camera::view_matrix(origin, num("yaw", 0.0), num("pitch", 0.0));
     let right = [view[0][0], view[1][0], view[2][0]];
     let up = [view[0][1], view[1][1], view[2][1]];
     let forward = [-view[0][2], -view[1][2], -view[2][2]];
-    let aspect = if vp[1] > 0.0 {
-        vp[0] / vp[1]
+    let aspect = if ctx.vp[1] > 0.0 {
+        ctx.vp[0] / ctx.vp[1]
     } else {
         16.0 / 9.0
     };
@@ -249,12 +226,12 @@ fn push_camera(
             right,
             up,
             forward,
-            fov_y_rad: num("fov_y_degrees").to_radians(),
+            fov_y_rad: num("fov_y_degrees", 75.0).to_radians(),
             aspect,
-            near: num("near"),
-            far: num("far"),
+            near: num("near", 0.05),
+            far: num("far", 200.0),
         },
-        s,
+        ctx.stroke,
     );
 }
 
@@ -522,10 +499,25 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for (ty, c, _) in EXTENTS {
             assert!(seen.insert(ty), "{ty} repeats");
+            assert!(
+                concinnity_cook::ComponentType::parse(ty).is_some(),
+                "{ty} is not a registered component type"
+            );
             assert_ne!(
                 c,
                 outlines::Category::Colliders,
                 "{ty}: colliders are not type-keyed"
+            );
+        }
+        // Every menu category except Colliders must have a row to answer its
+        // toggle, or the Display menu ships a toggle that draws nothing.
+        for (c, label) in outlines::Category::LABELED {
+            if c == outlines::Category::Colliders {
+                continue;
+            }
+            assert!(
+                EXTENTS.iter().any(|(_, row, _)| *row == c),
+                "{label} has no outlineable type"
             );
         }
     }
@@ -563,6 +555,15 @@ mod tests {
             },
         );
         let mut h = hook(vec![entry("shot", "Camera3D")]);
+        h.selection.replace("shot".to_string());
+        assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
+
+        // A hand-authored projection key that is not a number falls back to
+        // the shipping default rather than collapsing the frustum away.
+        let mut h = hook(vec![serde_json::json!({
+            "name": "shot", "type": "Camera3D",
+            "args": {"near": "0.05", "far": null}
+        })]);
         h.selection.replace("shot".to_string());
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
     }

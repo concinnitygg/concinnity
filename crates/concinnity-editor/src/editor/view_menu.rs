@@ -64,8 +64,10 @@ pub(crate) fn rows() -> Vec<MenuRow> {
         .collect()
 }
 
+// Kept allocation-free: the layout, hit test, and per-frame hide all call it,
+// and `rows_cover_every_mode_and_flag_once` pins it against `rows()`.
 pub(crate) fn row_count() -> usize {
-    rows().len()
+    ViewMode::ALL.len() + 1 + ShowFlags::LABELED.len() + 1 + 1 + Category::LABELED.len()
 }
 
 // The menu's top-left: right-aligned under the top bar, where the Display

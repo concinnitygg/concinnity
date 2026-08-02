@@ -15,6 +15,7 @@
 // scene depth buffer on the CPU or a shader change, neither of which an icon
 // earns yet.
 
+use super::outlines::shapes::{BOX_EDGES, EDGES};
 use super::registry::ID_BASE;
 use super::theme;
 use super::widget;
@@ -48,9 +49,8 @@ const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
 // The dotted screen-space box outline: a dotted run per box edge. Its one
 // tenant is the drag-out placement ghost; entity extents draw through the
-// renderer's line pass instead (`editor/outlines`), whose box topology this
-// shares.
-pub(crate) use super::outlines::shapes::BOX_EDGES;
+// renderer's line pass instead (`editor/outlines`), whose box topology
+// (`BOX_EDGES` / `EDGES`) this shares.
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
 
@@ -245,13 +245,13 @@ pub(crate) fn box_outline(
     model: &[[f32; 4]; 4],
     half_extents: [f32; 3],
 ) -> Option<Vec<[f32; 2]>> {
-    let world = super::outlines::shapes::box_corners(model, half_extents);
+    let world_corners = super::outlines::shapes::box_corners(model, half_extents);
     let mut corners = [[0.0f32; 2]; 8];
-    for (corner, world) in corners.iter_mut().zip(world) {
+    for (corner, world) in corners.iter_mut().zip(world_corners) {
         *corner = project(view, fov_y_radians, viewport, world)?.0;
     }
     let mut out = Vec::with_capacity(BOX_EDGES * EDGE_SEGMENTS);
-    for (a, b) in super::outlines::shapes::EDGES {
+    for (a, b) in EDGES {
         for seg in 0..EDGE_SEGMENTS {
             // Dots span the edge inclusive of both ends, so adjacent edges
             // meet at shared corners.

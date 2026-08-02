@@ -145,6 +145,26 @@ mod tests {
     }
 
     #[test]
+    fn lookup_resolves_interned_names_only() {
+        reset_interner();
+        intern_all(&["a", "b"]);
+        assert_eq!(lookup("a"), Some(AssetId(0)));
+        assert_eq!(lookup("b"), Some(AssetId(1)));
+        // An unknown name resolves to None without interning it, so a
+        // per-frame lookup never grows the table.
+        assert_eq!(lookup("c"), None);
+        assert_eq!(name_table().len(), 2);
+        // A sparse prime leaves blank names in the id-indexed table; those
+        // slots are not lookupable, so an empty name never resolves to the
+        // entity sitting in the first gap.
+        reset_interner();
+        prime_name_table(&[(0, "floor".to_string()), (2, "lamp".to_string())]);
+        assert_eq!(name_table()[1], "");
+        assert_eq!(lookup(""), None);
+        assert_eq!(lookup("lamp"), Some(AssetId(2)));
+    }
+
+    #[test]
     fn prime_installs_a_sparse_table_and_yields_to_a_cook() {
         reset_interner();
         // Sparse ids (1 is unrecorded) land at their exact slots.
