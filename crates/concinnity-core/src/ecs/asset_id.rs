@@ -68,6 +68,15 @@ pub fn reset_interner() {
     INTERNER.with(|i| *i.borrow_mut() = Interner::default());
 }
 
+// Resolve an already-interned name to its id without inserting: `None` for a
+// name this thread's interner has never seen, so per-frame lookups of unknown
+// names never grow the table. O(1) and allocation-free, unlike snapshotting
+// `name_table`.
+pub fn lookup(name: &str) -> Option<AssetId> {
+    ensure_name_resolver();
+    INTERNER.with(|i| i.borrow().map.get(name).map(|&id| AssetId(id)))
+}
+
 // Snapshot every interned name on the current thread, indexed by `AssetId`.
 // Because ids are assigned in world.jsonl declaration order, `table[id]` is
 // the declared name for that id. Used by the binary-only `crate::debug`

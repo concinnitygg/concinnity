@@ -26,12 +26,10 @@ pub(super) struct BillboardSpot {
 // index is built at load, so entries despawned by the start-time drains
 // (Window, GraphicsConfig, Scene, ...) are filtered by liveness.
 pub(super) fn entity_by_name(world: &World, name: &str) -> Option<crate::ecs::Entity> {
-    let id = crate::ecs::asset_id::name_table()
-        .iter()
-        .position(|n| n == name)?;
+    let id = crate::ecs::asset_id::lookup(name)?;
     world
         .resource::<concinnity_core::ecs::EntityByName>()?
-        .get(AssetId(id as u32))
+        .get(id)
         .filter(|&e| world.is_alive(e))
 }
 

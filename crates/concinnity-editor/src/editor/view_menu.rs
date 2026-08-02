@@ -32,16 +32,15 @@ const HEADING_H: f32 = 22.0;
 const PAD: f32 = 6.0;
 const MARGIN: f32 = 8.0;
 
-// One menu row: a view-mode radio, a section divider, one show-flag toggle,
+// One menu row: a view-mode radio, a section heading, one show-flag toggle,
 // the billboard-icons toggle (editor overlay sprites, not a render pass), or
 // one always-on extent-outline category.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum MenuRow {
     Mode(ViewMode),
-    ShowHeading,
+    Heading(&'static str),
     Flag(ShowFlags, &'static str),
     Billboards,
-    ExtentHeading,
     Extent(Category, &'static str),
 }
 
@@ -49,14 +48,14 @@ pub(crate) fn rows() -> Vec<MenuRow> {
     ViewMode::ALL
         .into_iter()
         .map(MenuRow::Mode)
-        .chain(std::iter::once(MenuRow::ShowHeading))
+        .chain(std::iter::once(MenuRow::Heading("Show")))
         .chain(
             ShowFlags::LABELED
                 .into_iter()
                 .map(|(f, label)| MenuRow::Flag(f, label)),
         )
         .chain(std::iter::once(MenuRow::Billboards))
-        .chain(std::iter::once(MenuRow::ExtentHeading))
+        .chain(std::iter::once(MenuRow::Heading("Extents")))
         .chain(
             Category::LABELED
                 .into_iter()
@@ -66,7 +65,7 @@ pub(crate) fn rows() -> Vec<MenuRow> {
 }
 
 pub(crate) fn row_count() -> usize {
-    ViewMode::ALL.len() + 1 + ShowFlags::LABELED.len() + 1 + 1 + Category::LABELED.len()
+    rows().len()
 }
 
 // The menu's top-left: right-aligned under the top bar, where the Display
@@ -126,10 +125,9 @@ pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
         let hovered = point_in(mouse[0], mouse[1], r);
         let (caption, on, selectable) = match row {
             MenuRow::Mode(m) => (m.label().to_string(), state.mode == m, true),
-            MenuRow::ShowHeading => ("Show".to_string(), false, false),
+            MenuRow::Heading(label) => (label.to_string(), false, false),
             MenuRow::Flag(f, label) => (label.to_string(), state.show.contains(f), true),
             MenuRow::Billboards => ("Billboards".to_string(), state.billboards, true),
-            MenuRow::ExtentHeading => ("Extents".to_string(), false, false),
             MenuRow::Extent(c, label) => (label.to_string(), state.extents.contains(c), true),
         };
         // A selected mode keeps the accent; other actionable rows light on
@@ -141,12 +139,12 @@ pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
         };
         widget::place_rounded(world, row_bg(i), r, tint, theme::CONTROL_RADIUS, bg_visible);
         let color = match row {
-            MenuRow::ShowHeading | MenuRow::ExtentHeading => theme::HEADING,
+            MenuRow::Heading(_) => theme::HEADING,
             MenuRow::Mode(_) => theme::LABEL,
             _ if on => theme::LABEL,
             _ => theme::LABEL_DIM,
         };
-        let indent = if matches!(row, MenuRow::ShowHeading | MenuRow::ExtentHeading) {
+        let indent = if matches!(row, MenuRow::Heading(_)) {
             0.0
         } else {
             6.0

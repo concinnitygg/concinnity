@@ -48,27 +48,11 @@ const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
 // The dotted screen-space box outline: a dotted run per box edge. Its one
 // tenant is the drag-out placement ghost; entity extents draw through the
-// renderer's line pass instead (`editor/outlines`).
-pub(crate) const BOX_EDGES: usize = 12;
+// renderer's line pass instead (`editor/outlines`), whose box topology this
+// shares.
+pub(crate) use super::outlines::shapes::BOX_EDGES;
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
-
-// Box corners as (x, y, z) sign masks; edges as index pairs into that corner
-// order (corner i has bit 0 = +x, bit 1 = +y, bit 2 = +z).
-const EDGES: [(usize, usize); BOX_EDGES] = [
-    (0, 1),
-    (2, 3),
-    (4, 5),
-    (6, 7),
-    (0, 2),
-    (1, 3),
-    (4, 6),
-    (5, 7),
-    (0, 4),
-    (1, 5),
-    (2, 6),
-    (3, 7),
-];
 
 fn icon_id(i: usize) -> AssetId {
     AssetId(BILLBOARD_BASE + i as u32)
@@ -99,12 +83,24 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
 // Billboard-eligible: a registered component type that never renders (the
 // registry's `renders` flag) but declares a world position in its authored
 // args. Derived from the registry metadata, so a new asset type earns an icon
-// by declaring those, not by editing a list here.
+// by declaring those, not by editing a list here. Memoized per type: the
+// answer is fixed for the process, and the default-args probe behind it
+// serializes a whole default struct, too heavy for a per-entry per-frame call.
 pub(crate) fn eligible(ty: &str) -> bool {
-    let Some(ct) = ComponentType::parse(ty) else {
-        return false;
-    };
-    !ct.renders() && position_of(&super::form::working_args(ty, None)).is_some()
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    CACHE.with(|c| {
+        if let Some(&known) = c.borrow().get(ty) {
+            return known;
+        }
+        let fresh = ComponentType::parse(ty).is_some_and(|ct| {
+            !ct.renders() && position_of(&super::form::working_args(ty, None)).is_some()
+        });
+        c.borrow_mut().insert(ty.to_string(), fresh);
+        fresh
+    })
 }
 
 // The asset's authored world position: a 3-number `position` (or, for panel
@@ -249,34 +245,13 @@ pub(crate) fn box_outline(
     model: &[[f32; 4]; 4],
     half_extents: [f32; 3],
 ) -> Option<Vec<[f32; 2]>> {
+    let world = super::outlines::shapes::box_corners(model, half_extents);
     let mut corners = [[0.0f32; 2]; 8];
-    for (i, corner) in corners.iter_mut().enumerate() {
-        let local = [
-            if i & 1 == 0 {
-                -half_extents[0]
-            } else {
-                half_extents[0]
-            },
-            if i & 2 == 0 {
-                -half_extents[1]
-            } else {
-                half_extents[1]
-            },
-            if i & 4 == 0 {
-                -half_extents[2]
-            } else {
-                half_extents[2]
-            },
-        ];
-        let world = [
-            model[0][0] * local[0] + model[1][0] * local[1] + model[2][0] * local[2] + model[3][0],
-            model[0][1] * local[0] + model[1][1] * local[1] + model[2][1] * local[2] + model[3][1],
-            model[0][2] * local[0] + model[1][2] * local[1] + model[2][2] * local[2] + model[3][2],
-        ];
+    for (corner, world) in corners.iter_mut().zip(world) {
         *corner = project(view, fov_y_radians, viewport, world)?.0;
     }
     let mut out = Vec::with_capacity(BOX_EDGES * EDGE_SEGMENTS);
-    for (a, b) in EDGES {
+    for (a, b) in super::outlines::shapes::EDGES {
         for seg in 0..EDGE_SEGMENTS {
             // Dots span the edge inclusive of both ends, so adjacent edges
             // meet at shared corners.

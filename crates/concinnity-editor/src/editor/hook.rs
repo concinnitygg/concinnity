@@ -1007,15 +1007,18 @@ impl DebugHook for EditorHook {
         // Publish the world-space editor lines (origin axes + extent outlines)
         // for the renderer's line pass, refilling last frame's buffer.
         // Republished every frame (the renderer expands whatever it finds), and
-        // empty while everything is toggled off or the HUD is hidden, which
-        // drops the pass from the frame graph entirely.
+        // empty while everything is toggled off, the HUD is hidden, or the
+        // Lines show flag is cleared (which would mask the pass anyway; the
+        // empty buffer also skips the CPU generation and ribbon expansion).
         let mut lines = world
             .remove_resource::<crate::ecs::WorldLines>()
             .map(|l| l.0)
             .unwrap_or_default();
         lines.clear();
-        self.push_axis_lines(world, &mut lines);
-        self.push_extent_lines(world, vp, &mut lines);
+        if self.show_flags.contains(view_menu::ShowFlags::LINES) {
+            self.push_axis_lines(world, &mut lines);
+            self.push_extent_lines(world, vp, &mut lines);
+        }
         world.insert_resource(crate::ecs::WorldLines(lines));
         // Drive the editor's in-engine cursor. It shows while the editor owns the
         // pointer (edit mode); a captured camera (play / fly) owns the pointer

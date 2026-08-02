@@ -27,8 +27,9 @@ pub(crate) struct Stroke {
 }
 
 // Box corners as sign masks (bit 0 = +x, bit 1 = +y, bit 2 = +z) and the 12
-// edges as corner-index pairs, matching the billboard outline's layout.
-const EDGES: [(usize, usize); BOX_EDGES] = [
+// edges as corner-index pairs. Shared with the billboard drag ghost's dotted
+// screen-space outline.
+pub(crate) const EDGES: [(usize, usize); BOX_EDGES] = [
     (0, 1),
     (2, 3),
     (4, 5),
@@ -87,6 +88,15 @@ fn on_circle(center: [f32; 3], u: [f32; 3], v: [f32; 3], radius: f32, theta: f32
     )
 }
 
+// A closed ring: `point_at(theta)` sampled over a full turn.
+fn push_ring(out: &mut Vec<Line>, s: Stroke, point_at: impl Fn(f32) -> [f32; 3]) {
+    let mut points = [[0.0f32; 3]; CIRCLE_SEGMENTS];
+    for (i, p) in points.iter_mut().enumerate() {
+        *p = point_at(i as f32 / CIRCLE_SEGMENTS as f32 * core::f32::consts::TAU);
+    }
+    closed_polyline(out, &points, s);
+}
+
 // A circle of `radius` around `center` in the plane perpendicular to `normal`.
 // A non-positive radius appends nothing.
 pub(crate) fn push_circle(
@@ -100,12 +110,7 @@ pub(crate) fn push_circle(
         return;
     }
     let (u, v) = plane_basis(normal);
-    let mut points = [[0.0f32; 3]; CIRCLE_SEGMENTS];
-    for (i, p) in points.iter_mut().enumerate() {
-        let theta = i as f32 / CIRCLE_SEGMENTS as f32 * core::f32::consts::TAU;
-        *p = on_circle(center, u, v, radius, theta);
-    }
-    closed_polyline(out, &points, s);
+    push_ring(out, s, |theta| on_circle(center, u, v, radius, theta));
 }
 
 // A sphere as its three axis-aligned great circles.
@@ -115,13 +120,9 @@ pub(crate) fn push_sphere(out: &mut Vec<Line>, center: [f32; 3], radius: f32, s:
     }
 }
 
-// An oriented box: the 12 edges of `half_extents` through `model`.
-pub(crate) fn push_box(
-    out: &mut Vec<Line>,
-    model: &[[f32; 4]; 4],
-    half_extents: [f32; 3],
-    s: Stroke,
-) {
+// The world-space corners of an oriented box, indexed by the `EDGES` sign
+// masks. Shared with the billboard ghost's screen-space projection.
+pub(crate) fn box_corners(model: &[[f32; 4]; 4], half_extents: [f32; 3]) -> [[f32; 3]; 8] {
     let mut corners = [[0.0f32; 3]; 8];
     for (i, corner) in corners.iter_mut().enumerate() {
         let local = [
@@ -143,6 +144,17 @@ pub(crate) fn push_box(
         ];
         *corner = transform_point(model, local);
     }
+    corners
+}
+
+// An oriented box: the 12 edges of `half_extents` through `model`.
+pub(crate) fn push_box(
+    out: &mut Vec<Line>,
+    model: &[[f32; 4]; 4],
+    half_extents: [f32; 3],
+    s: Stroke,
+) {
+    let corners = box_corners(model, half_extents);
     for (a, b) in EDGES {
         seg(out, corners[a], corners[b], s);
     }
@@ -156,15 +168,12 @@ fn push_local_circle(
     radius: f32,
     s: Stroke,
 ) {
-    let mut points = [[0.0f32; 3]; CIRCLE_SEGMENTS];
-    for (i, p) in points.iter_mut().enumerate() {
-        let theta = i as f32 / CIRCLE_SEGMENTS as f32 * core::f32::consts::TAU;
-        *p = transform_point(
+    push_ring(out, s, |theta| {
+        transform_point(
             model,
             [radius * theta.cos(), center_y, radius * theta.sin()],
-        );
-    }
-    closed_polyline(out, &points, s);
+        )
+    });
 }
 
 // A local-space semicircular cap arc in the plane spanned by local `axis`

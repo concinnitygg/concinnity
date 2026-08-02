@@ -5,7 +5,7 @@
 // not core, and concinnity-asset stays serde-only data. Exposed as extension
 // traits so call sites keep method syntax (`prop.model_matrix()`).
 
-use crate::assets::{GlassPanel, InstancedProp, Prop, SpotLight};
+use crate::assets::{GlassPanel, InstancedProp, Prop, RectAreaLight, SpotLight};
 
 // Widest half-angle a spot cone may open to. Past this the cone degenerates
 // toward a hemisphere and the clustered sphere bound stops being useful.
@@ -151,6 +151,25 @@ impl GlassPanelGeometry for GlassPanel {
     }
 }
 
+/// Unit-length emission normal for a [RectAreaLight].
+pub trait RectAreaLightGeometry {
+    fn unit_normal(&self) -> [f32; 3];
+}
+
+impl RectAreaLightGeometry for RectAreaLight {
+    /// Unit-length emission direction, falling back to straight down when the
+    /// authored `normal` is degenerate (the panel default emits downward).
+    fn unit_normal(&self) -> [f32; 3] {
+        let n = self.normal;
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len < 1e-6 {
+            [0.0, -1.0, 0.0]
+        } else {
+            [n[0] / len, n[1] / len, n[2] / len]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +195,20 @@ mod tests {
             spot([0.0; 3], 10.0, 20.0).unit_direction(),
             [0.0, -1.0, 0.0]
         );
+    }
+
+    #[test]
+    fn rect_normal_normalises_and_falls_back_to_down() {
+        let lit = RectAreaLight {
+            normal: [0.0, 0.0, 3.0],
+            ..RectAreaLight::default()
+        };
+        assert_eq!(lit.unit_normal(), [0.0, 0.0, 1.0]);
+        let degenerate = RectAreaLight {
+            normal: [0.0; 3],
+            ..RectAreaLight::default()
+        };
+        assert_eq!(degenerate.unit_normal(), [0.0, -1.0, 0.0]);
     }
 
     // The shader divides by (cos_inner - cos_outer), so the inner cone must never

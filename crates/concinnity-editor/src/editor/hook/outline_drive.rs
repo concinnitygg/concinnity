@@ -10,11 +10,25 @@
 
 use super::*;
 use crate::assets::{
-    Collider, PointLight, RectAreaLight, ReflectionProbe, SPOT_MAX_ANGLE_DEG, SpotLight,
-    SpotLightGeometry, Transform, TriggerVolume,
+    Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,
+    SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
 };
 use concinnity_core::gfx::lines::Line;
-use outlines::shapes;
+use outlines::shapes::{self, Stroke};
+
+type ShapeFn = fn(&World, crate::ecs::Entity, &serde_json::Value, [f32; 2], Stroke, &mut Vec<Line>);
+
+// Every outlineable component type with its display category and shape. One
+// row per type keeps the category map and the shape dispatch from drifting
+// apart; Colliders is not type-keyed (any entity carrying a Collider).
+const EXTENTS: [(&str, outlines::Category, ShapeFn); 6] = [
+    ("TriggerVolume", outlines::Category::Volumes, push_trigger),
+    ("PointLight", outlines::Category::Lights, push_point_light),
+    ("SpotLight", outlines::Category::Lights, push_spot_light),
+    ("RectAreaLight", outlines::Category::Lights, push_rect_light),
+    ("Camera3D", outlines::Category::Cameras, push_camera),
+    ("ReflectionProbe", outlines::Category::Probes, push_probe),
+];
 
 impl EditorHook {
     // Append this frame's extent outlines. Nothing while the HUD is hidden or
@@ -52,18 +66,26 @@ impl EditorHook {
             if self.name_hidden(name) || self.selection.contains(name) != selected_pass {
                 continue;
             }
-            let category = outlines::Category::of_type(ty);
-            let wants_extent =
-                category.is_some_and(|c| selected_pass || self.extent_show.contains(c));
-            if !wants_extent && !colliders_on {
+            let extent = EXTENTS
+                .iter()
+                .find(|(t, ..)| *t == ty)
+                .filter(|(_, c, _)| selected_pass || self.extent_show.contains(*c));
+            if extent.is_none() && !colliders_on {
                 continue;
             }
             let Some(entity) = billboard_drive::entity_by_name(world, name) else {
                 continue;
             };
             let before = out.len();
-            if wants_extent {
-                push_entity_extent(world, entity, e, ty, selected_pass, vp, out);
+            if let Some((_, _, shape)) = extent {
+                shape(
+                    world,
+                    entity,
+                    e,
+                    vp,
+                    outlines::stroke(ty, selected_pass),
+                    out,
+                );
             }
             if colliders_on {
                 push_collider_outline(world, entity, out);
@@ -75,143 +97,165 @@ impl EditorHook {
     }
 }
 
-fn push_entity_extent(
+fn push_trigger(
+    world: &World,
+    entity: crate::ecs::Entity,
+    _entry: &serde_json::Value,
+    _vp: [f32; 2],
+    s: Stroke,
+    out: &mut Vec<Line>,
+) {
+    let Some(volume) = world.get::<TriggerVolume>(entity) else {
+        return;
+    };
+    let transform = anchored_transform(world, entity, volume.position, volume.rotation_deg);
+    let c = &volume.collider;
+    match c.shape.as_str() {
+        "ball" => shapes::push_sphere(out, transform.position, c.radius, s),
+        "capsule" => {
+            shapes::push_capsule(out, &transform.model_matrix(), c.radius, c.half_height, s);
+        }
+        _ => shapes::push_box(out, &transform.model_matrix(), c.half_extents, s),
+    }
+}
+
+fn push_point_light(
+    world: &World,
+    entity: crate::ecs::Entity,
+    _entry: &serde_json::Value,
+    _vp: [f32; 2],
+    s: Stroke,
+    out: &mut Vec<Line>,
+) {
+    let Some(light) = world.get::<PointLight>(entity) else {
+        return;
+    };
+    let center = anchored_position(world, entity, light.position);
+    shapes::push_sphere(out, center, light.range, s);
+}
+
+fn push_spot_light(
+    world: &World,
+    entity: crate::ecs::Entity,
+    _entry: &serde_json::Value,
+    _vp: [f32; 2],
+    s: Stroke,
+    out: &mut Vec<Line>,
+) {
+    let Some(light) = world.get::<SpotLight>(entity) else {
+        return;
+    };
+    let apex = anchored_position(world, entity, light.position);
+    let dir = light.unit_direction();
+    let outer = light
+        .outer_angle
+        .clamp(0.0, SPOT_MAX_ANGLE_DEG)
+        .to_radians();
+    shapes::push_cone(out, apex, dir, outer, light.range, s);
+    // The full-bright inner cone reads as one dimmer circle on the same range
+    // sphere (a degenerate radius appends nothing).
+    let inner = light.inner_angle.to_radians().clamp(0.0, outer);
+    let center = [
+        apex[0] + dir[0] * light.range * inner.cos(),
+        apex[1] + dir[1] * light.range * inner.cos(),
+        apex[2] + dir[2] * light.range * inner.cos(),
+    ];
+    shapes::push_circle(
+        out,
+        center,
+        dir,
+        light.range * inner.sin(),
+        outlines::inner_stroke(s),
+    );
+}
+
+fn push_rect_light(
+    world: &World,
+    entity: crate::ecs::Entity,
+    _entry: &serde_json::Value,
+    _vp: [f32; 2],
+    s: Stroke,
+    out: &mut Vec<Line>,
+) {
+    let Some(light) = world.get::<RectAreaLight>(entity) else {
+        return;
+    };
+    let centre = anchored_position(world, entity, light.centre);
+    shapes::push_rect(
+        out,
+        centre,
+        light.unit_normal(),
+        light.half_size,
+        light.range,
+        s,
+    );
+}
+
+fn push_probe(
+    world: &World,
+    entity: crate::ecs::Entity,
+    _entry: &serde_json::Value,
+    _vp: [f32; 2],
+    s: Stroke,
+    out: &mut Vec<Line>,
+) {
+    let Some(probe) = world.get::<ReflectionProbe>(entity) else {
+        return;
+    };
+    let position = anchored_position(world, entity, probe.position);
+    let model = Transform {
+        position,
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    }
+    .model_matrix();
+    shapes::push_box(out, &model, probe.half_extents, s);
+}
+
+// The live Camera3D is the editor's own viewpoint (fly moves it), so the
+// frustum builds from the authored args, anchored on the seeded Transform so
+// a gizmo drag carries it. `working_args` has already merged the schema
+// defaults, so a missing key means a degenerate frustum, which draws nothing.
+fn push_camera(
     world: &World,
     entity: crate::ecs::Entity,
     entry: &serde_json::Value,
-    ty: &str,
-    selected: bool,
     vp: [f32; 2],
+    s: Stroke,
     out: &mut Vec<Line>,
 ) {
-    let s = outlines::stroke(ty, selected);
-    match ty {
-        "TriggerVolume" => {
-            let Some(volume) = world.get::<TriggerVolume>(entity) else {
-                return;
-            };
-            let transform = anchored_transform(world, entity, volume.position, volume.rotation_deg);
-            let c = &volume.collider;
-            match c.shape.as_str() {
-                "ball" => shapes::push_sphere(out, transform.position, c.radius, s),
-                "capsule" => {
-                    shapes::push_capsule(
-                        out,
-                        &transform.model_matrix(),
-                        c.radius,
-                        c.half_height,
-                        s,
-                    );
-                }
-                _ => shapes::push_box(out, &transform.model_matrix(), c.half_extents, s),
-            }
-        }
-        "PointLight" => {
-            let Some(light) = world.get::<PointLight>(entity) else {
-                return;
-            };
-            let center = anchored_position(world, entity, light.position);
-            shapes::push_sphere(out, center, light.range, s);
-        }
-        "SpotLight" => {
-            let Some(light) = world.get::<SpotLight>(entity) else {
-                return;
-            };
-            let apex = anchored_position(world, entity, light.position);
-            let dir = light.unit_direction();
-            let outer = light
-                .outer_angle
-                .clamp(0.0, SPOT_MAX_ANGLE_DEG)
-                .to_radians();
-            shapes::push_cone(out, apex, dir, outer, light.range, s);
-            // The full-bright inner cone reads as one dimmer circle on the
-            // same range sphere.
-            let inner = light.inner_angle.to_radians().clamp(0.0, outer);
-            if inner > 0.0 && light.range > 0.0 {
-                let center = [
-                    apex[0] + dir[0] * light.range * inner.cos(),
-                    apex[1] + dir[1] * light.range * inner.cos(),
-                    apex[2] + dir[2] * light.range * inner.cos(),
-                ];
-                shapes::push_circle(
-                    out,
-                    center,
-                    dir,
-                    light.range * inner.sin(),
-                    outlines::inner_stroke(s),
-                );
-            }
-        }
-        "RectAreaLight" => {
-            let Some(light) = world.get::<RectAreaLight>(entity) else {
-                return;
-            };
-            let centre = anchored_position(world, entity, light.centre);
-            shapes::push_rect(
-                out,
-                centre,
-                unit_or_down(light.normal),
-                light.half_size,
-                light.range,
-                s,
-            );
-        }
-        "ReflectionProbe" => {
-            let Some(probe) = world.get::<ReflectionProbe>(entity) else {
-                return;
-            };
-            let position = anchored_position(world, entity, probe.position);
-            let model = Transform {
-                position,
-                rotation_deg: [0.0; 3],
-                scale: [1.0; 3],
-            }
-            .model_matrix();
-            shapes::push_box(out, &model, probe.half_extents, s);
-        }
-        "Camera3D" => {
-            // The live Camera3D is the editor's own viewpoint (fly moves
-            // it), so the frustum builds from the authored args, anchored
-            // on the seeded Transform so a gizmo drag carries it.
-            let args = form::working_args(ty, entry.get("args").and_then(|v| v.as_object()));
-            let num = |key: &str, default: f32| {
-                args.get(key)
-                    .and_then(|v| v.as_f64())
-                    .map(|v| v as f32)
-                    .unwrap_or(default)
-            };
-            let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
-            let origin = anchored_position(world, entity, authored);
-            let view = concinnity_core::gfx::camera::view_matrix(
-                origin,
-                num("yaw", 0.0),
-                num("pitch", 0.0),
-            );
-            let right = [view[0][0], view[1][0], view[2][0]];
-            let up = [view[0][1], view[1][1], view[2][1]];
-            let forward = [-view[0][2], -view[1][2], -view[2][2]];
-            let aspect = if vp[1] > 0.0 {
-                vp[0] / vp[1]
-            } else {
-                16.0 / 9.0
-            };
-            shapes::push_frustum(
-                out,
-                &shapes::Frustum {
-                    origin,
-                    right,
-                    up,
-                    forward,
-                    fov_y_rad: num("fov_y_degrees", 75.0).to_radians(),
-                    aspect,
-                    near: num("near", 0.05),
-                    far: num("far", 200.0),
-                },
-                s,
-            );
-        }
-        _ => {}
-    }
+    let args = form::working_args("Camera3D", entry.get("args").and_then(|v| v.as_object()));
+    let num = |key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(0.0)
+    };
+    let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
+    let origin = anchored_position(world, entity, authored);
+    let view = concinnity_core::gfx::camera::view_matrix(origin, num("yaw"), num("pitch"));
+    let right = [view[0][0], view[1][0], view[2][0]];
+    let up = [view[0][1], view[1][1], view[2][1]];
+    let forward = [-view[0][2], -view[1][2], -view[2][2]];
+    let aspect = if vp[1] > 0.0 {
+        vp[0] / vp[1]
+    } else {
+        16.0 / 9.0
+    };
+    shapes::push_frustum(
+        out,
+        &shapes::Frustum {
+            origin,
+            right,
+            up,
+            forward,
+            fov_y_rad: num("fov_y_degrees").to_radians(),
+            aspect,
+            near: num("near"),
+            far: num("far"),
+        },
+        s,
+    );
 }
 
 // The entity's collider wireframe (the Colliders category), through its live
@@ -261,15 +305,6 @@ fn anchored_transform(
             rotation_deg,
             scale: [1.0; 3],
         })
-}
-
-fn unit_or_down(v: [f32; 3]) -> [f32; 3] {
-    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if len < 1e-6 {
-        [0.0, -1.0, 0.0]
-    } else {
-        [v[0] / len, v[1] / len, v[2] / len]
-    }
 }
 
 #[cfg(test)]
@@ -480,5 +515,55 @@ mod tests {
             lines_of(&h, &world).is_empty(),
             "F1 clears the outlines too"
         );
+    }
+
+    #[test]
+    fn the_extent_table_is_one_row_per_type_outside_colliders() {
+        let mut seen = std::collections::HashSet::new();
+        for (ty, c, _) in EXTENTS {
+            assert!(seen.insert(ty), "{ty} repeats");
+            assert_ne!(
+                c,
+                outlines::Category::Colliders,
+                "{ty}: colliders are not type-keyed"
+            );
+        }
+    }
+
+    #[test]
+    fn rect_probe_and_camera_extents_emit_lines_when_selected() {
+        // Rect: 4 edges + the normal ray.
+        let world = world_with("panel", RectAreaLight::default());
+        let mut h = hook(vec![entry("panel", "RectAreaLight")]);
+        h.selection.replace("panel".to_string());
+        assert_eq!(lines_of(&h, &world).len(), 5);
+
+        // Probe: its bounds box.
+        let world = world_with("probe", ReflectionProbe::default());
+        let mut h = hook(vec![entry("probe", "ReflectionProbe")]);
+        h.selection.replace("probe".to_string());
+        assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
+
+        // Camera: a frustum from the schema-default args (also guards that
+        // `working_args` keeps merging the defaults the frustum relies on).
+        let world = world_with(
+            "shot",
+            crate::assets::Camera3D {
+                position: [0.0; 3],
+                view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
+                fov_y_degrees: 75.0,
+                near: 0.05,
+                far: 200.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                desired_move: [0.0; 3],
+                jump_requested: false,
+                interact_requested: false,
+                controller: None,
+            },
+        );
+        let mut h = hook(vec![entry("shot", "Camera3D")]);
+        h.selection.replace("shot".to_string());
+        assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
     }
 }

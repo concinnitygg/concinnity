@@ -143,7 +143,8 @@ pub use frame_input::FrameInput;
 pub use gamepad_button::GamepadButton;
 pub use gamepad_map::{GamepadAction, GamepadMap};
 pub use geometry::{
-    GlassPanelGeometry, InstancedPropGeometry, PropGeometry, SPOT_MAX_ANGLE_DEG, SpotLightGeometry,
+    GlassPanelGeometry, InstancedPropGeometry, PropGeometry, RectAreaLightGeometry,
+    SPOT_MAX_ANGLE_DEG, SpotLightGeometry,
 };
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;

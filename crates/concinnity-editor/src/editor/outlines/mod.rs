@@ -54,17 +54,6 @@ impl Category {
     const fn bit(self) -> u32 {
         1 << self as u32
     }
-
-    // The category of an outlineable component type, if it has one.
-    pub(crate) fn of_type(ty: &str) -> Option<Category> {
-        Some(match ty {
-            "TriggerVolume" => Category::Volumes,
-            "PointLight" | "SpotLight" | "RectAreaLight" => Category::Lights,
-            "Camera3D" => Category::Cameras,
-            "ReflectionProbe" => Category::Probes,
-            _ => return None,
-        })
-    }
 }
 
 // The per-session set of always-on categories (all off by default; selection
@@ -116,20 +105,6 @@ pub(crate) fn inner_stroke(s: Stroke) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_outlineable_type_maps_to_its_category() {
-        assert_eq!(Category::of_type("TriggerVolume"), Some(Category::Volumes));
-        for ty in ["PointLight", "SpotLight", "RectAreaLight"] {
-            assert_eq!(Category::of_type(ty), Some(Category::Lights));
-        }
-        assert_eq!(Category::of_type("Camera3D"), Some(Category::Cameras));
-        assert_eq!(Category::of_type("ReflectionProbe"), Some(Category::Probes));
-        // Rendering / extentless types have no category.
-        for ty in ["Prop", "AudioEmitter", "DirectionalLight", "NotAType"] {
-            assert_eq!(Category::of_type(ty), None, "{ty}");
-        }
-    }
 
     #[test]
     fn category_set_toggles_independent_bits() {
