@@ -25,9 +25,10 @@ fn injected_world() -> World {
     world
 }
 
-// Open every registered panel, including the three that have no View row: the
+// Open every registered panel, including the ones that have no View row: the
 // edit form (gated on a picked type plus the Assets panel), the View panel
-// itself, and the template detail (gated on an open template).
+// itself, the template detail (gated on an open template), and the command
+// palette (opened by its shortcut).
 fn open_every_panel(h: &mut EditorHook, world: &mut World) {
     for p in registry::view_toggles() {
         if !p.is_open(h) {
@@ -37,6 +38,7 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
     h.selected_type = Some("Sprite".to_string());
     h.view_open = true;
     h.open_template = Some(0);
+    h.palette_open = true;
 }
 
 // Every declared element of `p`, forced visible so a `hide` that misses one is

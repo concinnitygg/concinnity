@@ -40,6 +40,8 @@ mod marquee;
 mod orbit;
 mod outlines;
 mod overrides;
+mod palette;
+mod palette_panel;
 mod panel;
 mod preview;
 mod registry;

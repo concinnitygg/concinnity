@@ -1091,6 +1091,85 @@ impl Panel for VariablesPanel {
     }
 }
 
+pub(crate) struct PalettePanel;
+
+impl Panel for PalettePanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Palette
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.palette_open
+    }
+    // Opening rebuilds the item list and clears the query, ready to type.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.toggle_palette(world);
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.close_palette();
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        palette_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        palette_panel::default_origin(vp)
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        palette_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        palette_panel::all_label_ids()
+    }
+    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
+        palette_panel::all_field_ids()
+            .into_iter()
+            .map(|id| (id, "search"))
+            .collect()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let action = {
+            let view = hook.make_palette_view([mx, my]);
+            palette_panel::hit_test(&view, mx, my, o)
+        };
+        match action {
+            Some(hit) => {
+                hook.apply_palette_hit(hit, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(
+        &self,
+        _hook: &EditorHook,
+        _world: &World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        palette_panel::cursor_over_rows(mx, my, o)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_palette(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.palette_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let view = hook.make_palette_view(mouse);
+        palette_panel::apply(world, Some(&view), o);
+    }
+    fn hide(&self, world: &mut World) {
+        palette_panel::apply(world, None, [0.0, 0.0]);
+    }
+}
+
 pub(crate) struct ImportPanel;
 
 impl Panel for ImportPanel {

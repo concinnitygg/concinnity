@@ -41,15 +41,16 @@ impl EditorHook {
     }
 
     // F: glide the camera so the selection's bounding sphere fills the view,
-    // keeping the current look direction.
-    pub(super) fn frame_selection(&mut self, input: &FrameInput, world: &World) {
+    // keeping the current look direction. Takes the viewport rather than the
+    // frame input so panel presses (which resolve without input access) can
+    // frame too.
+    pub(super) fn frame_selection(&mut self, vp: [f32; 2], world: &World) {
         let Some((mn, mx)) = self.selection_bounds(world) else {
             return;
         };
         let Some(cam) = world.query::<Camera3D>().next() else {
             return;
         };
-        let vp = input.viewport;
         let aspect = if vp[1] > 0.0 { vp[0] / vp[1] } else { 1.0 };
         let current = CameraPose {
             position: cam.position,

@@ -11,11 +11,11 @@ use super::*;
 
 impl EditorHook {
     // Rebuild the grouped tree from the working entries if it is out of date
-    // and a consumer is showing (the Assets tree or the Content grid). Called
-    // from the frame drive rather than from each edit, so a burst of edits
-    // costs one expansion, not one each.
+    // and a consumer is showing (the Assets tree, the Content grid, or the
+    // command palette). Called from the frame drive rather than from each
+    // edit, so a burst of edits costs one expansion, not one each.
     pub(super) fn refresh_tree_if_needed(&mut self) {
-        if !(self.panel_open || self.content_open) || !self.tree_stale {
+        if !(self.panel_open || self.content_open || self.palette_open) || !self.tree_stale {
             return;
         }
         self.tree_stale = false;

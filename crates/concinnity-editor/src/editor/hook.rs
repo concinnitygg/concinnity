@@ -49,6 +49,8 @@ use super::lighting;
 use super::lighting_panel::{self, LightingAction, LightingView};
 use super::list_panel::Row;
 use super::overrides;
+use super::palette;
+use super::palette_panel::{self, PaletteHit, PaletteView};
 use super::panel::{self, PanelAction, PanelView};
 use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
@@ -242,6 +244,9 @@ pub(crate) struct EditorHook {
     // Shift state sampled from this frame's input, for the panel presses that
     // resolve without direct input access (the Assets tree's additive select).
     shift_held: bool,
+    // Viewport sampled from this frame's input, for the panel presses that
+    // resolve without direct input access (framing a palette pick).
+    viewport: [f32; 2],
     // Whether the Assets panel is shown (toggled from the View panel).
     panel_open: bool,
     // The Assets panel's body: every asset of the expanded world as one tree
@@ -273,6 +278,19 @@ pub(crate) struct EditorHook {
     content_drag: Option<content_drag::ContentDrag>,
     // The right-click "Create here" menu (`hook/create_menu_drive.rs`), if open.
     create_menu: Option<create_menu_drive::CreateMenu>,
+    // The command palette (`hook/palette_edit.rs`): shown state, a one-frame
+    // focus blur after the Ctrl+K open, the query mirrored off its field once
+    // a frame, the item list built on open with the matches the query keeps,
+    // the highlighted match with its window scroll, and the labels of recent
+    // commits (session state, the empty query's launch list).
+    palette_open: bool,
+    palette_blur: bool,
+    palette_query: String,
+    palette_items: Vec<palette::PaletteItem>,
+    palette_matches: Vec<usize>,
+    palette_pick: usize,
+    palette_scroll: usize,
+    palette_recent: Vec<String>,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -534,6 +552,8 @@ mod orbit_drive;
 mod outline_drive;
 // Named to avoid colliding with the `use super::overrides` module import.
 mod override_edit;
+// Named to avoid colliding with the `use super::palette` module import.
+mod palette_edit;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
@@ -636,6 +656,7 @@ impl EditorHook {
             locked_assets: std::collections::BTreeSet::new(),
             isolate: None,
             shift_held: false,
+            viewport: [0.0, 0.0],
             panel_open: false,
             tree_groups: Vec::new(),
             tree_unfolded: Vec::new(),
@@ -652,6 +673,14 @@ impl EditorHook {
             content_search_focus: false,
             content_drag: None,
             create_menu: None,
+            palette_open: false,
+            palette_blur: false,
+            palette_query: String::new(),
+            palette_items: Vec::new(),
+            palette_matches: Vec::new(),
+            palette_pick: 0,
+            palette_scroll: 0,
+            palette_recent: Vec::new(),
             preview_open: true,
             health_open: false,
             health: HealthState::new(),
@@ -759,6 +788,7 @@ impl EditorHook {
             || self.behavior_picking
             || self.variables_name_focus
             || self.variables_value_focus
+            || self.palette_open
     }
 }
 
@@ -778,6 +808,7 @@ impl DebugHook for EditorHook {
         // Sampled before anything routes, so this frame's hit tests and draw
         // narrow the palette by the same query.
         self.sample_behavior_filter(world);
+        self.sample_palette_query(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -785,6 +816,7 @@ impl DebugHook for EditorHook {
             // Ctrl+click breakpoint toggle).
             self.shift_held = input.shift;
             self.ctrl_held = input.ctrl;
+            self.viewport = input.viewport;
             // Escape hands the cursor back to the editor: a running world
             // pauses mid-state, the fly camera exits, and the create menu
             // dismisses.
@@ -796,6 +828,7 @@ impl DebugHook for EditorHook {
                 self.orbit = None;
                 self.create_menu = None;
                 self.display_menu_open = false;
+                self.close_palette();
             }
             // The fly camera integrates before any routing: while it is on
             // the cursor is captured, so no click or HUD press can arrive.
@@ -853,6 +886,7 @@ impl DebugHook for EditorHook {
                     // an orbit tumble instead of a pick.
                     let claimed = self.route_display_menu_click(input, vp)
                         || self.route_create_menu_click(input, vp)
+                        || self.route_palette_dismiss(input, vp)
                         || (input.alt && self.try_begin_orbit(input, vp, world));
                     if !claimed {
                         self.route_click(input, vp, world);
@@ -889,7 +923,7 @@ impl DebugHook for EditorHook {
                             if input.shift {
                                 self.toggle_fly();
                             } else {
-                                self.frame_selection(input, world);
+                                self.frame_selection(input.viewport, world);
                             }
                         }
                         // H hides the selection; Shift+H isolates it.
@@ -914,6 +948,9 @@ impl DebugHook for EditorHook {
                 // system never types that backtick into the command line.
                 self.console_blur = false;
                 self.drive_console_toggle(input, world);
+                // Ctrl+K toggles the palette, with the same one-frame blur.
+                self.palette_blur = false;
+                self.drive_palette_toggle(input, world);
                 // Ctrl+Z / Ctrl+Y step the entry list through the history,
                 // unless the world owns the keyboard (play mode), a text
                 // field does (its own editing keys must win), or a gizmo drag

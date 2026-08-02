@@ -185,7 +185,7 @@ fn framing_the_selection_glides_the_camera_to_fit_it() {
         ..Default::default()
     };
 
-    h.frame_selection(&input, &world);
+    h.frame_selection(input.viewport, &world);
     assert!(h.glide.is_some(), "F armed a glide");
 
     // A step short of the duration moves the camera without ending the glide.
@@ -209,13 +209,7 @@ fn framing_the_selection_glides_the_camera_to_fit_it() {
 fn framing_nothing_starts_no_glide() {
     let (world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
-    h.frame_selection(
-        &FrameInput {
-            viewport: VP,
-            ..Default::default()
-        },
-        &world,
-    );
+    h.frame_selection(VP, &world);
     assert!(h.glide.is_none());
 }
 
@@ -252,13 +246,7 @@ fn steering_during_a_glide_hands_the_camera_back() {
         let (mut world, _) = camera_world([0.0, 0.0, 100.0]);
         let mut h = hook();
         h.selection.set(vec!["box".to_string()]);
-        h.frame_selection(
-            &FrameInput {
-                viewport: VP,
-                ..Default::default()
-            },
-            &world,
-        );
+        h.frame_selection(VP, &world);
         assert!(h.glide.is_some());
 
         h.drive_glide(&steer, &mut world);

@@ -41,9 +41,12 @@ pub(crate) enum PanelKey {
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
+    // After TemplateDetail: the palette is a transient launcher overlay, so it
+    // starts above everything it can open.
+    Palette,
 }
 
-pub(crate) const PANEL_COUNT: usize = 14;
+pub(crate) const PANEL_COUNT: usize = 15;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -61,6 +64,7 @@ impl PanelKey {
         PanelKey::Variables,
         PanelKey::Content,
         PanelKey::TemplateDetail,
+        PanelKey::Palette,
     ];
 
     pub(crate) fn index(self) -> usize {
@@ -98,6 +102,9 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // and card pools run well past 0x3300.
             PanelKey::Variables => 0x4000,
             PanelKey::Content => 0x5000,
+            // 0x6000 and 0x7000 belong to the create and Display menus
+            // (allocated in their own modules).
+            PanelKey::Palette => 0x8000,
         }
 }
 
@@ -200,6 +207,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::VariablesPanel,
     &panels::ContentPanel,
     &panels::TemplateDetailPanel,
+    &panels::PalettePanel,
 ];
 
 pub(crate) fn panel(key: PanelKey) -> &'static dyn Panel {
