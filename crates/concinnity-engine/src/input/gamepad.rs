@@ -169,7 +169,10 @@ impl PadSnapshot {
     // `None`. With several pressed on one frame, the first in declaration
     // order wins.
     pub(crate) fn first_pressed(&self) -> Option<GamepadButton> {
-        GamepadButton::ALL.into_iter().find(|&b| self.pressed(b))
+        GamepadButton::ALL
+            .iter()
+            .copied()
+            .find(|&b| self.pressed(b))
     }
 }
 

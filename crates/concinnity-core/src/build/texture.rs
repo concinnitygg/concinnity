@@ -24,6 +24,8 @@
 // upload it verbatim, since no runtime BCn encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
+use crate::build::payload::HeaderReader;
+
 pub const TEXTURE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"TEX2");
 const HEADER_BYTES: usize = 12;
 
@@ -177,24 +179,11 @@ pub fn serialise(image: &TextureImage) -> Vec<u8> {
 // Called by GraphicsSystem at runtime to recover texture format, dimensions,
 // and mip data before uploading to the GPU.
 pub fn deserialise(bytes: &[u8]) -> Result<TextureImage, String> {
-    if bytes.len() < HEADER_BYTES {
-        return Err(format!(
-            "texture payload too short: {} bytes (need at least {} for header)",
-            bytes.len(),
-            HEADER_BYTES
-        ));
-    }
-    let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-    if magic != TEXTURE_PAYLOAD_MAGIC {
-        return Err(format!(
-            "texture payload magic 0x{:08x} does not match expected 0x{:08x}",
-            magic, TEXTURE_PAYLOAD_MAGIC
-        ));
-    }
-    let format_id = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    let mut header = HeaderReader::open(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
+    let format_id = header.u32();
     let format = TextureFormat::from_id(format_id)
         .ok_or_else(|| format!("texture payload has unknown format_id {}", format_id))?;
-    let mip_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mip_count = header.u32() as usize;
     if mip_count == 0 {
         return Err("texture payload declares zero mip levels".into());
     }

@@ -12,7 +12,6 @@
 // `current`), so the other two read as never-constructed; `key` still matches
 // all three, so the type stays whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Platform {
     Metal,
     Hlsl,
@@ -57,13 +56,7 @@ impl Platform {
     // Shared by the per-platform source selection of `Shader` stages and
     // `SdfVolume` so both apply identical fallback rules.
     pub fn accepts_ext(self, ext: &str) -> bool {
-        match (ext, self) {
-            ("metal", Platform::Metal) => true,
-            ("hlsl", Platform::Hlsl) => true,
-            ("glsl", Platform::Glsl) => true,
-            _ if matches!(ext, "metal" | "hlsl" | "glsl") => false,
-            _ => true,
-        }
+        !matches!(ext, "metal" | "hlsl" | "glsl") || ext == self.key()
     }
 }
 

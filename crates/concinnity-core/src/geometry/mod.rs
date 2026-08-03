@@ -11,16 +11,16 @@
 // terrain, skybox, heightfield) live in `concinnity-cook`; they call back into
 // the shared helpers exported here.
 
-// Procedural voxel-chunk generation. Consumed only by the Metal backend's
-// chunk-streaming path for now, so the module is compiled but
-// unreferenced on non-macOS builds.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
+// path.
 mod chunk_gen;
 pub mod glass_quad;
+pub mod vec3;
 mod voxel;
 pub mod water_grid;
 
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
+pub use vec3::{vec3_add, vec3_face_normal, vec3_normalise};
+
 pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
 // Shared with the cook crate's `compile_voxel_chunk_payload`, which builds the
 // same palette the runtime `build_chunk_mesh` consumes.
@@ -336,34 +336,6 @@ fn arbitrary_tangent(normal: [f32; 3]) -> [f32; 3] {
     vec3_normalise(t)
 }
 
-// Newell-style face normal from three CCW positions. Shared with the cook
-// generators' smooth-normal pass.
-pub fn vec3_face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let n = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    vec3_normalise(n)
-}
-
-pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
-    dst[0] += src[0];
-    dst[1] += src[1];
-    dst[2] += src[2];
-}
-
-pub fn vec3_normalise(n: [f32; 3]) -> [f32; 3] {
-    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if len < 1e-6 {
-        [0.0, 1.0, 0.0]
-    } else {
-        [n[0] / len, n[1] / len, n[2] / len]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,17 +441,6 @@ mod tests {
             let dot = t[0] * normal[0] + t[1] * normal[1] + t[2] * normal[2];
             assert!(dot.abs() < 1e-5, "normal {normal:?}");
         }
-    }
-
-    #[test]
-    fn vec3_helpers_handle_degenerate_input() {
-        assert_eq!(vec3_normalise([0.0; 3]), [0.0, 1.0, 0.0]);
-        assert_eq!(vec3_normalise([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
-        let n = vec3_face_normal([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
-        assert_eq!(n, [0.0, 0.0, 1.0]);
-        let mut acc = [1.0, 2.0, 3.0];
-        vec3_add(&mut acc, [0.5, 0.5, 0.5]);
-        assert_eq!(acc, [1.5, 2.5, 3.5]);
     }
 
     #[test]

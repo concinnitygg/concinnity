@@ -133,10 +133,6 @@ macro_rules! for_each_component {
 // builds a `ResourceAssetType` from this list), compiles their payload, assigns
 // their handle, and emits a resource record. Each entry is
 // `Variant => Type { resource: <ResourceKind>, <flags...> }`.
-//
-// This is the asset-registry / component-registry split the P5 design calls for,
-// applied one kind at a time; AudioClip left first, then Texture, then the GPU
-// resource kinds (CubemapTexture, ...).
 #[macro_export]
 macro_rules! for_each_resource_asset {
     ($cb:ident) => {
@@ -261,12 +257,3 @@ macro_rules! cn_impl_components {
 // hand-written impl in their own `assets` module. Emitted here (rather than in
 // `assets`) so the macro is in textual scope, alongside `define_components`.
 crate::for_each_component!(cn_impl_components);
-
-// Retired discriminants that must not be reintroduced as components. Each is now
-// an Events<T> queue: SceneCommand, ScreenCommand (once ViewCommand), SettingCommand, ControlsCommand,
-// AudioCommand. Systems (once declarable, discriminants 128..255) are all
-// internal now: GraphicsSystem, FpsCounter, Camera3DSystem, PhysicsSystem,
-// UiInputSystem, AnimationSystem, AudioSystem, StatHud. FpsCounter / StatHud
-// became components; PhysicsSystem's world config became the `PhysicsConfig`
-// component. These names are kept as history; the component list above no longer
-// carries their numbers.

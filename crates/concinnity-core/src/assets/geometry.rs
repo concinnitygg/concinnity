@@ -30,37 +30,7 @@ pub trait PropGeometry {
 
 impl PropGeometry for Prop {
     fn model_matrix(&self) -> [[f32; 4]; 4] {
-        let [px, py, pz] = self.position;
-        let [pitch_deg, yaw_deg, roll_deg] = self.rotation_deg;
-        let [sx, sy, sz] = self.scale;
-
-        let (pr, yr, rr) = (
-            pitch_deg.to_radians(),
-            yaw_deg.to_radians(),
-            roll_deg.to_radians(),
-        );
-        let (sp, cp) = (pr.sin(), pr.cos());
-        let (sy_, cy) = (yr.sin(), yr.cos());
-        let (sr, cr) = (rr.sin(), rr.cos());
-
-        // YXZ rotation: R = Ry * Rx * Rz
-        // Combined and scaled, column-major storage: out[col][row].
-        [
-            [
-                sx * (cy * cr + sy_ * sp * sr),
-                sx * (cp * sr),
-                sx * (-sy_ * cr + cy * sp * sr),
-                0.0,
-            ],
-            [
-                sy * (-cy * sr + sy_ * sp * cr),
-                sy * (cp * cr),
-                sy * (sy_ * sr + cy * sp * cr),
-                0.0,
-            ],
-            [sz * (sy_ * cp), sz * (-sp), sz * (cy * cp), 0.0],
-            [px, py, pz, 1.0],
-        ]
+        crate::gfx::skinning::trs_matrix(self.position, self.rotation_deg, self.scale)
     }
 }
 
@@ -74,35 +44,11 @@ impl InstancedPropGeometry for InstancedProp {
     /// Order matches `Prop::model_matrix`: scale, then YXZ rotation, then translation.
     fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]> {
         let xform = self.instances.get(idx)?;
-        let [px, py, pz] = xform.position;
-        let [pitch_deg, yaw_deg, roll_deg] = xform.rotation_deg;
-        let [sx, sy, sz] = xform.scale;
-
-        let (pr, yr, rr) = (
-            pitch_deg.to_radians(),
-            yaw_deg.to_radians(),
-            roll_deg.to_radians(),
-        );
-        let (sp, cp) = (pr.sin(), pr.cos());
-        let (sy_, cy) = (yr.sin(), yr.cos());
-        let (sr, cr) = (rr.sin(), rr.cos());
-
-        Some([
-            [
-                sx * (cy * cr + sy_ * sp * sr),
-                sx * (cp * sr),
-                sx * (-sy_ * cr + cy * sp * sr),
-                0.0,
-            ],
-            [
-                sy * (-cy * sr + sy_ * sp * cr),
-                sy * (cp * cr),
-                sy * (sy_ * sr + cy * sp * cr),
-                0.0,
-            ],
-            [sz * (sy_ * cp), sz * (-sp), sz * (cy * cp), 0.0],
-            [px, py, pz, 1.0],
-        ])
+        Some(crate::gfx::skinning::trs_matrix(
+            xform.position,
+            xform.rotation_deg,
+            xform.scale,
+        ))
     }
 }
 

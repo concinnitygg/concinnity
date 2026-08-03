@@ -14,6 +14,8 @@
 // they project to straight screen-space lines separated by exactly the
 // requested pixel width along the whole run, however far the far end reaches.
 
+use crate::geometry::vec3::{cross, dot, lerp as lerp3, sub};
+
 use super::render_types::LineVertex;
 
 // Vertices emitted per expanded segment: two triangles, unindexed.
@@ -57,45 +59,25 @@ impl LineCamera {
         [self.view[0][0], self.view[1][0], self.view[2][0]]
     }
 
+    // Tangent of the half vertical FOV. Fixed for a camera, so a caller that
+    // needs it per vertex computes it once and passes it down.
+    fn tan_half_fov(&self) -> f32 {
+        (self.fov_y_radians * 0.5).tan()
+    }
+
     // World units per vertical pixel at view depth `depth`.
-    fn world_per_pixel(&self, depth: f32) -> f32 {
-        let tan_half = (self.fov_y_radians * 0.5).tan();
+    fn world_per_pixel(&self, depth: f32, tan_half: f32) -> f32 {
         2.0 * depth * tan_half / self.viewport[1]
     }
 
-    fn usable(&self) -> bool {
-        let tan_half = (self.fov_y_radians * 0.5).tan();
+    fn usable(&self, tan_half: f32) -> bool {
         self.viewport[0] > 0.0 && self.viewport[1] > 0.0 && tan_half > 0.0 && tan_half.is_finite()
     }
-}
-
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 fn normalize(v: [f32; 3]) -> Option<[f32; 3]> {
     let len = dot(v, v).sqrt();
     (len > 1e-6).then(|| [v[0] / len, v[1] / len, v[2] / len])
-}
-
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
 }
 
 fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
@@ -157,7 +139,8 @@ fn clip_to_near(line: &Line, cam: &LineCamera) -> Option<Clipped> {
 // segments contribute nothing, so an empty result means the pass can be
 // skipped entirely.
 pub fn build_vertices(lines: &[Line], cam: &LineCamera) -> Vec<LineVertex> {
-    if !cam.usable() {
+    let tan_half = cam.tan_half_fov();
+    if !cam.usable(tan_half) {
         return Vec::new();
     }
     let mut out = Vec::with_capacity(lines.len() * VERTS_PER_SEGMENT);
@@ -180,7 +163,8 @@ pub fn build_vertices(lines: &[Line], cam: &LineCamera) -> Vec<LineVertex> {
         let corner = |p: [f32; 3], color: [f32; 4], side: f32| {
             let to_eye = sub(p, cam.cam_pos);
             let normal = normalize(cross(dir, to_eye)).unwrap_or_else(|| cam.right());
-            let half = half_px * cam.world_per_pixel(dot(to_eye, fwd).max(cam.near.max(1e-4)));
+            let half =
+                half_px * cam.world_per_pixel(dot(to_eye, fwd).max(cam.near.max(1e-4)), tan_half);
             LineVertex {
                 pos: [
                     p[0] + normal[0] * half * side,

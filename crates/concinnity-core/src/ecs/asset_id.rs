@@ -81,7 +81,6 @@ pub fn lookup(name: &str) -> Option<AssetId> {
 // Because ids are assigned in world.jsonl declaration order, `table[id]` is
 // the declared name for that id. Used by the binary-only `crate::debug`
 // module to remap runtime `AssetId`s back to their declared names.
-#[allow(dead_code)] // consumed by the binary-only debug module in concinnity-editor
 pub fn name_table() -> Vec<String> {
     INTERNER.with(|i| i.borrow().names.clone())
 }

@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // Prefilter mips for face_size 16: 16, 8, 4 → 3 levels.
-        assert_eq!(view.prefilter_mips, 3);
+        assert_eq!(view.prefilter_mip_bytes.len(), 3);
     }
 
     // Build a minimal uncompressed Radiance HDR blob of `width × height` solid
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
         // mip chain for face_size 16: 16, 8, 4 → 3 levels.
-        assert_eq!(view.prefilter_mips, 3);
+        assert_eq!(view.prefilter_mip_bytes.len(), 3);
         assert_eq!(view.prefilter_mip_bytes.len(), 3);
         assert_eq!(view.irradiance_bytes.len(), 6 * 8 * 8 * 4 * 4);
     }

@@ -17,7 +17,6 @@ pub enum StepResult {
     // The world exits naturally when no systems remain.
     Done,
     // Hard stop -- halt everything immediately.
-    #[allow(dead_code)]
     Stop,
 }
 

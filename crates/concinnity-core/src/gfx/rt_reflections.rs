@@ -11,6 +11,8 @@
 // from SSR to RT keeps the same look knobs) but trace a real ray against the
 // scene BVH, so reflected geometry that is off-screen still appears.
 
+use crate::gfx::camera::{camera_to_world, view_ray_scale};
+
 use crate::gfx::render_types::RtParams;
 
 // Upper bound on `intensity`. The kernel mixes the reflection over the base
@@ -24,9 +26,6 @@ const MIN_DISTANCE: f32 = 1.0;
 // `t_max` on the BVH traversal, so it can reach farther than the SSR cap
 // without the per-step cost; still bounded so a stray value can't explode it.
 const MAX_DISTANCE: f32 = 1000.0;
-
-// Floor on the aspect ratio so a degenerate viewport cannot divide by zero.
-const MIN_ASPECT: f32 = 1.0e-3;
 
 // Clamped RT-reflection tunables resolved from the authored asset fields. Held
 // by the backend and turned into a per-frame [`RtParams`] once the camera and
@@ -80,16 +79,13 @@ impl RtReflectionSettings {
             sun_color,
             prefilter_mip_count,
         } = inputs;
-        // Camera-to-world: the rotation already lives in `inv_view_rot`'s 3x3
-        // (its translation column is identity); set the translation column to
-        // the world camera position to complete the rigid inverse of the view.
-        let mut inv_view = inv_view_rot;
-        inv_view[3] = [cam_pos[0], cam_pos[1], cam_pos[2], 1.0];
+        let inv_view = camera_to_world(inv_view_rot, cam_pos);
+        let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         RtParams {
             intensity: self.intensity,
             max_distance: self.max_distance,
-            tan_half_fov_y: (fov_y_radians * 0.5).tan(),
-            aspect: aspect.max(MIN_ASPECT),
+            tan_half_fov_y,
+            aspect,
             prefilter_mip_count,
             _pad0: 0.0,
             _pad1: 0.0,
@@ -105,13 +101,8 @@ impl RtReflectionSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const IDENTITY: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
+    use crate::gfx::camera::MIN_ASPECT;
+    use crate::gfx::skinning::IDENTITY;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

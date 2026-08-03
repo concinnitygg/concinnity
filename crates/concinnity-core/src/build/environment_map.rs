@@ -34,6 +34,10 @@
 //
 // Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
+use crate::build::payload::HeaderReader;
+
+use crate::geometry::vec3::{cross as cross3, dot as dot3};
+
 use rayon::prelude::*;
 
 pub const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
@@ -164,18 +168,6 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     [v[0] / l, v[1] / l, v[2] / l]
 }
 
-fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
 // Build an orthonormal basis around `n` (N = up axis). Returns (tangent, bitangent).
 fn make_tbn(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let up = if n[2].abs() < 0.999 {
@@ -204,14 +196,20 @@ pub fn hammersley(i: u32, n: u32) -> [f32; 2] {
 }
 
 // Sample the GGX distribution in world space around normal `n`. Returns a
-// half-vector H.
-fn importance_sample_ggx(xi: [f32; 2], n: [f32; 3], roughness: f32) -> [f32; 3] {
-    let a = roughness * roughness;
+// half-vector H. The caller supplies the tangent basis and `a2m1` (a^2 - 1),
+// both constant across a texel's whole sample set.
+fn importance_sample_ggx(
+    xi: [f32; 2],
+    n: [f32; 3],
+    basis: ([f32; 3], [f32; 3]),
+    a2m1: f32,
+) -> [f32; 3] {
+    let (t, b) = basis;
     let phi = 2.0 * std::f32::consts::PI * xi[0];
-    let cos_theta = ((1.0 - xi[1]) / (1.0 + (a * a - 1.0) * xi[1])).sqrt();
+    let cos_theta = ((1.0 - xi[1]) / (1.0 + a2m1 * xi[1])).sqrt();
     let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
-    let h_local = [sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta];
-    let (t, b) = make_tbn(n);
+    let (sin_phi, cos_phi) = phi.sin_cos();
+    let h_local = [sin_theta * cos_phi, sin_theta * sin_phi, cos_theta];
     normalize3([
         t[0] * h_local[0] + b[0] * h_local[1] + n[0] * h_local[2],
         t[1] * h_local[0] + b[1] * h_local[1] + n[1] * h_local[2],
@@ -372,19 +370,25 @@ fn convolve_ggx(
 ) -> [Vec<f32>; 6] {
     let f = output_face_size as usize;
     let mut faces: [Vec<f32>; 6] = std::array::from_fn(|_| vec![0.0; f * f * 4]);
+    // Constant across every sample of every texel at this roughness.
+    let a = roughness * roughness;
+    let a2m1 = a * a - 1.0;
     // Each output texel is an independent GGX convolution of the read-only
     // source, so faces and rows within a face are computed in parallel.
     faces.par_iter_mut().enumerate().for_each(|(face, out)| {
         out.par_chunks_mut(f * 4).enumerate().for_each(|(y, row)| {
             for x in 0..output_face_size {
                 let n = cube_texel_dir(face, x, y as u32, output_face_size);
+                // The tangent basis depends only on N, so it is built once per
+                // texel rather than once per sample.
+                let basis = make_tbn(n);
                 // Split-sum approximation: V = R = N. The light direction is
                 // then L = reflect(-V, H) = 2 (N·H) H - N.
                 let mut accum = [0.0f32; 3];
                 let mut total_weight = 0.0f32;
                 for i in 0..samples {
                     let xi = hammersley(i, samples);
-                    let h = importance_sample_ggx(xi, n, roughness);
+                    let h = importance_sample_ggx(xi, n, basis, a2m1);
                     let ndh = dot3(n, h);
                     if ndh <= 0.0 {
                         continue;
@@ -445,15 +449,11 @@ pub fn serialise_payload(
     buf.extend_from_slice(&prefilter_mips.to_le_bytes());
     buf.extend_from_slice(&0u32.to_le_bytes()); // pad
     for face in irradiance {
-        for &v in face {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
+        buf.extend_from_slice(bytemuck::cast_slice::<f32, u8>(face));
     }
     for mip in prefilter {
         for face in mip {
-            for &v in face {
-                buf.extend_from_slice(&v.to_le_bytes());
-            }
+            buf.extend_from_slice(bytemuck::cast_slice::<f32, u8>(face));
         }
     }
     buf
@@ -465,12 +465,6 @@ pub fn serialise_payload(
 pub struct EnvMapView<'a> {
     pub irradiance_face: u32,
     pub prefilter_face: u32,
-    // Mip count parsed from the header. The slice array
-    // [`Self::prefilter_mip_bytes`] carries the same length, so callers
-    // generally use that instead; the field is kept for symmetry with the
-    // header layout.
-    #[allow(dead_code)]
-    pub prefilter_mips: u32,
     pub irradiance_bytes: &'a [u8],
     // One slice per prefilter mip, ordered mip 0 → mip N-1.
     pub prefilter_mip_bytes: Vec<&'a [u8]>,
@@ -481,28 +475,19 @@ pub struct EnvMapView<'a> {
 // to the GPU without copying. Called by every backend at init time, and by
 // the Metal hot-reload path via `update_environment_map`.
 pub fn deserialise(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
-    if bytes.len() < ENVMAP_PAYLOAD_HEADER_BYTES {
-        return Err(format!(
-            "envmap payload too short: {} bytes (need at least {} for header)",
-            bytes.len(),
-            ENVMAP_PAYLOAD_HEADER_BYTES
-        ));
-    }
-    let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-    if magic != ENVMAP_PAYLOAD_MAGIC {
-        return Err(format!(
-            "envmap magic 0x{:08x} != expected 0x{:08x}",
-            magic, ENVMAP_PAYLOAD_MAGIC
-        ));
-    }
-    let format = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    let mut header = HeaderReader::open(
+        bytes,
+        ENVMAP_PAYLOAD_MAGIC,
+        ENVMAP_PAYLOAD_HEADER_BYTES,
+        "envmap",
+    )?;
+    let format = header.u32();
     if format != ENVMAP_FORMAT_RGBA32F {
         return Err(format!("envmap format_id {} unsupported", format));
     }
-    let irradiance_face = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-    let prefilter_face = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-    let prefilter_mips = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
-    let _pad = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+    let irradiance_face = header.u32();
+    let prefilter_face = header.u32();
+    let prefilter_mips = header.u32();
     if prefilter_mips == 0 || prefilter_mips > 12 {
         return Err(format!(
             "envmap prefilter_mips {} out of range",
@@ -529,7 +514,6 @@ pub fn deserialise(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
     Ok(EnvMapView {
         irradiance_face,
         prefilter_face,
-        prefilter_mips,
         irradiance_bytes,
         prefilter_mip_bytes,
     })
@@ -589,7 +573,8 @@ mod tests {
     #[test]
     fn importance_sample_ggx_at_xi_zero_returns_n() {
         let n = [0.0, 0.0, 1.0];
-        let h = importance_sample_ggx([0.0, 0.0], n, 0.5);
+        let a = 0.5f32 * 0.5;
+        let h = importance_sample_ggx([0.0, 0.0], n, make_tbn(n), a * a - 1.0);
         // xi=(0,0) → cos_theta = 1 → H aligns with N.
         assert!((h[0] - 0.0).abs() < 1e-5);
         assert!((h[1] - 0.0).abs() < 1e-5);
@@ -790,7 +775,7 @@ mod tests {
         let view = deserialise(&blob).expect("deserialise");
         assert_eq!(view.irradiance_face, 4);
         assert_eq!(view.prefilter_face, 8);
-        assert_eq!(view.prefilter_mips, 2);
+        assert_eq!(view.prefilter_mip_bytes.len(), 2);
         assert_eq!(view.irradiance_bytes.len(), 6 * 4 * 4 * 4 * 4);
         assert_eq!(view.prefilter_mip_bytes[0].len(), 6 * 8 * 8 * 4 * 4);
         assert_eq!(view.prefilter_mip_bytes[1].len(), 6 * 4 * 4 * 4 * 4);

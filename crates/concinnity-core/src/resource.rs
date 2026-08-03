@@ -17,12 +17,9 @@ use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord};
 // One loaded resource's runtime form. A payload resource (audio clip, and later
 // meshes / textures) carries a `PayloadLocator` into the blob payload section; a
 // data resource (a baked Material) carries its runtime bytes in `data_bytes`.
-// AudioClip uses the payload branch; `data_bytes` is present so the shape already
-// exists for the data-resource kinds that follow.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceEntry {
     pub payload: Option<PayloadLocator>,
-    #[allow(dead_code)]
     pub data_bytes: Vec<u8>,
 }
 
@@ -52,226 +49,98 @@ pub fn resource_table(records: &mut [ResourceRecord], kind: ResourceKind) -> Vec
     table
 }
 
-// The audio clips loaded from the blob, indexed by `AudioClipHandle`. A plain ECS
-// resource `AudioSystem` reads at init; this table is what AudioClip became when
-// it left the component registry -- the replacement for the `query::<AudioClip>()`
-// column plus its per-clip `PayloadLocator`.
-#[derive(Debug, Clone, Default)]
-pub struct AudioClipTable(pub Vec<ResourceEntry>);
+// Declare the per-kind tables. Every table is the same handle-indexed newtype
+// over `ResourceEntry` with the same accessors, so they are generated from one
+// list rather than hand-copied; a table whose kind carries no blob payload
+// simply reports no locators. Bespoke accessors live in a plain `impl` below.
+macro_rules! resource_tables {
+    ($($name:ident => $kind:ident),* $(,)?) => {
+        $(
+            #[derive(Debug, Clone, Default)]
+            pub struct $name(pub Vec<ResourceEntry>);
 
-impl AudioClipTable {
-    // Build the table from the blob's resource stream.
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::AudioClip))
-    }
+            impl $name {
+                // Build the table from the blob's resource stream.
+                pub fn from_records(records: &mut [ResourceRecord]) -> Self {
+                    Self(resource_table(records, ResourceKind::$kind))
+                }
 
-    // The payload locator for a clip handle, if the handle is in range and the
-    // clip has a compiled payload.
-    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
-        self.0.get(handle).and_then(|e| e.payload.clone())
-    }
+                // Number of resources of this kind; a handle is in range when
+                // its index is below this.
+                pub fn len(&self) -> usize {
+                    self.0.len()
+                }
 
-    // Iterate every clip's locator in handle order (index == the clip's
-    // `AudioClipHandle`), skipping clips with no payload.
-    pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
-    }
+                pub fn is_empty(&self) -> bool {
+                    self.0.is_empty()
+                }
 
-    // Blob indices that hold an audio-clip payload. The graphics systems consult
-    // this so they leave the audio blobs resident for `AudioSystem`, which inits
-    // after them. Replaces the old core `audio_clip_blob_indices` component scan.
-    pub fn blob_indices(&self) -> BTreeSet<u32> {
-        self.0
-            .iter()
-            .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
-            .collect()
-    }
+                // The payload locator for a handle, if the handle is in range
+                // and the resource has a compiled payload.
+                pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
+                    self.0.get(handle).and_then(|e| e.payload.clone())
+                }
+
+                // Every locator in handle order (index == the resource's
+                // handle), skipping entries with no payload.
+                pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
+                    self.0
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
+                }
+
+                // Blob indices holding a payload of this kind. The graphics
+                // systems consult this to keep those blobs resident for the
+                // system that inits after them.
+                pub fn blob_indices(&self) -> BTreeSet<u32> {
+                    self.0
+                        .iter()
+                        .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
+                        .collect()
+                }
+            }
+        )*
+    };
 }
 
-// The textures loaded from the blob, indexed by `TextureHandle`. The renderer
-// reads this at init to build its shared texture pool, in place of draining a
-// `Texture` component column and scanning names to slots. Every texture (file or
-// procedural) has a compiled payload, so an entry's `payload` is normally `Some`.
-#[derive(Debug, Clone, Default)]
-pub struct TextureTable(pub Vec<ResourceEntry>);
-
-impl TextureTable {
-    // Build the table from the blob's resource stream.
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::Texture))
-    }
-
-    // Number of textures (the shared pool size); a `TextureHandle` is in range
-    // when its index is below this.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    // The payload locator for a texture handle, if in range and compiled.
-    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
-        self.0.get(handle).and_then(|e| e.payload.clone())
-    }
-
-    // Blob indices that hold a texture payload, so the graphics systems can keep
-    // the texture blobs resident. Mirrors `AudioClipTable::blob_indices`.
-    pub fn blob_indices(&self) -> BTreeSet<u32> {
-        self.0
-            .iter()
-            .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
-            .collect()
-    }
+resource_tables! {
+    // Audio clips, indexed by `AudioClipHandle`. `AudioSystem` reads this at init.
+    AudioClipTable => AudioClip,
+    // Textures, indexed by `TextureHandle`. The renderer reads this at init to
+    // build its shared texture pool. Every texture (file or procedural) has a
+    // compiled payload, so an entry's `payload` is normally `Some`.
+    TextureTable => Texture,
+    // Color-grading LUTs, indexed by `ColorLutHandle`. The renderer uses only
+    // the first (handle 0) and warns when a world declares more.
+    ColorLutTable => ColorLut,
+    // IBL environment maps, indexed by `EnvironmentMapHandle`. The renderer uses
+    // only the first (handle 0); a world declares at most one.
+    EnvironmentMapTable => EnvironmentMap,
+    // Fonts, indexed by `FontHandle`. The renderer reads this at init to build
+    // its glyph atlases + metrics; every font has a compiled SDF-atlas payload.
+    FontTable => Font,
+    // Static meshes, indexed by `MeshHandle`. Mesh shares its handle space with
+    // the still-component geometry producers (ProceduralMesh, VoxelChunk,
+    // mesh-kind File): the Mesh block leads that space, so this table covers
+    // handles `0..len` and the runtime appends the component-produced geometry
+    // after it in the same block order cook assigned.
+    MeshTable => Mesh,
+    // Skinned meshes, indexed by `SkinnedMeshHandle`. A hybrid entry: `payload`
+    // locates the compiled geometry (vertices + indices + skeleton) while
+    // `data_bytes` carries the baked runtime fields (placement, material/texture
+    // handles, capsule, spawn reserve) as a `(name_id, SkinnedMesh)` postcard
+    // tuple -- `asset_id` is serde-skipped on the schema struct, so the interned
+    // name travels beside it for the runtime's spawn-by-name registration.
+    SkinnedMeshTable => SkinnedMesh,
+    // Materials, indexed by `MaterialHandle`. Unlike the payload-backed tables,
+    // a Material is a DATA resource: cook bakes its validated args into the
+    // record's `data_bytes` (no blob payload), so `data_bytes(handle)` returns
+    // the serialized `Material` the renderer deserializes to build its map.
+    MaterialTable => Material,
 }
-
-// The color-grading LUTs loaded from the blob, indexed by `ColorLutHandle`. The
-// renderer uses only the first (handle 0); a world declares at most one. Replaces
-// the `query::<ColorLut>()` drain -- the LUT payload is read once at init.
-#[derive(Debug, Clone, Default)]
-pub struct ColorLutTable(pub Vec<ResourceEntry>);
-
-impl ColorLutTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::ColorLut))
-    }
-
-    // Number of declared LUTs; the renderer warns and uses only handle 0 when >1.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    // The payload locator for a LUT handle, if in range and compiled.
-    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
-        self.0.get(handle).and_then(|e| e.payload.clone())
-    }
-}
-
-// The IBL environment maps loaded from the blob, indexed by `EnvironmentMapHandle`.
-// The renderer uses only the first (handle 0); a world declares at most one.
-// Replaces the `query::<EnvironmentMap>()` drain.
-#[derive(Debug, Clone, Default)]
-pub struct EnvironmentMapTable(pub Vec<ResourceEntry>);
-
-impl EnvironmentMapTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::EnvironmentMap))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
-        self.0.get(handle).and_then(|e| e.payload.clone())
-    }
-}
-
-// The fonts loaded from the blob, indexed by `FontHandle`. The renderer reads this
-// at init to build its glyph atlases + metrics, in place of draining a `Font`
-// component column. Every font (built-in or file-backed) has a compiled SDF-atlas
-// payload, so an entry's `payload` is normally `Some`.
-#[derive(Debug, Clone, Default)]
-pub struct FontTable(pub Vec<ResourceEntry>);
-
-impl FontTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::Font))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    // Iterate each font's payload locator in handle order (index == the font's
-    // `FontHandle`), skipping any font with no payload.
-    pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
-    }
-
-    // Blob indices that hold a font payload, so the graphics systems keep the font
-    // blobs resident. Mirrors `TextureTable::blob_indices`.
-    pub fn blob_indices(&self) -> BTreeSet<u32> {
-        self.0
-            .iter()
-            .filter_map(|e| e.payload.as_ref().map(|l| l.blob_index))
-            .collect()
-    }
-}
-
-// The static meshes loaded from the blob's resource stream, indexed by
-// `MeshHandle`. Mesh shares its handle space with the still-component geometry
-// producers (ProceduralMesh, VoxelChunk, mesh-kind File): the Mesh block leads
-// that space, so this table covers handles `0..len` and the runtime appends the
-// component-produced geometry after it in the same block order cook assigned.
-#[derive(Debug, Clone, Default)]
-pub struct MeshTable(pub Vec<ResourceEntry>);
-
-impl MeshTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::Mesh))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    // Iterate each mesh's payload locator in handle order (index == the mesh's
-    // `MeshHandle`), skipping any mesh with no payload.
-    pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
-    }
-}
-
-// The skinned meshes loaded from the blob's resource stream, indexed by
-// `SkinnedMeshHandle`. A hybrid entry: `payload` locates the compiled geometry
-// (vertices + indices + skeleton) while `data_bytes` carries the baked runtime
-// fields (placement, material/texture handles, capsule, spawn reserve) as a
-// `(name_id, SkinnedMesh)` postcard tuple -- `asset_id` is serde-skipped on the
-// schema struct, so the interned name travels beside it for the runtime's
-// spawn-by-name registration.
-#[derive(Debug, Clone, Default)]
-pub struct SkinnedMeshTable(pub Vec<ResourceEntry>);
 
 impl SkinnedMeshTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::SkinnedMesh))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     // Whether any skinned mesh declares a character capsule; gates whether the
     // world needs a PhysicsSystem.
     pub fn has_capsule(&self) -> bool {
@@ -282,27 +151,7 @@ impl SkinnedMeshTable {
     }
 }
 
-// The materials loaded from the blob's resource stream, indexed by
-// `MaterialHandle`. Unlike the payload-backed tables above, a Material is a DATA
-// resource: cook bakes its validated args into the record's `data_bytes` (no blob
-// payload), so `data_bytes(handle)` returns the serialized `Material` the renderer
-// deserializes to build its material map.
-#[derive(Debug, Clone, Default)]
-pub struct MaterialTable(pub Vec<ResourceEntry>);
-
 impl MaterialTable {
-    pub fn from_records(records: &mut [ResourceRecord]) -> Self {
-        Self(resource_table(records, ResourceKind::Material))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     // The baked material bytes for a handle, if the handle is in range.
     pub fn data_bytes(&self, handle: usize) -> Option<&[u8]> {
         self.0.get(handle).map(|e| e.data_bytes.as_slice())
@@ -381,5 +230,28 @@ mod tests {
         indices.sort_unstable();
         assert_eq!(indices, vec![1, 2]);
         assert!(TextureTable::from_records(&mut []).is_empty());
+    }
+
+    #[test]
+    fn every_table_reads_only_its_own_kind() {
+        // One record per kind in one stream; each table sees exactly its own.
+        let mut records = vec![
+            rec(ResourceKind::AudioClip, 0, 0),
+            rec(ResourceKind::Texture, 0, 1),
+            rec(ResourceKind::ColorLut, 0, 2),
+            rec(ResourceKind::EnvironmentMap, 0, 3),
+            rec(ResourceKind::Font, 0, 4),
+            rec(ResourceKind::Mesh, 0, 5),
+            rec(ResourceKind::SkinnedMesh, 0, 6),
+            rec(ResourceKind::Material, 0, 7),
+        ];
+        assert_eq!(AudioClipTable::from_records(&mut records).len(), 1);
+        assert_eq!(TextureTable::from_records(&mut records).len(), 1);
+        assert_eq!(ColorLutTable::from_records(&mut records).len(), 1);
+        assert_eq!(EnvironmentMapTable::from_records(&mut records).len(), 1);
+        assert_eq!(FontTable::from_records(&mut records).len(), 1);
+        assert_eq!(MeshTable::from_records(&mut records).len(), 1);
+        assert_eq!(SkinnedMeshTable::from_records(&mut records).len(), 1);
+        assert_eq!(MaterialTable::from_records(&mut records).len(), 1);
     }
 }

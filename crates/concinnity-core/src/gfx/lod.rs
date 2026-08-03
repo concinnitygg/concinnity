@@ -14,11 +14,47 @@
 // vertex buffer stays untouched and a LOD swap is a pure
 // `(index_offset, index_count)` change.
 
+// Whether an AABB encodes valid finite bounds suitable for frustum / distance
+// culling. A degenerate box (non-finite corner) disables culling.
+pub fn bounds_finite(bb_min: [f32; 3], bb_max: [f32; 3]) -> bool {
+    bb_min.iter().chain(bb_max.iter()).all(|c| c.is_finite())
+}
+
+// The LOD level active at `distance`: 0 for LOD0, or `i + 1` for the
+// highest-indexed alternate whose `switch_distance` is at or below it.
+// `alternates` is in ascending threshold order, so the scan stops early.
+pub fn pick_lod_level(alternates: &[crate::gfx::render_types::LodSlice], distance: f32) -> usize {
+    let mut level = 0usize;
+    for (i, slice) in alternates.iter().enumerate() {
+        if distance >= slice.switch_distance {
+            level = i + 1;
+        } else {
+            break;
+        }
+    }
+    level
+}
+
+// The `(index_offset, index_count)` slice active at `distance`, given the LOD0
+// pair and the alternates. Returns `lod0` when no alternate applies.
+pub fn pick_lod_slice(
+    lod0: (usize, usize),
+    alternates: &[crate::gfx::render_types::LodSlice],
+    distance: f32,
+) -> (usize, usize) {
+    match pick_lod_level(alternates, distance) {
+        0 => lod0,
+        level => {
+            let slice = &alternates[level - 1];
+            (slice.index_offset, slice.index_count)
+        }
+    }
+}
+
 // Distance from `cam_pos` to a skinned object's authored placement (the
 // column-3 translation of its model matrix). Skinned objects deform every
 // frame, so they have no static AABB: this is the cheap stand-in the
 // per-frame LOD picks use.
-#[allow(dead_code)] // Consumed by every backend's skinned draw path (client crate).
 pub fn skinned_camera_distance(
     obj: &crate::gfx::render_types::SkinnedDrawObject,
     cam_pos: [f32; 3],

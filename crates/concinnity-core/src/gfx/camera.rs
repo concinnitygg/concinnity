@@ -4,10 +4,32 @@
 // stateless -- callers own position, yaw, and pitch directly (e.g. on
 // Camera3D) and pass them in as needed.
 
+use crate::geometry::vec3::cross;
+
+// Floor applied to a viewport aspect ratio before it reaches a shader, so a
+// zero-height viewport cannot divide by zero in the ray reconstruction.
+pub const MIN_ASPECT: f32 = 1.0e-3;
+
+// The two view-ray reconstruction terms every screen-space pass sends its
+// shader: the half-FOV tangent and the floored aspect.
+pub fn view_ray_scale(fov_y_radians: f32, aspect: f32) -> (f32, f32) {
+    ((fov_y_radians * 0.5).tan(), aspect.max(MIN_ASPECT))
+}
+
+// Camera-to-world from the view rotation and the world camera position. The
+// rotation already lives in `inv_view_rot`'s 3x3; only the translation column
+// has to be filled in.
+pub fn camera_to_world(inv_view_rot: [[f32; 4]; 4], cam_pos: [f32; 3]) -> [[f32; 4]; 4] {
+    let mut inv_view = inv_view_rot;
+    inv_view[3] = [cam_pos[0], cam_pos[1], cam_pos[2], 1.0];
+    inv_view
+}
+
 // Build a column-major view matrix from position, yaw, and pitch.
 //
 // Convention matches the GLSL mat4 layout used by the shader UBOs:
 // view[column][row], right-handed, Y-up.
+
 pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
     let (sin_yaw, cos_yaw) = yaw.sin_cos();
     let (sin_pitch, cos_pitch) = pitch.sin_cos();
@@ -31,14 +53,6 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
             fx * px + fy * py + fz * pz,
             1.0,
         ],
-    ]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
     ]
 }
 

@@ -4791,7 +4791,7 @@ fn hide_and_lock_are_session_state_not_edits() {
 
     h.tick(&mut world);
     let hidden = world
-        .resource::<crate::ecs::EditorHidden>()
+        .resource::<crate::ecs::HiddenAssets>()
         .expect("the hook publishes the hidden set every tick");
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 

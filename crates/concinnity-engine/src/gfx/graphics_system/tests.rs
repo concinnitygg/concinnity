@@ -3924,7 +3924,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
 }
 
-// The editor's per-frame EditorHidden set collapses a hidden prop's draw slots
+// The editor's per-frame HiddenAssets set collapses a hidden prop's draw slots
 // to a degenerate model matrix (nothing rasterizes) and drops it from the
 // published PickIndex; clearing the set restores both the next step.
 #[test]
@@ -3938,7 +3938,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
 
     world
         .resources
-        .insert(crate::ecs::EditorHidden([PROP].into_iter().collect()));
+        .insert(crate::ecs::HiddenAssets([PROP].into_iter().collect()));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     {
         let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
@@ -3948,7 +3948,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
         assert_eq!(*model, COLLAPSED, "the hidden prop's slot is degenerate");
     }
 
-    world.resources.insert(crate::ecs::EditorHidden::default());
+    world.resources.insert(crate::ecs::HiddenAssets::default());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
     assert_eq!(index.entries.len(), 1, "clearing the set restores the prop");

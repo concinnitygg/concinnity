@@ -242,7 +242,7 @@ pub(crate) struct EditorHook {
     ctrl_held: bool,
     // Editor-session hide / lock sets, by NAME (ids drift across preview
     // rebuilds). Hidden assets skip rendering (via the published
-    // `EditorHidden` resource); locked ones are skipped by viewport picking.
+    // `HiddenAssets` resource); locked ones are skipped by viewport picking.
     // Neither touches the authored entries.
     hidden_assets: std::collections::BTreeSet<String>,
     locked_assets: std::collections::BTreeSet<String>,
@@ -1089,7 +1089,7 @@ impl DebugHook for EditorHook {
         // Publish the editor-session hidden set (manual hides composed with an
         // active isolate, resolved to this world's ids) so the renderer
         // collapses those objects this frame.
-        world.insert_resource(crate::ecs::EditorHidden(self.effective_hidden_ids()));
+        world.insert_resource(crate::ecs::HiddenAssets(self.effective_hidden_ids()));
         // Publish the viewport view mode + show flags for this frame's draw.
         world.insert_resource(crate::ecs::ViewOverrides {
             mode: self.view_mode,

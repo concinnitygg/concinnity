@@ -14,7 +14,7 @@
 // host captures the invocation directory and installs it here before it chdirs,
 // so state stays put while content resolution follows the working directory.
 //
-// A shipped game installs a flat state root via `set_state_dir`: the state tree
+// A shipped application installs a flat state root via `set_state_dir`: the state tree
 // then sits directly at that directory with no `.concinnity/` wrapper, so
 // `data/`, `saves/`, and `settings` resolve beside the executable or inside the
 // app bundle.
@@ -26,9 +26,9 @@
 //   4. none: `.concinnity` relative to the current directory (the default)
 //
 // The read-only content of the tree (`data/`) and the runtime-writable state
-// (`saves/` + `settings`) usually share one root, but a shipped game installed
+// (`saves/` + `settings`) usually share one root, but a shipped application installed
 // in a read-only location (Program Files) cannot write beside its data. Such a
-// game installs a separate writable root via `set_writable_state_dir` so only
+// application installs a separate writable root via `set_writable_state_dir` so only
 // `saves/` and `settings` relocate to a per-user directory while `data/` stays
 // beside the executable. When no writable root is installed, writable state
 // stays with the content, so dev and portable installs are unaffected.
@@ -71,7 +71,7 @@ pub fn clear_root() {
 }
 
 // Anchor the state tree directly at `dir` with no `.concinnity` segment, taking
-// precedence over `set_root`, `CN_HOME`, and the default. A shipped game
+// precedence over `set_root`, `CN_HOME`, and the default. A shipped application
 // installs this so `data/`, `saves/`, and `settings` resolve beside its
 // executable (or inside its app bundle) rather than under a `.concinnity/`
 // wrapper.
@@ -85,7 +85,7 @@ pub fn clear_state_dir() {
 }
 
 // Anchor the runtime-writable state (`saves/` + `settings`) at `dir`, leaving
-// the read-only content (`data/`) at the resolved state dir. A shipped game
+// the read-only content (`data/`) at the resolved state dir. A shipped application
 // installs this when its content dir is not writable (a read-only install such
 // as Program Files), redirecting only what it writes at runtime to a per-user
 // directory. When unset, writable state stays beside `data/`.
@@ -120,10 +120,7 @@ pub fn state_dir() -> PathBuf {
 // touching the process-global state. A flat dir wins verbatim; otherwise the
 // `.concinnity` segment is anchored onto the wrapping root.
 fn resolve_state_dir(flat: Option<&Path>, root: Option<&Path>) -> PathBuf {
-    match flat {
-        Some(f) => f.to_path_buf(),
-        None => anchor(root, Path::new(STATE_DIR)),
-    }
+    flat.map_or_else(|| anchor(root, Path::new(STATE_DIR)), Path::to_path_buf)
 }
 
 // The directory holding runtime-writable state (`saves/` + `settings`): the
@@ -144,10 +141,7 @@ fn resolve_writable_dir(over: Option<&Path>, state: &Path) -> PathBuf {
 // `None`. Split out so the anchoring rule is unit-testable without touching the
 // process-global root.
 fn anchor(root: Option<&Path>, rel: &Path) -> PathBuf {
-    match root {
-        Some(r) => r.join(rel),
-        None => rel.to_path_buf(),
-    }
+    root.map_or_else(|| rel.to_path_buf(), |r| r.join(rel))
 }
 
 pub fn assets_dir() -> PathBuf {
@@ -159,8 +153,8 @@ pub fn data_dir() -> PathBuf {
 }
 
 // Directory holding the runtime save files (`auto`, `save1` ..). Created on
-// first write by the running game, never by a build. Resolves under the
-// writable-state dir, which is the content root unless a game redirected it.
+// first write by the running application, never by a build. Resolves under the
+// writable-state dir, which is the content root unless an application redirected it.
 pub fn saves_dir() -> PathBuf {
     writable_state_dir().join("saves")
 }

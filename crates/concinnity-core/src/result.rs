@@ -5,7 +5,6 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum CnResult {
     #[error("Success")]
-    #[allow(dead_code)]
     Success = 0,
 
     #[error("Invalid asset type")]

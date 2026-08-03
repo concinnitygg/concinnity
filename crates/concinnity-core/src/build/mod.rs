@@ -12,6 +12,7 @@
 pub mod color_lut;
 pub mod environment_map;
 pub mod font;
+pub mod payload;
 pub mod shader;
 pub mod texture;
 

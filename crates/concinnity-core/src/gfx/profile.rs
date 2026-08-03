@@ -120,7 +120,6 @@ impl FrameProfile {
     // System step times from the last fully completed frame, in step order.
     // Read by the runtime debug server's `profile` command (a binary-only
     // module), so the lib build sees no caller.
-    #[allow(dead_code)]
     pub fn system_timings(&self) -> &[(&'static str, u32)] {
         &self.last
     }

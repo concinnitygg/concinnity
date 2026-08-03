@@ -180,14 +180,14 @@ pub struct WorldLines(pub alloc::vec::Vec<crate::gfx::lines::Line>);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FlyCam(pub bool);
 
-// The editor-session hidden set, published per frame by the `cn editor` HUD
-// drive: GraphicsSystem collapses each listed asset's draw slots to a
-// degenerate transform (so it neither rasterizes nor casts shadows) and drops
-// it from the [PickIndex]. Authored data is untouched, and the collapse is
-// re-derived every frame, so clearing an id restores the object immediately.
-// Absent / empty outside the editor.
+// Assets suppressed from rendering for this frame. GraphicsSystem collapses
+// each listed asset's draw slots to a degenerate transform (so it neither
+// rasterizes nor casts shadows) and drops it from the [PickIndex]. Authored
+// data is untouched, and the collapse is re-derived every frame, so clearing
+// an id restores the object immediately. Published by the `cn editor` HUD
+// drive; absent / empty otherwise.
 #[derive(Debug, Clone, Default)]
-pub struct EditorHidden(pub alloc::collections::BTreeSet<AssetId>);
+pub struct HiddenAssets(pub alloc::collections::BTreeSet<AssetId>);
 
 // The viewport's view mode + show flags, published per frame by the editor.
 // GraphicsSystem forwards it to the backend's FrameParams: the mode selects

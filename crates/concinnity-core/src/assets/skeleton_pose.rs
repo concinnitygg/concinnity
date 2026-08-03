@@ -20,8 +20,6 @@ pub struct SkeletonPose {
     /// `AnimationSystem` to match an `Animation` clip to its target.
     pub mesh_id: SkinnedMeshHandle,
     /// Index of this mesh's skinned draw object in the render backend.
-    /// Read only by the Metal skinned pipeline for now.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub skinned_index: usize,
     /// Bind-pose joint hierarchy, used to compose skinning matrices.
     pub skeleton: Skeleton,

@@ -84,7 +84,6 @@ pub use audio_command::AudioCommand;
 pub use camera_probe::CameraProbe;
 pub use camera3d::Camera3D;
 pub use character_rig::CharacterRig;
-#[allow(unused_imports)]
 pub use concinnity_asset::AaMode;
 pub use concinnity_asset::AudioClip;
 pub use concinnity_asset::AudioEmitter;
@@ -100,7 +99,6 @@ pub use concinnity_asset::Font;
 pub use concinnity_asset::GlassPanel;
 pub use concinnity_asset::GraphicsConfig;
 pub use concinnity_asset::HitRegion;
-#[allow(unused_imports)]
 pub use concinnity_asset::IndirectLighting;
 pub use concinnity_asset::KeyBinding;
 pub use concinnity_asset::LightRig;
@@ -116,19 +114,42 @@ pub use concinnity_asset::PostProcessConfig;
 pub use concinnity_asset::Prefab;
 pub use concinnity_asset::ProceduralMesh;
 pub use concinnity_asset::Prop;
-#[allow(unused_imports)]
+pub use concinnity_asset::PropBody;
+pub use concinnity_asset::PropCollider;
+pub use concinnity_asset::RectAreaLight;
 pub use concinnity_asset::ReflectionBlurResolution;
-#[allow(unused_imports)]
+pub use concinnity_asset::ReflectionProbe;
+pub use concinnity_asset::RigidBody;
+pub use concinnity_asset::RoomArgs;
+pub use concinnity_asset::Scene;
+pub use concinnity_asset::SceneImport;
 pub use concinnity_asset::ShadowUpdate;
-#[allow(unused_imports)]
+pub use concinnity_asset::Slider;
+pub use concinnity_asset::SpawnerArgs;
+pub use concinnity_asset::SpotLight;
 pub use concinnity_asset::SsgiResolution;
-#[allow(unused_imports)]
+pub use concinnity_asset::StoryImport;
+pub use concinnity_asset::StreamingConfig;
+pub use concinnity_asset::TextInput;
+pub use concinnity_asset::Texture;
 pub use concinnity_asset::UpscaleQuality;
-#[allow(unused_imports)]
 pub use concinnity_asset::UpscalerBackend;
+pub use concinnity_asset::VolumetricFog;
+pub use concinnity_asset::VoxelChunk;
+pub use concinnity_asset::VoxelWorld;
 pub use concinnity_asset::{AppLimits, ApplicationArgs};
 pub use concinnity_asset::{AudioCue, CueKind};
+pub use concinnity_asset::{
+    Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl, VarDecl, Variables,
+};
 pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
+pub use concinnity_asset::{
+    CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData,
+};
+pub use concinnity_asset::{
+    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
+    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
+};
 pub use concinnity_asset::{FileArgs, FileKind};
 pub use concinnity_asset::{InstanceTransform, InstancedProp};
 pub use concinnity_asset::{Joint, JointKind};
@@ -136,6 +157,13 @@ pub use concinnity_asset::{Justify, LabelBox, LayoutContainer, LayoutRow, Placem
 pub use concinnity_asset::{MainMenu, MainMenuItem, SettingsProfile};
 pub use concinnity_asset::{Mesh, VertexData};
 pub use concinnity_asset::{Model, SubMeshRef};
+pub use concinnity_asset::{Screen, ScreenInput};
+pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
+pub use concinnity_asset::{Sprite, SpriteFit};
+pub use concinnity_asset::{TextAlign, TextLabel};
+pub use concinnity_asset::{TriggerFilter, TriggerVolume};
+pub use concinnity_asset::{WaterSurface, WaterWave};
+pub use concinnity_asset::{Window, WindowArgs, WindowMode};
 pub use controls_command::ControlsCommand;
 pub use despawn_request::DespawnRequest;
 pub use file::File;
@@ -148,60 +176,19 @@ pub use geometry::{
 };
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;
+pub use interact_signal::InteractSignal;
 pub use lifetime::Lifetime;
 pub use nav_direction::NavDirection;
 pub use play_cue::PlayCue;
 pub use post_process_config::PostProcessResolve;
-pub use root_motion_event::RootMotion;
-// `PropCollider` is re-exported for tests / future consumers; the crate
-// currently only uses it through `Prop.collider`, so the re-export is unused
-// at compile time outside of the test module.
-pub use concinnity_asset::PropBody;
-#[allow(unused_imports)]
-pub use concinnity_asset::PropCollider;
-pub use concinnity_asset::RectAreaLight;
-pub use concinnity_asset::ReflectionProbe;
-pub use concinnity_asset::RigidBody;
-pub use concinnity_asset::RoomArgs;
-pub use concinnity_asset::Scene;
-pub use concinnity_asset::SceneImport;
-pub use concinnity_asset::{
-    Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl, VarDecl, Variables,
-};
-pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
-pub use concinnity_asset::{TriggerFilter, TriggerVolume};
 pub use reparent_request::ReparentRequest;
 pub use room::Room;
+pub use root_motion_event::RootMotion;
 pub use scene_command::SceneCommand;
-pub use sdf_volume::SdfVolume;
-pub use setting_command::{SettingCommand, SettingOp};
-// Re-exported for the Metal raymarch encoder; non-Metal builds reach
-// the asset through `SdfVolume` only.
-pub use concinnity_asset::Slider;
-pub use concinnity_asset::SpawnerArgs;
-pub use concinnity_asset::SpotLight;
-pub use concinnity_asset::StoryImport;
-pub use concinnity_asset::StreamingConfig;
-pub use concinnity_asset::TextInput;
-pub use concinnity_asset::Texture;
-pub use concinnity_asset::VolumetricFog;
-pub use concinnity_asset::VoxelChunk;
-pub use concinnity_asset::VoxelWorld;
-pub use concinnity_asset::{
-    CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData,
-};
-pub use concinnity_asset::{
-    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
-    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
-};
-pub use concinnity_asset::{Screen, ScreenInput};
-pub use concinnity_asset::{Sprite, SpriteFit};
-pub use concinnity_asset::{TextAlign, TextLabel};
-pub use concinnity_asset::{WaterSurface, WaterWave};
-pub use concinnity_asset::{Window, WindowArgs, WindowMode};
-pub use interact_signal::InteractSignal;
 pub use screen_command::ScreenCommand;
 pub use screen_shown::ScreenShown;
+pub use sdf_volume::SdfVolume;
+pub use setting_command::{SettingCommand, SettingOp};
 pub use shader::{Shader, ShaderKind, ShaderPayload, StageSource, StageSourceExt};
 pub use skeleton_pose::SkeletonPose;
 pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};

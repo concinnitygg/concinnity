@@ -25,8 +25,8 @@ mod system;
 // physics / audio subsystem crates can reach them; the client `ecs` module
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
-    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
-    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
+    CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
+    HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
     OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
     TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
 };
@@ -140,7 +140,6 @@ pub struct PipelineContext<'a> {
     // Compiled-payload store. Systems use `read_payload` to fetch binary data,
     // then call `release_blob` when done with it. A trait object so the ECS
     // mechanism names no concrete blob store; the runtime passes `BlobData`.
-    #[allow(dead_code)]
     pub blob: &'a mut dyn PayloadStore,
     // Per-frame profiling data. `World::step` records each system's CPU step
     // time here; `GraphicsSystem` writes the backend `RenderStats` after its
@@ -155,19 +154,16 @@ pub struct PipelineContext<'a> {
 
 impl<'a> PipelineContext<'a> {
     // Immutable iteration over all components of type C.
-    #[allow(dead_code)]
     pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
         C::slot(self.components).iter()
     }
 
     // Iterate all components of type C paired with their owning Entity.
-    #[allow(dead_code)]
     pub fn query_with_entity<C: ComponentSlot>(&self) -> impl Iterator<Item = (Entity, &C)> {
         C::slot(self.components).iter_with_entities()
     }
 
     // Mutable iteration over all components of type C.
-    #[allow(dead_code)]
     pub fn query_mut<C: ComponentSlot>(&mut self) -> core::slice::IterMut<'_, C> {
         self.components.values_mut::<C>().iter_mut()
     }
@@ -176,7 +172,6 @@ impl<'a> PipelineContext<'a> {
     // Entity (the mutable counterpart of `query_with_entity`), so a system can
     // update each component and still know which entity owns it without first
     // materializing the entity set into a Vec.
-    #[allow(dead_code)]
     pub fn query_mut_with_entity<C: ComponentSlot>(
         &mut self,
     ) -> impl Iterator<Item = (Entity, &mut C)> {
@@ -187,7 +182,6 @@ impl<'a> PipelineContext<'a> {
     // remove / mutable access of a C). Comparing two reads across frames detects
     // whether any C changed without scanning the column, so a per-frame pass can
     // skip its work when nothing touched C since it last ran.
-    #[allow(dead_code)]
     pub fn changed_tick<C: ComponentSlot>(&self) -> Tick {
         self.components.changed_tick::<C>()
     }
@@ -195,7 +189,6 @@ impl<'a> PipelineContext<'a> {
     // Mutable slice of all components of type C. Unlike `query_mut` this
     // exposes the backing storage as a slice, which a system can hand to the
     // job pool for parallel per-component work.
-    #[allow(dead_code)]
     pub fn query_slice_mut<C: ComponentSlot>(&mut self) -> &mut [C] {
         self.components.values_mut::<C>()
     }
@@ -209,7 +202,6 @@ impl<'a> PipelineContext<'a> {
     // Push a runtime-produced component into the matching typed column,
     // minting a fresh Entity for it. Preferred over reaching into
     // `self.components` directly.
-    #[allow(dead_code)]
     pub fn push<C: ComponentSlot>(&mut self, c: C) {
         self.components.push_typed(c);
     }
@@ -218,7 +210,6 @@ impl<'a> PipelineContext<'a> {
     // component. The entity must be alive and must not already have C. Allowed
     // dead because the caller is in the client crate (the load-time Prop
     // decomposition); core itself has no systems.
-    #[allow(dead_code)]
     pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
         self.components.insert_typed(entity, c);
     }
@@ -226,7 +217,6 @@ impl<'a> PipelineContext<'a> {
     // Remove a component from an entity, returning it if present. The entity
     // keeps its other components. Allowed dead for the same cross-crate reason
     // as `insert` (the client toggles the Held tag on pickup/drop).
-    #[allow(dead_code)]
     pub fn remove<C: ComponentSlot>(&mut self, entity: Entity) -> Option<C> {
         self.components.remove_typed::<C>(entity)
     }
@@ -236,7 +226,6 @@ impl<'a> PipelineContext<'a> {
     // no-op on an already-dead or unknown entity. Allowed dead for the same
     // cross-crate reason as `insert` (the client despawns entities at runtime
     // from the GraphicsSystem).
-    #[allow(dead_code)]
     pub fn despawn(&mut self, entity: Entity) {
         self.components.despawn(entity);
     }
@@ -244,7 +233,6 @@ impl<'a> PipelineContext<'a> {
     // Whether an entity is still live (not despawned, matching generation).
     // Allowed dead for the same cross-crate reason as `insert` (the client
     // reaps a despawned entity's physics body in PhysicsSystem).
-    #[allow(dead_code)]
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.components.is_alive(entity)
     }
@@ -252,7 +240,6 @@ impl<'a> PipelineContext<'a> {
     // Borrow one entity's component C read-only. Allowed dead for the same
     // cross-crate reason as `insert` (the client reads Transform / Held by
     // entity in the physics, camera, and audio systems).
-    #[allow(dead_code)]
     pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
         self.components.get::<C>(entity)
     }
@@ -266,7 +253,6 @@ impl<'a> PipelineContext<'a> {
     // Read-only join over two component types: iterate the first type's rows
     // and yield both refs for every entity that also has the second. Allowed
     // dead for the same cross-crate reason as `insert`.
-    #[allow(dead_code)]
     pub fn join2<A: ComponentSlot, B: ComponentSlot>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> {
@@ -276,7 +262,6 @@ impl<'a> PipelineContext<'a> {
     // Mutably borrow one entity's component C (a propagation pass writing a
     // single entity's value). Allowed dead for the same cross-crate reason as
     // `insert`.
-    #[allow(dead_code)]
     pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
         self.components.get_mut::<C>(entity)
     }
@@ -287,7 +272,6 @@ impl<'a> PipelineContext<'a> {
     }
 
     // Mutably borrow the singleton resource of type T, if present.
-    #[allow(dead_code)]
     pub fn resource_mut<T: core::any::Any>(&mut self) -> Option<&mut T> {
         self.resources.get_mut::<T>()
     }
@@ -300,7 +284,6 @@ impl<'a> PipelineContext<'a> {
 
     // Borrow the event queue for event type E, if any events of that type have
     // been registered.
-    #[allow(dead_code)]
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
         self.resources.get::<EventStore>()?.get::<E>()
     }
@@ -308,7 +291,6 @@ impl<'a> PipelineContext<'a> {
     // Mutably borrow the event queue for event type E, creating an empty one on
     // first access so writers and readers never miss it. All queues live in the
     // `EventStore` resource, which the frame driver rotates wholesale.
-    #[allow(dead_code)]
     pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
         if !self.resources.contains::<EventStore>() {
             self.resources.insert(EventStore::new());
@@ -324,7 +306,6 @@ impl<'a> PipelineContext<'a> {
     // Takes `&mut self` because an overflow blob is read from disk lazily on
     // first access. Returns an error if the blob was released, the locator is
     // out of range, or the on-demand load fails.
-    #[allow(dead_code)]
     pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
         self.blob.read(locator)
     }
@@ -333,7 +314,6 @@ impl<'a> PipelineContext<'a> {
     // that need it have finished (e.g. after GPU upload).
     //
     // See `PayloadStore::release` for semantics.
-    #[allow(dead_code)]
     pub fn release_blob(&mut self, blob_index: u32) {
         self.blob.release(blob_index);
     }
@@ -479,7 +459,6 @@ macro_rules! define_components {
             // The component tag of every stored component, one per instance.
             // The debug WS snapshot reports these; nothing re-serializes stored
             // components back to defs.
-            #[allow(dead_code)]
             pub fn component_tags(&self) -> Vec<u8> {
                 let mut out = Vec::new();
                 $(

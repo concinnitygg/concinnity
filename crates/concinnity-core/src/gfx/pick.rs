@@ -75,10 +75,8 @@ pub struct AabbFace {
 /// entry interval; a degenerate all-zero direction inside the box reports
 /// `sign` 0 (no face was crossed).
 pub fn ray_aabb_face(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<AabbFace> {
-    for i in 0..3 {
-        if !bb_min[i].is_finite() || !bb_max[i].is_finite() {
-            return None;
-        }
+    if !crate::gfx::lod::bounds_finite(bb_min, bb_max) {
+        return None;
     }
     let mut t_enter = f32::NEG_INFINITY;
     let mut t_exit = f32::INFINITY;

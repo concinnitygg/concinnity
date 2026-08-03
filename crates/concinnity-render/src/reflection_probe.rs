@@ -954,7 +954,7 @@ mod tests {
         let view = crate::build::environment_map::deserialise(&bytes).expect("deserialise");
         assert_eq!(view.prefilter_face, 8);
         assert_eq!(view.irradiance_face, 8);
-        assert!(view.prefilter_mips >= 2);
+        assert!(view.prefilter_mip_bytes.len() >= 2);
     }
 
     #[test]

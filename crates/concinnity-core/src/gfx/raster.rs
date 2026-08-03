@@ -5,6 +5,8 @@
 // simple key + ambient shading. No GPU, no backend, no ECS; deterministic
 // across platforms, so a baked image is identical everywhere.
 
+use crate::geometry::vec3::{cross, dot};
+
 use super::mesh_payload::Vertex;
 
 // The fixed camera direction (toward the subject) and key light, chosen so a
@@ -30,18 +32,6 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
         return [0.0, 0.0, 1.0];
     }
     [v[0] / len, v[1] / len, v[2] / len]
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 // The orthographic camera basis for the fixed view: right / up in the image

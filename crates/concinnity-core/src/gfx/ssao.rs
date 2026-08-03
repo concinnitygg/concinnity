@@ -6,6 +6,8 @@
 // itself lives in each backend's shader; this module owns only the parameter
 // math so it can be unit-tested without a GPU.
 
+use crate::gfx::camera::view_ray_scale;
+
 use crate::gfx::render_types::SsaoParams;
 
 // Upper bound on `intensity` so a stray asset value cannot drive the ambient
@@ -39,13 +41,13 @@ impl SsaoSettings {
     // camera. `fov_y_radians` is the vertical field of view and `aspect` the
     // viewport width / height ratio: together they give the view-ray scale
     // the kernel needs to rebuild view-space positions from linear depth.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsaoParams {
+        let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsaoParams {
             radius: self.radius,
             intensity: self.intensity,
-            tan_half_fov_y: (fov_y_radians * 0.5).tan(),
-            aspect: aspect.max(MIN_RADIUS),
+            tan_half_fov_y,
+            aspect,
         }
     }
 }

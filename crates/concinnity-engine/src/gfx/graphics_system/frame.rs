@@ -159,7 +159,7 @@ impl GraphicsSystem {
                     // and keep them out of the pick index. Re-derived every
                     // frame, so clearing the set restores them immediately.
                     let hidden = ctx
-                        .resource::<crate::ecs::EditorHidden>()
+                        .resource::<crate::ecs::HiddenAssets>()
                         .map(|h| h.0.clone())
                         .unwrap_or_default();
                     for c in self

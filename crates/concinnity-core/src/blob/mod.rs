@@ -40,7 +40,6 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
 // `PayloadLocator` offset into an absolute file offset.
 // Used only by the Metal-driven disk-backed streaming source for now
 // (Vulkan/DirectX streaming catch-up is a follow-up).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn payload_section_start(path: &str) -> Result<u64, CnResult> {
     let mut file = fs::File::open(path).map_err(|e| {
         tracing::error!("Failed to open {}: {}", path, e);
@@ -132,7 +131,6 @@ pub fn texture_resource_count() -> Result<usize, CnResult> {
 }
 
 // Load defs without resolving (for callers that apply overlays first)
-#[allow(dead_code)]
 pub fn load_defs() -> Result<Vec<BlobAssetDef>, CnResult> {
     read_cnb(&blob_path(0)).map(|(meta, _)| meta.defs)
 }

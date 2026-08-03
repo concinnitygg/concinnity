@@ -499,7 +499,6 @@ pub struct LineVertex {
 // Carries the framebuffer size so the shader can convert pixel coords to NDC.
 #[derive(Copy, Clone)]
 #[repr(C)]
-#[allow(dead_code)]
 pub struct TextUniforms {
     pub win_width: f32,
     pub win_height: f32,
@@ -836,7 +835,6 @@ pub struct FogParams {
 // 96 bytes.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
-#[allow(dead_code)] // Bound only by client backends; unused within the core crate.
 pub struct FogFroxelParams {
     // View matrix (world → view), so the compute kernel can pick a CSM
     // cascade for each froxel and the fragment sampler can map a scene
@@ -871,7 +869,6 @@ pub struct FogFroxelParams {
 // `ParticleParams` in `metal/shaders/particle.metal`. 144 bytes.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
-#[allow(dead_code)] // Metal-only particle pipeline uniform; DirectX / Vulkan don't draw particles.
 pub struct ParticleParams {
     // World-space spawn origin. `packed_float3` in MSL: alignment 4, with
     // `spread_cos` packed into the trailing float slot of the float4.
@@ -930,7 +927,6 @@ pub struct TextDrawCall {
 // distance. The same `base_vertex` as the parent applies: LOD decimation
 // reuses the LOD0 vertex range, only the index list changes.
 #[derive(Copy, Clone, Debug)]
-#[allow(dead_code)] // Vulkan still renders LOD0 only; the allow keeps that build warning-free.
 pub struct LodSlice {
     pub index_offset: usize,
     pub index_count: usize,
@@ -971,12 +967,10 @@ pub struct DrawObject {
     pub model: [[f32; 4]; 4],
     // Index into the shared texture pool for this object's albedo map.
     // Clamped to the last slot if out of range.
-    #[allow(dead_code)]
     pub texture_slot: usize,
     // Index into the shared texture pool for this object's normal map, or
     // `NO_NORMAL_MAP_SLOT` when the object has no normal map (the backend then
     // substitutes the flat-normal fallback).
-    #[allow(dead_code)]
     pub normal_map_slot: usize,
     // Per-draw material scalars pushed to the fragment shader at buffer(3).
     pub material: MaterialUniforms,
@@ -1017,26 +1011,17 @@ impl DrawObject {
     // than the first alternate's threshold; otherwise returns the
     // highest-indexed alternate whose `switch_distance` ≤ `distance`.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
-        let mut best = (self.index_offset, self.index_count);
-        for slice in &self.lod_alternates {
-            if distance >= slice.switch_distance {
-                best = (slice.index_offset, slice.index_count);
-            } else {
-                break;
-            }
-        }
-        best
+        crate::gfx::lod::pick_lod_slice(
+            (self.index_offset, self.index_count),
+            &self.lod_alternates,
+            distance,
+        )
     }
 
     // Returns true when the AABB encodes valid finite bounds suitable for
     // frustum/distance culling. A degenerate box (NaN min) disables culling.
     pub fn cullable(&self) -> bool {
-        self.bb_min[0].is_finite()
-            && self.bb_min[1].is_finite()
-            && self.bb_min[2].is_finite()
-            && self.bb_max[0].is_finite()
-            && self.bb_max[1].is_finite()
-            && self.bb_max[2].is_finite()
+        crate::gfx::lod::bounds_finite(self.bb_min, self.bb_max)
     }
 }
 
@@ -1144,6 +1129,50 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
     }
 }
 
+// The world bound and per-object cull range a packed record carries. The
+// main-pass shaders ignore both; a GPU-driven compute cull reads object bounds
+// straight from this buffer, so every packer fills them.
+pub struct RecordBounds {
+    pub bb_min: [f32; 3],
+    pub bb_max: [f32; 3],
+    pub cull_distance: f32,
+}
+
+impl GpuObjectData {
+    // Assemble a record from the pieces every packer resolves differently
+    // (transform, bounds, pool indices) plus the material block they all copy
+    // verbatim. Adding a material field lands in one place instead of three.
+    fn new(
+        model: [[f32; 4]; 4],
+        material: &MaterialUniforms,
+        bounds: RecordBounds,
+        albedo_index: u32,
+        normal_index: u32,
+    ) -> Self {
+        Self {
+            model,
+            tint: material.tint,
+            roughness: material.roughness,
+            emissive: material.emissive,
+            metallic: material.metallic,
+            albedo_index,
+            normal_index,
+            macro_variation: material.macro_variation,
+            terrain_blend: material.terrain_blend,
+            bb_min: bounds.bb_min,
+            cull_distance: bounds.cull_distance,
+            bb_max: bounds.bb_max,
+            secondary_blend_sharpness: material.secondary_blend_sharpness,
+            albedo_secondary_index: material.albedo_secondary_index,
+            normal_secondary_index: material.normal_secondary_index,
+            emissive_map_index: material.emissive_map_index,
+            orm_map_index: material.orm_map_index,
+            alpha_cutoff: material.alpha_cutoff,
+            _pad: [0.0; 3],
+        }
+    }
+}
+
 // Pack one `DrawObject` into its `GpuObjectData` record for the DirectX and
 // Vulkan bindless static pass. The caller supplies the resolved texture-pool
 // indices: `albedo_index` / `normal_index` are dense indices into the one
@@ -1153,29 +1182,13 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
 // `bb_min` / `bb_max` / `cull_distance` are copied even though the
 // main-pass shaders ignore them, so a GPU-driven compute cull can read object
 // bounds straight from this buffer without a layout change.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32) -> GpuObjectData {
-    GpuObjectData {
-        model: obj.model,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        emissive: obj.material.emissive,
-        metallic: obj.material.metallic,
-        albedo_index,
-        normal_index,
-        macro_variation: obj.material.macro_variation,
-        terrain_blend: obj.material.terrain_blend,
+    let bounds = RecordBounds {
         bb_min: obj.bb_min,
-        cull_distance: obj.cull_distance,
         bb_max: obj.bb_max,
-        secondary_blend_sharpness: obj.material.secondary_blend_sharpness,
-        albedo_secondary_index: obj.material.albedo_secondary_index,
-        normal_secondary_index: obj.material.normal_secondary_index,
-        emissive_map_index: obj.material.emissive_map_index,
-        orm_map_index: obj.material.orm_map_index,
-        alpha_cutoff: obj.material.alpha_cutoff,
-        _pad: [0.0; 3],
-    }
+        cull_distance: obj.cull_distance,
+    };
+    GpuObjectData::new(obj.model, &obj.material, bounds, albedo_index, normal_index)
 }
 
 // Pack one instance of an `InstancedCluster` into a `GpuObjectData` for the
@@ -1186,7 +1199,6 @@ pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32
 // from the cluster rather than a `DrawObject`. The instanced mesh's indices are
 // already absolute (rebased at `append_mesh`), so the per-instance draw args use
 // `base_vertex = 0`.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn pack_instance_record(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
@@ -1195,27 +1207,12 @@ pub fn pack_instance_record(
 ) -> GpuObjectData {
     let (bb_min, bb_max) =
         crate::gfx::frustum::transform_aabb(cluster.local_bb_min, cluster.local_bb_max, model);
-    GpuObjectData {
-        model,
-        tint: cluster.material.tint,
-        roughness: cluster.material.roughness,
-        emissive: cluster.material.emissive,
-        metallic: cluster.material.metallic,
-        albedo_index,
-        normal_index,
-        macro_variation: cluster.material.macro_variation,
-        terrain_blend: cluster.material.terrain_blend,
+    let bounds = RecordBounds {
         bb_min,
-        cull_distance: cluster.cull_distance,
         bb_max,
-        secondary_blend_sharpness: cluster.material.secondary_blend_sharpness,
-        albedo_secondary_index: cluster.material.albedo_secondary_index,
-        normal_secondary_index: cluster.material.normal_secondary_index,
-        emissive_map_index: cluster.material.emissive_map_index,
-        orm_map_index: cluster.material.orm_map_index,
-        alpha_cutoff: cluster.material.alpha_cutoff,
-        _pad: [0.0; 3],
-    }
+        cull_distance: cluster.cull_distance,
+    };
+    GpuObjectData::new(model, &cluster.material, bounds, albedo_index, normal_index)
 }
 
 // Expand every instance of every cluster into a flat `GpuObjectData` list for the
@@ -1225,7 +1222,6 @@ pub fn pack_instance_record(
 // `normal_pool_index`, matching `build_object_buffer`'s static addressing.
 // `texture_count` is the pool's real-texture count (the flat-normal fallback
 // sits at `texture_count`).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn instance_object_records(
     clusters: &[InstancedCluster],
     texture_count: u32,
@@ -1256,9 +1252,6 @@ const SKINNED_BB_PAD_FACTOR: f32 = 2.0;
 // (model -> world) exactly like a static object; the cull bound is the padded
 // bind-pose AABB transformed by `model`. Mirrors `pack_instance_record`, sourcing
 // material + flat texture indices from the skinned object.
-// Consumed by the DirectX skinned fold; the allow keeps the Vulkan / Metal builds
-// (whose folds are not yet wired) warning-free until they wire their callers.
-#[allow(dead_code)]
 pub fn pack_skinned_record(
     obj: &SkinnedDrawObject,
     albedo_index: u32,
@@ -1273,27 +1266,12 @@ pub fn pack_skinned_record(
         hi[a] = centre + half;
     }
     let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(lo, hi, obj.model);
-    GpuObjectData {
-        model: obj.model,
-        tint: obj.material.tint,
-        roughness: obj.material.roughness,
-        emissive: obj.material.emissive,
-        metallic: obj.material.metallic,
-        albedo_index,
-        normal_index,
-        macro_variation: obj.material.macro_variation,
-        terrain_blend: obj.material.terrain_blend,
+    let bounds = RecordBounds {
         bb_min,
-        cull_distance: 0.0,
         bb_max,
-        secondary_blend_sharpness: obj.material.secondary_blend_sharpness,
-        albedo_secondary_index: obj.material.albedo_secondary_index,
-        normal_secondary_index: obj.material.normal_secondary_index,
-        emissive_map_index: obj.material.emissive_map_index,
-        orm_map_index: obj.material.orm_map_index,
-        alpha_cutoff: obj.material.alpha_cutoff,
-        _pad: [0.0; 3],
-    }
+        cull_distance: 0.0,
+    };
+    GpuObjectData::new(obj.model, &obj.material, bounds, albedo_index, normal_index)
 }
 
 // Per-object draw parameters consumed by the GPU-driven compute cull kernel.
@@ -1384,13 +1362,11 @@ pub struct InstancedCluster {
     // every backend keeps the shared vertex buffer bound at offset 0 and
     // `append_mesh` rebases indices accordingly; retained for symmetry with
     // `DrawObject` and future per-cluster vertex bindings.
-    #[allow(dead_code)]
     pub vertex_offset: usize,
     // Number of vertices this cluster's mesh occupies in the shared vertex
     // buffer, starting at `vertex_offset`. Used by the shrinkable-seed
     // compaction to relocate the cluster's geometry region when streamed-mesh
     // gaps are removed from the shared buffer.
-    #[allow(dead_code)]
     pub vertex_count: usize,
     // Element offset into the shared index buffer.
     pub index_offset: usize,
@@ -1432,7 +1408,6 @@ pub struct InstancedCluster {
 // range for that LOD plus the subset of instance matrices that picked it.
 // Each bucket becomes one `drawIndexedInstanced` call.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // Consumed by the client backends' instanced draw paths.
 pub struct InstancedLodBucket {
     pub index_offset: usize,
     pub index_count: usize,
@@ -1443,12 +1418,7 @@ impl InstancedCluster {
     // True when the cluster AABB encodes valid finite bounds suitable for
     // frustum / distance culling.
     pub fn cullable(&self) -> bool {
-        self.cluster_bb_min[0].is_finite()
-            && self.cluster_bb_min[1].is_finite()
-            && self.cluster_bb_min[2].is_finite()
-            && self.cluster_bb_max[0].is_finite()
-            && self.cluster_bb_max[1].is_finite()
-            && self.cluster_bb_max[2].is_finite()
+        crate::gfx::lod::bounds_finite(self.cluster_bb_min, self.cluster_bb_max)
     }
 
     // Partition the cluster's instances into LOD buckets keyed by camera
@@ -1460,7 +1430,6 @@ impl InstancedCluster {
     // Per-instance distance uses the model-matrix translation rather than
     // a transformed-AABB centre: close enough for distance-keyed swaps
     // without paying the per-instance AABB transform every pass.
-    #[allow(dead_code)] // Consumed by every backend's instanced draw path (client crate).
     pub fn lod_buckets(&self, cam_pos: [f32; 3]) -> Vec<InstancedLodBucket> {
         // Fast path: no alternates → single LOD0 bucket containing every
         // instance. Cloning is unavoidable since the GPU buffer expects an
@@ -1496,14 +1465,7 @@ impl InstancedCluster {
             let dy = m[3][1] - cam_pos[1];
             let dz = m[3][2] - cam_pos[2];
             let d = (dx * dx + dy * dy + dz * dz).sqrt();
-            let mut pick = 0usize;
-            for (i, alt) in self.lod_alternates.iter().enumerate() {
-                if d >= alt.switch_distance {
-                    pick = i + 1;
-                } else {
-                    break;
-                }
-            }
+            let pick = crate::gfx::lod::pick_lod_level(&self.lod_alternates, d);
             buckets[pick].instances.push(*m);
         }
 
@@ -1522,7 +1484,6 @@ impl InstancedCluster {
     // [`lod_buckets`](Self::lod_buckets) makes. Clusters that declared LOD
     // alternates still regroup their instances per LOD (a copy that separate
     // per-LOD draw calls genuinely require); that path reuses `lod_buckets`.
-    #[allow(dead_code)] // Metal consumes this; other backends use owned `lod_buckets`.
     pub fn try_for_each_lod_bucket<E>(
         &self,
         cam_pos: [f32; 3],
@@ -1542,7 +1503,6 @@ impl InstancedCluster {
 
     // Infallible [`try_for_each_lod_bucket`](Self::try_for_each_lod_bucket)
     // for callers whose per-bucket work cannot fail.
-    #[allow(dead_code)] // Metal consumes this; other backends use owned `lod_buckets`.
     pub fn for_each_lod_bucket(
         &self,
         cam_pos: [f32; 3],
@@ -1575,11 +1535,9 @@ pub struct SkinnedDrawObject {
     // region to copy unchanged geometry across a size-changing rebuild.
     // Stored as u16 because the shared skinned index buffer is u16 and
     // every slot's `vertex_base` has to fit there.
-    #[allow(dead_code)] // Read only by Metal's rebuild_skinned_geometry hot-reload.
     pub vertex_base: u16,
     // Number of vertices in this slot's region of the shared skinned
     // vertex buffer.
-    #[allow(dead_code)] // Read only by Metal's rebuild_skinned_geometry hot-reload.
     pub vertex_count: usize,
     // Element offset into the shared skinned index buffer.
     pub index_offset: usize,
@@ -1610,26 +1568,20 @@ pub struct SkinnedDrawObject {
     // rebased index range in the shared skinned IB; QEM half-edge
     // decimation keeps the vertex set unchanged so all LODs share this
     // slot's `vertex_base` / `vertex_count`.
-    #[allow(dead_code)] // Consumed by every backend's skinned draw path (client crate).
     pub lod_alternates: Vec<LodSlice>,
 }
 
-#[allow(dead_code)] // Consumed by every backend's skinned draw path (client crate).
 impl SkinnedDrawObject {
     // Pick the active `(index_offset, index_count)` for this object given
     // the camera distance to its model-matrix translation. Returns the
     // LOD0 pair when no alternates are present or the distance is below
     // the first threshold.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
-        let mut best = (self.index_offset, self.index_count);
-        for slice in &self.lod_alternates {
-            if distance >= slice.switch_distance {
-                best = (slice.index_offset, slice.index_count);
-            } else {
-                break;
-            }
-        }
-        best
+        crate::gfx::lod::pick_lod_slice(
+            (self.index_offset, self.index_count),
+            &self.lod_alternates,
+            distance,
+        )
     }
 
     // World-space translation of this object (column 3 of the model

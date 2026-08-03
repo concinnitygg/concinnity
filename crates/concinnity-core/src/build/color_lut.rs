@@ -22,6 +22,8 @@
 // The texel order matches both the Metal 3D-texture upload layout and the
 // `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
+use crate::build::payload::HeaderReader;
+
 pub const LUT_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"LUT3");
 pub const LUT_FORMAT_RGBA8: u32 = 0;
 pub const LUT_PAYLOAD_HEADER_BYTES: usize = 12;
@@ -173,22 +175,14 @@ pub fn serialise(size: u32, data: &[u8]) -> Vec<u8> {
 // is borrowed from the input. Called by the Metal, Vulkan, and DirectX
 // backends at upload time.
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
-    if bytes.len() < LUT_PAYLOAD_HEADER_BYTES {
-        return Err(format!(
-            "ColorLut payload too short: {} bytes (need at least {} for header)",
-            bytes.len(),
-            LUT_PAYLOAD_HEADER_BYTES
-        ));
-    }
-    let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-    if magic != LUT_PAYLOAD_MAGIC {
-        return Err(format!(
-            "ColorLut payload magic 0x{:08x} does not match expected 0x{:08x}",
-            magic, LUT_PAYLOAD_MAGIC
-        ));
-    }
-    let size = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-    let format_id = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let mut header = HeaderReader::open(
+        bytes,
+        LUT_PAYLOAD_MAGIC,
+        LUT_PAYLOAD_HEADER_BYTES,
+        "ColorLut",
+    )?;
+    let size = header.u32();
+    let format_id = header.u32();
     if format_id != LUT_FORMAT_RGBA8 {
         return Err(format!(
             "ColorLut payload format_id {} unsupported (only RGBA8)",

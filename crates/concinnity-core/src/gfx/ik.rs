@@ -6,6 +6,8 @@
 // blending and before `skinning_matrices`, so the solve composes with any
 // animation. Pure math, no ECS or backend types.
 
+use crate::geometry::vec3::{add, cross, dot, length, scale, sub};
+
 use crate::gfx::skinning::{Mat4, Skeleton, mat4_affine_inverse, mat4_mul};
 
 type Vec3 = [f32; 3];
@@ -13,28 +15,6 @@ type Mat3 = [[f32; 3]; 3];
 
 const EPS: f32 = 1.0e-5;
 
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn add(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn scale(v: Vec3, s: f32) -> Vec3 {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
-fn dot(a: Vec3, b: Vec3) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn length(v: Vec3) -> f32 {
-    dot(v, v).sqrt()
-}
 fn normalize(v: Vec3) -> Option<Vec3> {
     let len = length(v);
     (len > EPS).then(|| scale(v, 1.0 / len))

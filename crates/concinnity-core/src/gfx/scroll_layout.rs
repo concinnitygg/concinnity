@@ -51,20 +51,6 @@ impl Solved {
     pub fn scrollable(&self) -> bool {
         self.thumb_frac < 1.0
     }
-
-    // The largest in-range scroll offset for this solution.
-    pub fn max_scroll(&self) -> f32 {
-        (self.content_height - self.band_height_from_thumb()).max(0.0)
-    }
-
-    // Recover the band height from the thumb fraction (band = content *
-    // thumb_frac). Used only by `max_scroll`; exact for thumb_frac > 0.
-    fn band_height_from_thumb(&self) -> f32 {
-        if self.thumb_frac <= 0.0 {
-            return self.content_height;
-        }
-        self.content_height * self.thumb_frac
-    }
 }
 
 // Solve the vertical layout. `rows` are in top-to-bottom order with their

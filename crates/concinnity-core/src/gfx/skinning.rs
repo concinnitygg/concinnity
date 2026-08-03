@@ -88,9 +88,9 @@ type Quat = [f32; 4];
 // `JointPose::to_matrix`, without the scale or translation.
 fn rotation_mat3(rotation_deg: [f32; 3]) -> Mat3 {
     let [pitch, yaw, roll] = rotation_deg;
-    let (sp, cp) = (pitch.to_radians().sin(), pitch.to_radians().cos());
-    let (syw, cyw) = (yaw.to_radians().sin(), yaw.to_radians().cos());
-    let (sr, cr) = (roll.to_radians().sin(), roll.to_radians().cos());
+    let (sp, cp) = pitch.to_radians().sin_cos();
+    let (syw, cyw) = yaw.to_radians().sin_cos();
+    let (sr, cr) = roll.to_radians().sin_cos();
     [
         [cyw * cr + syw * sp * sr, cp * sr, -syw * cr + cyw * sp * sr],
         [-cyw * sr + syw * sp * cr, cp * cr, syw * sr + cyw * sp * cr],
@@ -109,6 +109,13 @@ fn compose(r: Mat3, scale: [f32; 3], t: [f32; 3]) -> Mat4 {
         [r[2][0] * sz, r[2][1] * sz, r[2][2] * sz, 0.0],
         [t[0], t[1], t[2], 1.0],
     ]
+}
+
+/// Column-major `T * R(YXZ) * S` model matrix. The single home of the engine's
+/// transform convention: joints, props, and runtime transforms all build their
+/// matrix here so they compose consistently.
+pub fn trs_matrix(position: [f32; 3], rotation_deg: [f32; 3], scale: [f32; 3]) -> Mat4 {
+    compose(rotation_mat3(rotation_deg), scale, position)
 }
 
 // Quaternion of a column-major rotation 3x3 (Shepperd's method: picks the
@@ -278,14 +285,9 @@ impl Default for JointPose {
 }
 
 impl JointPose {
-    // Column-major local matrix `T * R(YXZ) * S`. Same construction as
-    // `Prop::model_matrix` so joint and prop transforms compose consistently.
+    // Column-major local matrix `T * R(YXZ) * S`.
     pub fn to_matrix(&self) -> Mat4 {
-        compose(
-            rotation_mat3(self.rotation_deg),
-            self.scale,
-            self.translation,
-        )
+        trs_matrix(self.translation, self.rotation_deg, self.scale)
     }
 
     // Interpolate two poses into a column-major local matrix. Translation and
@@ -330,6 +332,10 @@ pub struct Joint {
 #[derive(Debug, Clone)]
 pub struct Skeleton {
     joints: Vec<Joint>,
+    // Local bind matrix per joint, built once. Every pose sample starts from
+    // these, so rebuilding them per frame would re-run the Euler trig for
+    // every joint of every sampled clip.
+    bind_locals: Vec<Mat4>,
     // World-space inverse bind matrix per joint.
     inverse_bind: Vec<Mat4>,
     // World-space bind position per joint. With a skinning matrix
@@ -343,9 +349,10 @@ impl Skeleton {
     // Joints referencing a parent that does not precede them are treated as
     // roots (a forward pass cannot resolve them otherwise).
     pub fn new(joints: Vec<Joint>) -> Self {
+        let bind_locals: Vec<Mat4> = joints.iter().map(|j| j.bind.to_matrix()).collect();
         let mut world_bind: Vec<Mat4> = Vec::with_capacity(joints.len());
         for (i, joint) in joints.iter().enumerate() {
-            let local = joint.bind.to_matrix();
+            let local = bind_locals[i];
             let world = match joint.parent {
                 Some(p) if p < i => mat4_mul(world_bind[p], local),
                 _ => local,
@@ -359,6 +366,7 @@ impl Skeleton {
             .collect();
         Self {
             joints,
+            bind_locals,
             inverse_bind,
             bind_positions,
         }
@@ -395,10 +403,7 @@ impl Skeleton {
         let n = self.joints.len();
         let mut world: Vec<Mat4> = Vec::with_capacity(n);
         for (i, joint) in self.joints.iter().enumerate() {
-            let local = local_poses
-                .get(i)
-                .copied()
-                .unwrap_or_else(|| joint.bind.to_matrix());
+            let local = local_poses.get(i).copied().unwrap_or(self.bind_locals[i]);
             let world_mat = match joint.parent {
                 Some(p) if p < i => mat4_mul(world[p], local),
                 _ => local,
@@ -433,8 +438,13 @@ impl Skeleton {
     // transform is its bind transform, so every skinning matrix is identity.
     // Used to seed a `SkeletonPose` before the first animation tick.
     pub fn bind_skinning_matrices(&self) -> Vec<Mat4> {
-        let locals: Vec<Mat4> = self.joints.iter().map(|j| j.bind.to_matrix()).collect();
-        self.skinning_matrices(&locals)
+        self.skinning_matrices(&self.bind_locals)
+    }
+
+    // The local bind matrix of every joint, in joint order. A pose sample
+    // seeds its output with these before applying the clip's tracks.
+    pub fn bind_locals(&self) -> &[Mat4] {
+        &self.bind_locals
     }
 }
 
@@ -517,11 +527,7 @@ impl AnimationClip {
         } else {
             t.clamp(0.0, self.duration)
         };
-        let mut locals: Vec<Mat4> = skeleton
-            .joints()
-            .iter()
-            .map(|j| j.bind.to_matrix())
-            .collect();
+        let mut locals: Vec<Mat4> = skeleton.bind_locals().to_vec();
         for track in &self.tracks {
             if track.joint < locals.len() {
                 locals[track.joint] = track.sample(local_t);

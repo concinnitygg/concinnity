@@ -89,7 +89,6 @@ impl AutoExposureSettings {
 // second rather than snapping. One instance lives on each backend that runs
 // auto-exposure.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // consumed by Metal + DirectX; Vulkan accepts-and-ignores.
 pub struct AutoExposureState {
     // EV currently applied to the scene. Updated each frame by
     // [`AutoExposureState::update`]; the backend reads it back out to set the
@@ -97,7 +96,6 @@ pub struct AutoExposureState {
     pub current_ev: f32,
 }
 
-#[allow(dead_code)] // see AutoExposureState: Metal + DirectX consumers.
 impl AutoExposureState {
     // Initial state. The current EV is the midpoint of the settings' clamp
     // range: a neutral starting point before the first GPU measurement
@@ -147,7 +145,6 @@ impl AutoExposureState {
 // `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
 // "below sensor floor" and weighted-in only when every other bin is empty,
 // so a mostly-black frame still produces a finite EV.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
     let mut weighted_sum = 0.0f64;

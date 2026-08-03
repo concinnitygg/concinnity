@@ -52,7 +52,7 @@ impl EditorHook {
     }
 
     // The full effective hide set resolved to this world's dense ids, for the
-    // per-frame `EditorHidden` publish. Names that no longer resolve (a
+    // per-frame `HiddenAssets` publish. Names that no longer resolve (a
     // renamed or deleted asset) simply drop out until they return.
     pub(super) fn effective_hidden_ids(&self) -> std::collections::BTreeSet<AssetId> {
         if self.hidden_assets.is_empty() && self.isolate.is_none() {

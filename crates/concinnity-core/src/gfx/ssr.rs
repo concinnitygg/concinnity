@@ -6,6 +6,8 @@
 // backend's shader; this module owns only the parameter math so it can be
 // unit-tested without a GPU.
 
+use crate::gfx::camera::{camera_to_world, view_ray_scale};
+
 use crate::gfx::render_types::SsrParams;
 
 // Upper bound on `intensity`. The resolve pass mixes the reflection over the
@@ -29,9 +31,6 @@ const MARCH_STEPS: f32 = 48.0;
 // wide enough to catch a crossing between two samples, tight enough not to
 // punch through thin geometry.
 const THICKNESS_SCALE: f32 = 2.5;
-
-// Floor on the aspect ratio so a degenerate viewport cannot divide by zero.
-const MIN_ASPECT: f32 = 1.0e-3;
 
 // Canonical roughness cut for sharp reflections: surfaces rougher than this get
 // no screen-space / ray-traced reflection. One value drives four shaders that
@@ -84,18 +83,15 @@ impl SsrSettings {
         prefilter_mip_count: f32,
     ) -> SsrParams {
         let stride = self.max_distance / MARCH_STEPS;
-        // Camera-to-world: the rotation already lives in `inv_view_rot`'s 3x3 (its
-        // translation column is identity); set the translation column to the world
-        // camera position to complete the rigid inverse of the view, so the resolve
-        // can rebuild the world-space surface position the reflection probe
-        // box-projects against. Mirrors `RtReflectionSettings::params`.
-        let mut inv_view = inv_view_rot;
-        inv_view[3] = [cam_pos[0], cam_pos[1], cam_pos[2], 1.0];
+        // The resolve rebuilds the world-space surface position the reflection
+        // probe box-projects against, so it needs the full camera-to-world.
+        let inv_view = camera_to_world(inv_view_rot, cam_pos);
+        let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsrParams {
             intensity: self.intensity,
             max_distance: self.max_distance,
-            tan_half_fov_y: (fov_y_radians * 0.5).tan(),
-            aspect: aspect.max(MIN_ASPECT),
+            tan_half_fov_y,
+            aspect,
             stride,
             thickness: stride * THICKNESS_SCALE,
             prefilter_mip_count,
@@ -108,13 +104,8 @@ impl SsrSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const IDENTITY: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
+    use crate::gfx::camera::MIN_ASPECT;
+    use crate::gfx::skinning::IDENTITY;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

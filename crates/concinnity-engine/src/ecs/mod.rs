@@ -33,8 +33,8 @@ pub use concinnity_core::ecs::{
 // Re-exported here to keep the historical `crate::ecs::*` paths for every reader
 // (engine systems and the editor's hook drive).
 pub use concinnity_core::ecs::{
-    CursorShape, CursorState, DesiredCursor, DropdownView, EditorHidden, ExecutionTrace, FlyCam,
-    FrameRateCap, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
+    CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
+    HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
     OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
     TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
 };

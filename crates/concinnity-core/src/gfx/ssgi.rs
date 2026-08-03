@@ -10,6 +10,8 @@
 // this module owns only the parameter math so it can be unit-tested without a
 // GPU.
 
+use crate::gfx::camera::view_ray_scale;
+
 use crate::gfx::render_types::SsgiParams;
 
 // Upper bound on `intensity`. The composite pass adds the gathered indirect
@@ -45,9 +47,6 @@ const MAX_STEPS: u32 = 64;
 // wide enough to catch a crossing between two samples, tight enough not to
 // punch through thin geometry.
 const THICKNESS_SCALE: f32 = 2.0;
-
-// Floor on the aspect ratio so a degenerate viewport cannot divide by zero.
-const MIN_ASPECT: f32 = 1.0e-3;
 
 // Clamped SSGI tunables resolved from the authored asset fields. Held by the
 // backend and turned into a per-frame [`SsgiParams`] once the camera is known.
@@ -102,11 +101,12 @@ impl SsgiSettings {
     // the gather pass needs to project a view-space ray point to a UV.
     pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsgiParams {
         let stride = self.max_distance / self.steps as f32;
+        let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsgiParams {
             intensity: self.intensity,
             max_distance: self.max_distance,
-            tan_half_fov_y: (fov_y_radians * 0.5).tan(),
-            aspect: aspect.max(MIN_ASPECT),
+            tan_half_fov_y,
+            aspect,
             stride,
             thickness: stride * THICKNESS_SCALE,
             rays: self.rays as f32,
@@ -118,6 +118,7 @@ impl SsgiSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gfx::camera::MIN_ASPECT;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

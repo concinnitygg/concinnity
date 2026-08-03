@@ -63,17 +63,13 @@ impl RangeAllocator {
         if size == 0 {
             return Some(0);
         }
-        let mut best: Option<usize> = None;
-        for (i, b) in self.free.iter().enumerate() {
-            if b.size < size {
-                continue;
-            }
-            match best {
-                Some(j) if self.free[j].size <= b.size => {}
-                _ => best = Some(i),
-            }
-        }
-        let i = best?;
+        let i = self
+            .free
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.size >= size)
+            .min_by_key(|(_, b)| b.size)?
+            .0;
         let block = self.free[i];
         if block.size == size {
             self.free.remove(i);
@@ -117,13 +113,11 @@ impl RangeAllocator {
     }
 
     // Total bytes available for allocation right now (pending frees excluded).
-    #[allow(dead_code)]
     pub fn free_bytes(&self) -> u64 {
         self.free.iter().map(|b| b.size).sum()
     }
 
     // Number of distinct free blocks -- a fragmentation gauge for diagnostics.
-    #[allow(dead_code)]
     pub fn free_block_count(&self) -> usize {
         self.free.len()
     }
