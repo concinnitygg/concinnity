@@ -23,4 +23,4 @@ runs:
           libglfw3 libglfw3-dev \
           libwayland-dev libwayland-bin wayland-protocols \
           libx11-dev libxkbcommon-dev libxrandr-dev libxinerama-dev \
-          libxcursor-dev libxi-dev libudev-dev
+          libxcursor-dev libxi-dev libudev-dev libdbus-1-dev
