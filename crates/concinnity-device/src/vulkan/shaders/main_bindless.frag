@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(location = 0) in vec3 frag_world_pos;
 layout(location = 1) in vec3 frag_normal;
@@ -476,7 +477,10 @@ void main() {
         return;
     }
 
-    vec4 albedo_samp = texture(tex_pool[od.albedo_index], frag_uv);
+    // `frag_object_id` is flat from gl_InstanceIndex, so a fragment wave that
+    // straddles two objects of one indirect draw carries two pool indices. That
+    // makes every `tex_pool` index non-uniform and `nonuniformEXT` mandatory.
+    vec4 albedo_samp = texture(tex_pool[nonuniformEXT(od.albedo_index)], frag_uv);
     // Alpha cutout: punch the texel out entirely so foliage and decal cards
     // stay in the opaque pass. Disabled at cutoff 0.
     if (od.alpha_cutoff > 0.0 && albedo_samp.a < od.alpha_cutoff) {
@@ -493,10 +497,11 @@ void main() {
     // Per-material emissive texture carries the colour (the scalar factor is a
     // uniform strength when a map is bound). Slot 0 is the "no map" sentinel.
     if (od.emissive_map_index != 0u) {
-        emissive *= texture(tex_pool[od.emissive_map_index], frag_uv).rgb;
+        emissive *= texture(tex_pool[nonuniformEXT(od.emissive_map_index)], frag_uv).rgb;
     }
 
-    vec3 norm_samp = decode_normal_map(texture(tex_pool[od.normal_index], frag_uv).rg);
+    vec3 norm_samp =
+        decode_normal_map(texture(tex_pool[nonuniformEXT(od.normal_index)], frag_uv).rg);
     mat3 TBN = mat3(
         normalize(frag_tangent),
         normalize(frag_bitangent),

@@ -163,8 +163,8 @@ pub(super) fn create_logical_device(
     let mut rq_probe = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
     let mut rt_bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
     // Descriptor indexing serves two independent needs, so it is probed
-    // unconditionally: the textured RT-reflection shader indexes the bindless
-    // pool with a per-pixel (non-uniform) hit index via `nonuniformEXT`
+    // unconditionally: every bindless shader indexes the texture pool with a
+    // non-uniform index via `nonuniformEXT`
     // (`shaderSampledImageArrayNonUniformIndexing`), and a sampler-constrained
     // device declares that pool update-after-bind
     // (`descriptorBindingSampledImageUpdateAfterBind`).
@@ -244,6 +244,15 @@ pub(super) fn create_logical_device(
     // GPU the renderer stays on SSR. `buffer_device_address` is core in 1.2, so
     // the three RT extensions are all that's added here.
     let rt_capable = rt_device_capable && upscaler_sdk.choice != ResolvedBackend::Xess;
+
+    // Non-uniform indexing gate for the bindless texture pool. The main scene
+    // pass indexes it per fragment, so this rides device support alone rather
+    // than RT capability: an RT-incapable GPU still runs that pass, and without
+    // the feature a divergent index is undefined. Never under XeSS, which
+    // forbids the descriptor-indexing struct alongside the `Vulkan12Features`
+    // it appends.
+    let want_nonuniform_indexing = di_probe.shader_sampled_image_array_non_uniform_indexing != 0
+        && upscaler_sdk.choice != ResolvedBackend::Xess;
 
     // Update-after-bind gate for the bindless texture pool. Enabled only on a
     // device whose plain per-stage sampler budget cannot seat the pool, which
@@ -357,7 +366,7 @@ pub(super) fn create_logical_device(
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
     let mut rq_enable = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
     let mut di_enable = vk::PhysicalDeviceDescriptorIndexingFeatures::default()
-        .shader_sampled_image_array_non_uniform_indexing(rt_capable)
+        .shader_sampled_image_array_non_uniform_indexing(want_nonuniform_indexing)
         .descriptor_binding_sampled_image_update_after_bind(want_update_after_bind);
     // The probed portability subset, reused as the enable struct so every
     // feature the driver supports is on. Its `p_next` still points into the
@@ -368,8 +377,8 @@ pub(super) fn create_logical_device(
     tracing::info!(
         "Vulkan device features: fp16={want_f16}, 16bit_storage={want_16bit}, \
          subgroup_extended_types={want_subgroup_ext}, buffer_device_address={want_bda}, \
-         ray_query={rt_capable}, update_after_bind={want_update_after_bind} \
-         (upscaler + RT enablers)"
+         ray_query={rt_capable}, nonuniform_indexing={want_nonuniform_indexing}, \
+         update_after_bind={want_update_after_bind} (upscaler + RT enablers)"
     );
 
     // XeSS patches a device-feature `pNext` chain (it adds a
@@ -430,7 +439,7 @@ pub(super) fn create_logical_device(
             .push_next(&mut accel_enable)
             .push_next(&mut rq_enable);
     }
-    if rt_capable || want_update_after_bind {
+    if want_nonuniform_indexing || want_update_after_bind {
         device_info = device_info.push_next(&mut di_enable);
     }
     if has_portability_subset {
