@@ -322,11 +322,7 @@ impl SettingsState {
                 // The composite FXAA flag rides PostProcessParams (pushed
                 // by update_post_process below), so refresh it from the
                 // re-derived AA mode before that push.
-                self.post_process.fxaa = if self.post_config.aa_mode.fxaa_enabled() {
-                    1.0
-                } else {
-                    0.0
-                };
+                self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
                 backend.apply_quality_settings(gsys::derive_quality_settings(&self.post_config));
                 // Auto-exposure may have flipped off; re-push the static
                 // post-process params so exposure reverts (mirrors the
@@ -343,27 +339,23 @@ impl SettingsState {
                 // under the new ceiling. The cadence is live (the scheduler
                 // reads it each frame); the resolution is restart-required,
                 // so it only updates the row label below.
-                self.shadow_map_size =
-                    quality_preset::clamp_shadow_map_size(self.authored_shadow_map_size, &ceiling);
+                self.shadow_map_size = self.authored_shadow_map_size.min(ceiling.shadow_map_size);
                 self.shadow_update =
                     quality_preset::clamp_shadow_update(self.authored_shadow_update, &ceiling);
                 backend.set_shadow_update(self.shadow_update);
                 // Shadow distance: live (the cascade-split math reads it
                 // each frame), so re-derive from the authored baseline and
                 // push it to the backend.
-                self.shadow_distance =
-                    quality_preset::clamp_shadow_distance(self.authored_shadow_distance, &ceiling);
+                self.shadow_distance = self.authored_shadow_distance.min(ceiling.shadow_distance);
                 backend.set_shadow_distance(self.shadow_distance);
                 // Shadow cascade count: live (the per-frame split + schedule
                 // read it), so re-derive from the authored baseline and push.
-                self.shadow_cascades =
-                    quality_preset::clamp_shadow_cascades(self.authored_shadow_cascades, &ceiling);
+                self.shadow_cascades = self.authored_shadow_cascades.min(ceiling.shadow_cascades);
                 backend.set_shadow_cascades(self.shadow_cascades);
                 // Anisotropy: restart-required, so re-derive from the
                 // authored baseline for the row label only (the sampler is
                 // built at init; the new degree takes effect next launch).
-                self.anisotropy =
-                    quality_preset::clamp_anisotropy(self.authored_anisotropy, &ceiling);
+                self.anisotropy = self.authored_anisotropy.min(ceiling.anisotropy);
 
                 // Persist the preset and drop the per-row quality overrides,
                 // so the next launch re-resolves them from the world +
@@ -560,16 +552,7 @@ impl SettingsState {
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.render_scale = settings::render_scale_at(next);
                     cfg.graphics.render_scale = Some(self.render_scale);
-                    // Render scale is ceiling-governed, so an explicit
-                    // choice opts the master preset out to Custom.
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 "upscale_backend" => {
@@ -634,17 +617,7 @@ impl SettingsState {
                         "auto_exposure" => cfg.graphics.auto_exposure = Some(on),
                         _ => {}
                     }
-                    // An explicit per-row quality change opts the master
-                    // preset out to Custom (no ceiling clamps the user's
-                    // choice), and updates the master row's label to match.
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     backend
                         .apply_quality_settings(gsys::derive_quality_settings(&self.post_config));
                     // Auto-exposure overwrites the backend's live exposure
@@ -684,14 +657,7 @@ impl SettingsState {
                         }
                         _ => {}
                     }
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     backend
                         .apply_quality_settings(gsys::derive_quality_settings(&self.post_config));
                     // The AA mode also drives the composite FXAA flag,
@@ -699,11 +665,7 @@ impl SettingsState {
                     // QualitySettings rebuild above. Refresh it and push it
                     // live (the TAA pass itself rebuilt via the call above).
                     if key == "aa_mode" {
-                        self.post_process.fxaa = if self.post_config.aa_mode.fxaa_enabled() {
-                            1.0
-                        } else {
-                            0.0
-                        };
+                        self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
                         backend.update_post_process(self.post_process);
                     }
                     Some(opts[next])
@@ -739,99 +701,57 @@ impl SettingsState {
                 }
                 // Shadow resolution: restart-required (the shadow map array
                 // is sized once at init), so persist + display only; the
-                // new size takes effect at the next launch. Preset-governed,
-                // so an explicit choice opts the master preset out to Custom.
+                // new size takes effect at the next launch.
                 "shadow_map_size" => {
                     let cur = settings::shadow_resolution_index(self.shadow_map_size);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_map_size = settings::shadow_resolution_at(next);
                     cfg.graphics.shadow_map_size = Some(self.shadow_map_size);
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 // Anisotropic filtering: restart-required (the scene
                 // sampler is built once at init), so persist + display only;
-                // the new degree takes effect at the next launch. Preset-
-                // governed, so an explicit choice opts the master preset out
-                // to Custom.
+                // the new degree takes effect at the next launch.
                 "anisotropy" => {
                     let cur = settings::anisotropy_index(self.anisotropy);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.anisotropy = settings::anisotropy_at(next);
                     cfg.graphics.anisotropy = Some(self.anisotropy);
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 // Shadow re-render cadence: live -- the cascade scheduler
-                // reads the policy each frame, so it applies on the next
-                // draw. Preset-governed, so an explicit choice flips the
-                // master preset to Custom.
+                // reads the policy each frame, so it applies on the next draw.
                 "shadow_update" => {
                     let cur = settings::shadow_update_index(self.shadow_update);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_update = settings::shadow_update_at(next);
                     backend.set_shadow_update(self.shadow_update);
                     cfg.graphics.shadow_update = Some(self.shadow_update);
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 // Shadow distance: live -- the per-frame cascade-split math
-                // reads it, so it applies on the next draw. Preset-governed,
-                // so an explicit choice flips the master preset to Custom.
+                // reads it, so it applies on the next draw.
                 "shadow_distance" => {
                     let cur = settings::shadow_distance_index(self.shadow_distance);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_distance = settings::shadow_distance_at(next);
                     backend.set_shadow_distance(self.shadow_distance);
                     cfg.graphics.shadow_distance = Some(self.shadow_distance);
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 // Shadow cascade count: live -- the per-frame split + schedule
-                // read it, so it applies on the next draw. Preset-governed, so
-                // an explicit choice flips the master preset to Custom.
+                // read it, so it applies on the next draw.
                 "shadow_cascades" => {
                     let cur = settings::shadow_cascades_index(self.shadow_cascades);
                     let next = settings::cycle(cur, opts.len(), cmd.op);
                     self.shadow_cascades = settings::shadow_cascades_at(next);
                     backend.set_shadow_cascades(self.shadow_cascades);
                     cfg.graphics.shadow_cascades = Some(self.shadow_cascades);
-                    self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
-                    cfg.graphics.quality_preset = Some(self.quality_preset);
-                    set_cached_row_label(
-                        &self.cycle_value_labels,
-                        ctx,
-                        "graphics_quality",
-                        self.quality_preset.name(),
-                    );
+                    self.opt_out_of_preset(ctx, cfg);
                     Some(opts[next])
                 }
                 // System / streaming restart rows. Restart-required (the
@@ -885,5 +805,18 @@ impl SettingsState {
             }
             self.settings_cache = Some(cfg);
         }
+    }
+
+    // An explicit per-row quality change opts the master preset out to Custom
+    // (no ceiling clamps the user's choice) and relabels the master row.
+    fn opt_out_of_preset(&mut self, ctx: &mut PipelineContext, cfg: &mut crate::config::Settings) {
+        self.quality_preset = crate::gfx::quality_preset::QualityPreset::Custom;
+        cfg.graphics.quality_preset = Some(self.quality_preset);
+        set_cached_row_label(
+            &self.cycle_value_labels,
+            ctx,
+            "graphics_quality",
+            self.quality_preset.name(),
+        );
     }
 }

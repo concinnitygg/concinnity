@@ -38,23 +38,11 @@ pub(super) fn def_hash(def: &Behavior) -> u64 {
 }
 
 pub(super) fn read_save(path: &Path) -> Option<BehaviorSave> {
-    let bytes = std::fs::read(path).ok()?;
-    match ciborium::from_reader(&bytes[..]) {
-        Ok(save) => Some(save),
-        Err(e) => {
-            tracing::warn!("BehaviorSystem: saved state unreadable, starting fresh: {e}");
-            None
-        }
-    }
+    crate::cbor_file::read(path, "BehaviorSystem: saved state")
 }
 
 pub(super) fn write_save(path: &Path, save: &BehaviorSave) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut bytes = Vec::new();
-    ciborium::into_writer(save, &mut bytes).map_err(std::io::Error::other)?;
-    std::fs::write(path, bytes)
+    crate::cbor_file::write(path, save)
 }
 
 #[cfg(test)]

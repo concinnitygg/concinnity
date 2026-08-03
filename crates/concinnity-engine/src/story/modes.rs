@@ -25,10 +25,7 @@ impl StorySystem {
         self.skip = !self.skip;
         self.mode_timer = 0.0;
         if self.skip && !self.typewriter.done() {
-            self.typewriter.shown = self.typewriter.full.len();
-            let text = self.typewriter.text();
-            let text_id = self.ids.as_ref().expect("resolved at init").text;
-            set_label(ctx, text_id, |l| l.content = text);
+            self.reveal_all(ctx);
         }
         self.render_quick_row(ctx);
     }
@@ -49,10 +46,7 @@ impl StorySystem {
         // not repaint the quick row over it.
         if self.page_mode() {
             if want && !self.typewriter.done() {
-                self.typewriter.shown = self.typewriter.full.len();
-                let text = self.typewriter.text();
-                let text_id = self.ids.as_ref().expect("resolved at init").text;
-                set_label(ctx, text_id, |l| l.content = text);
+                self.reveal_all(ctx);
             }
             self.render_quick_row(ctx);
         }
@@ -80,10 +74,7 @@ impl StorySystem {
         set_sprite(ctx, marker, |s| s.tint[3] = alpha);
         if skipping {
             if !self.typewriter.done() {
-                self.typewriter.shown = self.typewriter.full.len();
-                let text = self.typewriter.text();
-                let text_id = self.ids.as_ref().expect("resolved at init").text;
-                set_label(ctx, text_id, |l| l.content = text);
+                self.reveal_all(ctx);
             }
             self.mode_timer += dt;
             if self.mode_timer >= SKIP_PAGE_SECS {

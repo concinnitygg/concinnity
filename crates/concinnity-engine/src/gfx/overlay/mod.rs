@@ -24,10 +24,10 @@ use std::time::Instant;
 mod hud_layout;
 mod widgets;
 
-// Reserved draw-layer range for the `cn editor` HUD's per-frame overrides:
-// far above any screen-stack layer (authored layer band ~4M at most), so the
-// editor panels always occlude world screens while keeping their own order.
-const EDITOR_LAYER_BASE: i32 = i32::MAX / 2;
+// Base of the reserved draw-layer band `HudLayers` overrides sit in: far above
+// any screen-stack layer (authored layer band ~4M at most), so an overriding
+// producer always occludes world screens while keeping its own relative order.
+const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
 
 // Everything the overlay build needs from GraphicsSystem's init: the loaded
 // font atlases, the sprite-texture slot map, the HUD chip id lists, and the
@@ -151,13 +151,10 @@ fn build_overlay_frame(
     // active screen, no editor), the sort below is skipped and draw order is
     // pure insertion order, as before.
     let empty_layers = std::collections::HashMap::new();
-    let screen_layers = ctx
-        .resource::<crate::ecs::ScreenStack>()
-        .map(|s| s.layers.clone())
-        .unwrap_or_default();
+    let screen_layers = ctx.resource::<crate::ecs::ScreenStack>().map(|s| &s.layers);
     let mut effective_layers: std::collections::HashMap<AssetId, i32> =
         std::collections::HashMap::new();
-    if !screen_layers.is_empty() {
+    if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
         for s in ctx.query::<Sprite>() {
             if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id)) {
                 effective_layers.insert(s.asset_id, *layer);
@@ -176,7 +173,7 @@ fn build_overlay_frame(
     }
     if let Some(overrides) = ctx.resource::<crate::ecs::HudLayers>() {
         for (id, layer) in &overrides.0 {
-            effective_layers.insert(*id, EDITOR_LAYER_BASE + layer);
+            effective_layers.insert(*id, HUD_OVERRIDE_LAYER_BASE + layer);
         }
     }
     let hud_layers = &effective_layers;
@@ -665,7 +662,7 @@ mod tests {
         // The screen sprite sorts below the editor panel, which sits in the
         // reserved band regardless of the screen's own layer.
         assert_eq!(frame.calls[0].layer, 7);
-        assert_eq!(frame.calls[1].layer, EDITOR_LAYER_BASE + 3);
+        assert_eq!(frame.calls[1].layer, HUD_OVERRIDE_LAYER_BASE + 3);
     }
 
     // With no screen stack and no editor overrides nothing is layered, so the
@@ -729,7 +726,7 @@ mod tests {
                 2,
             )])));
         let frame = w.build(0.0);
-        let field_layer = EDITOR_LAYER_BASE + 2;
+        let field_layer = HUD_OVERRIDE_LAYER_BASE + 2;
         assert!(
             frame.calls.iter().any(|c| c.layer == field_layer),
             "the field's calls lift with it"

@@ -24,7 +24,6 @@ use crate::ecs::asset_id::AssetId;
 // `dead_code` allow: the only constructor is the binary-only debug module,
 // so `cargo check --lib` sees the struct as unconstructed.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CrossfadeRequest {
     pub target: AssetId,
     pub weights: Vec<f32>,
@@ -37,7 +36,6 @@ pub struct CrossfadeRequest {
 //
 // `dead_code` allow: same rationale as `CrossfadeRequest` above.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct SetParamRequest {
     pub target: AssetId,
     pub name: String,
@@ -65,7 +63,6 @@ pub struct GraphStateReport {
 // `dead_code` allow: the only producer is the binary-only `crate::debug`
 // module (declared by main.rs, not lib.rs), so `cargo check --lib` sees the
 // variants as unconstructed.
-#[allow(dead_code)]
 pub enum AnimCommand {
     Crossfade {
         req: CrossfadeRequest,
@@ -94,7 +91,6 @@ pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 // used regardless (an unrelated panic must not silently drop commands).
 //
 // `dead_code` allow: the only producer is the binary-only debug module.
-#[allow(dead_code)]
 pub fn enqueue(cmd: AnimCommand) {
     let mut q = match QUEUE.lock() {
         Ok(g) => g,

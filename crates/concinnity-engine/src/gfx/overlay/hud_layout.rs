@@ -35,13 +35,12 @@ pub(super) fn apply_label_layout(
         .iter()
         .flat_map(|c| c.layout(|id| boxes.get(&id).copied()))
         .collect();
-    for p in placements {
-        for label in ctx.query_mut::<TextLabel>() {
-            if label.asset_id == p.id {
-                label.x = p.x;
-                label.y = p.y;
-                break;
-            }
+    let placed: std::collections::HashMap<AssetId, (f32, f32)> =
+        placements.into_iter().map(|p| (p.id, (p.x, p.y))).collect();
+    for label in ctx.query_mut::<TextLabel>() {
+        if let Some(&(x, y)) = placed.get(&label.asset_id) {
+            label.x = x;
+            label.y = y;
         }
     }
 }
@@ -84,12 +83,9 @@ pub(super) fn position_debug_hud(
         // Right-anchor the box (its left edge sits `pad` left of the text
         // origin) and place its top at the running y.
         let x = (win_w - MARGIN - b.w + b.pad).max(MARGIN);
-        for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id {
-                l.x = x;
-                l.y = y + b.top_inset;
-                break;
-            }
+        if let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) {
+            l.x = x;
+            l.y = y + b.top_inset;
         }
         y += b.h + GAP;
     }
@@ -125,12 +121,9 @@ pub(super) fn position_stat_hud(
         };
         // The box's left edge sits `pad` left of the text origin, so offset the
         // origin by `pad` to line the box up at the running x.
-        for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id {
-                l.x = x + b.pad;
-                l.y = MARGIN + b.top_inset;
-                break;
-            }
+        if let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) {
+            l.x = x + b.pad;
+            l.y = MARGIN + b.top_inset;
         }
         x += b.w + GAP;
     }

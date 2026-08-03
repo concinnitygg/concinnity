@@ -7,12 +7,12 @@ use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
 use crate::gfx::backend::FrameParams;
-use crate::gfx::{draw_list, scene_flow, settings};
+use crate::gfx::{draw_list, scene_flow, setting_action, settings};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
 use crate::gfx::settings_system::rows::{
-    DISABLED_ROW_COLOR, capture_row_labels, cycle_next_key_of, expand_dim_set, rebind_key_of,
-    set_label_content, set_rows_grayed, set_sprite_x, slider_key_of,
+    DISABLED_ROW_COLOR, capture_row_labels, expand_dim_set, set_label_content, set_rows_grayed,
+    set_sprite_x,
 };
 
 // The model matrix pushed for an editor-hidden object's draw slots: zero
@@ -234,14 +234,16 @@ impl GraphicsSystem {
                 // and a scene jump has primed the flow below.
 
                 // Advance any in-flight scene fade, sourcing visibility from
-                // the live per-entity components (the snapshot is rebuilt each
-                // frame the flow exists). The flow is the shared
+                // the live per-entity components. An idle fade is a no-op in
+                // `tick_transitions`, so the snapshot is rebuilt only while a
+                // transition is actually running. The flow is the shared
                 // `ActiveSceneFlow` resource SettingsSystem also jumps; its
                 // `epoch` is the shared clock for the fade timing.
-                let flow_active = ctx
+                let fading = ctx
                     .resource::<crate::ecs::ActiveSceneFlow>()
-                    .is_some_and(|f| f.flow.is_some());
-                if flow_active {
+                    .and_then(|f| f.flow.as_ref())
+                    .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
+                if fading {
                     let (draws, scenes) = super::scene::decomposed_visibility_snapshot(ctx);
                     if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
                         let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
@@ -356,7 +358,7 @@ impl GraphicsSystem {
             .collect();
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let Some(key) = slider_key_of(&r.action) else {
+            let Some(key) = setting_action::key_with_verb(&r.action, "drag") else {
                 continue;
             };
             let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
@@ -372,9 +374,12 @@ impl GraphicsSystem {
                 value_id,
             });
         }
-        // Sync each slider's handle + value label to its live value.
+        // Sync each slider's handle + value label to its live value. One
+        // persisted snapshot serves every controls slider (they read the store,
+        // not the render params), so the capture never re-reads it per row.
+        let persisted = self.persisted_settings();
         for s in &sliders {
-            let Some(value) = self.slider_current_value(&s.key) else {
+            let Some(value) = self.slider_current_value(&s.key, &persisted) else {
                 continue;
             };
             let frac = settings::slider_fraction(&s.key, value).unwrap_or(0.0);
@@ -397,7 +402,9 @@ impl GraphicsSystem {
         let mut rows: Vec<RebindViz> = Vec::new();
         let mut pad_rows: Vec<super::PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let (Some(key), Some(value_id)) = (rebind_key_of(&r.action), r.label) else {
+            let (Some(key), Some(value_id)) =
+                (setting_action::key_with_verb(&r.action, "rebind"), r.label)
+            else {
                 continue;
             };
             // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
@@ -429,7 +436,7 @@ impl GraphicsSystem {
     pub(super) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
         let mut labels = std::collections::HashMap::new();
         for r in ctx.query::<HitRegion>() {
-            if let (Some(key), Some(value_id)) = (cycle_next_key_of(&r.action), r.label) {
+            if let (Some(key), Some(value_id)) = (setting_action::cycle_key(&r.action), r.label) {
                 labels.insert(key.to_string(), value_id);
             }
         }
@@ -528,8 +535,9 @@ impl GraphicsSystem {
     }
 
     // The current user-facing value of a slider setting, derived from the live
-    // post-process params. `None` for a key this system does not own.
-    fn slider_current_value(&self, key: &str) -> Option<f32> {
+    // post-process params, or from `persisted` for the settings this system
+    // does not hold live. `None` for a key it does not own at all.
+    fn slider_current_value(&self, key: &str, persisted: &crate::config::Settings) -> Option<f32> {
         let stored = match key {
             "exposure" => self.post_process.exposure,
             "bloom_intensity" => self.post_process.bloom_intensity,
@@ -550,24 +558,21 @@ impl GraphicsSystem {
             "auto_exposure_speed" => self.post_config.auto_exposure_speed,
             // The controls sliders live in the controls store, not the render
             // params; read the persisted value or the engine default.
-            "mouse_sensitivity" => crate::config::Settings::load()
+            "mouse_sensitivity" => persisted
                 .controls
                 .mouse_sensitivity
                 .unwrap_or(settings::DEFAULT_MOUSE_SENSITIVITY),
-            "gamepad_look_sensitivity" => crate::config::Settings::load()
+            "gamepad_look_sensitivity" => persisted
                 .controls
                 .gamepad_look_sensitivity
                 .unwrap_or(settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY),
-            "gamepad_deadzone" => crate::config::Settings::load()
+            "gamepad_deadzone" => persisted
                 .controls
                 .gamepad_deadzone
                 .unwrap_or(settings::DEFAULT_GAMEPAD_DEADZONE),
             // FOV lives in the graphics store (degrees); read the persisted value
             // or the authored default.
-            "fov" => crate::config::Settings::load()
-                .graphics
-                .fov
-                .unwrap_or(settings::DEFAULT_FOV),
+            "fov" => persisted.graphics.fov.unwrap_or(settings::DEFAULT_FOV),
             _ => return None,
         };
         // Invert `slider_apply_value` to the user-facing value (exposure: 2^ev ->

@@ -76,9 +76,11 @@ pub mod streaming_system;
 // compiled only into the unit-test binary. Implements concinnity-render's
 // RenderBackend seam on a client-local type and carries a `config::Settings`,
 // so it stays with the GraphicsSystem tests that consume it.
+pub(crate) mod look_controls;
 #[cfg(test)]
 pub(crate) mod mock_backend;
 pub(crate) mod quality_preset;
+pub(crate) mod setting_action;
 pub(crate) mod settings;
 // Handle -> asset id bridge for SkinnedMesh correlation references, published by
 // GraphicsSystem and read by the animation / third-person systems.

@@ -42,10 +42,7 @@ impl StorySystem {
             self.render_page(ctx);
             // Editing flow: show the whole revised page at once rather than
             // re-typing it out.
-            self.typewriter.shown = self.typewriter.full.len();
-            let text = self.typewriter.text();
-            let text_id = self.ids.as_ref().expect("resolved at init").text;
-            set_label(ctx, text_id, |l| l.content = text);
+            self.reveal_all(ctx);
         } else {
             // The node lost its pages (and any open menu no longer applies):
             // re-enter it fresh so gates and fall-through resolve.

@@ -452,10 +452,10 @@ impl BehaviorSystem {
                 BehaviorSource::Variable(name) => self.var_table.slot_of(name),
                 _ => None,
             };
-            let def = self.programs[i].def.clone();
+            let def = &self.programs[i].def;
             for instance in &mut self.instances[i] {
                 if instance.due(
-                    &def,
+                    def,
                     &self.vars,
                     var_slot,
                     dt,

@@ -13,6 +13,7 @@
 // entry to the `define_systems!` table in `ecs::registry` -- the table is the
 // registry AND the schedule (table order is run order).
 
+pub(crate) mod by_asset_id;
 pub(crate) mod decompose;
 mod registry;
 pub mod schedule;
@@ -257,20 +258,17 @@ impl World {
         self.components.push(component)
     }
 
-    #[allow(dead_code)]
     pub fn add_component<C: Into<ComponentAsset>>(&mut self, c: C) {
         self.components.push(c.into());
     }
 
     // Remove and drop every component of type C. Used by `cn editor` to suppress
     // the world's baked-in `DebugHud` before start, since the editor HUD's own
-    // F1 toggle replaces it. Cross-crate caller, so unused from the client itself.
-    #[allow(dead_code)]
+    // F1 toggle replaces it.
     pub fn remove_all<C: ComponentSlot>(&mut self) {
         let _ = self.components.drain::<C>();
     }
 
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.components.is_empty() && self.systems.is_empty()
     }
@@ -300,19 +298,16 @@ impl World {
                 .any(|s| matches!(s, SystemAsset::GraphicsSystem(_)))
     }
 
-    #[allow(dead_code)]
     pub fn component_count(&self) -> usize {
         self.components.len()
     }
 
-    #[allow(dead_code)]
     pub fn system_count(&self) -> usize {
         self.systems.len()
     }
 
     // Iterate every stored component of a given type. Mirrors
     // `PipelineContext::query`; useful in tests that hold a `World` directly.
-    #[allow(dead_code)]
     pub fn query<C: ComponentSlot>(&self) -> std::slice::Iter<'_, C> {
         C::slot(&self.components).iter()
     }
@@ -322,7 +317,6 @@ impl World {
     // than a per-system `PipelineContext`, namely the `DebugHook::tick`
     // drive, which applies hot-reload skeleton-shape changes to the ECS-owned
     // `SkeletonPose` components from outside the system step.
-    #[allow(dead_code)]
     pub fn query_mut<C: ComponentSlot>(&mut self) -> std::slice::IterMut<'_, C> {
         self.components.values_mut::<C>().iter_mut()
     }
@@ -331,7 +325,6 @@ impl World {
     // returning its minted entity. Mirror of `PipelineContext::push`; used by
     // the `DebugHook::tick` drive to insert `Prop`s added by a world.jsonl
     // hot-reload so subsequent systems see them.
-    #[allow(dead_code)]
     pub fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
         self.components.push_typed(c)
     }
@@ -339,7 +332,6 @@ impl World {
     // Borrow one entity's component, for code holding a `World` directly.
     // Mirror of `PipelineContext::get`; the editor's gizmo drive reads the
     // selected entity's transforms through this.
-    #[allow(dead_code)]
     pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
         self.components.get::<C>(entity)
     }
@@ -347,7 +339,6 @@ impl World {
     // Mutably borrow one entity's component. Mirror of
     // `PipelineContext::get_mut`; the editor's gizmo drag moves the selected
     // entity's `Transform` through this.
-    #[allow(dead_code)]
     pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
         self.components.get_mut::<C>(entity)
     }
@@ -355,7 +346,6 @@ impl World {
     // Add a component to an existing entity. Mirror of
     // `PipelineContext::insert`; the editor's billboard drive seeds a
     // `Transform` onto non-rendering entities through this.
-    #[allow(dead_code)]
     pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
         self.components.insert_typed(entity, c);
     }
@@ -363,7 +353,6 @@ impl World {
     // Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
     // guards name-index resolves against entities despawned by the start-time
     // drains (Window, GraphicsConfig, Scene, ...).
-    #[allow(dead_code)]
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.components.is_alive(entity)
     }
@@ -371,7 +360,6 @@ impl World {
     // Read-only join over two component types, for code holding a `World`
     // directly (the decomposition round-trip tests). Mirror of
     // `PipelineContext::join2`.
-    #[allow(dead_code)]
     pub fn join2<A: ComponentSlot, B: ComponentSlot>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> {
@@ -380,7 +368,6 @@ impl World {
 
     // Borrow the event queue for event type E, if any have been sent. Mirror of
     // `PipelineContext::events`, for code holding a `World` directly (tests).
-    #[allow(dead_code)]
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
         self.resources.get::<EventStore>()?.get::<E>()
     }
@@ -388,7 +375,6 @@ impl World {
     // Mutably borrow (creating if absent) the event queue for event type E.
     // Mirror of `PipelineContext::events_mut`, for code holding a `World`
     // directly: tests, and the editor's debug-driven command injection.
-    #[allow(dead_code)]
     pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
         if !self.resources.contains::<EventStore>() {
             self.resources.insert(EventStore::new());
@@ -399,7 +385,6 @@ impl World {
             .get_mut_or_create::<E>()
     }
 
-    #[allow(dead_code)]
     pub fn systems(&self) -> &[SystemAsset] {
         &self.systems
     }
@@ -420,7 +405,6 @@ impl World {
     // sample or when no `MemoryBudget` / RSS is available (the valve is inert).
     // Read by the `cn debug` server's `streaming` command; unused from the
     // client itself.
-    #[allow(dead_code)]
     pub fn streaming_pressure(&self) -> Option<crate::gfx::streaming_system::StreamingPressure> {
         self.resources
             .get::<crate::gfx::streaming_system::StreamingPressure>()
@@ -439,14 +423,12 @@ impl World {
     // The process thread + memory budgets App published at start. `None` before
     // `App::start` installs them. Read by the `cn debug` server's `budget`
     // command; unused from the client itself.
-    #[allow(dead_code)]
     pub fn thread_budget(&self) -> Option<crate::app::budget::ThreadBudget> {
         self.resources
             .get::<crate::app::budget::ThreadBudget>()
             .copied()
     }
 
-    #[allow(dead_code)]
     pub fn memory_budget(&self) -> Option<crate::app::budget::MemoryBudget> {
         self.resources
             .get::<crate::app::budget::MemoryBudget>()
@@ -458,8 +440,7 @@ impl World {
     // the rebuilt world (via a `PendingBackend` resource) so the edit applies
     // without recreating the OS window / re-initialising the GPU device. `None`
     // when the world never built a backend (or it was already yielded).
-    // Cross-crate caller (the editor), so unused from the client itself.
-    #[allow(dead_code)]
+    //
     pub fn take_render_backend(&mut self) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
         ActiveRenderBackend::take(&mut self.resources)
     }
@@ -469,8 +450,7 @@ impl World {
     // through a system's init-captured bookkeeping, so it needs both at once.
     // The backend is `None` while a step has it taken (never the case between
     // ticks, where the drive runs) or when no backend was built.
-    // Cross-crate caller (the editor), so unused from the client itself.
-    #[allow(dead_code)]
+    //
     pub fn systems_and_render_backend(
         &mut self,
     ) -> (
@@ -496,7 +476,6 @@ impl World {
     // `cn editor` drive publishes `MenuOverride` through this each frame; it also
     // stands in for the GraphicsSystem-published resources (e.g. `MenuActive`) in
     // system tests that drive a later system directly without a GraphicsSystem.
-    #[allow(dead_code)]
     pub fn insert_resource<T: std::any::Any>(&mut self, value: T) {
         self.resources.insert(value);
     }
@@ -511,7 +490,6 @@ impl World {
     // Withdraw a published singleton resource. Presence-keyed protocols (the
     // `cn editor` drive's `TraceRequest`) turn off by removing their resource,
     // so the reading system pays nothing beyond noticing the absence.
-    #[allow(dead_code)]
     pub fn remove_resource<T: std::any::Any>(&mut self) -> Option<T> {
         self.resources.remove::<T>()
     }
@@ -520,14 +498,12 @@ impl World {
     // `DebugHook::tick` drive match out a `&mut GraphicsSystem` /
     // `&mut AnimationSystem` (the same enum-match `systems()` already serves
     // read-only) to drive hot-reload from outside the per-system step.
-    #[allow(dead_code)]
     pub fn systems_mut(&mut self) -> &mut [SystemAsset] {
         &mut self.systems
     }
 
     // Re-serialize the world's components as blob defs. Systems are internal
     // and never serialized, so they do not appear here.
-    #[allow(dead_code)]
     pub fn component_tags(&self) -> Vec<u8> {
         self.components.component_tags()
     }
@@ -600,7 +576,6 @@ impl World {
 
     // Per-frame profiling data: system CPU timings and render-backend stats
     // from the most recently completed frame.
-    #[allow(dead_code)]
     pub fn profile(&self) -> &FrameProfile {
         &self.profile
     }

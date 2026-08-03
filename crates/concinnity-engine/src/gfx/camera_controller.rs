@@ -6,9 +6,7 @@
 // turns mouse/keyboard input into a `Camera3D` orientation and a movement
 // intent for the player's `RigidBody`.
 
-use crate::assets::{
-    Camera3D, CameraController, ControlsCommand, FrameInput, Interactable, Transform,
-};
+use crate::assets::{Camera3D, CameraController, FrameInput, Interactable, Transform};
 use crate::ecs::{Entity, PipelineContext, StepResult, System};
 use std::time::Instant;
 
@@ -66,7 +64,6 @@ impl Camera3DSystem {
     // cn debug `camera-set` command) teleports the camera, so free-fly velocity
     // integration does not drift the new pose on the next step. Only reached
     // from the binary-only debug drive, hence dead in a `--lib` build.
-    #[allow(dead_code)]
     pub fn reset_velocity(&mut self) {
         self.velocity = [0.0; 3];
     }
@@ -76,21 +73,13 @@ impl System for Camera3DSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.last_step = Some(Instant::now());
 
-        // Persisted settings-menu choices override the camera's authored values.
-        // `None` keeps the authored value. Sensitivity lives on this controller;
-        // FOV lives on the Camera3D component, so it is written there directly.
-        let settings = crate::config::Settings::load();
-        if let Some(s) = settings.controls.mouse_sensitivity {
-            self.mouse_sensitivity = s;
-        }
-        if let Some(s) = settings.controls.gamepad_look_sensitivity {
-            self.gamepad_look_sensitivity = s;
-        }
-        if let Some(fov) = settings.graphics.fov {
-            for camera in ctx.query_mut::<Camera3D>() {
-                camera.fov_y_degrees = fov;
-            }
-        }
+        crate::gfx::look_controls::apply_persisted(
+            ctx,
+            crate::gfx::look_controls::Look {
+                mouse_sensitivity: &mut self.mouse_sensitivity,
+                gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
+            },
+        );
 
         // Collect interact targets: every entity carrying the Interactable tag.
         self.interactable_entities = ctx
@@ -108,25 +97,17 @@ impl System for Camera3DSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Apply any live controls change (settings-menu sensitivity / FOV slider)
-        // sent this tick by GraphicsSystem, which runs first. The last one this
-        // tick wins. Sensitivity updates this controller immediately; FOV lives on
-        // the Camera3D component, so it is captured here and written in the camera
-        // loop below (which holds the mutable Camera3D borrow).
-        let mut pending_fov: Option<f32> = None;
-        if let Some(events) = ctx.events::<ControlsCommand>() {
-            for cmd in events.read(&mut self.controls_cursor) {
-                if let Some(s) = cmd.mouse_sensitivity {
-                    self.mouse_sensitivity = s;
-                }
-                if let Some(s) = cmd.gamepad_look_sensitivity {
-                    self.gamepad_look_sensitivity = s;
-                }
-                if let Some(fov) = cmd.fov_y_degrees {
-                    pending_fov = Some(fov);
-                }
-            }
-        }
+        // Live settings-menu changes sent this tick by GraphicsSystem, which runs
+        // first. FOV is written in the camera loop below, which holds the
+        // mutable Camera3D borrow.
+        let pending_fov = crate::gfx::look_controls::drain_commands(
+            ctx,
+            &mut self.controls_cursor,
+            crate::gfx::look_controls::Look {
+                mouse_sensitivity: &mut self.mouse_sensitivity,
+                gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
+            },
+        );
 
         // Read (not drain) the input snapshot deposited by GraphicsSystem this
         // frame, so UiInputSystem can read the same snapshot (e.g. for a pause

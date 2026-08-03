@@ -196,18 +196,20 @@ impl System for InputSystem {
         let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
         let gameplay = (!menu_active && !screen_captures) || fly;
 
-        // Both readers query (not drain) the snapshot, so clear the previous
-        // frame's first.
-        let _ = ctx.drain::<FrameInput>();
         let frame_input = FrameInput {
             viewport: [vp_w, vp_h],
             ..compose_frame_input(&raw, &pad, self.map, nav, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI
-        // systems still drain/query.
+        // systems still query. Both readers query rather than drain, so the
+        // column carries one entity for the world's life and each frame
+        // overwrites it in place.
         ctx.insert_resource(frame_input.clone());
-        ctx.push(frame_input);
+        match ctx.query_mut::<FrameInput>().next() {
+            Some(slot) => *slot = frame_input,
+            None => ctx.push(frame_input),
+        }
 
         StepResult::Continue
     }

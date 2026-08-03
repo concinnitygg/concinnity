@@ -13,3 +13,4 @@ mod file_range;
 pub(crate) mod mesh;
 pub(crate) mod shader;
 pub(crate) mod texture;
+mod worker;

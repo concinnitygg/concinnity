@@ -39,6 +39,7 @@ pub use concinnity_core::paths::set_writable_state_dir;
 pub use concinnity_device::precompile::{
     Report as ShaderPrecompileReport, precompile_builtin_shaders,
 };
+pub(crate) mod cbor_file;
 pub mod config;
 pub mod gfx;
 pub(crate) mod hud;

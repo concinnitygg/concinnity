@@ -4,6 +4,9 @@
 // driven by Camera3DSystem against the free functions in client/camera.rs;
 // this struct exists for future input-state captures.
 
+// Unreferenced until a stateful controller replaces Camera3DSystem's stateless
+// drive; the allows go away with the first construction site. The module is
+// `pub(crate)`, so these are genuinely unreachable rather than public API.
 #[allow(dead_code)]
 pub struct FpsController {
     // Movement speed in world units per second.

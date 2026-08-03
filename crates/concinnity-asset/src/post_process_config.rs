@@ -234,6 +234,12 @@ impl AaMode {
     pub fn fxaa_enabled(self) -> bool {
         !matches!(self, AaMode::Off)
     }
+
+    /// The composite's FXAA gate as the `0.0` / `1.0` flag `PostProcessParams`
+    /// carries to the shader.
+    pub fn fxaa_flag(self) -> f32 {
+        if self.fxaa_enabled() { 1.0 } else { 0.0 }
+    }
 }
 
 /// Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`.

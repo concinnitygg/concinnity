@@ -337,9 +337,6 @@ impl StorySystem {
         // Overlays open from page mode only; restore the covered page in
         // full (it was already read, so no re-typing).
         self.render_page(ctx);
-        self.typewriter.shown = self.typewriter.full.len();
-        let text = self.typewriter.text();
-        let text_id = self.ids.as_ref().expect("resolved at init").text;
-        set_label(ctx, text_id, |l| l.content = text);
+        self.reveal_all(ctx);
     }
 }

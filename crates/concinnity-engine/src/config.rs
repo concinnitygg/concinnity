@@ -295,27 +295,15 @@ impl Settings {
     // Read settings from `path`. Split from `load` so the serialize-read path
     // can be tested against a sandbox file, never the developer's real one.
     fn load_from(path: &Path) -> Self {
-        match std::fs::read(path) {
-            Ok(bytes) => ciborium::from_reader(&bytes[..]).unwrap_or_else(|e| {
-                // A truncated / incompatible file: use defaults rather than
-                // wiping silently mid-run (CBOR + serde defaults make this rare).
-                tracing::warn!("settings store unreadable, using defaults: {e}");
-                Settings::default()
-            }),
-            // No settings file yet: start from defaults.
-            Err(_) => Settings::default(),
-        }
+        // No settings file yet, or a truncated / incompatible one: start from
+        // defaults rather than wiping silently mid-run.
+        crate::cbor_file::read(path, "settings store").unwrap_or_default()
     }
 
     // Write settings to `path`. Split from `save` so the serialize-write path
     // can be tested against a sandbox file, never the developer's real one.
     fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut bytes = Vec::new();
-        ciborium::into_writer(self, &mut bytes).map_err(std::io::Error::other)?;
-        std::fs::write(path, bytes)
+        crate::cbor_file::write(path, self)
     }
 }
 

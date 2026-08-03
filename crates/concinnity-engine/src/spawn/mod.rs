@@ -25,14 +25,20 @@ use std::time::Instant;
 // Resolve a request target to a live entity. A named target goes through the
 // world's name index; an entity-addressed one is already what the caller means,
 // including entities that never had a name.
-fn resolve_target(
-    by_name: &std::collections::BTreeMap<AssetId, crate::ecs::Entity>,
-    target: Target,
-) -> Option<crate::ecs::Entity> {
+fn resolve_target(ctx: &PipelineContext, target: Target) -> Option<crate::ecs::Entity> {
     match target {
-        Target::Name(name) => by_name.get(&name).copied(),
+        Target::Name(name) => resolve_name(ctx, name),
         Target::Entity(entity) => Some(entity),
     }
+}
+
+// The entity a decomposed name resolves to. Borrows the name index only for
+// the lookup, so the caller is free to take `&mut ctx` immediately after.
+fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<crate::ecs::Entity> {
+    ctx.resource::<crate::ecs::decompose::EntityByName>()?
+        .0
+        .get(&name)
+        .copied()
 }
 
 mod despawn;
@@ -122,17 +128,9 @@ impl SpawnSystem {
                 .collect(),
             None => Vec::new(),
         };
-        if !despawn_targets.is_empty() {
-            // Clone the name index out so the ctx borrow ends before the
-            // despawns, which take &mut ctx.
-            let by_name = ctx
-                .resource::<crate::ecs::decompose::EntityByName>()
-                .map(|n| n.0.clone())
-                .unwrap_or_default();
-            for target in despawn_targets {
-                if let Some(entity) = resolve_target(&by_name, target) {
-                    despawn::despawn_subtree(ctx, backend, entity);
-                }
+        for target in despawn_targets {
+            if let Some(entity) = resolve_target(ctx, target) {
+                despawn::despawn_subtree(ctx, backend, entity);
             }
         }
 
@@ -148,15 +146,9 @@ impl SpawnSystem {
                 .collect(),
             None => Vec::new(),
         };
-        if !vis_reqs.is_empty() {
-            let by_name = ctx
-                .resource::<crate::ecs::decompose::EntityByName>()
-                .map(|n| n.0.clone())
-                .unwrap_or_default();
-            for req in vis_reqs {
-                if let Some(entity) = resolve_target(&by_name, req.target) {
-                    visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
-                }
+        for req in vis_reqs {
+            if let Some(entity) = resolve_target(ctx, req.target) {
+                visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
             }
         }
 
@@ -173,23 +165,17 @@ impl SpawnSystem {
                 .collect(),
             None => Vec::new(),
         };
-        if !reparents.is_empty() {
-            let by_name = ctx
-                .resource::<crate::ecs::decompose::EntityByName>()
-                .map(|n| n.0.clone())
-                .unwrap_or_default();
-            for req in reparents {
-                let Some(child) = resolve_target(&by_name, req.child) else {
-                    continue;
-                };
-                let parent = req.parent.and_then(|p| resolve_target(&by_name, p));
-                // A named-but-unresolved parent skips, so a typo never
-                // silently detaches the child to a root.
-                if req.parent.is_some() && parent.is_none() {
-                    continue;
-                }
-                draw_list::reparent(ctx, child, parent);
+        for req in reparents {
+            let Some(child) = resolve_target(ctx, req.child) else {
+                continue;
+            };
+            let parent = req.parent.and_then(|p| resolve_target(ctx, p));
+            // A named-but-unresolved parent skips, so a typo never
+            // silently detaches the child to a root.
+            if req.parent.is_some() && parent.is_none() {
+                continue;
             }
+            draw_list::reparent(ctx, child, parent);
         }
 
         // Runtime entity spawn: drain SpawnRequest events, resolve each
@@ -207,37 +193,31 @@ impl SpawnSystem {
                 .collect(),
             None => Vec::new(),
         };
-        if !spawn_reqs.is_empty() {
-            let by_name = ctx
-                .resource::<crate::ecs::decompose::EntityByName>()
-                .map(|n| n.0.clone())
-                .unwrap_or_default();
-            for req in spawn_reqs {
-                let Some(&template) = by_name.get(&req.template) else {
-                    continue;
-                };
-                // A skinned template (a SkeletonPose entity) claims a
-                // pre-reserved instance slot; a static one clones a draw
-                // slot. Dispatch on which the template carries.
-                if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
-                    template::spawn_skinned_from_template(
-                        ctx,
-                        template,
-                        req.name,
-                        req.transform,
-                        req.lifetime_secs,
-                        |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
-                    );
-                } else {
-                    template::spawn_from_template(
-                        ctx,
-                        template,
-                        req.name,
-                        req.transform,
-                        req.lifetime_secs,
-                        |src, model| backend.clone_static_draw_object(src, model).ok(),
-                    );
-                }
+        for req in spawn_reqs {
+            let Some(template) = resolve_name(ctx, req.template) else {
+                continue;
+            };
+            // A skinned template (a SkeletonPose entity) claims a
+            // pre-reserved instance slot; a static one clones a draw
+            // slot. Dispatch on which the template carries.
+            if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
+                template::spawn_skinned_from_template(
+                    ctx,
+                    template,
+                    req.name,
+                    req.transform,
+                    req.lifetime_secs,
+                    |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
+                );
+            } else {
+                template::spawn_from_template(
+                    ctx,
+                    template,
+                    req.name,
+                    req.transform,
+                    req.lifetime_secs,
+                    |src, model| backend.clone_static_draw_object(src, model).ok(),
+                );
             }
         }
 
@@ -253,34 +233,28 @@ impl SpawnSystem {
         } else {
             template::tick_spawners(ctx, dt)
         };
-        if !due_spawns.is_empty() {
-            let by_name = ctx
-                .resource::<crate::ecs::decompose::EntityByName>()
-                .map(|n| n.0.clone())
-                .unwrap_or_default();
-            for due in due_spawns {
-                let Some(&template) = by_name.get(&due.template) else {
-                    continue;
-                };
-                if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
-                    template::spawn_skinned_from_template(
-                        ctx,
-                        template,
-                        None,
-                        due.transform,
-                        due.lifetime,
-                        |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
-                    );
-                } else {
-                    template::spawn_from_template(
-                        ctx,
-                        template,
-                        None,
-                        due.transform,
-                        due.lifetime,
-                        |src, model| backend.clone_static_draw_object(src, model).ok(),
-                    );
-                }
+        for due in due_spawns {
+            let Some(template) = resolve_name(ctx, due.template) else {
+                continue;
+            };
+            if ctx.get::<crate::assets::SkeletonPose>(template).is_some() {
+                template::spawn_skinned_from_template(
+                    ctx,
+                    template,
+                    None,
+                    due.transform,
+                    due.lifetime,
+                    |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
+                );
+            } else {
+                template::spawn_from_template(
+                    ctx,
+                    template,
+                    None,
+                    due.transform,
+                    due.lifetime,
+                    |src, model| backend.clone_static_draw_object(src, model).ok(),
+                );
             }
         }
     }

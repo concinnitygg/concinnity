@@ -16,7 +16,6 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
 
 use super::mesh::DecodedMesh;
 use crate::geometry::{
@@ -158,10 +157,8 @@ pub struct ChunkStreamer {
     // its chunk coordinate.
     chunk_w: f32,
     chunk_d: f32,
-    // Dropped on shutdown to unblock the worker's `recv`.
-    request_tx: Option<Sender<(ChunkCoord, ChunkDetail)>>,
+    worker: super::worker::Worker<(ChunkCoord, ChunkDetail)>,
     result_rx: Receiver<LoadResult>,
-    worker: Option<JoinHandle<()>>,
 }
 
 impl ChunkStreamer {
@@ -184,18 +181,17 @@ impl ChunkStreamer {
         let (request_tx, request_rx) = std::sync::mpsc::channel::<(ChunkCoord, ChunkDetail)>();
         let (result_tx, result_rx) = std::sync::mpsc::channel::<LoadResult>();
 
-        let worker = std::thread::Builder::new()
-            .name("cn-chunk-stream".to_string())
-            .spawn(move || worker_loop(source, request_rx, result_tx))
-            .expect("failed to spawn chunk-stream worker");
+        let worker =
+            super::worker::Worker::spawn("cn-chunk-stream", request_rx, request_tx, move |rx| {
+                worker_loop(source, rx, result_tx)
+            });
 
         Self {
             window,
             chunk_w,
             chunk_d,
-            request_tx: Some(request_tx),
             result_rx,
-            worker: Some(worker),
+            worker,
         }
     }
 
@@ -210,10 +206,7 @@ impl ChunkStreamer {
     pub fn plan_and_dispatch(&mut self, camera: ChunkCoord) -> Vec<ChunkCoord> {
         let plan = self.window.plan(camera);
         for &(coord, detail) in &plan.to_load {
-            let sent = self
-                .request_tx
-                .as_ref()
-                .is_some_and(|tx| tx.send((coord, detail)).is_ok());
+            let sent = self.worker.send((coord, detail));
             if !sent {
                 // Worker gone -- forget the chunk so it is retried rather than
                 // stuck Pending forever.
@@ -292,17 +285,6 @@ impl ChunkStreamer {
     // The active resident-byte budget, or `None` when byte accounting is off.
     pub fn byte_budget(&self) -> Option<u64> {
         self.window.byte_budget()
-    }
-}
-
-impl Drop for ChunkStreamer {
-    fn drop(&mut self) {
-        // Dropping the sender ends the worker's `recv` loop; then join it so a
-        // world rebuild does not leak the thread.
-        self.request_tx = None;
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
     }
 }
 

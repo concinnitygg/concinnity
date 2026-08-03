@@ -2,7 +2,7 @@ use super::*;
 
 impl StorySystem {
     pub(super) fn advance(&mut self, ctx: &mut PipelineContext) {
-        let Some((screen, text_id)) = self.ids.as_ref().map(|i| (i.screen, i.text)) else {
+        let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
             return;
         };
         if !self.started || self.in_choice || self.active_screen != Some(screen) {
@@ -10,9 +10,7 @@ impl StorySystem {
         }
         // A click mid-reveal completes the page instead of leaving it.
         if !self.typewriter.done() {
-            self.typewriter.shown = self.typewriter.full.len();
-            let text = self.typewriter.text();
-            set_label(ctx, text_id, |l| l.content = text);
+            self.reveal_all(ctx);
             return;
         }
         let node = &self.story.nodes[self.node];

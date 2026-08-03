@@ -5,6 +5,7 @@
 use crate::assets::{HitRegion, Sprite, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::setting_action;
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
 // reads as unavailable next to the live rows.
@@ -63,10 +64,9 @@ pub(crate) fn capture_row_labels(
     // prev/next or a dropdown's open -- references its value label).
     let mut anchors: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
     for r in ctx.query::<HitRegion>() {
-        let Some(rest) = r.action.strip_prefix("setting:") else {
+        let Some((key, _)) = setting_action::parse(&r.action) else {
             continue;
         };
-        let key = rest.split(':').next().unwrap_or("");
         if keys.contains(&key)
             && let Some(label) = r.label
         {
@@ -89,12 +89,7 @@ pub(crate) fn capture_row_labels(
 
 // Overwrite the text of the TextLabel with the given id, if present.
 pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &str) {
-    for l in ctx.query_mut::<TextLabel>() {
-        if l.asset_id == id {
-            l.content = text.to_string();
-            break;
-        }
-    }
+    crate::ecs::by_asset_id::set_text(ctx, id, text);
 }
 
 // Set a cycle row's value label from its init-captured id. Used to update a
@@ -116,40 +111,7 @@ pub(crate) fn set_cached_row_label(
 // Move the Sprite with the given id to `x` (its left edge), if present. Used to
 // slide a slider's handle along its track.
 pub(crate) fn set_sprite_x(ctx: &mut PipelineContext, id: AssetId, x: f32) {
-    for s in ctx.query_mut::<Sprite>() {
-        if s.asset_id == id {
-            s.x = x;
-            break;
-        }
-    }
-}
-
-// The setting key of a slider drag action (`setting:<key>:drag`), or `None`.
-pub(crate) fn slider_key_of(action: &str) -> Option<&str> {
-    action
-        .strip_prefix("setting:")?
-        .strip_suffix(":drag")
-        .filter(|k| !k.is_empty())
-}
-
-// The setting key of a key-rebind action (`setting:<key>:rebind`), or `None`.
-pub(crate) fn rebind_key_of(action: &str) -> Option<&str> {
-    action
-        .strip_prefix("setting:")?
-        .strip_suffix(":rebind")
-        .filter(|k| !k.is_empty())
-}
-
-// The setting key of a cycle row's value-carrying region, or `None`. A stepper
-// row emits a `:next` region (with a matching `:prev` sharing the same value
-// label, so capturing `:next` alone maps the key once); a dropdown row emits a
-// single `:open` region. Both carry the value label, so matching either maps
-// each cycle key to its value label exactly once.
-pub(crate) fn cycle_next_key_of(action: &str) -> Option<&str> {
-    let rest = action.strip_prefix("setting:")?;
-    rest.strip_suffix(":next")
-        .or_else(|| rest.strip_suffix(":open"))
-        .filter(|k| !k.is_empty())
+    crate::ecs::by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.x = x);
 }
 
 #[cfg(test)]
@@ -362,44 +324,5 @@ mod tests {
         let mut ctx = world.ctx();
 
         assert!(capture_row_labels(&mut ctx, &["resolution"]).is_empty());
-    }
-
-    // A slider's drag region maps to its setting key. Another action's prefix,
-    // a different suffix, and an empty key all decline.
-    #[test]
-    fn slider_key_of_reads_a_drag_region_only() {
-        assert_eq!(
-            slider_key_of("setting:render_scale:drag"),
-            Some("render_scale")
-        );
-        assert_eq!(slider_key_of("screen:show:pause"), None);
-        assert_eq!(slider_key_of("setting:render_scale:next"), None);
-        assert_eq!(slider_key_of("setting::drag"), None);
-    }
-
-    // A key-rebind region maps to its setting key, under the same three
-    // declines as the slider parser.
-    #[test]
-    fn rebind_key_of_reads_a_rebind_region_only() {
-        assert_eq!(rebind_key_of("setting:jump:rebind"), Some("jump"));
-        assert_eq!(rebind_key_of("quit"), None);
-        assert_eq!(rebind_key_of("setting:jump:drag"), None);
-        assert_eq!(rebind_key_of("setting::rebind"), None);
-    }
-
-    // Both value-carrying cycle regions map: a stepper's `:next` and a
-    // dropdown's `:open`. A stepper's `:prev` does not, so a stepper row maps
-    // its key exactly once.
-    #[test]
-    fn cycle_next_key_of_accepts_a_stepper_next_and_a_dropdown_open() {
-        assert_eq!(cycle_next_key_of("setting:shadows:next"), Some("shadows"));
-        assert_eq!(
-            cycle_next_key_of("setting:resolution:open"),
-            Some("resolution")
-        );
-        assert_eq!(cycle_next_key_of("setting:shadows:prev"), None);
-        assert_eq!(cycle_next_key_of("screen:hide"), None);
-        assert_eq!(cycle_next_key_of("setting::next"), None);
-        assert_eq!(cycle_next_key_of("setting::open"), None);
     }
 }

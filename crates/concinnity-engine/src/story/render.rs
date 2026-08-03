@@ -62,10 +62,7 @@ impl StorySystem {
         // A skip run reveals instantly; otherwise the reveal restarts the
         // auto/skip pacing clock.
         if self.skipping() {
-            self.typewriter.shown = self.typewriter.full.len();
-            let text = self.typewriter.text();
-            let text_id = self.ids.as_ref().expect("resolved at init").text;
-            set_label(ctx, text_id, |l| l.content = text);
+            self.reveal_all(ctx);
         }
         self.mode_timer = 0.0;
         self.render_quick_row(ctx);

@@ -12,6 +12,11 @@ use crate::assets::{Camera3D, DebugHud, FrameInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::profile::PassTiming;
+use std::time::Instant;
+
+// How often the process resident-set-size syscall is resampled while the HUD
+// is open, matching the stat HUD's own sampling cadence.
+const RSS_INTERVAL_SECS: f32 = 0.5;
 
 // How many per-pass entries the passes chip lists. Picked to fit comfortably
 // in the top-right debug column; passes past this count are dropped from the
@@ -133,6 +138,9 @@ pub struct DebugHudSystem {
     // Most recent live camera pose (position, yaw, pitch); `None` until a
     // `Camera3D` is seen (a world with no camera leaves the chip blank).
     camera_pose: Option<([f32; 3], f32, f32)>,
+    // Most recent process resident-set size, resampled at RSS_INTERVAL_SECS.
+    rss: Option<u64>,
+    last_rss_sample: Option<Instant>,
 }
 
 impl DebugHudSystem {
@@ -147,20 +155,14 @@ impl DebugHudSystem {
             pass_times: Vec::new(),
             mouse_pos: (0.0, 0.0),
             camera_pose: None,
+            rss: None,
+            last_rss_sample: None,
         }
     }
 
     // Write `text` into the TextLabel with the given id, if it exists.
     fn write_chip(ctx: &mut PipelineContext, id: Option<AssetId>, text: String) {
-        let Some(id) = id else {
-            return;
-        };
-        for label in ctx.query_mut::<TextLabel>() {
-            if label.asset_id == id {
-                label.content = text;
-                return;
-            }
-        }
+        crate::ecs::by_asset_id::update::<TextLabel>(ctx, id, |l| l.content = text);
     }
 }
 
@@ -203,14 +205,24 @@ impl System for DebugHudSystem {
 
         // Process-level thread + memory budgets (published by App::start) and
         // the live process RSS. Copied out to owned values before the mutable
-        // chip write; each half is optional and renders `--` when absent.
+        // chip write; each half is optional and renders `--` when absent. The
+        // RSS read is a syscall, so it is resampled on an interval rather than
+        // every frame.
         let threads = ctx
             .resource::<crate::app::budget::ThreadBudget>()
             .map(|t| (t.job_threads, t.total_cores));
         let budget_mib = ctx
             .resource::<crate::app::budget::MemoryBudget>()
             .map(|b| b.budget_mib());
-        let rss = crate::app::sysmem::process_resident_bytes();
+        let now = Instant::now();
+        if self
+            .last_rss_sample
+            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= RSS_INTERVAL_SECS)
+        {
+            self.rss = crate::app::sysmem::process_resident_bytes();
+            self.last_rss_sample = Some(now);
+        }
+        let rss = self.rss;
 
         Self::write_chip(ctx, self.passes_label, passes_text(&self.pass_times));
         Self::write_chip(

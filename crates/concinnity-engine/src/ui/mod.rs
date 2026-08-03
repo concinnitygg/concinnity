@@ -298,7 +298,8 @@ impl System for UiInputSystem {
                     .unwrap_or((None, None)),
             };
             let screen = region.screen;
-            let slider_key = slider_key_from_action(&region.action);
+            let slider_key = crate::gfx::setting_action::key_with_verb(&region.action, "drag")
+                .map(str::to_string);
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
             // A follow-label region captures the y offset to its label now, so
@@ -485,7 +486,16 @@ impl System for UiInputSystem {
         if self.open_dropdown.is_some() {
             // Enter always picks inside the list, focused or not.
             let pick = confirm || enter_pressed;
-            self.step_open_dropdown(&input, nav, pick, ui_escape, cursor_moved, ctx);
+            self.step_open_dropdown(
+                &input,
+                nav,
+                DropdownPulses {
+                    confirm: pick,
+                    escape: ui_escape,
+                    cursor_moved,
+                },
+                ctx,
+            );
             self.publish_dropdown(ctx);
             return StepResult::Continue;
         }
@@ -593,7 +603,7 @@ impl System for UiInputSystem {
         // adjust the panel's scroll offset (clamped later in the apply pass). A
         // thumb drag suppresses the slider + click passes so the gutter doesn't
         // double as a control.
-        let thumb_active = self.handle_scroll_input(&input, mx, my, active_screen, &overlay);
+        let thumb_active = self.handle_scroll_input(&input, active_screen, &overlay);
 
         // Per-panel bands (reference space), so a scroll-content region only
         // fires while the cursor is inside its panel window.
@@ -815,11 +825,15 @@ impl System for UiInputSystem {
                 // loop) instead of firing an action.
                 if let Some(gid) = group_toggle {
                     toggle_group = Some(gid);
-                } else if let Some(key) = rebind_key_from_action(&r.action) {
+                } else if let Some(key) =
+                    crate::gfx::setting_action::key_with_verb(&r.action, "rebind")
+                {
                     // A rebind row enters capture (started after the loop)
                     // instead of firing an action immediately.
                     start_capture = Some((key.to_string(), r.label));
-                } else if let Some(key) = open_key_from_action(&r.action) {
+                } else if let Some(key) =
+                    crate::gfx::setting_action::key_with_verb(&r.action, "open")
+                {
                     // A dropdown row opens its floating list (started after the
                     // loop) instead of firing an action. Snapshot the control
                     // rect + the row's un-hovered value style now.
@@ -856,7 +870,7 @@ impl System for UiInputSystem {
                 } else {
                     REBIND_PROMPT
                 };
-                self.set_label_text(ctx, id, prompt);
+                crate::ecs::by_asset_id::set_text(ctx, id, prompt);
             }
             self.capturing = Some(Capture {
                 setting_key,
@@ -903,11 +917,14 @@ impl UiInputSystem {
         &mut self,
         input: &FrameInput,
         nav: Option<NavDirection>,
-        confirm: bool,
-        escape: bool,
-        cursor_moved: bool,
+        pulses: DropdownPulses,
         ctx: &mut PipelineContext,
     ) {
+        let DropdownPulses {
+            confirm,
+            escape,
+            cursor_moved,
+        } = pulses;
         let Some(state) = self.open_dropdown.as_mut() else {
             return;
         };
@@ -1281,17 +1298,7 @@ impl UiInputSystem {
             && let Some(id) = cap.value_label
         {
             let prev = cap.prev_text.clone();
-            self.set_label_text(ctx, id, &prev);
-        }
-    }
-
-    // Overwrite the content of the TextLabel with the given id, if present.
-    fn set_label_text(&self, ctx: &mut PipelineContext, id: AssetId, text: &str) {
-        for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id {
-                l.content = text.to_string();
-                break;
-            }
+            crate::ecs::by_asset_id::set_text(ctx, id, &prev);
         }
     }
 
@@ -1446,12 +1453,10 @@ impl UiInputSystem {
     fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
-        mx: f32,
-        my: f32,
         active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
     ) -> bool {
-        let (qx, qy) = overlay.inverse(mx, my);
+        let (qx, qy) = overlay.inverse(input.mouse_x, input.mouse_y);
         let active_panel = self.panels.iter().position(|p| p.screen == active_screen);
 
         // Wheel: scroll the active panel while the cursor is over its band.
@@ -1601,38 +1606,19 @@ impl UiInputSystem {
     }
 }
 
-// The setting key of a slider drag action (`setting:<key>:drag`), or `None`
-// for any other action. A region with `Some` here is a slider track, driven by
-// the drag pass rather than the click-to-fire path.
-fn slider_key_from_action(action: &str) -> Option<String> {
-    let rest = action.strip_prefix("setting:")?;
-    let key = rest.strip_suffix(":drag")?;
-    (!key.is_empty()).then(|| key.to_string())
-}
-
-// The setting key of a key-rebind action (`setting:<key>:rebind`), or `None`
-// for any other action. A region with `Some` here enters capture mode on click
-// instead of firing an action.
-fn rebind_key_from_action(action: &str) -> Option<&str> {
-    let rest = action.strip_prefix("setting:")?;
-    let key = rest.strip_suffix(":rebind")?;
-    (!key.is_empty()).then_some(key)
-}
-
-// The setting key of a dropdown-open action (`setting:<key>:open`), or `None`
-// for any other action. A region with `Some` here opens a floating option list
-// on click instead of firing an action.
-fn open_key_from_action(action: &str) -> Option<&str> {
-    let rest = action.strip_prefix("setting:")?;
-    let key = rest.strip_suffix(":open")?;
-    (!key.is_empty()).then_some(key)
-}
-
 // The collapsible-group index of a group-toggle action (`group:toggle:<gid>`),
 // or `None`. A region with `Some` here flips its panel's group instead of
 // firing an action.
 fn group_toggle_from_action(action: &str) -> Option<usize> {
     action.strip_prefix("group:toggle:")?.parse::<usize>().ok()
+}
+
+// The one-shot edges an open dropdown reacts to this frame: pick the hovered
+// option, dismiss the list, or re-hover from a cursor move.
+struct DropdownPulses {
+    confirm: bool,
+    escape: bool,
+    cursor_moved: bool,
 }
 
 // Whether a point lies inside an `[x, y, width, height]` rectangle.
@@ -3867,40 +3853,6 @@ mod tests {
     fn thumb_rect_clamps_an_overscrolled_offset() {
         let rect = UiInputSystem::thumb_rect(&scroll_panel(9999.0, 400.0, 100.0)).unwrap();
         assert_eq!(rect[1], 250.0, "pinned at track_y + track_h");
-    }
-
-    // Each action parser reads only its own region suffix, so a slider region
-    // never enters rebind capture and a rebind row never drags.
-    #[test]
-    fn action_parsers_read_only_their_own_suffix() {
-        assert_eq!(
-            slider_key_from_action("setting:exposure:drag").as_deref(),
-            Some("exposure")
-        );
-        assert_eq!(slider_key_from_action("setting:exposure:rebind"), None);
-
-        assert_eq!(
-            rebind_key_from_action("setting:key_forward:rebind"),
-            Some("key_forward")
-        );
-        assert_eq!(rebind_key_from_action("setting:key_forward:drag"), None);
-
-        assert_eq!(open_key_from_action("setting:vsync:open"), Some("vsync"));
-        assert_eq!(open_key_from_action("setting:vsync:next"), None);
-    }
-
-    // A non-setting action belongs to no parser, and a suffix with no key in
-    // front of it is rejected rather than parsed as an empty setting.
-    #[test]
-    fn action_parsers_reject_foreign_actions_and_empty_keys() {
-        for action in ["menu:quit", "", "drag", "setting:"] {
-            assert_eq!(slider_key_from_action(action), None, "{action}");
-            assert_eq!(rebind_key_from_action(action), None, "{action}");
-            assert_eq!(open_key_from_action(action), None, "{action}");
-        }
-        assert_eq!(slider_key_from_action("setting::drag"), None);
-        assert_eq!(rebind_key_from_action("setting::rebind"), None);
-        assert_eq!(open_key_from_action("setting::open"), None);
     }
 
     // A menu screen (id 90) with two buttons at y 100 / 200 whose labels take a

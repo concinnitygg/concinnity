@@ -22,7 +22,6 @@ impl AnimationSystem {
     // step. The library never calls this (the drive is in the `cn debug`
     // binary), hence the `dead_code` allowance. `step` runs after the hook on
     // the same frame, so the `start` anchor set here is shared.
-    #[allow(dead_code)]
     pub fn apply_runtime_commands(&mut self) {
         let now = std::time::Instant::now();
         let start = *self.start.get_or_insert(now);

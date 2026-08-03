@@ -5,14 +5,24 @@
 // that consume them live in the `cn debug` binary (`crate::debug::hot_reload`),
 // out of the library. `init` fills these maps and hands them off as a
 // `HotReloadSources` bundle through `GraphicsSystem::take_hot_reload_sources`.
-//
-// These are filled by the library (init) and read by the `cn debug` binary, so
-// from `cargo check --lib`'s view every field / `watch_dirs` is write-only.
-// Allow dead code module-wide: the whole module is a binary-consumed handoff.
-#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+// Every unique parent directory across `paths`. The watcher subscribes to
+// these; a bare-filename source (no parent) is skipped and only reachable via
+// the debug-WS `reload-assets` command. Callers pass resolved paths.
+fn watch_dirs_of<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
+    let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    for path in paths {
+        if let Some(parent) = Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            dirs.insert(parent.to_path_buf());
+        }
+    }
+    dirs.into_iter().collect()
+}
 
 // One reload entry: a file-backed source and the GPU slot it owns. Built once
 // at `GraphicsSystem::init` from the live `Texture` assets and consulted on
@@ -95,22 +105,8 @@ impl MeshSourceMap {
         self.entries.len()
     }
 
-    // Every unique parent directory across all entries. The watcher uses
-    // these to know what to subscribe to; bare-filename sources (no parent)
-    // are skipped here and only reachable via the debug-WS `reload-assets`
-    // command. The caller should pass *resolved* paths via the resolved
-    // field in [`MeshSourceEntry`]; for now resolution lives at the call
-    // site (init.rs).
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-        for e in &self.entries {
-            if let Some(parent) = Path::new(&e.source).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                dirs.insert(parent.to_path_buf());
-            }
-        }
-        dirs.into_iter().collect()
+        watch_dirs_of(self.entries.iter().map(|e| e.source.as_str()))
     }
 }
 
@@ -218,21 +214,8 @@ impl ShaderStageSourceMap {
         self.entries.len()
     }
 
-    // Every unique parent directory across all entries. The watcher uses
-    // these to know what to subscribe to alongside the texture / mesh /
-    // LUT / envmap / world directories. Bare filenames (no parent) are
-    // skipped; those are only reachable via the debug-WS `reload-assets`
-    // command, mirroring the static-Mesh + texture maps.
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-        for e in &self.entries {
-            if let Some(parent) = Path::new(&e.resolved_path).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                dirs.insert(parent.to_path_buf());
-            }
-        }
-        dirs.into_iter().collect()
+        watch_dirs_of(self.entries.iter().map(|e| e.resolved_path.as_str()))
     }
 }
 
@@ -294,18 +277,8 @@ impl SkinnedMeshSourceMap {
         self.entries.len()
     }
 
-    // Every unique parent directory across all entries. The watcher uses
-    // these alongside the static-Mesh watch dirs.
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-        for e in &self.entries {
-            if let Some(parent) = Path::new(&e.source).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                dirs.insert(parent.to_path_buf());
-            }
-        }
-        dirs.into_iter().collect()
+        watch_dirs_of(self.entries.iter().map(|e| e.source.as_str()))
     }
 }
 
@@ -355,20 +328,8 @@ impl TextureSourceMap {
         });
     }
 
-    // Every unique parent directory across all entries. Used by the
-    // filesystem watcher to know what to subscribe to. A `.glb` source has
-    // its containing directory watched too; the whole file shows up as
-    // "modified" when the user re-exports it.
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
-        for e in &self.entries {
-            if let Some(parent) = Path::new(&e.source).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                dirs.insert(parent.to_path_buf());
-            }
-        }
-        dirs.into_iter().collect()
+        watch_dirs_of(self.entries.iter().map(|e| e.source.as_str()))
     }
 
     pub fn is_empty(&self) -> bool {

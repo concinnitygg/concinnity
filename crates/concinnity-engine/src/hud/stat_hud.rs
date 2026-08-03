@@ -150,15 +150,7 @@ impl StatHudSystem {
 
     // Write `text` into the TextLabel with the given id, if it exists.
     fn write_chip(ctx: &mut PipelineContext, id: Option<AssetId>, text: String) {
-        let Some(id) = id else {
-            return;
-        };
-        for label in ctx.query_mut::<TextLabel>() {
-            if label.asset_id == id {
-                label.content = text;
-                return;
-            }
-        }
+        crate::ecs::by_asset_id::update::<TextLabel>(ctx, id, |l| l.content = text);
     }
 }
 

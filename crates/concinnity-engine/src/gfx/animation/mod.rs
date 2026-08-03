@@ -147,7 +147,6 @@ impl AnimationSystem {
     // `dead_code` allowed while the runtime crate still carries the legacy
     // binary; the only caller is the editor crate (external). Removed when the
     // binary moves out of the runtime crate.
-    #[allow(dead_code)]
     pub fn reload_entries(&self) -> &[AnimationReloadEntry] {
         &self.reload_entries
     }
@@ -158,7 +157,6 @@ impl AnimationSystem {
     // (a half-applied reload is impossible: nothing is mutated on miss). The
     // editor crate calls this after decoding the source GLB; the runtime crate
     // does no decoding of its own.
-    #[allow(dead_code)]
     pub fn apply_reloaded_clip(
         &mut self,
         target: SkinnedMeshHandle,

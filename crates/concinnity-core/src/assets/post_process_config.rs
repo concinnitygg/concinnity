@@ -70,11 +70,7 @@ impl PostProcessResolve for PostProcessConfig {
             lut_strength: self.lut_strength.clamp(0.0, 1.0),
             hdr_output: 0.0,
             pq_output: 0.0,
-            fxaa: if self.aa_mode.fxaa_enabled() {
-                1.0
-            } else {
-                0.0
-            },
+            fxaa: self.aa_mode.fxaa_flag(),
         }
     }
 

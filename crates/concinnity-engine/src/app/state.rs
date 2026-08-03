@@ -8,7 +8,6 @@ use concinnity_core::shutdown::ShutdownToken;
 pub enum AppStatus {
     Created,
     Started,
-    #[allow(dead_code)]
     Stopped,
 }
 
@@ -85,7 +84,6 @@ impl App {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn world(&self) -> &World {
         &self.world
     }
@@ -163,7 +161,6 @@ impl App {
 
     // Replace the current world and reset to Created so start() can be called again.
     // Used to load a new scene at runtime.
-    #[allow(dead_code)]
     pub fn load_world(&mut self, world: World) {
         self.world = world;
         self.status = AppStatus::Created;

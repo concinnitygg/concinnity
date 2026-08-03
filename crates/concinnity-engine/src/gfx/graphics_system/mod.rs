@@ -351,7 +351,6 @@ pub(crate) struct SliderViz {
 // init world resolves through these maps without re-running build.
 // Built by init, read only by the `cn debug` binary's world.jsonl reload pass,
 // so its fields read as dead under `cargo check --lib`.
-#[allow(dead_code)]
 pub struct WorldReloadState {
     // Texture asset name -> live pool slot, so runtime decal / emitter spawn
     // (`cn debug`) can resolve an authored Texture name to its slot.
@@ -368,7 +367,6 @@ pub struct WorldReloadState {
 // from [`HotReloadSources`]. The library never constructs this; hence the
 // `dead_code` allowance (the fields are read only from the `cn debug` binary's
 // drive, never under `cargo check --lib`).
-#[allow(dead_code)]
 pub struct HotReloadApplyParts<'a> {
     pub backend: &'a mut dyn RenderBackend,
     pub world_reload: &'a Option<WorldReloadState>,
@@ -545,7 +543,6 @@ impl GraphicsSystem {
     // init. The library never calls this (the asset hot-reload drive lives in
     // the `cn debug` binary), so it reads as dead code under
     // `cargo check --lib`.
-    #[allow(dead_code)]
     pub fn hot_reload_apply_parts<'a>(
         &'a mut self,
         backend: &'a mut dyn RenderBackend,
@@ -560,9 +557,7 @@ impl GraphicsSystem {
     // Take the init-captured hot-reload source catalogues, leaving `None`
     // behind. The `cn debug` drive calls this once on its first tick to build
     // the filesystem watcher + `AssetHotReloadState`. `None` under `cn run`,
-    // or when no file-backed asset / world.jsonl was declared. Library-dead
-    // (only the binary calls it).
-    #[allow(dead_code)]
+    // or when no file-backed asset / world.jsonl was declared.
     pub fn take_hot_reload_sources(&mut self) -> Option<hot_reload_sources::HotReloadSources> {
         self.pending_hot_reload_sources.take()
     }

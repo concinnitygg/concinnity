@@ -183,23 +183,11 @@ fn slot_file(dir: &Path, slot: usize) -> PathBuf {
 }
 
 fn read_save(path: &Path) -> Option<StorySave> {
-    let bytes = std::fs::read(path).ok()?;
-    match ciborium::from_reader(&bytes[..]) {
-        Ok(save) => Some(save),
-        Err(e) => {
-            tracing::warn!("StorySystem: save unreadable, starting fresh: {e}");
-            None
-        }
-    }
+    crate::cbor_file::read(path, "StorySystem: save")
 }
 
 fn write_save(path: &Path, save: &StorySave) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut bytes = Vec::new();
-    ciborium::into_writer(save, &mut bytes).map_err(std::io::Error::other)?;
-    std::fs::write(path, bytes)
+    crate::cbor_file::write(path, save)
 }
 
 // Dialogue reveal state for the current page.
@@ -509,21 +497,24 @@ impl System for StorySystem {
     }
 }
 
-// Mutate the first component with the given asset id; an unset reference or
-// a missing component (a stage asset the world never declared) is a silent
-// no-op.
-fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
-    let Some(id) = id else { return };
-    if let Some(label) = ctx.query_mut::<TextLabel>().find(|l| l.asset_id == id) {
-        apply(label);
+impl StorySystem {
+    // Finish the current page's reveal immediately and repaint its text.
+    pub(super) fn reveal_all(&mut self, ctx: &mut PipelineContext) {
+        self.typewriter.shown = self.typewriter.full.len();
+        let text = self.typewriter.text();
+        let text_id = self.ids.as_ref().expect("resolved at init").text;
+        set_label(ctx, text_id, |l| l.content = text);
     }
 }
 
+// Mutate the stage component with the given asset id; an unset reference or a
+// component the world never declared is a silent no-op.
+fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
+    crate::ecs::by_asset_id::update(ctx, id, apply);
+}
+
 fn set_sprite(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
-    let Some(id) = id else { return };
-    if let Some(sprite) = ctx.query_mut::<Sprite>().find(|s| s.asset_id == id) {
-        apply(sprite);
-    }
+    crate::ecs::by_asset_id::update(ctx, id, apply);
 }
 
 // Apply a page's stage dressing: the backdrop keeps its dark fill when the

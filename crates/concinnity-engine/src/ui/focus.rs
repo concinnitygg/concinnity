@@ -6,6 +6,7 @@
 // state and applies the resulting styling / actions to the world.
 
 use crate::assets::NavDirection;
+use crate::gfx::setting_action;
 
 // Weight of the perpendicular offset in the directional score, so a target
 // straight ahead beats a nearer one far off to the side (tabs above a row
@@ -43,13 +44,6 @@ pub(crate) struct FocusRef {
     pub(crate) rect: [f32; 4],
 }
 
-// The setting key of a `setting:<key>:<suffix>` action, or `None`.
-fn setting_key<'a>(action: &'a str, suffix: &str) -> Option<&'a str> {
-    let rest = action.strip_prefix("setting:")?;
-    let key = rest.strip_suffix(suffix)?;
-    (!key.is_empty()).then_some(key)
-}
-
 // Group the candidates into focus targets:
 //   - a stepper's `setting:<key>:next` region is the row's target (confirm
 //     cycles forward); its `:prev` twin is dropped -- Left sends the Prev op
@@ -61,24 +55,24 @@ pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
     candidates
         .iter()
         .filter_map(|c| {
-            if setting_key(&c.action, ":prev").is_some() {
+            if setting_action::key_with_verb(&c.action, "prev").is_some() {
                 return None;
             }
-            if let Some(key) = setting_key(&c.action, ":next") {
+            if let Some(key) = setting_action::key_with_verb(&c.action, "next") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
                     setting: Some(key.to_string()),
                 });
             }
-            if let Some(key) = setting_key(&c.action, ":open") {
+            if let Some(key) = setting_action::key_with_verb(&c.action, "open") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
                     setting: Some(key.to_string()),
                 });
             }
-            if let Some(key) = setting_key(&c.action, ":drag") {
+            if let Some(key) = setting_action::key_with_verb(&c.action, "drag") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,

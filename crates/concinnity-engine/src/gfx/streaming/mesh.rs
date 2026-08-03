@@ -21,7 +21,6 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
 
 use super::{StreamPlanner, StreamState};
 use crate::gfx::mesh_payload::Vertex;
@@ -294,10 +293,8 @@ pub struct MeshStreamer {
     // mesh `id`; the streaming priority is the squared distance from the
     // camera to the nearest of them.
     centers: Vec<Vec<[f32; 3]>>,
-    // Dropped on shutdown to unblock the worker's `recv`.
-    request_tx: Option<Sender<usize>>,
+    worker: super::worker::Worker<usize>,
     result_rx: Receiver<LoadResult>,
-    worker: Option<JoinHandle<()>>,
 }
 
 impl MeshStreamer {
@@ -317,17 +314,16 @@ impl MeshStreamer {
         let (request_tx, request_rx) = std::sync::mpsc::channel::<usize>();
         let (result_tx, result_rx) = std::sync::mpsc::channel::<LoadResult>();
 
-        let worker = std::thread::Builder::new()
-            .name("cn-mesh-stream".to_string())
-            .spawn(move || worker_loop(source, request_rx, result_tx))
-            .expect("failed to spawn mesh-stream worker");
+        let worker =
+            super::worker::Worker::spawn("cn-mesh-stream", request_rx, request_tx, move |rx| {
+                worker_loop(source, rx, result_tx)
+            });
 
         Self {
             planner,
             centers,
-            request_tx: Some(request_tx),
             result_rx,
-            worker: Some(worker),
+            worker,
         }
     }
 
@@ -377,10 +373,7 @@ impl MeshStreamer {
     pub fn plan_and_dispatch(&mut self) -> Vec<usize> {
         let plan = self.planner.plan();
         for &id in &plan.to_load {
-            let sent = self
-                .request_tx
-                .as_ref()
-                .is_some_and(|tx| tx.send(id).is_ok());
+            let sent = self.worker.send(id);
             if !sent {
                 // Worker gone -- revert so the mesh is retried rather than
                 // stuck Pending forever.
@@ -445,17 +438,6 @@ impl MeshStreamer {
     // `(resident, pending, unloaded)` mesh counts -- for diagnostics.
     pub fn stats(&self) -> (usize, usize, usize) {
         self.planner.counts()
-    }
-}
-
-impl Drop for MeshStreamer {
-    fn drop(&mut self) {
-        // Dropping the sender ends the worker's `recv` loop; then join it so a
-        // world rebuild does not leak the thread.
-        self.request_tx = None;
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
     }
 }
 

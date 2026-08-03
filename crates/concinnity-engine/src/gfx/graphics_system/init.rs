@@ -388,15 +388,9 @@ impl GraphicsSystem {
         // by the cascade scheduler each frame.
         self.authored_shadow_map_size = self.shadow_map_size;
         self.authored_shadow_update = self.shadow_update;
-        match user_graphics.shadow_map_size {
-            Some(v) => self.shadow_map_size = v,
-            None => {
-                self.shadow_map_size = crate::gfx::quality_preset::clamp_shadow_map_size(
-                    self.shadow_map_size,
-                    &quality_ceiling,
-                )
-            }
-        }
+        self.shadow_map_size = user_graphics
+            .shadow_map_size
+            .unwrap_or(self.shadow_map_size.min(quality_ceiling.shadow_map_size));
         match user_graphics.shadow_update {
             Some(v) => self.shadow_update = v,
             None => {
@@ -410,38 +404,22 @@ impl GraphicsSystem {
         // split reads it). Same baseline / override / ceiling-clamp shape as the
         // shadow knobs above.
         self.authored_shadow_distance = self.shadow_distance;
-        match user_graphics.shadow_distance {
-            Some(v) => self.shadow_distance = v,
-            None => {
-                self.shadow_distance = crate::gfx::quality_preset::clamp_shadow_distance(
-                    self.shadow_distance,
-                    &quality_ceiling,
-                )
-            }
-        }
+        self.shadow_distance = user_graphics
+            .shadow_distance
+            .unwrap_or(self.shadow_distance.min(quality_ceiling.shadow_distance));
         // Shadow cascade count (GraphicsConfig-sourced, live -- the per-frame split
         // + schedule read it). Same baseline / override / ceiling-clamp shape.
         self.authored_shadow_cascades = self.shadow_cascades;
-        match user_graphics.shadow_cascades {
-            Some(v) => self.shadow_cascades = v,
-            None => {
-                self.shadow_cascades = crate::gfx::quality_preset::clamp_shadow_cascades(
-                    self.shadow_cascades,
-                    &quality_ceiling,
-                )
-            }
-        }
+        self.shadow_cascades = user_graphics
+            .shadow_cascades
+            .unwrap_or(self.shadow_cascades.min(quality_ceiling.shadow_cascades));
         // Anisotropy (GraphicsConfig-sourced, restart-required -- the scene sampler
         // is built from `self.anisotropy` at backend init below). Same baseline /
         // override / ceiling-clamp shape as the shadow knobs above.
         self.authored_anisotropy = self.anisotropy;
-        match user_graphics.anisotropy {
-            Some(v) => self.anisotropy = v,
-            None => {
-                self.anisotropy =
-                    crate::gfx::quality_preset::clamp_anisotropy(self.anisotropy, &quality_ceiling)
-            }
-        }
+        self.anisotropy = user_graphics
+            .anisotropy
+            .unwrap_or(self.anisotropy.min(quality_ceiling.anisotropy));
         // Frames-in-flight (ring-buffer depth): a persisted override clamped to the
         // 1..3 the backends support, applied unconditionally like vsync. Restart-
         // required (the ring buffers are sized at backend init below), independent
@@ -665,11 +643,7 @@ impl GraphicsSystem {
         // AA mode. resolve() seeded `post_process.fxaa` from the authored mode
         // before the override/clamp above, so refresh both the local copy passed
         // to the backend ctor and the live `self.post_process` here.
-        post_process.fxaa = if self.post_config.aa_mode.fxaa_enabled() {
-            1.0
-        } else {
-            0.0
-        };
+        post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
         self.post_process.fxaa = post_process.fxaa;
         let ssao_settings = self.post_config.ssao_settings();
         let ssr_settings = self.post_config.ssr_settings();
@@ -1098,17 +1072,8 @@ impl GraphicsSystem {
             // are rebased onto the same `base` as LOD0, identical to how
             // the shadow / velocity / SSAO / SSR pre-passes already consume
             // the IB.
-            let mut lod_slices: Vec<crate::gfx::render_types::LodSlice> =
-                Vec::with_capacity(lod_alts.len());
-            for (switch_distance, alt_idx) in lod_alts {
-                let alt_offset = skinned_indices.len();
-                skinned_indices.extend(alt_idx.iter().map(|i| i + base));
-                lod_slices.push(crate::gfx::render_types::LodSlice {
-                    index_offset: alt_offset,
-                    index_count: alt_idx.len(),
-                    switch_distance: *switch_distance,
-                });
-            }
+            let lod_slices =
+                crate::gfx::draw_list::append_lod_slices(&mut skinned_indices, lod_alts, base);
 
             let skeleton = crate::assets::build_skeleton_from_joint_defs(joint_defs);
             let joint_count = skeleton.len().min(crate::gfx::render_types::MAX_JOINTS);
@@ -1187,17 +1152,11 @@ impl GraphicsSystem {
                 let copy_index_offset = skinned_indices.len();
                 skinned_vertices.extend_from_slice(verts);
                 skinned_indices.extend(idxs.iter().map(|i| i + copy_base));
-                let mut copy_lods: Vec<crate::gfx::render_types::LodSlice> =
-                    Vec::with_capacity(lod_alts.len());
-                for (switch_distance, alt_idx) in lod_alts {
-                    let alt_offset = skinned_indices.len();
-                    skinned_indices.extend(alt_idx.iter().map(|i| i + copy_base));
-                    copy_lods.push(crate::gfx::render_types::LodSlice {
-                        index_offset: alt_offset,
-                        index_count: alt_idx.len(),
-                        switch_distance: *switch_distance,
-                    });
-                }
+                let copy_lods = crate::gfx::draw_list::append_lod_slices(
+                    &mut skinned_indices,
+                    lod_alts,
+                    copy_base,
+                );
                 let copy_skinned_index = skinned_draw_objects.len();
                 skinned_morphs.push(mesh_morphs.clone());
                 skinned_draw_objects.push(crate::gfx::render_types::SkinnedDrawObject {
@@ -1315,12 +1274,32 @@ impl GraphicsSystem {
         ctx: &mut PipelineContext,
         texture_count: usize,
     ) -> Option<std::collections::HashMap<crate::ecs::MaterialHandle, MaterialEntry>> {
-        // Albedo-region textures (albedo, secondary albedo, emissive, packed ORM)
-        // carry a cook-assigned `TextureHandle` whose value is the texture's
-        // declaration-order pool slot, so the handle indexes the pool directly.
-        let albedo_slot_of = |handle: crate::ecs::TextureHandle| -> Option<usize> {
+        // Every material texture reference carries a cook-assigned
+        // `TextureHandle` whose value is the texture's declaration-order slot in
+        // the shared pool, so the handle indexes the pool directly. An unset
+        // reference resolves to `unset` (a per-field fallback slot); a handle
+        // past the pool is a resolution error (cook validated the reference
+        // exists) and resolves to `None` with the field named in the log.
+        let slot_of = |material_handle: usize,
+                       field: &str,
+                       handle: Option<crate::ecs::TextureHandle>,
+                       unset: usize|
+         -> Option<usize> {
+            let Some(handle) = handle else {
+                return Some(unset);
+            };
             let slot = handle.index();
-            (slot < texture_count).then_some(slot)
+            if slot >= texture_count {
+                tracing::error!(
+                    "GraphicsSystem: Material {} references out-of-range {} texture handle {} (only {} textures)",
+                    material_handle,
+                    field,
+                    slot,
+                    texture_count
+                );
+                return None;
+            }
+            Some(slot)
         };
         let material_table = ctx
             .resource::<crate::resource::MaterialTable>()
@@ -1341,123 +1320,35 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            let albedo_slot = match mat.albedo {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range albedo texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
-            };
-
-            // A normal map is a texture in the shared pool at its own drain slot,
-            // addressed by its cook-assigned `TextureHandle` just like the albedo
-            // region; unset selects the flat-normal fallback. A handle past the
-            // pool is a resolution error (cook validated the reference exists).
-            let normal_map_slot = match mat.normal_map {
-                None => crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range normal_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
-            };
-
-            // Optional secondary albedo/normal pair for the terrain shader's
-            // slope-blending mode. Same handle resolution as the primary pair
-            // (both index the shared pool by `TextureHandle`); the fallback slots
-            // fall through when either is unset and the shader's
-            // `terrain_blend > 0` gate is what controls whether the secondary
-            // actually gets sampled.
-            let albedo_secondary_slot: u32 = match mat.albedo_secondary {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range albedo_secondary texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
-            };
-            // Secondary normal for the terrain slope-blend layer, sampled only
-            // when `terrain_blend > 0`. Resolves to the texture's shared-pool
-            // slot; unset selects the flat-normal fallback (index `texture_count`,
-            // one past the last real texture) so a slope layer without its own
-            // normal map perturbs nothing.
-            let normal_secondary_slot: u32 = match mat.normal_secondary {
-                None => texture_count as u32,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range normal_secondary texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
-            };
-
-            // Emissive + packed-ORM maps live in the albedo region of the
-            // bindless pool, so their `TextureHandle` indexes the pool directly
-            // like the primary/secondary albedo. Slot 0 (unset) is the sentinel
-            // the shader gates on to keep the scalar fallback.
-            let emissive_map_slot: u32 = match mat.emissive_map {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range emissive_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
-            };
-            let orm_map_slot: u32 = match mat.orm_map {
-                None => 0,
-                Some(handle) => match albedo_slot_of(handle) {
-                    Some(slot) => slot as u32,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: Material {} references out-of-range orm_map texture handle {} (only {} textures)",
-                            material_handle,
-                            handle.index(),
-                            texture_count
-                        );
-                        self.failed = true;
-                        return None;
-                    }
-                },
+            // Unset fallbacks differ per field: slot 0 is the sentinel the
+            // shader gates on to keep its scalar value; the normal maps instead
+            // select the flat-normal fallback, `NO_NORMAL_MAP_SLOT` for the
+            // primary and `texture_count` (one past the last real texture) for
+            // the terrain slope-blend layer.
+            let slots = [
+                ("albedo", mat.albedo, 0),
+                (
+                    "normal_map",
+                    mat.normal_map,
+                    crate::gfx::render_types::NO_NORMAL_MAP_SLOT,
+                ),
+                ("albedo_secondary", mat.albedo_secondary, 0),
+                ("normal_secondary", mat.normal_secondary, texture_count),
+                ("emissive_map", mat.emissive_map, 0),
+                ("orm_map", mat.orm_map, 0),
+            ]
+            .map(|(field, handle, unset)| slot_of(material_handle, field, handle, unset));
+            let [
+                Some(albedo_slot),
+                Some(normal_map_slot),
+                Some(albedo_secondary_slot),
+                Some(normal_secondary_slot),
+                Some(emissive_map_slot),
+                Some(orm_map_slot),
+            ] = slots
+            else {
+                self.failed = true;
+                return None;
             };
 
             let uniforms = crate::gfx::render_types::MaterialUniforms {
@@ -1469,10 +1360,10 @@ impl GraphicsSystem {
                 _pad2: 0.0,
                 emissive: mat.emissive_factor,
                 secondary_blend_sharpness: mat.secondary_blend_sharpness,
-                albedo_secondary_index: albedo_secondary_slot,
-                normal_secondary_index: normal_secondary_slot,
-                emissive_map_index: emissive_map_slot,
-                orm_map_index: orm_map_slot,
+                albedo_secondary_index: albedo_secondary_slot as u32,
+                normal_secondary_index: normal_secondary_slot as u32,
+                emissive_map_index: emissive_map_slot as u32,
+                orm_map_index: orm_map_slot as u32,
                 alpha_cutoff: mat.alpha_cutoff,
                 opacity: mat.opacity,
                 transparent: u32::from(mat.transparent),

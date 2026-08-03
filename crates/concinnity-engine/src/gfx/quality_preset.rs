@@ -170,14 +170,6 @@ const SHADOW_CASCADES_MAX: u32 = 4;
 // `gfx::planar_reflection` constant so a capacity bump flows here automatically.
 const PLANAR_PLANES_MAX: u32 = crate::gfx::planar_reflection::MAX_PLANAR_PLANES as u32;
 
-// The coarser (smaller) of two shadow-map resolutions, the shadow analogue of
-// the SSGI / reflection-blur clamp helpers. Used to clamp a world's authored
-// size DOWN under a ceiling without ever raising it. `0` (shadows disabled) is
-// the smallest, so a ceiling never re-enables a world that authored it off.
-pub(crate) fn clamp_shadow_map_size(authored: u32, ceiling: &QualityCeiling) -> u32 {
-    authored.min(ceiling.shadow_map_size)
-}
-
 // The world's shadow re-render cadence clamped under the ceiling: a tier that
 // disallows `EveryFrame` forces the cheaper `Hybrid`; otherwise the authored
 // cadence stands. Never raises (`Hybrid` -> `EveryFrame`).
@@ -190,25 +182,6 @@ pub(crate) fn clamp_shadow_update(
     } else {
         ShadowUpdate::Hybrid
     }
-}
-
-// The world's anisotropy degree clamped under the ceiling: the smaller of the
-// authored degree and the cap. Never raises. The shadow / SSGI clamp helpers'
-// anisotropy sibling.
-pub(crate) fn clamp_anisotropy(authored: u32, ceiling: &QualityCeiling) -> u32 {
-    authored.min(ceiling.anisotropy)
-}
-
-// The world's shadow distance clamped under the ceiling: the smaller of the
-// authored distance and the cap. Never raises.
-pub(crate) fn clamp_shadow_distance(authored: u32, ceiling: &QualityCeiling) -> u32 {
-    authored.min(ceiling.shadow_distance)
-}
-
-// The world's shadow cascade count clamped under the ceiling: the smaller of the
-// authored count and the cap. Never raises.
-pub(crate) fn clamp_shadow_cascades(authored: u32, ceiling: &QualityCeiling) -> u32 {
-    authored.min(ceiling.shadow_cascades)
 }
 
 const NONE: QualityCeiling = QualityCeiling {
@@ -322,13 +295,7 @@ pub(crate) fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> Qu
         QualityPreset::Medium => MEDIUM,
         QualityPreset::High => HIGH,
         QualityPreset::Ultra => ULTRA,
-        QualityPreset::Auto => match profile.tier {
-            GpuTier::Unknown => NONE,
-            GpuTier::Integrated => LOW,
-            GpuTier::EntryDiscrete => MEDIUM,
-            GpuTier::MidDiscrete => HIGH,
-            GpuTier::HighDiscrete => ULTRA,
-        },
+        QualityPreset::Auto => auto_tier(profile).map_or(NONE, |(_, ceiling)| ceiling),
     }
 }
 
@@ -407,12 +374,19 @@ pub(crate) fn preset_at(index: usize) -> QualityPreset {
 // "Auto (High)"). `None` when the GPU is unclassified, where `Auto` imposes no
 // ceiling and the bare "Auto" reads correctly.
 pub(crate) fn auto_resolved_name(profile: &GpuProfile) -> Option<&'static str> {
+    auto_tier(profile).map(|(name, _)| name)
+}
+
+// The named tier `Auto` resolves to on this GPU, as (label, ceiling). `None`
+// for an unclassified GPU, where `Auto` imposes no ceiling. One table, so the
+// menu label can never disagree with the ceiling actually applied.
+fn auto_tier(profile: &GpuProfile) -> Option<(&'static str, QualityCeiling)> {
     match profile.tier {
         GpuTier::Unknown => None,
-        GpuTier::Integrated => Some("Low"),
-        GpuTier::EntryDiscrete => Some("Medium"),
-        GpuTier::MidDiscrete => Some("High"),
-        GpuTier::HighDiscrete => Some("Ultra"),
+        GpuTier::Integrated => Some(("Low", LOW)),
+        GpuTier::EntryDiscrete => Some(("Medium", MEDIUM)),
+        GpuTier::MidDiscrete => Some(("High", HIGH)),
+        GpuTier::HighDiscrete => Some(("Ultra", ULTRA)),
     }
 }
 
@@ -570,73 +544,40 @@ mod tests {
         }
     }
 
+    // Callers clamp with `authored.min(ceiling.field)`, so what each tier
+    // actually promises is the cap value itself.
     #[test]
-    fn shadow_caps_clamp_down_only() {
+    fn tier_caps_bound_the_shadow_and_texture_knobs() {
         use crate::assets::ShadowUpdate;
-        // No ceiling (Custom / Ultra) leaves a world's authored shadows alone.
+        // No ceiling (Custom / Ultra) leaves a world's authored values alone.
         let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_shadow_map_size(8192, &none), 8192);
+        assert_eq!(none.shadow_map_size, SHADOW_SIZE_MAX);
+        assert_eq!(none.anisotropy, ANISO_MAX);
+        assert_eq!(none.shadow_distance, SHADOW_DIST_MAX);
+        assert_eq!(none.shadow_cascades, SHADOW_CASCADES_MAX);
         assert_eq!(
             clamp_shadow_update(ShadowUpdate::EveryFrame, &none),
             ShadowUpdate::EveryFrame
         );
-        // Low caps the map size hard and forces the cheaper Hybrid cadence.
+
+        // Low caps every knob hard and forces the cheaper Hybrid cadence.
         let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_shadow_map_size(4096, &low), 1024);
+        assert_eq!(low.shadow_map_size, 1024);
+        assert_eq!(low.anisotropy, 4);
+        assert_eq!(low.shadow_distance, 40);
+        assert_eq!(low.shadow_cascades, 2);
         assert_eq!(
             clamp_shadow_update(ShadowUpdate::EveryFrame, &low),
             ShadowUpdate::Hybrid
         );
-        // The clamp never raises: a world authoring a smaller map keeps it, and a
-        // tier permitting EveryFrame leaves Hybrid as Hybrid.
-        assert_eq!(clamp_shadow_map_size(512, &low), 512);
+        // The cadence clamp never raises Hybrid to EveryFrame.
         assert_eq!(
             clamp_shadow_update(ShadowUpdate::Hybrid, &none),
             ShadowUpdate::Hybrid
         );
-        // Shadows authored off (size 0) stay off under any ceiling.
-        assert_eq!(clamp_shadow_map_size(0, &none), 0);
-        assert_eq!(clamp_shadow_map_size(0, &low), 0);
-    }
 
-    #[test]
-    fn anisotropy_clamps_down_only() {
-        // No ceiling (Custom / Ultra) leaves the world's authored degree alone,
-        // up to the GPU maximum.
-        let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
-        assert_eq!(none.anisotropy, ANISO_MAX);
-        assert_eq!(clamp_anisotropy(16, &none), 16);
-        assert_eq!(clamp_anisotropy(8, &none), 8);
-        // Low caps the degree hard; the clamp never raises a smaller authored one.
-        let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_anisotropy(16, &low), 4);
-        assert_eq!(clamp_anisotropy(2, &low), 2);
-    }
-
-    #[test]
-    fn shadow_distance_clamps_down_only() {
-        // No ceiling (Custom / Ultra) leaves the world's authored distance alone.
-        let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
-        assert_eq!(none.shadow_distance, SHADOW_DIST_MAX);
-        assert_eq!(clamp_shadow_distance(320, &none), 320);
-        // Low caps the distance hard; the clamp never raises a shorter authored one.
-        let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_shadow_distance(320, &low), 40);
-        assert_eq!(clamp_shadow_distance(30, &low), 30);
-    }
-
-    #[test]
-    fn shadow_cascades_clamp_down_only() {
-        // No ceiling (Custom / Ultra) leaves the world's authored count alone.
-        let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
-        assert_eq!(none.shadow_cascades, SHADOW_CASCADES_MAX);
-        assert_eq!(clamp_shadow_cascades(4, &none), 4);
-        // Low caps at 2, Medium at 3; the clamp never raises a smaller authored one.
-        let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_shadow_cascades(4, &low), 2);
-        assert_eq!(clamp_shadow_cascades(1, &low), 1);
         let medium = resolve_ceiling(QualityPreset::Medium, &GpuProfile::UNKNOWN);
-        assert_eq!(clamp_shadow_cascades(4, &medium), 3);
+        assert_eq!(medium.shadow_cascades, 3);
     }
 
     #[test]

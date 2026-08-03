@@ -69,7 +69,6 @@ static FLAG_ACCESS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 // `dead_code` allow: only the binary's `Commands::Debug` arm calls this; the
 // library never sets the flag (it only reads it), so `cargo check --lib`
 // reports it unused.
-#[allow(dead_code)]
 pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }
@@ -85,7 +84,6 @@ pub(crate) fn enabled() -> bool {
 //
 // `dead_code` allow: only the binary-only debug subsystem sets this; the
 // library never does, so `cargo check --lib` reports it unused.
-#[allow(dead_code)]
 pub fn set_pending_animations() {
     PENDING_ANIMATIONS.store(true, Ordering::SeqCst);
 }
@@ -93,7 +91,6 @@ pub fn set_pending_animations() {
 // Swap the "Animation source changed" flag to `false`, returning whether it
 // was set. The editor crate's `anim_reload::reload_clips_if_pending` calls
 // this; a `true` result kicks the per-clip re-import pass.
-#[allow(dead_code)]
 pub fn take_pending_animations() -> bool {
     PENDING_ANIMATIONS.swap(false, Ordering::SeqCst)
 }
@@ -103,7 +100,6 @@ pub fn take_pending_animations() -> bool {
 //
 // `dead_code` allow: only the binary's `Commands::Run` / `Commands::Debug` arms
 // call this; the library only reads it, so `cargo check --lib` reports it unused.
-#[allow(dead_code)]
 pub fn set_validation(v: Option<bool>) {
     let encoded = match v {
         None => 0,
@@ -129,7 +125,6 @@ pub(crate) fn validation() -> Option<bool> {
 //
 // `dead_code` allow: only the editor crate sets this; the library just reads
 // it, so `cargo check --lib` reports it unused.
-#[allow(dead_code)]
 pub fn set_world_jsonl_path(path: Option<String>) {
     *WORLD_JSONL_PATH.lock().unwrap() = path;
 }

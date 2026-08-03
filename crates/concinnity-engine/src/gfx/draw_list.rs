@@ -15,12 +15,7 @@ use crate::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
 
-pub(crate) const IDENTITY4: [[f32; 4]; 4] = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
+pub(crate) use crate::gfx::skinning::{IDENTITY as IDENTITY4, mat4_mul};
 
 // One decoded material as build_draw_list consumes it: resolved texture pool
 // slots, the GPU uniforms, and the shader bucket its draws render under.
@@ -196,67 +191,40 @@ pub(crate) fn decomposed_renderable_item(
     }
 }
 
-// Column-major 4×4 matrix multiply: result = a * b; layout m[col][row].
-fn mat_mul4(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for col in 0..4 {
-        for row in 0..4 {
-            for k in 0..4 {
-                out[col][row] += a[k][row] * b[col][k];
-            }
-        }
+// Append each LOD alternate's indices to `indices`, rebased onto `base`, and
+// return the slice table addressing them. The alternates share the base mesh's
+// vertex range, so only the index run differs per level.
+pub(crate) fn append_lod_slices<T>(
+    indices: &mut Vec<T>,
+    alternates: &[(f32, Vec<u16>)],
+    base: T,
+) -> Vec<LodSlice>
+where
+    T: Copy + From<u16> + std::ops::Add<Output = T>,
+{
+    let mut slices = Vec::with_capacity(alternates.len());
+    for (switch_distance, alt) in alternates {
+        let index_offset = indices.len();
+        indices.extend(alt.iter().map(|&i| T::from(i) + base));
+        slices.push(LodSlice {
+            index_offset,
+            index_count: alt.len(),
+            switch_distance: *switch_distance,
+        });
     }
-    out
+    slices
 }
 
-// Resolve each entity's world matrix from its Transform and Parent chain: roots
-// use their local matrix, children compose parent-world * local, and cyclic
-// parents fall back to their local matrix. Returns an entity -> world matrix map.
-// Shared by the per-frame propagate_transforms and the render-init draw-list
-// build.
+// Resolve each entity's world matrix from its Transform and Parent chain.
+// Returns an entity -> world matrix map, built through a throwaway
+// `TransformCache`; the per-frame path owns a cache and calls
+// `propagate_transforms_cached` instead so the buffers survive across frames.
 pub(crate) fn resolve_world_matrices(
     ctx: &crate::ecs::PipelineContext,
 ) -> std::collections::HashMap<crate::ecs::Entity, [[f32; 4]; 4]> {
-    use crate::assets::{Parent, Transform};
-    use crate::ecs::Entity;
-    use std::collections::HashMap;
-
-    let parents: HashMap<Entity, Entity> = ctx
-        .query_with_entity::<Parent>()
-        .map(|(entity, parent)| (entity, parent.0))
-        .collect();
-    let locals: Vec<(Entity, [[f32; 4]; 4])> = ctx
-        .query_with_entity::<Transform>()
-        .map(|(entity, transform)| (entity, transform.model_matrix()))
-        .collect();
-
-    // Fixed-point resolution: keep a pass running while any entity newly
-    // resolves; stop on a pass with no progress (a cycle) or once all are done.
-    let mut world: HashMap<Entity, [[f32; 4]; 4]> = HashMap::with_capacity(locals.len());
-    loop {
-        let mut progressed = false;
-        for (entity, local) in &locals {
-            if world.contains_key(entity) {
-                continue;
-            }
-            let resolved = match parents.get(entity) {
-                None => Some(*local),
-                Some(parent) => world.get(parent).map(|pw| mat_mul4(*pw, *local)),
-            };
-            if let Some(matrix) = resolved {
-                world.insert(*entity, matrix);
-                progressed = true;
-            }
-        }
-        if !progressed || world.len() == locals.len() {
-            break;
-        }
-    }
-    // Cyclic entities fall back to their local matrix.
-    for (entity, local) in &locals {
-        world.entry(*entity).or_insert(*local);
-    }
-    world
+    let mut cache = TransformCache::default();
+    cache.resolve(ctx);
+    cache.world
 }
 
 pub(crate) fn propagate_transforms(ctx: &mut crate::ecs::PipelineContext) {
@@ -289,8 +257,8 @@ pub(crate) struct TransformCache {
 
 impl TransformCache {
     // Recompute world matrices into the reused buffers from the live Transform +
-    // Parent columns. Same fixed-point resolution as `resolve_world_matrices`,
-    // but writing into `self`'s retained-capacity buffers instead of fresh ones.
+    // Parent columns: roots use their local matrix, children compose
+    // parent-world * local, and cyclic parents fall back to their local matrix.
     fn resolve(&mut self, ctx: &crate::ecs::PipelineContext) {
         use crate::assets::{Parent, Transform};
 
@@ -303,6 +271,8 @@ impl TransformCache {
         for (entity, transform) in ctx.query_with_entity::<Transform>() {
             self.locals.push((entity, transform.model_matrix()));
         }
+        // Fixed-point resolution: keep a pass running while any entity newly
+        // resolves; stop on a pass with no progress (a cycle) or once all are done.
         loop {
             let mut progressed = false;
             for (entity, local) in &self.locals {
@@ -311,7 +281,7 @@ impl TransformCache {
                 }
                 let resolved = match self.parents.get(entity) {
                     None => Some(*local),
-                    Some(parent) => self.world.get(parent).map(|pw| mat_mul4(*pw, *local)),
+                    Some(parent) => self.world.get(parent).map(|pw| mat4_mul(*pw, *local)),
                 };
                 if let Some(matrix) = resolved {
                     self.world.insert(*entity, matrix);
@@ -322,6 +292,7 @@ impl TransformCache {
                 break;
             }
         }
+        // Cyclic entities fall back to their local matrix.
         for (entity, local) in &self.locals {
             self.world.entry(*entity).or_insert(*local);
         }
@@ -831,16 +802,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             .unwrap_or_else(|| local_bounds(&loaded.vertices));
         all_vertices.extend_from_slice(&loaded.vertices);
         all_indices.extend(loaded.indices.iter().map(|i| u32::from(*i) + base));
-        let mut lod_slices: Vec<LodSlice> = Vec::with_capacity(loaded.lod_alternates.len());
-        for (switch_distance, alt_idx) in &loaded.lod_alternates {
-            let alt_offset = all_indices.len();
-            all_indices.extend(alt_idx.iter().map(|i| u32::from(*i) + base));
-            lod_slices.push(LodSlice {
-                index_offset: alt_offset,
-                index_count: alt_idx.len(),
-                switch_distance: *switch_distance,
-            });
-        }
+        let lod_slices = append_lod_slices(&mut all_indices, &loaded.lod_alternates, base);
         // A deferred mesh appended no bytes; its draw record carries the baked
         // counts so the streamed upload's size check matches the real geometry.
         let (vertex_count, index_count) = loaded
@@ -1200,16 +1162,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         let base = all_vertices.len() as u32;
         all_vertices.extend_from_slice(verts);
         all_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
-        let mut lod_slices: Vec<LodSlice> = Vec::with_capacity(room_lods.len());
-        for (switch_distance, alt_idx) in room_lods {
-            let alt_offset = all_indices.len();
-            all_indices.extend(alt_idx.iter().map(|i| u32::from(*i) + base));
-            lod_slices.push(LodSlice {
-                index_offset: alt_offset,
-                index_count: alt_idx.len(),
-                switch_distance: *switch_distance,
-            });
-        }
+        let lod_slices = append_lod_slices(&mut all_indices, room_lods, base);
         // A room's texture carries its cook-assigned `TextureHandle`, whose
         // value is the texture's slot in the albedo pool. An out-of-range handle
         // (an unresolved generator name) falls back to slot 0, as before.
@@ -1393,7 +1346,7 @@ mod tests {
         assert_eq!(parent_g, parent_t.model_matrix(), "root world = local");
         assert_eq!(
             child_g,
-            mat_mul4(parent_t.model_matrix(), child_t.model_matrix()),
+            mat4_mul(parent_t.model_matrix(), child_t.model_matrix()),
             "child world = parent_world * local"
         );
     }
@@ -1446,7 +1399,7 @@ mod tests {
         );
         assert_eq!(
             ctx.components.get::<GlobalTransform>(child_e).unwrap().0,
-            mat_mul4(parent_t.model_matrix(), child_t.model_matrix())
+            mat4_mul(parent_t.model_matrix(), child_t.model_matrix())
         );
     }
 
@@ -1553,7 +1506,7 @@ mod tests {
         let under_a = ctx.components.get::<GlobalTransform>(child).unwrap().0;
         assert_eq!(
             under_a,
-            mat_mul4(a_t.model_matrix(), child_t.model_matrix())
+            mat4_mul(a_t.model_matrix(), child_t.model_matrix())
         );
         assert_eq!(ctx.components.get::<Children>(a).unwrap().0, vec![child]);
 
@@ -1562,7 +1515,7 @@ mod tests {
         let under_b = ctx.components.get::<GlobalTransform>(child).unwrap().0;
         assert_eq!(
             under_b,
-            mat_mul4(b_t.model_matrix(), child_t.model_matrix())
+            mat4_mul(b_t.model_matrix(), child_t.model_matrix())
         );
         assert_ne!(under_a, under_b, "the child actually moved");
         assert!(
@@ -1586,40 +1539,6 @@ mod tests {
             ctx.components.get::<Children>(b).unwrap().0.is_empty(),
             "B unlisted the child"
         );
-    }
-
-    #[test]
-    fn mat_mul4_identity_is_no_op() {
-        let m = [
-            [1.0, 2.0, 3.0, 0.0],
-            [4.0, 5.0, 6.0, 0.0],
-            [7.0, 8.0, 9.0, 0.0],
-            [10.0, 11.0, 12.0, 1.0],
-        ];
-        assert_eq!(mat_mul4(m, IDENTITY4), m);
-        assert_eq!(mat_mul4(IDENTITY4, m), m);
-    }
-
-    #[test]
-    fn mat_mul4_translations_compose() {
-        // T(1,0,0) * T(0,1,0) should give combined translation (1,1,0).
-        // Column-major: translation is in col 3.
-        let tx = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [1.0, 0.0, 0.0, 1.0],
-        ];
-        let ty = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0, 1.0],
-        ];
-        let result = mat_mul4(tx, ty);
-        assert_eq!(result[3], [1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result[0], [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(result[1], [0.0, 1.0, 0.0, 0.0]);
     }
 
     fn unit_quad_mesh() -> LoadedMesh {
