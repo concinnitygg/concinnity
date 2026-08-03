@@ -96,6 +96,9 @@ fn compose_frame_input(
         // Not gated by `gameplay`: the editor's orbit drag needs the modifier
         // while it holds the cursor, like `shift`.
         alt: raw.alt,
+        // Not gated by `gameplay` either: it carries the same UI shortcuts
+        // Ctrl does on the platforms that use it.
+        cmd: raw.cmd,
         // Not gated by `gameplay`: the rebind captures work while the
         // settings menu is open (the camera is what freezes behind it).
         captured_key: raw.captured_key,
@@ -277,6 +280,28 @@ mod tests {
         assert_eq!(input.scroll_delta, 1.5);
         assert_eq!(input.move_axis, [0.0, 0.0]);
         assert_eq!(input.captured_button, None);
+    }
+
+    // The UI modifiers pass the menu gate: they carry shortcuts that must work
+    // while a menu (or the in-engine editor) holds the screen.
+    #[test]
+    fn ui_modifiers_stay_live_behind_the_menu_gate() {
+        let raw = RenderInput {
+            ctrl: true,
+            alt: true,
+            cmd: true,
+            ..Default::default()
+        };
+        for gameplay in [true, false] {
+            let input = compose_frame_input(
+                &raw,
+                &PadSnapshot::default(),
+                GamepadMap::DEFAULT,
+                None,
+                gameplay,
+            );
+            assert!(input.ctrl && input.alt && input.cmd, "gameplay={gameplay}");
+        }
     }
 
     #[test]

@@ -18,11 +18,13 @@ use crate::editor::palette::{PaletteAction, providers};
 const WINDOW: usize = palette_panel::ROW_POOL;
 
 impl EditorHook {
-    // The Ctrl+K edge: toggle unless play mode owns the keyboard. Other text
-    // fields do not stand in the way (Ctrl+K types nothing), so the palette
-    // opens from anywhere in edit mode.
+    // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
+    // Other text fields do not stand in the way (the chord types nothing), so
+    // the palette opens from anywhere in edit mode. Both modifiers are taken
+    // so the shortcut reads natively on macOS without moving on Windows and
+    // Linux, where `cmd` is never set.
     pub(super) fn drive_palette_toggle(&mut self, input: &FrameInput, world: &mut World) {
-        if input.captured_key != Some(Key::K) || !input.ctrl || self.sim.playing() {
+        if input.captured_key != Some(Key::K) || !(input.ctrl || input.cmd) || self.sim.playing() {
             return;
         }
         self.toggle_palette(world);

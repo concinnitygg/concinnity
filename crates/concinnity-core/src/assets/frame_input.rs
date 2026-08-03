@@ -34,6 +34,13 @@ pub struct FrameInput {
     /// the editor's orbit drag). Not frozen while a menu is open, matching
     /// [ctrl](#structfield.ctrl).
     pub alt: bool,
+    /// True while the platform's command modifier is held: the Command key on
+    /// macOS, where application shortcuts are built on it. Windows and Linux
+    /// leave this false and use [ctrl](#structfield.ctrl) instead, since the
+    /// Super key there belongs to the desktop shell. UI that offers a shortcut
+    /// on both accepts either modifier. Not frozen while a menu is open,
+    /// matching [ctrl](#structfield.ctrl).
+    pub cmd: bool,
     /// Gamepad left-stick movement vector `[x, y]`: `x` is rightward strafe,
     /// `y` is forward. Radial deadzone applied, magnitude at most 1, so partial
     /// deflection walks slower. `[0.0, 0.0]` with no gamepad; frozen (zeroed)

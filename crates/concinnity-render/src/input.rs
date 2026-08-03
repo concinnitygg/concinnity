@@ -27,6 +27,11 @@ pub struct RenderInput {
     // drag); not gated by menu state, like `ctrl`. Wired on Metal; DirectX /
     // Vulkan set it from their key callbacks.
     pub alt: bool,
+    // True while the platform's command modifier is held: the Command key on
+    // macOS, where it is the idiomatic modifier for an application shortcut.
+    // Windows and Linux leave this false and keep Ctrl as their shortcut
+    // modifier, because the Super key there belongs to the desktop shell.
+    pub cmd: bool,
     // Accumulated mouse delta since the last take_input() call.
     pub mouse_dx: f32,
     pub mouse_dy: f32,

@@ -75,6 +75,10 @@ pub(super) struct KeyState {
     // Whether Option/Alt is currently held, tracked from FlagsChanged like
     // Control. Surfaced as a held modifier (the editor's orbit drag).
     pub(super) alt_down: bool,
+    // Whether Command is currently held, tracked from FlagsChanged like
+    // Control. Surfaced as a held modifier (the editor's palette shortcut); a
+    // Command chord also suppresses text and gameplay bindings in `handle_key`.
+    pub(super) command_down: bool,
     // Set by capture_cursor(); the next mouse-motion event after capture
     // has its delta discarded so queued pre-capture events (which were
     // produced before CGAssociateMouseAndMouseCursorPosition(0) took
@@ -477,6 +481,7 @@ impl MtlContext {
             escape: self.keys.escape_pulse,
             ctrl: self.keys.control_down,
             alt: self.keys.alt_down,
+            cmd: self.keys.command_down,
             captured_key: self.keys.captured_key,
             typed_char: self.keys.typed_char,
         };
@@ -535,6 +540,9 @@ impl MtlContext {
                     // Option/Alt is tracked the same way; like Control it
                     // drives no gameplay binding.
                     self.keys.alt_down = flags.contains(NSEventModifierFlags::Option);
+                    // Command likewise, the modifier macOS shortcuts are built
+                    // on.
+                    self.keys.command_down = flags.contains(NSEventModifierFlags::Command);
                 }
                 NSEventType::MouseMoved | NSEventType::LeftMouseDragged => {
                     if self.cursor_captured {
@@ -713,17 +721,32 @@ impl MtlContext {
             122 if pressed => self.keys.hud_toggle_pulse = true, // F1: stat HUD.
             _ => {}
         }
+        // Read from the event rather than the tracked flag so the decisions
+        // below hold whatever order the queue delivered FlagsChanged in.
+        let command = event
+            .modifierFlags()
+            .contains(NSEventModifierFlags::Command);
         // Rebindable keys, decoded through the runtime key map.
         if let Some(key) = key_from_mac(kc) {
             if pressed {
                 self.keys.captured_key = Some(key);
             }
-            self.apply_binding(key, pressed, pressed);
+            // A Command chord is a shortcut, so its press drives no gameplay
+            // action (Cmd+W is not "walk forward"). A release always binds:
+            // macOS withholds the key-up of a Command chord, so a key held
+            // before Command went down must still be able to let go.
+            if !(pressed && command) {
+                self.apply_binding(key, pressed, pressed);
+            }
         }
         // Printable text input: the OS-resolved glyph for this press (correct
         // casing / shifted symbols / dead keys), for text-input fields. Editing
-        // and navigation keys resolve to control glyphs and are filtered out.
-        if pressed && let Some(c) = printable_char(event) {
+        // and navigation keys resolve to control glyphs and are filtered out,
+        // as is a Command chord, which carries a glyph but means a shortcut.
+        if pressed
+            && !command
+            && let Some(c) = printable_char(event)
+        {
             self.keys.typed_char = Some(c);
         }
     }

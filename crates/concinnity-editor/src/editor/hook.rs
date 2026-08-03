@@ -574,6 +574,8 @@ mod console_tests;
 #[cfg(test)]
 mod override_tests;
 #[cfg(test)]
+mod palette_tests;
+#[cfg(test)]
 mod panel_tests;
 #[cfg(test)]
 mod select_tests;

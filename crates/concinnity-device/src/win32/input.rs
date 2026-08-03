@@ -213,6 +213,10 @@ impl KeyState {
             // across down/up; the editor's orbit drag reads it. Held state, not
             // a one-shot, so it is not reset below.
             alt: self.alt,
+            // Windows shortcuts are built on Ctrl, and the Windows key belongs
+            // to the shell (Win+K opens a system panel), so nothing here claims
+            // it.
+            cmd: false,
             captured_key: self.captured_key,
             // Printable text input from WM_CHAR (text-input fields read it). A
             // one-shot like `captured_key`, reset below.
