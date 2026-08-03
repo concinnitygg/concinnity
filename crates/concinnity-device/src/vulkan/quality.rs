@@ -406,14 +406,11 @@ impl VkContext {
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
         let (geom_buffer, geom_size) = accel.geom_table();
-        // The textured hit variant indexes the bindless pool; sized to the live
-        // albedo + normal-map pool count, 0 when the legacy per-draw path is
-        // active (no bindless layout, so the textured variant is not built).
-        let bindless_pool_size = if self.cull.bindless_set_layout.is_some() {
-            self.textures.len() + self.normal_map_textures.len()
-        } else {
-            0
-        };
+        // The textured hit variant indexes the bindless pool, so it compiles
+        // against the length the pool set layout was built with; 0 when the
+        // legacy per-draw path is active (no bindless layout, so the textured
+        // variant is not built).
+        let bindless_pool_size = self.cull.bindless_pool_size;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuild {
                 instance: &self.instance,

@@ -768,6 +768,46 @@ mod tests {
         assert_eq!(bindless_pool_size(7), 8);
     }
 
+    // The uploaded image vectors reproduce the pool length exactly: init pads an
+    // empty texture table to one fallback white image and always uploads the
+    // single flat-normal fallback alongside it. A raw texture count is never a
+    // valid pool length, so a compile handed one silently drops the last slot.
+    #[test]
+    fn pool_size_matches_the_uploaded_image_counts() {
+        for texture_count in [0usize, 1, 7, 64] {
+            let gpu_textures = texture_count.max(1);
+            let gpu_normal_maps = 1;
+            assert_eq!(
+                bindless_pool_size(texture_count),
+                gpu_textures + gpu_normal_maps
+            );
+            assert!(bindless_pool_size(texture_count) > texture_count);
+        }
+    }
+
+    // Every pool-sized program declares its texture array at the length the
+    // caller passed, so a pipeline rebuilt from the layout's stored pool size
+    // indexes the same slots the descriptor set was written with.
+    #[test]
+    fn pool_programs_size_their_texture_array_from_the_context() {
+        for pool_size in [2usize, 8, 65] {
+            let ctx = Ctx {
+                hot_reload: false,
+                msaa: false,
+                pool_size,
+                probe_count: 4,
+            };
+            for p in ALL.iter().filter(|p| p.assembly.pool_size) {
+                let src = p.source(&ctx);
+                assert!(
+                    src.contains(&format!("tex_pool[{pool_size}]")),
+                    "{} did not size its texture pool at {pool_size}",
+                    p.label
+                );
+            }
+        }
+    }
+
     // Two programs collide when they would compile identical source text with
     // the same kind and target; the table must not declare the same slot twice.
     #[test]

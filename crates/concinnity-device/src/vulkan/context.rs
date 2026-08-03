@@ -526,6 +526,13 @@ pub(super) struct VkCull {
     pub(super) bindless_pipeline: Option<vk::Pipeline>,
     pub(super) bindless_pipeline_layout: Option<vk::PipelineLayout>,
     pub(super) bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    // Descriptor count `bindless_set_layout`'s binding 1 was built with, and the
+    // `{POOL_SIZE}` every pool-sized shader must compile against. 0 when the
+    // bindless path is inactive. Every recompile reads this rather than
+    // re-deriving from the texture table: a shader that declares fewer array
+    // elements than the layout is legal Vulkan, so drift is silent and costs the
+    // trailing flat-normal fallback slot.
+    pub(super) bindless_pool_size: usize,
     // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
     // (bucket 0 is `bindless_pipeline`). Each renders its bucket's slice of the
     // GPU-culled command buffer through the shared bindless pipeline layout.

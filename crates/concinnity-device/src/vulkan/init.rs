@@ -3859,6 +3859,7 @@ impl VkContext {
                 bindless_pipeline,
                 bindless_pipeline_layout,
                 bindless_set_layout,
+                bindless_pool_size,
                 world_pipelines,
                 bucket_stride: n_cull,
                 bindless_main_spv,

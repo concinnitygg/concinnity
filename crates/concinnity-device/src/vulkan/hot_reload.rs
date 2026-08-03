@@ -271,7 +271,7 @@ impl VkContext {
             {
                 let (bvs, bps) = compile_bindless_shaders(
                     hr,
-                    self.textures.len(),
+                    self.cull.bindless_pool_size,
                     self.descriptors.probe_cube_count,
                 )?;
                 create_main_pipeline(
