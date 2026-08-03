@@ -29,6 +29,11 @@ mod widgets;
 // producer always occludes world screens while keeping its own relative order.
 const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
 
+// An open dropdown list is modal (it swallows every nav input while it is up),
+// so it draws over every screen and HUD-override layer; only the cursor, which
+// points at it, outranks it.
+const DROPDOWN_LAYER: i32 = i32::MAX - 1;
+
 // Everything the overlay build needs from GraphicsSystem's init: the loaded
 // font atlases, the sprite-texture slot map, the HUD chip id lists, and the
 // scroll-panel clip bands. Parked as a resource at the end of graphics init;
@@ -207,16 +212,16 @@ fn build_overlay_frame(
         let no_clips = std::collections::HashMap::new();
         let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
         let sprite_refs: Vec<&Sprite> = dd_sprites.iter().collect();
-        calls.extend(gfx_sprite::build_sprite_calls(
+        let mut dd_calls = gfx_sprite::build_sprite_calls(
             &sprite_refs,
             default_atlas_slot,
             &assets.sprite_texture_slots,
             [win_w, win_h],
             &no_clips,
             &empty_layers,
-        ));
+        );
         let label_refs: Vec<&TextLabel> = dd_labels.iter().collect();
-        calls.extend(text::build_text_calls(
+        dd_calls.extend(text::build_text_calls(
             &label_refs,
             &assets.fonts,
             win_w,
@@ -224,6 +229,13 @@ fn build_overlay_frame(
             &no_clips,
             &empty_layers,
         ));
+        // The synthesised list carries no asset id, so nothing would lift it out
+        // of layer 0 -- where the sort below buries it under the opaque rows it
+        // drops from (functional, but invisible).
+        for c in &mut dd_calls {
+            c.layer = DROPDOWN_LAYER;
+        }
+        calls.extend(dd_calls);
     }
 
     // Text-input fields draw as a background box + their text + a caret,
@@ -306,13 +318,13 @@ fn build_overlay_frame(
         && scene_sprites
             .iter()
             .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
-    // Reorder the overlay by layer when any layer is assigned (an active
-    // screen stack, or the editor's focus-stack overrides): a stable sort
-    // keeps same-layer order (so the sprites-then-text order within a panel
-    // is intact) while lifting a screen's or focused panel's whole content
-    // above the others'. Skipped entirely when no layer is set, so draw order
-    // stays pure insertion order.
-    if !hud_layers.is_empty() {
+    // Reorder the overlay by layer when any call carries one (an active screen
+    // stack, the editor's focus-stack overrides, an open dropdown, the cursor):
+    // a stable sort keeps same-layer order (so the sprites-then-text order
+    // within a panel is intact) while lifting a screen's or focused panel's
+    // whole content above the others'. Skipped entirely when nothing is
+    // layered, so draw order stays pure insertion order.
+    if calls.iter().any(|c| c.layer != 0) {
         calls.sort_by_key(|c| c.layer);
     }
     OverlayFrame {
@@ -436,6 +448,21 @@ mod tests {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+        }
+    }
+
+    // A list dropped from a 200x40 control on SCREEN, with room to open downward.
+    fn dropdown_view() -> DropdownView {
+        DropdownView {
+            anchor: [400.0, 100.0, 200.0, 40.0],
+            options: vec!["aa".to_string(), "bb".to_string()],
+            selected: 0,
+            first: 0,
+            hovered: None,
+            screen: Some(SCREEN),
+            font: Some(FONT),
+            scale: 1.0,
+            color: [1.0, 1.0, 1.0],
         }
     }
 
@@ -685,23 +712,72 @@ mod tests {
         let mut w = TestWorld::new();
         let before = w.build(0.0).calls.len();
 
-        w.resources.insert(OpenDropdown(Some(DropdownView {
-            anchor: [400.0, 100.0, 200.0, 40.0],
-            options: vec!["aa".to_string(), "bb".to_string()],
-            selected: 0,
-            first: 0,
-            hovered: None,
-            screen: Some(SCREEN),
-            font: Some(FONT),
-            scale: 1.0,
-            color: [1.0, 1.0, 1.0],
-        })));
+        w.resources.insert(OpenDropdown(Some(dropdown_view())));
         let frame = w.build(0.0);
         assert!(frame.calls.len() > before, "the list added draw calls");
         assert!(
             frame.calls.iter().all(|c| c.clip_rect.is_none()),
             "the list is never scissored"
         );
+    }
+
+    // The list is modal while it is up, so every call it adds sorts above the
+    // screen it drops from -- at layer 0 it sank under the menu's opaque dim and
+    // row cards, which drew it correctly but invisibly.
+    #[test]
+    fn open_dropdown_sorts_above_the_menus_row_cards() {
+        let mut w = TestWorld::new();
+        // The menu behind the list: an opaque full-canvas dim and a row card,
+        // both owned by the active screen.
+        w.push(backdrop(AssetId(1)));
+        w.push(Sprite {
+            screen: Some(SCREEN),
+            ..sprite(AssetId(2))
+        });
+        w.push(TextLabel {
+            screen: Some(SCREEN),
+            ..label(AssetId(3), "Window Mode")
+        });
+        w.resources.insert(screen_stack(7));
+        let menu = w.build(0.0).calls.len();
+
+        w.resources.insert(OpenDropdown(Some(dropdown_view())));
+        let frame = w.build(0.0);
+        assert!(frame.calls.len() > menu, "the list added draw calls");
+        // The menu's own calls keep their screen layer and the list's tail sits
+        // above every one of them.
+        let (below, list) = frame.calls.split_at(menu);
+        assert!(
+            below.iter().all(|c| c.layer == 7),
+            "{:?}",
+            below.iter().map(|c| c.layer).collect::<Vec<_>>()
+        );
+        assert!(
+            list.iter().all(|c| c.layer == DROPDOWN_LAYER),
+            "{:?}",
+            list.iter().map(|c| c.layer).collect::<Vec<_>>()
+        );
+    }
+
+    // The list outranks the editor's HUD overrides too: its panels sit in a
+    // reserved band above every screen, and a list dropped over one still has
+    // to draw on top of it.
+    #[test]
+    fn open_dropdown_sorts_above_the_editor_layer_band() {
+        let mut w = TestWorld::new();
+        w.push(sprite(AssetId(2)));
+        w.resources
+            .insert(HudLayers(std::collections::BTreeMap::from([(
+                AssetId(2),
+                3,
+            )])));
+        let panel = w.build(0.0).calls.len();
+
+        w.resources.insert(OpenDropdown(Some(dropdown_view())));
+        let frame = w.build(0.0);
+        let (below, list) = frame.calls.split_at(panel);
+        assert!(below.iter().all(|c| c.layer == HUD_OVERRIDE_LAYER_BASE + 3));
+        assert!(list.iter().all(|c| c.layer == DROPDOWN_LAYER));
     }
 
     // A closed dropdown synthesises nothing.
@@ -782,11 +858,11 @@ mod tests {
         assert!(!frame.calls.is_empty(), "the arrow was shaped");
     }
 
-    // The arrow outranks every layered element: an active screen and the editor
-    // both lift their content above 0, and a layer-0 cursor would sort under
-    // the opaque menu backdrop it points at.
+    // The arrow outranks every layered element: an active screen, the editor and
+    // an open dropdown all lift their content above 0, and a layer-0 cursor
+    // would sort under the opaque menu backdrop it points at.
     #[test]
-    fn the_ui_arrow_sorts_above_screen_and_editor_layers() {
+    fn the_ui_arrow_sorts_above_screen_editor_and_dropdown_layers() {
         let mut w = TestWorld::new();
         w.push(backdrop(AssetId(1)));
         w.push(sprite(AssetId(2)));
@@ -795,6 +871,7 @@ mod tests {
             ..sprite(AssetId(3))
         });
         w.resources.insert(screen_stack(7));
+        w.resources.insert(OpenDropdown(Some(dropdown_view())));
         w.resources
             .insert(HudLayers(std::collections::BTreeMap::from([(
                 AssetId(2),
