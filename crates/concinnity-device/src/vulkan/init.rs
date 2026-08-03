@@ -1131,19 +1131,37 @@ impl VkContext {
         };
 
         //  Descriptor set layouts
-        // Reflection-probe cube-array length this device affords. The geometry
-        // pipeline layout's per-stage sampler count is nine count-1 bindings plus
-        // this array, and `maxPerStageDescriptorSamplers` is 16 on MoltenVK
-        // against six figures on desktop drivers, so the count is read from the
-        // device rather than fixed at the `MAX_PROBES` ceiling. It sizes the
-        // binding below, the descriptor pool, every probe cube write, the GLSL
-        // arrays, and the placement list, so they can never disagree.
+        // Global set 0 is bound by the geometry path, glass, and the SSR resolve
+        // alike, so its sampler cost is paid by all three pipeline layouts.
+        // `maxPerStageDescriptorSamplers` is 16 on MoltenVK (Metal's per-stage
+        // sampler argument table, reported the same under every argument-buffer
+        // mode) against six figures on desktop drivers, which is not enough for
+        // the set plus the widest of those passes. Such a device declares the set
+        // update-after-bind so it budgets against
+        // `maxPerStageDescriptorUpdateAfterBindSamplers` (1024 on MoltenVK) and
+        // drops out of the plain per-layout count entirely. Desktop stays on the
+        // plain path untouched.
         let max_per_stage_samplers =
             unsafe { instance.get_physical_device_properties(physical_device) }
                 .limits
                 .max_per_stage_descriptor_samplers;
-        let probe_cube_count =
-            super::descriptor_layout::probe_cube_array_count(max_per_stage_samplers);
+        let global_constrained =
+            super::descriptor_layout::sampler_budget_is_constrained(max_per_stage_samplers);
+        if global_constrained && !update_after_bind {
+            tracing::warn!(
+                "global descriptor set: per-stage sampler budget ({max_per_stage_samplers}) is \
+                 too tight for the widest pass and update-after-bind is unavailable; the \
+                 reflection-probe cube array will be clamped"
+            );
+        }
+        let global_update_after_bind = global_constrained && update_after_bind;
+        // Reflection-probe cube-array length this device affords. Sizes the
+        // binding below, the descriptor pool, every probe cube write, the GLSL
+        // arrays, and the placement list, so they can never disagree.
+        let probe_cube_count = super::descriptor_layout::probe_cube_array_count(
+            max_per_stage_samplers,
+            global_update_after_bind,
+        );
         if (probe_cube_count as usize) < super::probe_uniforms::MAX_PROBES {
             tracing::info!(
                 "reflection probes: device sampler headroom binds {probe_cube_count} of {}",
@@ -1242,13 +1260,18 @@ impl VkContext {
                         .stage_flags(vk::ShaderStageFlags::FRAGMENT),
                 );
             }
-            unsafe {
-                device.create_descriptor_set_layout(
-                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-                    None,
-                )
+            // On a sampler-constrained device the whole set is declared
+            // update-after-bind, which is purely how it is budgeted: no binding
+            // takes `VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT`, so the update
+            // timing rules are unchanged and no extra descriptor-indexing feature
+            // is required. Every pool that allocates the set must declare the
+            // matching flag in turn.
+            let mut info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+            if global_update_after_bind {
+                info = info.flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL);
             }
-            .map_err(|e| format!("global set layout: {e}"))?
+            unsafe { device.create_descriptor_set_layout(&info, None) }
+                .map_err(|e| format!("global set layout: {e}"))?
         };
         // Per-object set (set 1): albedo + normal map.
         let object_set_layout =
@@ -1741,6 +1764,7 @@ impl VkContext {
                 max_per_stage_samplers,
                 probe_cube_count,
                 bindless_pool_size as u32,
+                global_update_after_bind,
             );
         if pool_overflows_samplers && !update_after_bind {
             tracing::warn!(
@@ -1844,11 +1868,12 @@ impl VkContext {
             + shadow_cull_set_count
             + gbuffer_sets_count;
         // An update-after-bind set layout can only be allocated from a pool that
-        // declares the same, so the flag rides along with the bindless decision.
+        // declares the same. This pool allocates both the global sets and the
+        // bindless set, so either opting in forces the flag.
         let mut pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(total_sets);
-        if bindless_uab {
+        if bindless_uab || global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
@@ -3586,6 +3611,7 @@ impl VkContext {
                 &planar_assignment.representatives,
                 main_render_pass,
                 crate::vulkan::planar::PlanarGlobalSet {
+                    update_after_bind: global_update_after_bind,
                     layout: global_set_layout,
                     probe_cube_count,
                 },
@@ -4040,6 +4066,7 @@ impl VkContext {
             memory_budget_supported,
             descriptors: VkDescriptors {
                 global_set_layout,
+                global_update_after_bind,
                 probe_cube_count,
                 object_set_layout,
                 text_set_layout,

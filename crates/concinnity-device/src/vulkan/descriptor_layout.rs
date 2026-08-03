@@ -141,6 +141,29 @@ fn object_fragment_samplers() -> u32 {
     count_fragment_samplers(&object_set())
 }
 
+// Fragment samplers the glass pipeline layouts declare outside the global set:
+// two on the view set (the scene snapshot + main depth) and one on the per-panel
+// params set (that pane's planar reflection). Mirrors `glass.rs`'s
+// `create_view_set_layout` + `create_params_set_layout`; the flat and RT glass
+// layouts share both sets, so both pay exactly this.
+const GLASS_PASS_SAMPLERS: u32 = 3;
+
+// Fragment samplers the reflection-resolve pipeline layouts declare outside the
+// global set: scene, G-buffer, roughness, and the prefilter cube they fall back
+// to. Mirrors the resolve set in `post/ssr.rs` and the identically shaped set 0
+// in `post/rt_reflections.rs`, which pays the same four.
+const REFLECTION_RESOLVE_SAMPLERS: u32 = 4;
+
+// The largest per-stage sampler cost any pipeline layout declares outside the
+// global set. The global set is bound by the geometry path (which adds per-object
+// set 1), by glass, and by the SSR / RT reflection resolves, so this is what the
+// global set's own cost has to fit alongside on the tightest of them.
+fn widest_pass_samplers() -> u32 {
+    object_fragment_samplers()
+        .max(GLASS_PASS_SAMPLERS)
+        .max(REFLECTION_RESOLVE_SAMPLERS)
+}
+
 // Fragment-stage samplers the geometry pipeline layout (global set 0 + per-object
 // set 1) declares outside the reflection-probe cube array. All are
 // descriptorCount 1, so this is the fixed cost the probe array is budgeted
@@ -151,23 +174,47 @@ fn fixed_fragment_samplers() -> u32 {
 
 // How many descriptors the reflection-probe cube array (global set 0, binding 8)
 // may declare on a device reporting `max_per_stage_samplers` for
-// `VkPhysicalDeviceLimits::maxPerStageDescriptorSamplers`. `MAX_PROBES` is the
-// CPU-side ceiling; a driver with less headroom than that binds fewer probes
-// rather than building a pipeline layout it rejects. MoltenVK reports 16, which
-// leaves room for `MAX_PROBES - 1`; desktop Vulkan drivers report six figures or
-// more, where this is exactly `MAX_PROBES`. Never returns 0: the GLSL array
-// declaration needs at least one element, and a device with no headroom at all
-// cannot run the geometry path either way.
-pub(in crate::vulkan) fn probe_cube_array_count(max_per_stage_samplers: u32) -> u32 {
+// `VkPhysicalDeviceLimits::maxPerStageDescriptorSamplers`.
+//
+// Once the global set is declared update-after-bind (`global_update_after_bind`,
+// the sampler-constrained path) the array budgets against
+// `maxPerStageDescriptorUpdateAfterBindSamplers` instead, which MoltenVK reports
+// as 1024, so it binds the full `MAX_PROBES` ceiling like every desktop driver.
+// The clamp below is the fallback for a device that is constrained AND cannot
+// offer update-after-bind at all: it binds fewer probes rather than building a
+// pipeline layout the driver rejects. Never returns 0: the GLSL array declaration
+// needs at least one element, and a device with no headroom at all cannot run the
+// geometry path either way.
+pub(in crate::vulkan) fn probe_cube_array_count(
+    max_per_stage_samplers: u32,
+    global_update_after_bind: bool,
+) -> u32 {
+    if global_update_after_bind {
+        return MAX_PROBES as u32;
+    }
     let headroom = max_per_stage_samplers.saturating_sub(fixed_fragment_samplers());
     headroom.clamp(1, MAX_PROBES as u32)
 }
 
+// Per-stage sampler cost global set 0 contributes to a plain pipeline-layout
+// budget: its count-1 samplers plus the reflection-probe cube array, or zero once
+// the set itself is update-after-bind. VUID-VkPipelineLayoutCreateInfo-descriptorType-03016
+// only counts set layouts created WITHOUT
+// `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, so opting the set
+// in removes it from every layout that binds it at once.
+fn global_plain_samplers(probe_cube_count: u32, global_update_after_bind: bool) -> u32 {
+    if global_update_after_bind {
+        0
+    } else {
+        global_fragment_samplers() + probe_cube_count
+    }
+}
+
 // Whether the bindless main pipeline layout must declare its texture pool
 // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`. The layout is
-// global set 0 + the bindless set, so its per-stage sampler cost is the count-1
-// global samplers, the probe cube array, and the pool itself; unlike the probe
-// array the pool cannot be clamped, since its length is the world's texture
+// global set 0 + the bindless set, so its plain per-stage sampler cost is
+// whatever the global set still contributes plus the pool itself; unlike the
+// probe array the pool cannot be clamped, since its length is the world's texture
 // table. Descriptors in an update-after-bind set layout are budgeted against
 // `maxPerStageDescriptorUpdateAfterBindSamplers` instead, which MoltenVK reports
 // as 1024 against a plain limit of 16. Desktop drivers report six figures for
@@ -176,19 +223,27 @@ pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
     max_per_stage_samplers: u32,
     probe_cube_count: u32,
     pool_size: u32,
+    global_update_after_bind: bool,
 ) -> bool {
-    let declared = global_fragment_samplers() + probe_cube_count + pool_size;
+    let declared = global_plain_samplers(probe_cube_count, global_update_after_bind) + pool_size;
     declared > max_per_stage_samplers
 }
 
-// Whether a device's per-stage sampler budget is too tight to seat the geometry
-// path at its `MAX_PROBES` ceiling. Such a device cannot seat a bindless texture
-// pool of any useful length either, so device creation enables the
-// descriptor-indexing update-after-bind features the pool's set layout opts into
-// (see `bindless_pool_needs_update_after_bind`). True on MoltenVK, false on every
-// desktop driver, which leaves their device-creation feature chain untouched.
+// Whether a device's per-stage sampler budget is too tight to seat the global set
+// at its `MAX_PROBES` ceiling alongside the widest pass that binds it. Metal's
+// per-stage sampler argument table is 16 entries, which MoltenVK reports verbatim
+// under every argument-buffer mode, against six figures on desktop drivers.
+//
+// Such a device declares global set 0 itself update-after-bind rather than
+// rationing the probe cube array against 16, so device creation enables the
+// descriptor-indexing update-after-bind features that opt-in needs. The budget is
+// measured against `widest_pass_samplers` because the global set is bound by the
+// geometry path, glass, and the SSR resolve alike, and the layout with the most
+// samplers of its own is the one that decides whether the plain budget holds.
+// True on MoltenVK, false on every desktop driver, which leaves their
+// device-creation feature chain and descriptor path untouched.
 pub(in crate::vulkan) fn sampler_budget_is_constrained(max_per_stage_samplers: u32) -> bool {
-    max_per_stage_samplers < fixed_fragment_samplers() + MAX_PROBES as u32
+    global_fragment_samplers() + MAX_PROBES as u32 + widest_pass_samplers() > max_per_stage_samplers
 }
 
 // Per-object set (set 1): albedo at 0, normal map at 1.
@@ -314,20 +369,100 @@ mod tests {
         assert_eq!(object_fragment_samplers(), 2);
     }
 
-    // A driver with room to spare gets the full CPU-side ceiling, so every
-    // desktop Vulkan device keeps binding `MAX_PROBES` probes exactly as before.
+    // The per-pass sampler costs the global set has to fit alongside. The
+    // reflection resolves are the widest, so they decide whether a device's plain
+    // budget holds.
     #[test]
-    fn probe_cube_array_count_is_max_probes_on_desktop_drivers() {
-        for limit in [1_048_576, 500_000, 1_048_575, MAX_PROBES as u32 + 9] {
-            assert_eq!(probe_cube_array_count(limit), MAX_PROBES as u32);
+    fn widest_pass_is_the_reflection_resolve() {
+        assert_eq!(object_fragment_samplers(), 2);
+        assert_eq!(GLASS_PASS_SAMPLERS, 3);
+        assert_eq!(REFLECTION_RESOLVE_SAMPLERS, 4);
+        assert_eq!(widest_pass_samplers(), REFLECTION_RESOLVE_SAMPLERS);
+    }
+
+    // Plain (non update-after-bind) per-stage sampler count of a pipeline layout
+    // that binds global set 0 plus `pass_samplers` of its own. This is exactly
+    // what VUID-VkPipelineLayoutCreateInfo-descriptorType-03016 counts.
+    fn layout_plain_samplers(
+        probe_cube_count: u32,
+        global_update_after_bind: bool,
+        pass_samplers: u32,
+    ) -> u32 {
+        global_plain_samplers(probe_cube_count, global_update_after_bind) + pass_samplers
+    }
+
+    // The overflow this budget model exists to remove, pinned to the counts
+    // MoltenVK's validation layer actually reported: with global set 0 left
+    // plain, geometry sits at exactly the 16 limit with zero room, glass
+    // overflows at 17, and the SSR resolve at 18.
+    #[test]
+    fn plain_global_set_overflows_glass_and_ssr_on_moltenvk() {
+        let probes = probe_cube_array_count(16, false);
+        assert_eq!(probes, 7);
+        assert_eq!(
+            layout_plain_samplers(probes, false, object_fragment_samplers()),
+            16
+        );
+        assert_eq!(
+            layout_plain_samplers(probes, false, GLASS_PASS_SAMPLERS),
+            17
+        );
+        assert_eq!(
+            layout_plain_samplers(probes, false, REFLECTION_RESOLVE_SAMPLERS),
+            18
+        );
+    }
+
+    // Declaring global set 0 update-after-bind takes it out of the plain count
+    // entirely, so every layout that binds it pays only its own samplers and the
+    // probe array stops being rationed. This is the whole point of the opt-in:
+    // 16 of 16 with nothing to spare becomes 4 of 16 at the widest.
+    #[test]
+    fn update_after_bind_global_set_clears_every_layout_on_moltenvk() {
+        let probes = probe_cube_array_count(16, true);
+        assert_eq!(probes, MAX_PROBES as u32);
+        for pass in [
+            object_fragment_samplers(),
+            GLASS_PASS_SAMPLERS,
+            REFLECTION_RESOLVE_SAMPLERS,
+        ] {
+            assert_eq!(layout_plain_samplers(probes, true, pass), pass);
+            assert!(layout_plain_samplers(probes, true, pass) <= 16);
         }
     }
 
-    // MoltenVK reports 16, which leaves 7 after the nine fixed samplers: one
-    // short of `MAX_PROBES`, and the reason the count is a runtime value at all.
+    // A driver with room to spare gets the full CPU-side ceiling without ever
+    // opting in, so every desktop Vulkan device keeps binding `MAX_PROBES`
+    // probes through the plain path exactly as before.
     #[test]
-    fn probe_cube_array_count_fits_moltenvk_limit() {
-        let count = probe_cube_array_count(16);
+    fn probe_cube_array_count_is_max_probes_on_desktop_drivers() {
+        for limit in [1_048_576, 500_000, 1_048_575] {
+            assert!(!sampler_budget_is_constrained(limit));
+            assert_eq!(probe_cube_array_count(limit, false), MAX_PROBES as u32);
+        }
+    }
+
+    // Where the plain path stops being enough: the global set's own samplers, the
+    // probe array at its ceiling, and the widest pass that binds it. A device one
+    // below that is constrained even though the geometry path alone would fit,
+    // because the reflection resolve would not.
+    #[test]
+    fn constrained_threshold_is_the_global_set_plus_the_widest_pass() {
+        let threshold = global_fragment_samplers() + MAX_PROBES as u32 + widest_pass_samplers();
+        assert_eq!(threshold, 19);
+        assert!(!sampler_budget_is_constrained(threshold));
+        assert!(sampler_budget_is_constrained(threshold - 1));
+        assert_eq!(probe_cube_array_count(threshold, false), MAX_PROBES as u32);
+    }
+
+    // The fallback path for a device that is sampler-constrained AND cannot
+    // offer update-after-bind: MoltenVK's 16 leaves 7 after the nine fixed
+    // samplers, one short of `MAX_PROBES`. Reachable only when the
+    // descriptor-indexing feature is missing, and the reason the count is a
+    // runtime value rather than a constant.
+    #[test]
+    fn probe_cube_array_count_fits_moltenvk_limit_without_update_after_bind() {
+        let count = probe_cube_array_count(16, false);
         assert_eq!(count, 7);
         assert_eq!(fixed_fragment_samplers() + count, 16);
     }
@@ -339,7 +474,7 @@ mod tests {
     fn probe_cube_array_count_never_zero_or_over_ceiling() {
         let fixed = fixed_fragment_samplers();
         for limit in 0..=64u32 {
-            let count = probe_cube_array_count(limit);
+            let count = probe_cube_array_count(limit, false);
             assert!(count >= 1, "limit {limit} produced a zero-length array");
             assert!(count <= MAX_PROBES as u32, "limit {limit} exceeded ceiling");
             if limit > fixed {
@@ -348,43 +483,55 @@ mod tests {
                     "limit {limit} produced {count}, overrunning the budget"
                 );
             }
+            assert_eq!(probe_cube_array_count(limit, true), MAX_PROBES as u32);
         }
     }
 
     // The bindless layout drops per-object set 1 for the texture pool, so it
-    // budgets against the global samplers only. On MoltenVK's 16 that leaves
-    // 16 - 7 - 7 = 2 pool entries, the one-texture world; anything larger needs
-    // update-after-bind. This is the overflow the runtime decision exists for.
+    // budgets against whatever the global set still contributes. Left plain on
+    // MoltenVK's 16 that leaves 16 - 7 - 7 = 2 pool entries, the one-texture
+    // world; anything larger needs update-after-bind.
     #[test]
     fn bindless_pool_needs_update_after_bind_past_moltenvk_headroom() {
-        let probes = probe_cube_array_count(16);
-        assert!(!bindless_pool_needs_update_after_bind(16, probes, 2));
-        assert!(bindless_pool_needs_update_after_bind(16, probes, 3));
+        let probes = probe_cube_array_count(16, false);
+        assert!(!bindless_pool_needs_update_after_bind(16, probes, 2, false));
+        assert!(bindless_pool_needs_update_after_bind(16, probes, 3, false));
+    }
+
+    // With global set 0 update-after-bind the pool has the whole plain budget to
+    // itself, so only a genuinely large texture table forces the pool's own
+    // opt-in. The pool still cannot be clamped, so past 16 it opts in too.
+    #[test]
+    fn bindless_pool_budgets_against_the_full_limit_under_global_update_after_bind() {
+        let probes = probe_cube_array_count(16, true);
+        assert!(!bindless_pool_needs_update_after_bind(16, probes, 16, true));
+        assert!(bindless_pool_needs_update_after_bind(16, probes, 17, true));
     }
 
     // A driver with room to spare keeps the plain layout for any pool a world
     // can realistically declare, so desktop never changes descriptor path.
     #[test]
     fn bindless_pool_stays_plain_on_desktop_drivers() {
-        let probes = probe_cube_array_count(1_048_576);
+        let probes = probe_cube_array_count(1_048_576, false);
         for pool_size in [2, 64, 4096, 65_536] {
             assert!(!bindless_pool_needs_update_after_bind(
-                1_048_576, probes, pool_size
+                1_048_576, probes, pool_size, false
             ));
         }
     }
 
-    // The device-creation gate and the per-layout decision must agree about who
-    // is starved: every device that can overflow on a plausible pool has to have
-    // had the update-after-bind features enabled for it.
+    // The device-creation gate and the per-layout decisions must agree about who
+    // is starved: every device where any layout binding the global set can
+    // overflow has to have had the update-after-bind features enabled for it.
     #[test]
-    fn constrained_budget_covers_every_device_that_can_overflow() {
+    fn constrained_budget_covers_every_layout_that_can_overflow() {
         for limit in 0..=64u32 {
-            let probes = probe_cube_array_count(limit);
-            if bindless_pool_needs_update_after_bind(limit, probes, 2) {
+            let probes = probe_cube_array_count(limit, false);
+            let worst = layout_plain_samplers(probes, false, widest_pass_samplers());
+            if worst > limit || bindless_pool_needs_update_after_bind(limit, probes, 2, false) {
                 assert!(
                     sampler_budget_is_constrained(limit),
-                    "limit {limit} overflows on a one-texture world but reads unconstrained"
+                    "limit {limit} can overflow but reads unconstrained"
                 );
             }
         }

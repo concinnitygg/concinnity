@@ -333,6 +333,9 @@ pub(in crate::vulkan) struct PlanarConfig {
 pub(in crate::vulkan) struct PlanarGlobalSet {
     pub(in crate::vulkan) layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) probe_cube_count: u32,
+    // Whether `layout` is update-after-bind, which the pool allocating from it
+    // must declare in turn.
+    pub(in crate::vulkan) update_after_bind: bool,
 }
 
 // The shared lighting + environment bindings every planar global set carries: the
@@ -397,6 +400,7 @@ impl PlanarReflectionSet {
         let PlanarGlobalSet {
             layout: global_set_layout,
             probe_cube_count,
+            update_after_bind: global_update_after_bind,
         } = global_set;
 
         let PlanarDevice {
@@ -561,9 +565,15 @@ impl PlanarReflectionSet {
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count((ring * 4 + ring + ring + ring + ring).max(1) as u32),
         ];
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
+        // The per-(plane, frame) global sets come from the forward global set
+        // layout, so this pool has to declare update-after-bind whenever that
+        // layout does.
+        let mut pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets((ring * 2 + usize::from(has_hiz)).max(1) as u32);
+        if global_update_after_bind {
+            pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
+        }
         let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("planar descriptor pool: {e}"))?;
 

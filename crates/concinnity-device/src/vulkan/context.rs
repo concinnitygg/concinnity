@@ -384,6 +384,14 @@ impl VkGeometry {
 // chunk, clone, and skinned descriptors live in their own pools, not here.
 pub(super) struct VkDescriptors {
     pub(super) global_set_layout: vk::DescriptorSetLayout,
+    // Whether `global_set_layout` was created with
+    // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, so it budgets
+    // against the update-after-bind sampler limit instead of Metal's 16-entry
+    // per-stage table and costs the layouts that bind it nothing. Every pool that
+    // allocates a global set (here, `planar.rs`, `probe.rs`) must declare the
+    // matching flag. True on a sampler-constrained device (MoltenVK), false on
+    // every desktop driver.
+    pub(super) global_update_after_bind: bool,
     // Descriptor count of `global_set_layout`'s reflection-probe cube array
     // (binding 8), derived at init from the device's per-stage sampler limit by
     // `descriptor_layout::probe_cube_array_count`. Every later probe cube write,
