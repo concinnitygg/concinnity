@@ -53,28 +53,22 @@ pub fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     // Convert source channel order to RGBA, then flip rows if the origin is at
     // the bottom-left (the TGA default) so callers always get top-row-first.
     let mut rgba = vec![0u8; pixel_count * 4];
-    for i in 0..pixel_count {
-        let s = i * channels;
-        let d = i * 4;
-        match channels {
-            4 => {
-                rgba[d] = raw[s + 2];
-                rgba[d + 1] = raw[s + 1];
-                rgba[d + 2] = raw[s];
-                rgba[d + 3] = raw[s + 3];
+    let src = raw.chunks_exact(channels);
+    let dst = rgba.chunks_exact_mut(4);
+    match channels {
+        4 => {
+            for (s, d) in src.zip(dst) {
+                d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
             }
-            3 => {
-                rgba[d] = raw[s + 2];
-                rgba[d + 1] = raw[s + 1];
-                rgba[d + 2] = raw[s];
-                rgba[d + 3] = 255;
+        }
+        3 => {
+            for (s, d) in src.zip(dst) {
+                d.copy_from_slice(&[s[2], s[1], s[0], 255]);
             }
-            _ => {
-                let v = raw[s];
-                rgba[d] = v;
-                rgba[d + 1] = v;
-                rgba[d + 2] = v;
-                rgba[d + 3] = 255;
+        }
+        _ => {
+            for (s, d) in src.zip(dst) {
+                d.copy_from_slice(&[s[0], s[0], s[0], 255]);
             }
         }
     }
@@ -135,11 +129,8 @@ fn decode_rle(data: &[u8], pixel_count: usize, channels: usize) -> Result<Vec<u8
 fn flip_rows(rgba: &mut [u8], width: usize, height: usize) {
     let stride = width * 4;
     for y in 0..height / 2 {
-        let top = y * stride;
-        let bot = (height - 1 - y) * stride;
-        for x in 0..stride {
-            rgba.swap(top + x, bot + x);
-        }
+        let (head, tail) = rgba.split_at_mut((height - 1 - y) * stride);
+        head[y * stride..y * stride + stride].swap_with_slice(&mut tail[..stride]);
     }
 }
 

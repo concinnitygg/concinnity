@@ -16,7 +16,6 @@ pub(crate) mod application;
 pub(crate) mod camera_shot;
 pub(crate) mod companion;
 pub(crate) mod companion_specs;
-pub(crate) mod config;
 pub(crate) mod defaults;
 
 pub(crate) mod light_rig;
@@ -38,8 +37,6 @@ pub use provenance::Provenance;
 pub(crate) mod shadow;
 pub use shadow::merge_args;
 
-#[allow(unused_imports)]
-pub use config::{DEFAULT_MAX_BLOB_BYTES, WorldConfig};
 pub use expand::{
     ExpandReport, GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world, expand_world_from_str,
 };

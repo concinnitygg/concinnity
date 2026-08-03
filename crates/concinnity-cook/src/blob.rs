@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use concinnity_blob::{HEADER_SIZE, encode_cnb};
+use concinnity_blob::encode_cnb;
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
 // Re-export the read side from core so `crate::blob::{BlobData, load_raw, ...}`
@@ -181,6 +181,9 @@ pub fn write_blobs(
     Ok(PackResult { blob_paths })
 }
 
+// Size at which the packer rolls over to a fresh blob.
+pub const DEFAULT_MAX_BLOB_BYTES: u64 = 1 << 30;
+
 // PayloadPacker (build step)
 pub struct PayloadPacker {
     max_blob_bytes: u64,
@@ -249,13 +252,7 @@ pub fn write_lock(
     let mut blobs = Vec::new();
     for path in blob_paths {
         let data = fs::read(path).unwrap_or_default();
-        let payload_bytes = if data.len() > HEADER_SIZE {
-            let defs_len = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
-            let payload_start = HEADER_SIZE + defs_len;
-            (data.len().saturating_sub(payload_start)) as u64
-        } else {
-            0
-        };
+        let payload_bytes = concinnity_blob::payload_section(&data).len() as u64;
         blobs.push(BlobEntry {
             path: path.clone(),
             checksum: checksum(&data),

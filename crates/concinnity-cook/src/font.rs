@@ -9,6 +9,8 @@
 // outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment shader
 // uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
 
+use serde::Deserialize;
+
 use concinnity_core::assets::Font;
 use concinnity_core::build::font::GlyphMetrics;
 
@@ -54,7 +56,7 @@ const BUILTIN_FONT_BYTES: &[u8] = include_bytes!("fonts/Questrial-Regular.ttf");
 // instead of reading from disk, so no external file is required.
 pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let font: Font =
-        serde_json::from_value(args.clone()).map_err(|e| format!("Font: invalid args: {}", e))?;
+        Deserialize::deserialize(args).map_err(|e| format!("Font: invalid args: {}", e))?;
     let path = font.path.as_str();
     // Captured before `font` is shadowed by the loaded fontdue face below; baked
     // into the payload for the runtime's line-height / cap-height.
@@ -120,11 +122,12 @@ pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
     // stride times the glyph count overflows u16 (a debug-only multiply panic),
     // even though the packed atlas width is then clamped to <= 2048 logical px.
     let ideal_w_hi = (max_glyph_w_hi as u32 + pad_hi as u32) * glyph_count as u32;
-    let atlas_w_hi = next_pow2(ideal_w_hi.max(64)).min(2048 * OVERSAMPLE) as u16;
+    let atlas_w_hi = u32::next_power_of_two(ideal_w_hi.max(64)).min(2048 * OVERSAMPLE) as u16;
     let glyphs_per_row = (atlas_w_hi / (max_glyph_w_hi + pad_hi)).max(1);
     let rows = glyph_count.div_ceil(glyphs_per_row);
-    let atlas_h_hi =
-        next_pow2((max_glyph_h_hi as u32 + pad_hi as u32) * rows as u32 + pad_hi as u32) as u16;
+    let atlas_h_hi = u32::next_power_of_two(
+        (max_glyph_h_hi as u32 + pad_hi as u32) * rows as u32 + pad_hi as u32,
+    ) as u16;
 
     let atlas_w_hi = atlas_w_hi as u32;
     let atlas_h_hi = atlas_h_hi as u32;
@@ -450,19 +453,6 @@ fn serialise(
     Ok(out)
 }
 
-fn next_pow2(n: u32) -> u32 {
-    if n == 0 {
-        return 1;
-    }
-    let mut v = n - 1;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,11 +588,11 @@ mod tests {
 
     #[test]
     fn next_pow2_rounds_up_and_maps_zero_to_one() {
-        assert_eq!(next_pow2(0), 1);
-        assert_eq!(next_pow2(1), 1);
-        assert_eq!(next_pow2(3), 4);
-        assert_eq!(next_pow2(64), 64);
-        assert_eq!(next_pow2(65), 128);
+        assert_eq!(u32::next_power_of_two(0), 1);
+        assert_eq!(u32::next_power_of_two(1), 1);
+        assert_eq!(u32::next_power_of_two(3), 4);
+        assert_eq!(u32::next_power_of_two(64), 64);
+        assert_eq!(u32::next_power_of_two(65), 128);
     }
 
     #[test]

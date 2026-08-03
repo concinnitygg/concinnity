@@ -6,8 +6,10 @@
 // - Packs all payloads into blobs using PayloadPacker (fills locators)
 // - Sorts: components first, then systems in declared order
 
+use serde::Deserialize;
+
 use crate::assets::FileKind;
-use crate::world::{WorldConfig, WorldJsonlAsset};
+use crate::world::WorldJsonlAsset;
 
 use crate::asset_api::{self, AssetRequest};
 use crate::blob::PayloadPacker;
@@ -174,7 +176,6 @@ pub struct PipelineResult {
 //   - asset type is registered (via asset_api::create_asset_def)
 //   - per-type structural checks via crate::check
 // Shader assets are not compiled here; use the validate_shader tool for that.
-#[allow(dead_code)]
 pub fn validate_asset(
     asset_type: &str,
     name: &str,
@@ -258,7 +259,6 @@ pub fn build_compiled_with_progress(
     artifacts_dir: Option<&str>,
     progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
 ) -> std::io::Result<PipelineResult> {
-    let config = WorldConfig::default();
     if let Some(p) = progress {
         p(BuildProgress {
             stage: "desugar",
@@ -274,17 +274,17 @@ pub fn build_compiled_with_progress(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let gltf_cache = probe_gltf_cache(&assets, artifacts_dir);
+    let mesh_cache = probe_mesh_payload_cache(&assets, artifacts_dir);
 
     // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
     // skinned-mesh pass so an importer that wanted to share state could read
     // already-imported skeletons; today both passes parse the .glb fresh,
     // but the ordering keeps that option open without an API churn.
-    desugar_gltf_skinned_meshes(&mut assets, &gltf_cache)?;
-    desugar_fbx_skinned_meshes(&mut assets, &gltf_cache)?;
-    desugar_gltf_meshes(&mut assets, &gltf_cache)?;
-    desugar_fbx_meshes(&mut assets, &gltf_cache)?;
+    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache)?;
+    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache)?;
+    desugar_gltf_meshes(&mut assets, &mesh_cache)?;
+    desugar_fbx_meshes(&mut assets, &mesh_cache)?;
     desugar_animation_imports(&mut assets)?;
     desugar_root_motion(&mut assets)?;
 
@@ -458,9 +458,9 @@ pub fn build_compiled_with_progress(
             resource_jobs: &resource_jobs,
             partition: &partition,
             mesh_source_handles: &resource_handles,
-            max_blob_bytes: config.max_blob_bytes,
+            max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
             artifacts_dir,
-            gltf_cache: &gltf_cache,
+            mesh_cache: &mesh_cache,
             progress,
         },
     )?;
@@ -507,27 +507,27 @@ pub fn build_compiled_with_progress(
     })
 }
 
-// Per-asset state recorded by `probe_gltf_cache`. `key` is the cache key
+// Per-asset state recorded by `probe_mesh_payload_cache`. `key` is the cache key
 // computed from the asset's pre-desugar args; `bytes` is `Some` when the
 // cache already held a compiled payload for that key. On a hit, the desugar
 // pass skips the .glb parse for this asset; on a miss, compile_and_pack
 // stores the freshly compiled payload under the same `key` so the next
 // build's probe can re-use it.
 #[derive(Clone)]
-struct GltfCacheEntry {
+struct MeshCacheEntry {
     key: String,
     bytes: Option<Vec<u8>>,
 }
 
-// Hash every glTF-sourced Mesh / SkinnedMesh asset's pre-desugar args and
-// referenced .glb, then probe the content-addressed payload cache. Returns
-// one entry per (source-backed) asset name. Assets without a `source` are
-// not probed: their args don't depend on a file, so the regular per-asset
-// cache path inside compile_and_pack_payloads is sufficient.
-fn probe_gltf_cache(
+// Hash every source-backed Mesh / SkinnedMesh asset's pre-desugar args and
+// referenced source file (`.glb` or `.fbx`), then probe the content-addressed
+// payload cache. Returns one entry per source-backed asset name. Assets
+// without a `source` are not probed: their args don't depend on a file, so the
+// regular per-asset cache path inside compile_and_pack_payloads is sufficient.
+fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     artifacts_dir: Option<&str>,
-) -> std::collections::HashMap<String, GltfCacheEntry> {
+) -> std::collections::HashMap<String, MeshCacheEntry> {
     use crate::resource_handles::{ResourceAssetCompile, ResourceAssetType};
 
     let mut out = std::collections::HashMap::new();
@@ -561,18 +561,11 @@ fn probe_gltf_cache(
         let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
         let key = crate::cache::payload_key(discriminant, &asset.args, &ctx, &inputs);
         let bytes = crate::cache::load(&key);
-        out.insert(asset.name.clone(), GltfCacheEntry { key, bytes });
+        out.insert(asset.name.clone(), MeshCacheEntry { key, bytes });
     }
     out
 }
 
-// Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
-// and write the imported geometry + skeleton into the asset's inline
-// `vertices` / `indices` / `skeleton` args. A SkinnedMesh with no `source` is
-// left untouched, so an inline-authored mesh is byte-for-byte unchanged;
-// `.fbx` sources belong to `desugar_fbx_skinned_meshes`.
-// Skips an asset whose cache probe found a precompiled payload: there is no
-// reason to parse the .glb when the bytes are already in hand.
 // Which skinned mesh of the asset's source file it selects; absent means the
 // file's first.
 fn skin_index_arg(asset: &WorldJsonlAsset) -> u32 {
@@ -595,9 +588,16 @@ fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap
         .collect()
 }
 
+// Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
+// and write the imported geometry + skeleton into the asset's inline
+// `vertices` / `indices` / `skeleton` args. A SkinnedMesh with no `source` is
+// left untouched, so an inline-authored mesh is byte-for-byte unchanged;
+// `.fbx` sources belong to `desugar_fbx_skinned_meshes`.
+// Skips an asset whose cache probe found a precompiled payload: there is no
+// reason to parse the .glb when the bytes are already in hand.
 fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
-    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+    mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
         if asset.asset_type != SKINNED_MESH_TYPE {
@@ -617,8 +617,8 @@ fn desugar_gltf_skinned_meshes(
         // directly. Leave the args un-desugared so they keep matching the
         // pre-desugar cache key on the next build.
         if matches!(
-            gltf_cache.get(&asset.name),
-            Some(GltfCacheEntry { bytes: Some(_), .. })
+            mesh_cache.get(&asset.name),
+            Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
         }
@@ -692,7 +692,7 @@ fn desugar_gltf_skinned_meshes(
 // `indices` / `skeleton` args.
 fn desugar_fbx_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
-    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+    mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
         if asset.asset_type != SKINNED_MESH_TYPE {
@@ -708,8 +708,8 @@ fn desugar_fbx_skinned_meshes(
             continue;
         }
         if matches!(
-            gltf_cache.get(&asset.name),
-            Some(GltfCacheEntry { bytes: Some(_), .. })
+            mesh_cache.get(&asset.name),
+            Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
         }
@@ -771,7 +771,7 @@ fn desugar_fbx_skinned_meshes(
 // of one file, so memoization keeps this O(files) rather than O(primitives).
 fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
-    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+    mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
     use crate::assets::VertexData;
     use std::collections::HashMap;
@@ -807,8 +807,8 @@ fn desugar_gltf_meshes(
         // for this asset (see `desugar_gltf_skinned_meshes` for the same
         // pattern). Args stay pre-desugar so the next build's probe hits.
         if matches!(
-            gltf_cache.get(&asset.name),
-            Some(GltfCacheEntry { bytes: Some(_), .. })
+            mesh_cache.get(&asset.name),
+            Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
         }
@@ -934,7 +934,7 @@ fn desugar_gltf_meshes(
 // file) and each primitive's u16 chunk split is memoized.
 fn desugar_fbx_meshes(
     assets: &mut [WorldJsonlAsset],
-    gltf_cache: &std::collections::HashMap<String, GltfCacheEntry>,
+    mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
     use crate::assets::VertexData;
     use crate::fbx::FbxScene;
@@ -961,8 +961,8 @@ fn desugar_fbx_meshes(
         // Honour the same content-addressed cache the glTF pass uses: a probe
         // hit means the compiled payload is already in hand, so skip the parse.
         if matches!(
-            gltf_cache.get(&asset.name),
-            Some(GltfCacheEntry { bytes: Some(_), .. })
+            mesh_cache.get(&asset.name),
+            Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
         }
@@ -1238,7 +1238,7 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
         {
             continue;
         }
-        let mut anim: Animation = serde_json::from_value(asset.args.clone()).map_err(|e| {
+        let mut anim: Animation = Deserialize::deserialize(&asset.args).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
@@ -1285,7 +1285,6 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
 // resolution, but stops short of compiling payloads: intended for fast
 // server-side pre-deploy checks where shader compilation is not needed.
 // Every problem found is reported in a single newline-joined error.
-#[allow(dead_code)]
 pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
     let loaded = crate::world::prepare_world(content).map_err(errors_to_io)?;
 
@@ -1376,7 +1375,7 @@ struct PackContext<'a> {
     mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
     max_blob_bytes: u64,
     artifacts_dir: Option<&'a str>,
-    gltf_cache: &'a std::collections::HashMap<String, GltfCacheEntry>,
+    mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
 }
 
@@ -1395,7 +1394,7 @@ fn compile_and_pack_payloads(
         mesh_source_handles,
         max_blob_bytes,
         artifacts_dir,
-        gltf_cache,
+        mesh_cache,
         progress,
     } = pack_ctx;
 
@@ -1478,7 +1477,7 @@ fn compile_and_pack_payloads(
                 // desugar; honor those results here so the .glb parse really
                 // is skipped on cache hits. On a miss the precomputed key is
                 // used at store time, keeping the next build's probe valid.
-                if let Some(entry) = gltf_cache.get(name) {
+                if let Some(entry) = mesh_cache.get(name) {
                     if let Some(bytes) = &entry.bytes {
                         cache_hits.fetch_add(1, Ordering::Relaxed);
                         return Ok((*idx, bytes.clone()));
@@ -1525,40 +1524,39 @@ fn compile_and_pack_payloads(
         // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
         // the source parse really is skipped on a hit and the pre-desugar key is
         // reused at store time (same contract as the component gltf-cache path).
-        if let Some(entry) = gltf_cache.get(&asset.name) {
-            let bytes = if let Some(bytes) = &entry.bytes {
-                resource_hits += 1;
-                bytes.clone()
-            } else {
-                let compiled = rt.compile_payload(&asset.args)?;
-                crate::cache::store(&entry.key, &compiled);
-                compiled
-            };
-            resource_pending.push(PendingResource {
-                kind: rt.resource_kind() as u8,
-                handle: *handle,
-                bytes,
-                is_data: rt.is_data(),
-                extra_data,
-            });
-            continue;
-        }
-        // Every resource asset compiles identically on every backend, so its
-        // entry is shared across a DirectX and a Vulkan cook.
-        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
-        let key = crate::cache::payload_key(
-            RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
-            &asset.args,
-            &ctx,
-            &inputs,
-        );
-        let bytes = if let Some(bytes) = crate::cache::load(&key) {
-            resource_hits += 1;
-            bytes
+        let bytes = if let Some(entry) = mesh_cache.get(&asset.name) {
+            match &entry.bytes {
+                Some(bytes) => {
+                    resource_hits += 1;
+                    bytes.clone()
+                }
+                None => {
+                    let compiled = rt.compile_payload(&asset.args)?;
+                    crate::cache::store(&entry.key, &compiled);
+                    compiled
+                }
+            }
         } else {
-            let compiled = rt.compile_payload(&asset.args)?;
-            crate::cache::store(&key, &compiled);
-            compiled
+            // Every resource asset compiles identically on every backend, so its
+            // entry is shared across a DirectX and a Vulkan cook.
+            let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
+            let key = crate::cache::payload_key(
+                RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8,
+                &asset.args,
+                &ctx,
+                &inputs,
+            );
+            match crate::cache::load(&key) {
+                Some(bytes) => {
+                    resource_hits += 1;
+                    bytes
+                }
+                None => {
+                    let compiled = rt.compile_payload(&asset.args)?;
+                    crate::cache::store(&key, &compiled);
+                    compiled
+                }
+            }
         };
         resource_pending.push(PendingResource {
             kind: rt.resource_kind() as u8,
@@ -1782,9 +1780,9 @@ fn cache_inputs_by_type(
 // Naming-convention relationships handled:
 //   - A Prop named `<scene>_*` belongs to Scene `<scene>`. The matched scene
 //     name is written into the prop's `scene` arg.
-//   - A Sprite, TextLabel, TextInput, or HitRegion named `<screen>_*` belongs
-//     to Screen `<screen>`. The matched screen name is written into the
-//     asset's `screen` arg.
+//   - A UI element (Sprite, ImageOverlay, TextLabel, Text, TextInput,
+//     HitRegion, ScrollPanel) named `<screen>_*` belongs to Screen `<screen>`.
+//     The matched screen name is written into the asset's `screen` arg.
 //   - A HitRegion or KeyBinding `action` of the form `scene:<name>`,
 //     `screen:show:<name>`, `screen:push:<name>`, or `screen:toggle:<name>`
 //     has its `<name>` part rewritten to the interned id, so `UiInputSystem`
@@ -1804,6 +1802,17 @@ fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
         .map(|a| a.name.clone())
         .collect();
 
+    // Longest matching prefix wins so a nested name (e.g. `level_boss_*` under
+    // both `level` and `level_boss`) binds to the most specific host.
+    // Equivalent to first-match when no host name prefixes another.
+    let longest_prefix_host = |name: &str, hosts: &[String]| -> Option<String> {
+        hosts
+            .iter()
+            .filter(|h| name.starts_with(&format!("{h}_")))
+            .max_by_key(|h| h.len())
+            .cloned()
+    };
+
     // Rewrite an action string, replacing the trailing `<name>` after the
     // given action prefix with its interned id. Returns Some(new_action) when
     // the action used the prefix with an unresolved name; None otherwise.
@@ -1820,67 +1829,34 @@ fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
     };
 
     for asset in assets.iter_mut() {
-        match norm(&asset.asset_type).as_str() {
-            "prop" => {
-                if asset.args.get("scene").is_some() {
-                    continue;
-                }
-                // Longest matching prefix wins so a nested name (e.g.
-                // `level_boss_*` under both `level` and `level_boss`) binds to
-                // the most specific scene. Equivalent to first-match when no
-                // scene name prefixes another.
-                let matched = scene_names
-                    .iter()
-                    .filter(|sn| asset.name.starts_with(&format!("{sn}_")))
-                    .max_by_key(|sn| sn.len())
-                    .cloned();
-                if let (Some(sn), serde_json::Value::Object(m)) = (matched, &mut asset.args) {
-                    m.insert("scene".to_string(), serde_json::Value::String(sn));
-                }
-            }
+        let ty = norm(&asset.asset_type);
+
+        // Host binding by name prefix: a Prop takes its Scene, a UI element
+        // takes its Screen. An asset that already names its host is left alone.
+        let host = match ty.as_str() {
+            "prop" => Some(("scene", &scene_names)),
             "sprite" | "imageoverlay" | "textlabel" | "text" | "textinput" | "hitregion"
-            | "scrollpanel" => {
-                // Resolve screen prefix association. Longest matching prefix
-                // wins so a nested screen name (e.g. `main_menu_settings_*`
-                // under both `main_menu` and `main_menu_settings`) binds to the
-                // most specific screen. Equivalent to first-match when no
-                // screen name prefixes another.
-                if asset.args.get("screen").is_none() {
-                    let matched = screen_names
-                        .iter()
-                        .filter(|sn| asset.name.starts_with(&format!("{sn}_")))
-                        .max_by_key(|sn| sn.len())
-                        .cloned();
-                    if let (Some(sn), serde_json::Value::Object(m)) = (matched, &mut asset.args) {
-                        m.insert("screen".to_string(), serde_json::Value::String(sn));
-                    }
-                }
-                // Resolve screen:* / scene:* action targets to interned ids.
-                if matches!(norm(&asset.asset_type).as_str(), "hitregion") {
-                    let new_action = asset
-                        .args
-                        .get("action")
-                        .and_then(|v| v.as_str())
-                        .and_then(resolve_action);
-                    if let (Some(action), serde_json::Value::Object(m)) =
-                        (new_action, &mut asset.args)
-                    {
-                        m.insert("action".to_string(), serde_json::Value::String(action));
-                    }
-                }
+            | "scrollpanel" => Some(("screen", &screen_names)),
+            _ => None,
+        };
+        if let Some((key, hosts)) = host
+            && asset.args.get(key).is_none()
+            && let Some(matched) = longest_prefix_host(&asset.name, hosts)
+            && let serde_json::Value::Object(m) = &mut asset.args
+        {
+            m.insert(key.to_string(), serde_json::Value::String(matched));
+        }
+
+        // Resolve screen:* / scene:* action targets to interned ids.
+        if matches!(ty.as_str(), "hitregion" | "keybinding") {
+            let new_action = asset
+                .args
+                .get("action")
+                .and_then(|v| v.as_str())
+                .and_then(resolve_action);
+            if let (Some(action), serde_json::Value::Object(m)) = (new_action, &mut asset.args) {
+                m.insert("action".to_string(), serde_json::Value::String(action));
             }
-            "keybinding" => {
-                let new_action = asset
-                    .args
-                    .get("action")
-                    .and_then(|v| v.as_str())
-                    .and_then(resolve_action);
-                if let (Some(action), serde_json::Value::Object(m)) = (new_action, &mut asset.args)
-                {
-                    m.insert("action".to_string(), serde_json::Value::String(action));
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -2215,11 +2191,11 @@ mod tests {
 
     // A cache map that claims a compiled payload is already in hand for the
     // named asset, so every desugar pass must skip its source parse.
-    fn hit_cache(name: &str) -> std::collections::HashMap<String, GltfCacheEntry> {
+    fn hit_cache(name: &str) -> std::collections::HashMap<String, MeshCacheEntry> {
         let mut m = std::collections::HashMap::new();
         m.insert(
             name.to_string(),
-            GltfCacheEntry {
+            MeshCacheEntry {
                 key: "k".to_string(),
                 bytes: Some(vec![1, 2, 3]),
             },
@@ -3518,7 +3494,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_gltf_cache_probes_only_source_backed_mesh_assets() {
+    fn probe_mesh_payload_cache_probes_only_source_backed_mesh_assets() {
         let assets = vec![
             wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
             wja("inline", MESH_TYPE, serde_json::json!({"vertices": []})),
@@ -3533,7 +3509,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let probed = probe_gltf_cache(&assets, None);
+        let probed = probe_mesh_payload_cache(&assets, None);
 
         let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
         names.sort_unstable();
@@ -3758,12 +3734,12 @@ mod tests {
     // A source-backed asset that is neither mesh kind is skipped: its payload
     // cache is handled by the per-asset path inside the compile pass.
     #[test]
-    fn probe_gltf_cache_skips_a_source_backed_non_mesh_asset() {
+    fn probe_mesh_payload_cache_skips_a_source_backed_non_mesh_asset() {
         let assets = vec![
             wja("tex", "Texture", serde_json::json!({"source": "wall.png"})),
             wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
         ];
-        let probed = probe_gltf_cache(&assets, None);
+        let probed = probe_mesh_payload_cache(&assets, None);
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
@@ -3801,14 +3777,14 @@ mod tests {
         let mut cache = std::collections::HashMap::new();
         cache.insert(
             "shape".to_string(),
-            GltfCacheEntry {
+            MeshCacheEntry {
                 key: "shape-key".to_string(),
                 bytes: Some(vec![1, 2, 3]),
             },
         );
         cache.insert(
             "body".to_string(),
-            GltfCacheEntry {
+            MeshCacheEntry {
                 key: "body-key".to_string(),
                 bytes: Some(vec![4, 5, 6, 7]),
             },
@@ -3824,7 +3800,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
-                gltf_cache: &cache,
+                mesh_cache: &cache,
                 progress: None,
             },
         )
@@ -3879,14 +3855,14 @@ mod tests {
         let cache = std::collections::HashMap::from([
             (
                 "day_mesh".to_string(),
-                GltfCacheEntry {
+                MeshCacheEntry {
                     key: "day-key".to_string(),
                     bytes: Some(vec![0xDD; 4]),
                 },
             ),
             (
                 "bg_mesh".to_string(),
-                GltfCacheEntry {
+                MeshCacheEntry {
                     key: "bg-key".to_string(),
                     bytes: Some(vec![0xBB; 2]),
                 },
@@ -3903,7 +3879,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
-                gltf_cache: &cache,
+                mesh_cache: &cache,
                 progress: None,
             },
         )
@@ -3946,7 +3922,7 @@ mod tests {
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
-                gltf_cache: &Default::default(),
+                mesh_cache: &Default::default(),
                 progress: None,
             },
         )
@@ -3978,7 +3954,7 @@ mod tests {
         ];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
         let resource_jobs = vec![(1usize, ResourceAssetType::Mesh, 0u32)];
-        let miss = |key: &str| GltfCacheEntry {
+        let miss = |key: &str| MeshCacheEntry {
             key: key.to_string(),
             bytes: None,
         };
@@ -3997,7 +3973,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
-                gltf_cache: &cache,
+                mesh_cache: &cache,
                 progress: None,
             },
         )
@@ -4039,7 +4015,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
-                gltf_cache: &Default::default(),
+                mesh_cache: &Default::default(),
                 progress: None,
             },
         )
@@ -4082,7 +4058,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
-                gltf_cache: &Default::default(),
+                mesh_cache: &Default::default(),
                 progress: None,
             },
         )
@@ -4107,14 +4083,14 @@ mod tests {
         let cache = std::collections::HashMap::from([
             (
                 "a".to_string(),
-                GltfCacheEntry {
+                MeshCacheEntry {
                     key: "a".to_string(),
                     bytes: Some(vec![0xAA; 6]),
                 },
             ),
             (
                 "b".to_string(),
-                GltfCacheEntry {
+                MeshCacheEntry {
                     key: "b".to_string(),
                     bytes: Some(vec![0xBB; 6]),
                 },
@@ -4131,7 +4107,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 8,
                 artifacts_dir: None,
-                gltf_cache: &cache,
+                mesh_cache: &cache,
                 progress: None,
             },
         )

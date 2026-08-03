@@ -1,4 +1,4 @@
-// src/build/gltf.rs
+// src/gltf.rs
 //
 // Imports a skinned mesh + skeleton from a glTF file (binary `.glb` or text
 // `.gltf` with external / data-URI buffers) into the inline `SkinnedMesh`
@@ -15,7 +15,7 @@
 // Imported* payload types.
 use crate::glb::{
     ImportedAnimation, ImportedSkinnedMesh, import_glb_animations_from_doc,
-    import_skinned_from_doc, parse_glb, resolve_source,
+    import_skinned_from_doc, parse_glb,
 };
 
 // Parse a glTF file into inline `SkinnedMesh` geometry plus a
@@ -80,11 +80,8 @@ pub fn import_glb_animation(
 // for the desugar pass when the user authored `animation_name` instead of
 // `animation_index` and we need to look up the index.
 pub fn glb_animation_names(source: &str) -> Result<Vec<String>, String> {
-    let path = resolve_source(source);
-    let bytes = std::fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
-    let doc = gltf::Gltf::from_slice(&bytes)
-        .map_err(|e| format!("'{}': not a valid glTF/GLB file: {}", path, e))?;
-    Ok(doc
+    Ok(crate::glb::parse_glb(source)?
+        .doc
         .document
         .animations()
         .map(|a| a.name().unwrap_or("").to_string())

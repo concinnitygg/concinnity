@@ -54,10 +54,12 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
 // revision, or a change to a default sample count. A bump changes every key
 // and so invalidates every existing cache entry.
 //
-// 4: font payload gained a supersample factor in its header (build::font).
-// 5: EnvironmentMap default irradiance_face_size changed 32 -> 8
-//    (build::environment_map), so worlds that omit it bake a different cube.
-//    (The counter was later reset to 1 with the postcard/blob migration.)
+// The counter was reset to 1 with the postcard/blob migration. Two entries
+// predate that reset and are kept for context:
+//   (pre-reset 4): font payload gained a supersample factor (build::font).
+//   (pre-reset 5): EnvironmentMap default irradiance_face_size 32 -> 8
+//   (build::environment_map), so worlds that omit it bake a different cube.
+//
 // 2: EnvironmentMap glossy reflection mips gained a firefly clamp
 //    (prefilter_clamp, default 12); worlds that omit the arg still bake dimmer
 //    hot texels, so every cached envmap must rebake (build::environment_map).
@@ -141,11 +143,7 @@ fn hash_source_input(input: &SourceInput) -> Option<(String, [u8; 32])> {
 
 // Bump when the SceneImport expansion output shape changes (a new generated
 // asset field, a renamed arg, a different naming scheme) so existing cached
-// entry lists are invalidated. v2: glass materials are detected (by FBX
-// transparency / name) and emitted smooth + translucent. v3: a skinned node
-// expands to SkinnedMesh + Animation entries instead of a static
-// Mesh / Model / Prop. v4: glTF materials carry their packed
-// metallic-roughness + emissive textures and an alpha-cutout threshold.
+// entry lists are invalidated.
 const EXPAND_FORMAT_VERSION: u32 = 4;
 
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
@@ -253,14 +251,8 @@ fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(String
 
     let mut out = Vec::new();
     for s in strings {
-        if let Some(src) = concinnity_core::build::shader::builtin_shader_source(&s) {
-            let bare = Path::new(&s)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&s);
-            let mut h = Sha256::new();
-            h.update(src.as_bytes());
-            out.push((format!("builtin:{bare}"), h.finalize().into()));
+        if let Some(hashed) = hash_source_input(&SourceInput::Builtin(s.clone())) {
+            out.push(hashed);
             continue;
         }
         let Some(path) = resolve_source(&s, ctx) else {

@@ -24,30 +24,16 @@ pub const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
 // Deserialise a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
 // The byte slice returned is borrowed from the input; callers can reinterpret
 // it as `&[f32]` after a length check.
-//
-// `dead_code` allow: the round-trip reader for the CUBE payload format, kept as
-// the counterpart to `compile_cubemap_payload`'s writer and exercised by that
-// module's tests; no non-test caller today (the runtime reads the raw bytes
-// directly). Remove the allow if a caller adopts it.
-#[allow(dead_code)]
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
-    if bytes.len() < CUBE_PAYLOAD_HEADER_BYTES {
-        return Err(format!(
-            "cubemap payload too short: {} bytes (need at least {} for header)",
-            bytes.len(),
-            CUBE_PAYLOAD_HEADER_BYTES
-        ));
-    }
-    let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-    if magic != CUBE_PAYLOAD_MAGIC {
-        return Err(format!(
-            "cubemap payload magic 0x{:08x} does not match expected 0x{:08x}",
-            magic, CUBE_PAYLOAD_MAGIC
-        ));
-    }
-    let face_size = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-    let mip_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-    let format_id = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    let mut header = crate::build::payload::HeaderReader::open(
+        bytes,
+        CUBE_PAYLOAD_MAGIC,
+        CUBE_PAYLOAD_HEADER_BYTES,
+        "cubemap",
+    )?;
+    let face_size = header.u32();
+    let mip_count = header.u32();
+    let format_id = header.u32();
     if mip_count != 1 {
         return Err(format!(
             "cubemap payload mip_count {} unsupported (only single-mip supported today)",
@@ -71,6 +57,17 @@ pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
         ));
     }
     Ok((face_size, &bytes[CUBE_PAYLOAD_HEADER_BYTES..expected]))
+}
+
+// Read a Radiance `.hdr` file off disk and decode it to a linear-light image.
+pub fn load_file(path: &str) -> Result<HdrImage, String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("failed to read HDR source '{}': {}", path, e))?;
+    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{}': {}", path, e))
 }
 
 // HDR (Radiance RGBE) decoder

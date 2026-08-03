@@ -210,9 +210,8 @@ fn build_lod_alternates(
             alt_count,
         ));
     }
-    let radius = bounding_sphere_radius(verts);
-
     let positions: Vec<[f32; 3]> = verts.iter().map(|(p, _, _, _, _)| *p).collect();
+    let radius = bounding_sphere_radius(&positions);
     let lod0_tri_count = indices.len() / 3;
     let mut out = Vec::with_capacity(alt_count);
     for level in 1..lod_levels {
@@ -235,14 +234,13 @@ fn build_lod_alternates(
 
 // Bounding-sphere radius around the mesh AABB centre. Cheap upper bound on
 // the per-vertex distance to centre, used to seed default LOD thresholds.
-fn bounding_sphere_radius(verts: &[VertT]) -> f32 {
-    if verts.is_empty() {
+fn bounding_sphere_radius(positions: &[[f32; 3]]) -> f32 {
+    if positions.is_empty() {
         return 1.0;
     }
     let mut mn = [f32::INFINITY; 3];
     let mut mx = [f32::NEG_INFINITY; 3];
-    for v in verts {
-        let p = v.0;
+    for p in positions {
         for k in 0..3 {
             mn[k] = mn[k].min(p[k]);
             mx[k] = mx[k].max(p[k]);
@@ -403,7 +401,7 @@ pub fn compile_skinned_mesh_payload_with_lods(
             ));
         }
         let positions: Vec<[f32; 3]> = skinned.iter().map(|v| v.pos).collect();
-        let radius = skinned_bounding_sphere_radius(&skinned);
+        let radius = bounding_sphere_radius(&positions);
         let lod0_tris = indices.len() / 3;
         let mut out: Vec<(f32, Vec<u16>)> = Vec::with_capacity(alt_count);
         for level in 1..lod_levels {
@@ -442,24 +440,6 @@ pub fn compile_skinned_mesh_payload_with_lods(
         &morphs,
         &alternates,
     ))
-}
-
-fn skinned_bounding_sphere_radius(verts: &[crate::gfx::mesh_payload::SkinnedVertex]) -> f32 {
-    if verts.is_empty() {
-        return 1.0;
-    }
-    let mut mn = [f32::INFINITY; 3];
-    let mut mx = [f32::NEG_INFINITY; 3];
-    for v in verts {
-        for k in 0..3 {
-            mn[k] = mn[k].min(v.pos[k]);
-            mx[k] = mx[k].max(v.pos[k]);
-        }
-    }
-    let dx = mx[0] - mn[0];
-    let dy = mx[1] - mn[1];
-    let dz = mx[2] - mn[2];
-    (0.5 * (dx * dx + dy * dy + dz * dz).sqrt()).max(0.25)
 }
 
 // Compile a VoxelChunk component into a packed binary mesh payload.
@@ -512,24 +492,7 @@ where
     }
 
     let (vertices, indices) = build_voxel_mesh(dim, block_size, &blocks, &palette)?;
-    let tangents = compute_tangents(&vertices, &indices);
-    let verts5: Vec<_> = vertices
-        .into_iter()
-        .zip(tangents)
-        .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
-        .collect();
-
-    // Optional LOD alternates: each level halves the triangle budget via
-    // QEM half-edge collapse. Default off; opt in with `lod_levels: 2..=8`
-    // on the VoxelChunk asset. Routed through the same payload trailer
-    // as Mesh / ProceduralMesh so the runtime LoadedMesh path picks them
-    // up unchanged.
-    let alternates = build_lod_alternates(args, &verts5, &indices)?;
-    Ok(crate::gfx::mesh_payload::serialise_with_lods(
-        &verts5,
-        &indices,
-        &alternates,
-    ))
+    finish_mesh_payload(vertices, indices, args)
 }
 
 fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
@@ -614,18 +577,7 @@ pub fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
 
     let (vertices, indices) =
         room::build_room_geometry(half_width, half_depth, 0.0, ceiling_height);
-    let tangents = compute_tangents(&vertices, &indices);
-    let verts5: Vec<_> = vertices
-        .into_iter()
-        .zip(tangents)
-        .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
-        .collect();
-    let alternates = build_lod_alternates(args, &verts5, &indices)?;
-    Ok(crate::gfx::mesh_payload::serialise_with_lods(
-        &verts5,
-        &indices,
-        &alternates,
-    ))
+    finish_mesh_payload(vertices, indices, args)
 }
 
 // Builds geometry from inline vertex/index data in the blob JSON.
@@ -1153,12 +1105,11 @@ mod tests {
     #[test]
     fn bounding_sphere_radius_covers_empty_small_and_boxed_inputs() {
         assert_eq!(bounding_sphere_radius(&[]), 1.0);
-        let vt =
-            |p: [f32; 3]| -> VertT { (p, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0; 3], [0.0, 0.0]) };
         // Degenerate extents clamp to the 0.25 floor.
-        assert_eq!(bounding_sphere_radius(&[vt([0.0; 3])]), 0.25);
+        assert_eq!(bounding_sphere_radius(&[[0.0; 3]]), 0.25);
+        assert_eq!(bounding_sphere_radius(&[[3.0; 3]]), 0.25);
         // A unit cube has a half-diagonal of sqrt(3)/2.
-        let cube = [vt([0.0, 0.0, 0.0]), vt([1.0, 1.0, 1.0])];
+        let cube = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
         assert!((bounding_sphere_radius(&cube) - (3.0f32).sqrt() / 2.0).abs() < 1e-6);
     }
 
@@ -1481,24 +1432,6 @@ mod tests {
                 .lods
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn skinned_bounding_sphere_radius_covers_empty_and_boxed_inputs() {
-        assert_eq!(skinned_bounding_sphere_radius(&[]), 1.0);
-        let sv = |pos: [f32; 3]| crate::gfx::mesh_payload::SkinnedVertex {
-            pos,
-            normal: [0.0, 1.0, 0.0],
-            tangent: [1.0, 0.0, 0.0],
-            color: [1.0; 3],
-            uv: [0.0, 0.0],
-            joints: [0; 4],
-            weights: [1.0, 0.0, 0.0, 0.0],
-        };
-        // A single point has no extent, so the radius clamps to the 0.25 floor.
-        assert_eq!(skinned_bounding_sphere_radius(&[sv([3.0; 3])]), 0.25);
-        let cube = [sv([0.0, 0.0, 0.0]), sv([1.0, 1.0, 1.0])];
-        assert!((skinned_bounding_sphere_radius(&cube) - (3.0f32).sqrt() / 2.0).abs() < 1e-6);
     }
 
     fn voxel_args(dim: [u32; 3], blocks: Vec<u32>) -> serde_json::Value {

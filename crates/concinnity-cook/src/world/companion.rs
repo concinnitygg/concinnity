@@ -42,13 +42,11 @@ fn asset_type_norm(v: &serde_json::Value) -> String {
 // earlier round is our own, so neither counts.
 fn record_if_overridden(
     assets: &mut [serde_json::Value],
-    snapshot: &[serde_json::Value],
+    claimed_names: &HashSet<String>,
     report: &mut ExpandReport,
     spec: &CompanionSpec,
 ) {
-    let claimed = snapshot
-        .iter()
-        .any(|v| v.get("name").and_then(|n| n.as_str()) == Some(spec.name));
+    let claimed = claimed_names.contains(spec.name);
     let ours = report.injected.iter().any(|i| i.name == spec.name);
     if claimed && !ours {
         report.record_shadowed(spec.name, spec.asset_type, "companion", spec.args.clone());
@@ -57,12 +55,8 @@ fn record_if_overridden(
 }
 
 // Dispatch a companion lookup for one asset by its normalized type name.
-fn companions_for_type(
-    asset_type: &str,
-    args: &serde_json::Value,
-    world: &[serde_json::Value],
-) -> Vec<CompanionSpec> {
-    companions_for(&type_norm_str(asset_type), args, world)
+fn companions_for_type(asset_type: &str, world: &[serde_json::Value]) -> Vec<CompanionSpec> {
+    companions_for(&type_norm_str(asset_type), world)
 }
 
 // Pixel size of the auto-injected default font. Deliberately larger than a
@@ -124,24 +118,24 @@ fn apply_default_font(assets: &mut Vec<serde_json::Value>, report: &mut ExpandRe
 
 pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mut ExpandReport) {
     loop {
-        // Snapshot the world for this round. New companions added in this
-        // round only enter the visible set on the next iteration; that keeps
-        // multi-spec batches from
-        // shadowing each other through the per-spec type-dedup.
-        let snapshot = assets.clone();
-        let present_types: HashSet<String> = snapshot.iter().map(asset_type_norm).collect();
+        // Freeze what this round sees before injecting anything: companions
+        // added below only enter the visible set on the next iteration, which
+        // keeps multi-spec batches from shadowing each other through the
+        // per-spec type-dedup.
+        let present_types: HashSet<String> = assets.iter().map(asset_type_norm).collect();
+        let claimed_names: HashSet<String> = assets
+            .iter()
+            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+            .map(str::to_string)
+            .collect();
 
         // Collect every spec implied by every declared asset.
         let mut candidates: Vec<CompanionSpec> = Vec::new();
-        for value in &snapshot {
+        for value in assets.iter() {
             let Some(t) = value.get("type").and_then(|s| s.as_str()) else {
                 continue;
             };
-            let args = value
-                .get("args")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            candidates.extend(companions_for_type(t, &args, &snapshot));
+            candidates.extend(companions_for_type(t, assets));
         }
 
         // Apply: skip a spec whose asset_type already exists in the
@@ -151,7 +145,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         let mut to_inject = Vec::new();
         for spec in candidates {
             if present_types.contains(&type_norm_str(spec.asset_type)) {
-                record_if_overridden(assets, &snapshot, report, &spec);
+                record_if_overridden(assets, &claimed_names, report, &spec);
                 continue;
             }
             if !seen_names.insert(spec.name.to_string()) {

@@ -21,7 +21,6 @@ pub struct AssetRequest {
 // Describes one addable asset type. Returned by list_addable_types() and
 // used by HTTP GET /assets/types and CLI help output
 #[derive(Debug, Clone, serde::Serialize)]
-#[allow(dead_code)]
 pub struct AssetTypeEntry {
     pub asset_type: String,
     pub registration: Registration,
@@ -65,7 +64,6 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
 }
 
 // List every externally-addable component type with its registration metadata.
-#[allow(dead_code)]
 pub fn list_addable_types() -> Vec<AssetTypeEntry> {
     let mut entries: Vec<AssetTypeEntry> = ComponentType::addable_types()
         .map(|(ct, reg)| AssetTypeEntry {

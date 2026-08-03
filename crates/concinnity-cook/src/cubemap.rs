@@ -18,11 +18,8 @@
 // Face order matches the standard cube convention used by Metal / Vulkan / DX:
 //   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z
 
-use std::io::Read;
-
 use crate::hdr::{
-    CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, HdrImage, decode_hdr,
-    equirect_to_cube,
+    CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
 };
 
 // Validate that args specify either a supported source extension or omit it.
@@ -65,7 +62,7 @@ pub fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, Stri
         .and_then(|v| v.as_u64())
         .unwrap_or(256) as u32;
 
-    let hdr = load_hdr(source)?;
+    let hdr = crate::hdr::load_file(source)?;
     let faces = equirect_to_cube(&hdr, face_size);
     Ok(serialise_faces(face_size, &faces))
 }
@@ -79,20 +76,9 @@ fn serialise_faces(face_size: u32, faces: &[Vec<f32>; 6]) -> Vec<u8> {
     buf.extend_from_slice(&CUBE_FORMAT_RGBA32F.to_le_bytes());
     for face in faces {
         debug_assert_eq!(face.len(), face_floats);
-        for &v in face {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
+        buf.extend_from_slice(bytemuck::cast_slice::<f32, u8>(face));
     }
     buf
-}
-
-fn load_hdr(path: &str) -> Result<HdrImage, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("failed to read HDR source '{}': {}", path, e))?;
-    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{}': {}", path, e))
 }
 
 // Tests
@@ -100,7 +86,7 @@ fn load_hdr(path: &str) -> Result<HdrImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hdr::deserialise;
+    use crate::hdr::{HdrImage, deserialise};
 
     #[test]
     fn payload_round_trip_via_deserialise() {

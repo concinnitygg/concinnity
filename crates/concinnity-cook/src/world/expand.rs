@@ -30,10 +30,12 @@ pub(crate) fn type_norm(v: &serde_json::Value) -> String {
 }
 
 pub(crate) fn asset_name(v: &serde_json::Value) -> String {
-    v.get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .to_string()
+    asset_name_str(v).to_string()
+}
+
+// Borrowing form of `asset_name`, for scans that only compare.
+pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
+    v.get("name").and_then(|n| n.as_str()).unwrap_or("")
 }
 
 // One asset added to the world by an injection pass rather than authored or

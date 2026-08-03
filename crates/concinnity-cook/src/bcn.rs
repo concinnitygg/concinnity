@@ -1,4 +1,4 @@
-// src/build/bcn.rs
+// src/bcn.rs
 //
 // Block-compression decoders for the three DDS formats the asset set ships:
 // BC1 (DXT1), BC3 (DXT5), and BC5 (ATI2, two-channel). Each decodes a compressed
@@ -7,6 +7,8 @@
 // BC5 holds only two channels (red, green). It is used for tangent-space normal
 // maps, so the blue channel is reconstructed as the unit-length Z and written
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
+
+use concinnity_core::build::texture::TextureFormat;
 
 // Expand a 16-bit 565 colour to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {
@@ -173,6 +175,23 @@ pub fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
         }
         rgba
     })
+}
+
+// Decode a block-compressed level to RGBA8, selecting the decoder from the
+// format tag. BC7 has no CPU decoder; callers that can render a fallback check
+// for it before calling.
+pub fn decode(
+    format: TextureFormat,
+    blocks: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    match format {
+        TextureFormat::Bc1 => decode_bc1(blocks, width, height),
+        TextureFormat::Bc3 => decode_bc3(blocks, width, height),
+        TextureFormat::Bc5 => decode_bc5(blocks, width, height),
+        other => Err(format!("no CPU decoder for {:?}", other)),
+    }
 }
 
 #[cfg(test)]

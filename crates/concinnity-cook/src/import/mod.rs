@@ -1,4 +1,4 @@
-// src/build/import.rs
+// src/import/mod.rs
 //
 // Build-time expansion of a scene file into Concinnity asset entries
 // (Texture / Material / Mesh / Model / Prop / Camera3D, plus SkinnedMesh /
@@ -33,6 +33,10 @@
 // ambient-occlusion source, and `Material::orm_map` reserves its red channel for
 // that reason. alphaMode BLEND is dropped too, because `Material::transparent`
 // means refracting glass, not a blended card.
+
+// Neutral grey vertex colour for imported geometry, so a mesh takes its
+// material albedo unmodified. Shared by every source-format decoder.
+pub(crate) const NEUTRAL_COLOR: [f32; 3] = [0.75, 0.74, 0.72];
 
 mod gltf_material;
 mod rig;
@@ -135,22 +139,15 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     for (i, m) in scene.materials.iter().enumerate() {
         let name = format!("{prefix}_mat_{i}");
         let mut args = serde_json::Map::new();
-        // Glass detection: the FBX flags it transparent, or the material is named
-        // like glass. Glass renders smooth + translucent (transparent pass when
-        // ray tracing is available, else a smooth reflective opaque surface).
-        let lname = m.name.to_lowercase();
         // Smooth, see-through glass: flagged transparent by the FBX, or named
-        // like glass/window. Frosted glass stays rough/diffuse and emissive
-        // "glass" (lamp lenses) stays an opaque glow, so both are excluded.
+        // like glass/window. Glass renders smooth + translucent (transparent
+        // pass when ray tracing is available, else a smooth reflective opaque
+        // surface). Frosted glass stays rough/diffuse and emissive "glass"
+        // (lamp lenses) stays an opaque glow, so both are excluded.
+        let lname = m.name.to_lowercase();
         let is_glass = (m.opacity < 0.95 || lname.contains("glass") || lname.contains("window"))
             && !lname.contains("frosted")
             && !lname.contains("emissive");
-        if std::env::var_os("CN_IMPORT_DEBUG").is_some() {
-            eprintln!(
-                "[import] mat '{}' opacity={} glass={}",
-                m.name, m.opacity, is_glass
-            );
-        }
         if let Some(p) = &m.albedo {
             let t = intern_texture(
                 p,
@@ -261,9 +258,9 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
         // Oversized: count the chunks the build will produce and emit one Mesh
         // per chunk, each carrying its `chunk_index`.
-        let (verts, indices32) = crate::fbx::read_primitive_geometry(&scene, i as u32)
+        let (_, indices32) = crate::fbx::read_primitive_geometry(&scene, i as u32)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let chunk_count = crate::glb::split_into_u16_chunks(&verts, &indices32).len();
+        let chunk_count = crate::glb::count_u16_chunks(&indices32);
         for chunk_idx in 0..chunk_count {
             let mesh_name = format!("{prefix}_prim_{i}_chunk_{chunk_idx}");
             entries.push(serde_json::json!({
@@ -470,8 +467,10 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
                 continue;
             }
 
-            let vert_count =
-                crate::gltf::primitive_vertex_count(&doc, prim_idx as u32).unwrap_or(0);
+            let vert_count = primitive
+                .get(&gltf::Semantic::Positions)
+                .map(|a| a.count())
+                .unwrap_or(0);
 
             if vert_count <= U16_CAPACITY {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}");
@@ -494,10 +493,10 @@ fn entries_from_glb(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
             // chunks the build will produce. Emit one Mesh per chunk by name;
             // each carries `chunk_index` so desugar can re-split the primitive
             // and pick the right slice: no inline data baked into world.jsonl.
-            let (verts, indices32) =
+            let (_, indices32) =
                 crate::glb::read_primitive_geometry(&doc, path, prim_idx as u32)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let chunk_count = crate::glb::split_into_u16_chunks(&verts, &indices32).len();
+            let chunk_count = crate::glb::count_u16_chunks(&indices32);
             for chunk_idx in 0..chunk_count {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}_chunk_{chunk_idx}");
                 entries.push(serde_json::json!({

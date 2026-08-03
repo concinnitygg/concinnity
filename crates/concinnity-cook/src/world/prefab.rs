@@ -12,7 +12,7 @@ pub(crate) fn expand_prefabs(
     authored: &std::collections::HashMap<String, String>,
     report: &mut ExpandReport,
 ) -> Result<(), String> {
-    // Step 1: collect all Prefab definitions.
+    // Collect all Prefab definitions.
     let mut prefab_defs: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
     let mut non_prefab: Vec<serde_json::Value> = Vec::new();
@@ -33,7 +33,7 @@ pub(crate) fn expand_prefabs(
     // earlier expansion's output or another instance's) is a conflict.
     let mut taken: std::collections::HashSet<String> = non_prefab.iter().map(asset_name).collect();
 
-    // Step 2: expand Prop entries that reference a prefab.
+    // Expand Prop entries that reference a prefab.
     let mut result: Vec<serde_json::Value> = Vec::new();
     // Shadow hits found while expanding: the authored patch line may not be in
     // `result` yet, so the merges apply after the rebuild.

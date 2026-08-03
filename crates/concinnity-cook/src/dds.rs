@@ -26,36 +26,12 @@ pub struct DdsBlocks {
 // BCn format and every stored mip level's blocks. A DX10 header or an
 // unsupported fourCC is rejected the same way `decode_dds` rejects them.
 pub fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
-    if bytes.len() < PIXELDATA_OFFSET {
-        return Err(format!("DDS too short: {} bytes", bytes.len()));
-    }
-    if &bytes[0..4] != MAGIC {
-        return Err("not a DDS file (bad magic)".to_string());
-    }
-    let height = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-    let width = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-    let mip_count = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]).max(1);
-    let fourcc = &bytes[84..88];
-    if width == 0 || height == 0 {
-        return Err(format!("DDS has zero dimension {}x{}", width, height));
-    }
-
-    let format = match fourcc {
-        b"DXT1" => TextureFormat::Bc1,
-        b"DXT5" => TextureFormat::Bc3,
-        b"ATI2" => TextureFormat::Bc5,
-        b"DX10" => {
-            return Err("DDS uses a DX10 extended header, which is not supported; \
-                 re-export as DXT1/DXT5/ATI2"
-                .to_string());
-        }
-        other => {
-            return Err(format!(
-                "unsupported DDS fourCC {:?}; only DXT1, DXT5, and ATI2 are handled",
-                String::from_utf8_lossy(other)
-            ));
-        }
-    };
+    let DdsHeader {
+        width,
+        height,
+        mip_count,
+        format,
+    } = parse_dds_header(bytes)?;
 
     let mut mips = Vec::with_capacity(mip_count as usize);
     let mut cursor = PIXELDATA_OFFSET;
@@ -86,26 +62,42 @@ pub fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
 
 // Decode the top mip of a DDS file into (width, height, RGBA8 pixels).
 pub fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let DdsHeader {
+        width,
+        height,
+        format,
+        ..
+    } = parse_dds_header(bytes)?;
+    let pixels = crate::bcn::decode(format, &bytes[PIXELDATA_OFFSET..], width, height)?;
+    Ok((width, height, pixels))
+}
+
+// The fixed preamble of a legacy DDS: dimensions, stored mip count, and the
+// block format its fourCC selects.
+struct DdsHeader {
+    width: u32,
+    height: u32,
+    mip_count: u32,
+    format: TextureFormat,
+}
+
+fn parse_dds_header(bytes: &[u8]) -> Result<DdsHeader, String> {
     if bytes.len() < PIXELDATA_OFFSET {
         return Err(format!("DDS too short: {} bytes", bytes.len()));
     }
     if &bytes[0..4] != MAGIC {
         return Err("not a DDS file (bad magic)".to_string());
     }
-
     let height = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
     let width = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-    let fourcc = &bytes[84..88];
-    let data = &bytes[PIXELDATA_OFFSET..];
-
+    let mip_count = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]).max(1);
     if width == 0 || height == 0 {
         return Err(format!("DDS has zero dimension {}x{}", width, height));
     }
-
-    let pixels = match fourcc {
-        b"DXT1" => crate::bcn::decode_bc1(data, width, height)?,
-        b"DXT5" => crate::bcn::decode_bc3(data, width, height)?,
-        b"ATI2" => crate::bcn::decode_bc5(data, width, height)?,
+    let format = match &bytes[84..88] {
+        b"DXT1" => TextureFormat::Bc1,
+        b"DXT5" => TextureFormat::Bc3,
+        b"ATI2" => TextureFormat::Bc5,
         b"DX10" => {
             return Err("DDS uses a DX10 extended header, which is not supported; \
                  re-export as DXT1/DXT5/ATI2"
@@ -118,8 +110,12 @@ pub fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
             ));
         }
     };
-
-    Ok((width, height, pixels))
+    Ok(DdsHeader {
+        width,
+        height,
+        mip_count,
+        format,
+    })
 }
 
 // Synthetic legacy DDS containers for this crate's tests: `texture.rs` builds

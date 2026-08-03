@@ -11,8 +11,7 @@
 use crate::assets::VertexData;
 use std::collections::HashMap;
 
-// Neutral grey for vertex color, takes material albedo without tinting.
-const NEUTRAL_COLOR: [f32; 3] = [0.75, 0.74, 0.72];
+use crate::import::NEUTRAL_COLOR;
 
 // Sentinel for "no UV index present on this face corner".
 const NO_UV: u32 = u32::MAX;

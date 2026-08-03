@@ -262,15 +262,22 @@ pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
     let mut verts: Verts = Vec::new();
     let mut idxs: Vec<u16> = Vec::new();
 
+    // theta depends only on the segment, so the ring loop would otherwise
+    // recompute the same sin/cos pair once per ring.
+    let ring_angles: Vec<(f32, f32)> = (0..=segments)
+        .map(|seg| {
+            let theta = std::f32::consts::TAU * seg as f32 / segments as f32;
+            theta.sin_cos()
+        })
+        .collect();
+
     for ring in 0..=rings {
         let phi = std::f32::consts::PI * (ring as f32 + 1.0) / (rings as f32 + 1.0);
-        let sin_phi = phi.sin();
-        let cos_phi = phi.cos();
-        for seg in 0..=segments {
-            let theta = std::f32::consts::TAU * seg as f32 / segments as f32;
-            let nx = sin_phi * theta.cos();
+        let (sin_phi, cos_phi) = phi.sin_cos();
+        for (seg, &(sin_theta, cos_theta)) in ring_angles.iter().enumerate() {
+            let nx = sin_phi * cos_theta;
             let ny = cos_phi;
-            let nz = sin_phi * theta.sin();
+            let nz = sin_phi * sin_theta;
             let u = seg as f32 / segments as f32;
             let v = (ring as f32 + 1.0) / (rings as f32 + 1.0);
             verts.push((

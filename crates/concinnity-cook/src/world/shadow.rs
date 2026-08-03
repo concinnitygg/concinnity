@@ -4,7 +4,7 @@
 // authored args win per key; keys the patch omits keep the generated values,
 // so an instance tracks its template except where it overrides.
 
-use super::expand::asset_name;
+use super::expand::asset_name_str;
 
 /// Deep-merge a sparse authored patch over a template's args.
 ///
@@ -38,7 +38,7 @@ pub(crate) fn merge_into_authored(
     name: &str,
     template_args: &serde_json::Value,
 ) {
-    let Some(line) = assets.iter_mut().find(|v| asset_name(v) == name) else {
+    let Some(line) = assets.iter_mut().find(|v| asset_name_str(v) == name) else {
         return;
     };
     let authored = line.get("args").cloned().unwrap_or(serde_json::json!({}));

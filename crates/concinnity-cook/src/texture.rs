@@ -24,6 +24,8 @@
 // `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
+use serde::Deserialize;
+
 use concinnity_core::assets::Texture;
 use concinnity_core::build::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialise,
@@ -41,8 +43,8 @@ pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String
 
 // Compile a Texture component's JSON args into the tagged texture payload.
 pub fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let tex: Texture = serde_json::from_value(args.clone())
-        .map_err(|e| format!("Texture: invalid args: {}", e))?;
+    let tex: Texture =
+        Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {}", e))?;
 
     let image = match tex.generator.as_str() {
         "checker" => rgba8_image(generate_checker(tex.resolution)),
@@ -81,13 +83,12 @@ fn compile_image_source(
 ) -> Result<TextureImage, String> {
     let lower = source.to_lowercase();
     let image = if lower.ends_with(".ktx2") {
-        let bytes = std::fs::read(source)
-            .map_err(|e| format!("failed to open KTX2 texture '{}': {}", source, e))?;
+        let bytes = read_source(source, "KTX2 texture")?;
         crate::ktx2::compile_ktx2(&bytes).map_err(|e| format!("'{}': {}", source, e))?
     } else if lower.ends_with(".dds") {
         compile_dds_source(source, max_size)?
     } else {
-        let (w, h, px) = decode_file_source(source, image_index)?;
+        let (w, h, px) = decode_source(source, image_index)?;
         TextureImage::rgba8(w, h, px)
     };
     Ok(cap_image(image, max_size))
@@ -96,8 +97,7 @@ fn compile_image_source(
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
 // decodes to RGBA8 so runtime mip generation applies.
 fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
+    let bytes = read_source(source, "DDS texture")?;
     let blocks =
         crate::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
     let mips = cap_block_mips(blocks.mips, max_size);
@@ -151,27 +151,14 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 // File-backed source decode
 //
 // Turns a PNG / JPEG / DDS / TGA file on disk, or an image embedded in a
-// `.glb`, into (width, height, RGBA8 pixels). `compile_texture_payload` uses
-// this for the file-backed branch; the `cn debug` asset hot-reload path calls
-// `decode_source` directly to re-decode a changed file. Both share one dispatch
-// so a texture that builds also hot-reloads.
+// `.glb`, into (width, height, RGBA8 pixels).
 
-// Decode a file-backed texture source the same way the build pipeline does at
-// build time. Dispatches between a PNG / JPEG on disk and an image embedded in
-// a `.glb` based on the source extension. Exposed for the runtime asset
-// hot-reload path (`cn debug` only); production never calls this, it reads the
-// compiled payload via `concinnity_core::build::texture::deserialise` instead.
+// Decode a file-backed texture source into (width, height, RGBA pixels).
+// Dispatches on the lower-cased extension: an image embedded in a `.glb`, a
+// `.jpg` / `.jpeg`, a `.dds`, a `.ktx2`, a `.tga`, or a PNG (the default).
+// The single dispatch behind both the compiled payload and a re-decode of an
+// edited file, so a texture that builds also reloads.
 pub fn decode_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
-    decode_file_source(source, image_index)
-}
-
-// Single source of truth for decoding a file-backed texture source into
-// (width, height, RGBA pixels). Dispatches on the lower-cased extension: an
-// image embedded in a `.glb`, a `.jpg` / `.jpeg`, a `.dds`, a `.tga`, or a PNG
-// (the default). Both the build-time compiler and the runtime [`decode_source`]
-// delegate here, so the two paths always accept the same set of formats: a
-// texture that builds also hot-reloads.
-pub fn decode_file_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let lower = source.to_lowercase();
     if lower.ends_with(".glb") || lower.ends_with(".gltf") {
         load_gltf_image(source, image_index)
@@ -192,9 +179,14 @@ pub fn decode_file_source(source: &str, image_index: u32) -> Result<(u32, u32, V
 // build path keeps KTX2 block-compressed; this decodes/transcodes the base
 // level so `cn debug` can show an edited texture without a compressed upload.
 fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open KTX2 texture '{}': {}", source, e))?;
+    let bytes = read_source(source, "KTX2 texture")?;
     crate::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{}': {}", source, e))
+}
+
+// Read an authored image file, naming the kind in the open error. Every
+// file-backed decoder below reports a missing or unreadable source the same way.
+fn read_source(source: &str, label: &str) -> Result<Vec<u8>, String> {
+    std::fs::read(source).map_err(|e| format!("failed to open {} '{}': {}", label, source, e))
 }
 
 // Decode a block-compressed DDS (DXT1/DXT5/ATI2) from disk into RGBA.
@@ -206,15 +198,13 @@ fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 
 // Decode a Targa (.tga) image from disk into RGBA.
 fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open TGA texture '{}': {}", source, e))?;
+    let bytes = read_source(source, "TGA texture")?;
     crate::tga::decode_tga(&bytes).map_err(|e| format!("'{}': {}", source, e))
 }
 
 // Decode a PNG file from disk into (width, height, RGBA pixels).
 fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open texture source '{}': {}", source, e))?;
+    let bytes = read_source(source, "texture source")?;
     decode_png_bytes(&bytes).map_err(|e| format!("'{}': {}", source, e))
 }
 
@@ -226,8 +216,7 @@ fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 // channels ship as `.jpg`.
 fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
     use jpeg_decoder::PixelFormat;
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open JPEG texture '{}': {}", source, e))?;
+    let bytes = read_source(source, "JPEG texture")?;
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
     let raw = decoder
         .decode()
@@ -1226,7 +1215,7 @@ mod tests {
             "images": [{"uri": "albedo.png"}]
         });
         let src = write_file(&dir, "scene.gltf", &serde_json::to_vec(&json).unwrap());
-        let (w, h, px) = decode_file_source(&src, 0).expect("decode");
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
         assert_eq!((w, h), (1, 1));
         assert_eq!(px, vec![9, 8, 7, 255]);
     }

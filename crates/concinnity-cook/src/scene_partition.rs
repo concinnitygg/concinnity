@@ -30,10 +30,6 @@ impl ScenePartition {
             .copied()
             .unwrap_or(Owner::Global)
     }
-
-    pub fn has_scenes(&self) -> bool {
-        !self.scenes.is_empty()
-    }
 }
 
 // Ownership label lattice: unlabeled < one scene < Global (top). An asset
@@ -50,7 +46,7 @@ fn merge(a: Option<Owner>, b: Owner) -> Owner {
 // Reference targets (never roots): their owner derives entirely from who
 // references them. Resource assets plus the component types that only exist
 // to be referenced (mesh sources and Model). Everything else is a root whose
-// label is fixed — labels never merge INTO a root, so a logic asset naming a
+// label is fixed -- labels never merge INTO a root, so a logic asset naming a
 // scene prop (an AnimGraph target, a Behavior show/hide) does not drag that
 // prop's resources into the global set.
 fn is_reference_target(type_norm: &str) -> bool {
@@ -300,7 +296,6 @@ mod tests {
             asset("m", "ProceduralMesh", serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
-        assert!(!p.has_scenes());
         assert_eq!(p.owner("m"), Owner::Global);
     }
 

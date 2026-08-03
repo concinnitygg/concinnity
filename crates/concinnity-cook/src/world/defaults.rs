@@ -94,36 +94,51 @@ pub(crate) fn inject_engine_defaults(
     Ok(())
 }
 
-// The overlay's ref fields, each paired with the default piece it receives.
-const LOADING_OVERLAY_FIELDS: [(&str, &str); 5] = [
-    ("screen", "loading_screen"),
-    ("backdrop", "loading_screen_backdrop"),
-    ("track", "loading_screen_track"),
-    ("fill", "loading_screen_fill"),
-    ("label", "loading_screen_label"),
-];
+// One LoadingOverlay ref field and the default UI piece that fills it. The
+// pieces are named `loading_screen_*` so the screen-prefix rule also binds them
+// to the overlay's screen.
+struct LoadingPiece {
+    field: &'static str,
+    name: &'static str,
+    asset_type: &'static str,
+    args: serde_json::Value,
+}
 
-// The default UI piece behind one LoadingOverlay ref field: its asset type and
-// args. The pieces are named `loading_screen_*` so the screen-prefix rule also
-// binds them to the overlay's screen.
-fn loading_piece(field: &str) -> (&'static str, serde_json::Value) {
-    match field {
-        "screen" => ("Screen", serde_json::json!({ "fade_in_secs": 0.15 })),
-        "backdrop" => (
+fn loading_overlay_pieces() -> [LoadingPiece; 5] {
+    let piece = |field, name, asset_type, args| LoadingPiece {
+        field,
+        name,
+        asset_type,
+        args,
+    };
+    [
+        piece(
+            "screen",
+            "loading_screen",
+            "Screen",
+            serde_json::json!({ "fade_in_secs": 0.15 }),
+        ),
+        piece(
+            "backdrop",
+            "loading_screen_backdrop",
             "Sprite",
             serde_json::json!({
                 "x": 0, "y": 0, "width": 1280, "height": 720,
                 "tint": [0.0, 0.0, 0.0, 1.0], "fit": "cover",
             }),
         ),
-        "track" => (
+        piece(
+            "track",
+            "loading_screen_track",
             "Sprite",
             serde_json::json!({
                 "x": 400, "y": 600, "width": 480, "height": 8,
                 "tint": [0.25, 0.25, 0.25, 1.0], "corner_radius": 4,
             }),
         ),
-        "fill" => (
+        piece(
+            "fill",
+            "loading_screen_fill",
             "Sprite",
             serde_json::json!({
                 "x": 400, "y": 600, "width": 0, "height": 8,
@@ -131,15 +146,16 @@ fn loading_piece(field: &str) -> (&'static str, serde_json::Value) {
                 "visible": false,
             }),
         ),
-        "label" => (
+        piece(
+            "label",
+            "loading_screen_label",
             "TextLabel",
             serde_json::json!({
                 "font": HUD_FONT_NAME, "content": "Loading",
                 "x": 640, "y": 566, "align": "center",
             }),
         ),
-        _ => unreachable!("unknown LoadingOverlay field '{field}'"),
-    }
+    ]
 }
 
 // Synthesize the LoadingOverlay for a world that jumps between streamed
@@ -186,7 +202,7 @@ fn inject_loading_overlay(
 
     // Fill unset ref fields on the overlay (authored or synthesized) and
     // collect the pieces those fields now reference.
-    let mut needed: Vec<(&str, &str)> = Vec::new();
+    let mut needed: Vec<LoadingPiece> = Vec::new();
     {
         let overlay = &mut assets[overlay_index];
         if overlay.get("args").is_none() {
@@ -196,15 +212,15 @@ fn inject_loading_overlay(
             .get_mut("args")
             .and_then(|a| a.as_object_mut())
             .ok_or_else(|| "LoadingOverlay: args must be an object".to_string())?;
-        for (field, piece) in LOADING_OVERLAY_FIELDS {
+        for piece in loading_overlay_pieces() {
             let unset = args
-                .get(field)
+                .get(piece.field)
                 .and_then(|v| v.as_str())
                 .map(|s| s.is_empty())
                 .unwrap_or(true);
             if unset {
-                args.insert(field.to_string(), serde_json::json!(piece));
-                needed.push((field, piece));
+                args.insert(piece.field.to_string(), serde_json::json!(piece.name));
+                needed.push(piece);
             }
         }
     }
@@ -223,8 +239,13 @@ fn inject_loading_overlay(
     }
 
     let mut label_injected = false;
-    for (field, piece) in needed {
-        let (piece_type, piece_args) = loading_piece(field);
+    for LoadingPiece {
+        field,
+        name: piece,
+        asset_type: piece_type,
+        args: piece_args,
+    } in needed
+    {
         if name_claimed(
             assets,
             report,

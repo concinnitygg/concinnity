@@ -19,9 +19,7 @@ use crate::assets::{JointDef, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
 use crate::gltf_source::GltfDoc;
 
-// Neutral grey for vertex color, matches the wavefront/OBJ importer so
-// imported geometry takes the material albedo without tinting.
-const NEUTRAL_COLOR: [f32; 3] = [0.75, 0.74, 0.72];
+use crate::import::NEUTRAL_COLOR;
 
 // The inline `SkinnedMesh` fields produced from a glTF file.
 pub struct ImportedSkinnedMesh {
@@ -228,6 +226,33 @@ pub fn read_primitive_geometry(
 // attempt at locality optimisation. Vertices are duplicated across chunks
 // when a triangle straddles a flush boundary; for chess-piece geometry the
 // duplication is well under one percent.
+// Number of u16-safe chunks `split_into_u16_chunks` would produce, walking the
+// index stream only. The importer needs the count to name one Mesh per chunk;
+// materialising the chunks themselves just to call `.len()` clones every vertex.
+pub fn count_u16_chunks(indices: &[u32]) -> usize {
+    let limit: usize = u16::MAX as usize + 1;
+    let mut chunks = 0usize;
+    let mut cur_len = 0usize;
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for tri in indices.chunks_exact(3) {
+        let new_in_tri = tri.iter().filter(|&&v| !seen.contains(&v)).count();
+        if cur_len != 0 && cur_len + new_in_tri > limit {
+            chunks += 1;
+            cur_len = 0;
+            seen.clear();
+        }
+        for &v in tri {
+            if seen.insert(v) {
+                cur_len += 1;
+            }
+        }
+    }
+    if cur_len != 0 {
+        chunks += 1;
+    }
+    chunks
+}
+
 pub fn split_into_u16_chunks(
     vertices: &[VertexData],
     indices: &[u32],
@@ -2143,6 +2168,32 @@ mod tests {
         // Remapped geometry references the original positions.
         assert_eq!(cv[ci[0] as usize].pos, vertices[2].pos);
         assert_eq!(cv[ci[5] as usize].pos, vertices[3].pos);
+    }
+
+    // The importer names one Mesh per chunk off `count_u16_chunks`, while the
+    // desugar pass slices with `split_into_u16_chunks`. A disagreement would
+    // emit Mesh entries that never get geometry, so pin them together.
+    #[test]
+    fn count_u16_chunks_agrees_with_the_split_it_mirrors() {
+        let cases: Vec<Vec<u32>> = vec![
+            vec![],
+            vec![0, 1],
+            vec![2, 1, 0, 0, 2, 3],
+            // A degenerate triangle repeating one vertex.
+            vec![5, 5, 5],
+            (0..u16::MAX as u32 + 3).collect(),
+            (0..(u16::MAX as u32 + 1) * 2 + 3).collect(),
+        ];
+        for indices in cases {
+            let max = indices.iter().copied().max().map_or(0, |m| m + 1);
+            let vertices: Vec<VertexData> = (0..max).map(vert).collect();
+            assert_eq!(
+                count_u16_chunks(&indices),
+                split_into_u16_chunks(&vertices, &indices).len(),
+                "index stream of len {}",
+                indices.len()
+            );
+        }
     }
 
     #[test]

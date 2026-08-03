@@ -5,21 +5,10 @@
 // differently and the compilers live there); this module owns only naming,
 // parsing, kind mapping, and authoring metadata.
 
-use crate::registry::ComponentType;
-
 // The resource kinds (and their `resource_kind` blob tag) are defined with the
 // blob format; re-exported here for the classifiers and the cook-side handle
 // assigner so both sides agree on the kind and its tag.
 pub use concinnity_core::ecs::ResourceKind;
-
-// The resource kind a *component-registry* asset type is, or `None` if it is
-// not a resource. Every resource kind has now left the component registry (all
-// classify through `ResourceAssetType`); kept so `asset_resource_kind` retains
-// its two-registry shape until the endgame retires it.
-pub fn resource_kind(ct: ComponentType) -> Option<ResourceKind> {
-    let _ = ct;
-    None
-}
 
 // The mesh-source handle space is shared across every geometry-producing kind
 // (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so it is not assigned
@@ -65,14 +54,11 @@ pub fn is_mesh_source(asset_type: &str, args: &serde_json::Value) -> bool {
     mesh_source_block(asset_type, args).is_some()
 }
 
-// The resource kind a declarable asset type name maps to, across both registries:
-// a component-registry resource (SkinnedMesh) or a resource-only asset (Texture,
-// AudioClip, ...). `None` for non-resource types. This is the single classifier
-// the build uses to assign handles over the world's assets.
+// The resource kind a declarable asset type name maps to, or `None` for a
+// non-resource type. Every resource lives in the resource-asset registry (the
+// two registries share no names), so this is the single classifier the build
+// uses to assign handles over the world's assets.
 pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
-    if let Some(ct) = ComponentType::parse(asset_type) {
-        return resource_kind(ct);
-    }
     let rt = ResourceAssetType::parse(asset_type)?;
     // Mesh draws from the shared mesh-source handle space (assigned by cook's
     // `assign_mesh_source_handles` in block order across all four geometry
@@ -194,6 +180,7 @@ impl ResourceAssetType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::ComponentType;
 
     // The typed round-trip fills the schema defaults and rejects what the
     // schema cannot hold, so authoring tools can check a resource's args
@@ -278,9 +265,9 @@ mod tests {
             Some(ResourceKind::SkinnedMesh)
         );
         // Pure-data components and containers are not resources.
-        assert_eq!(resource_kind(ComponentType::PointLight), None);
-        assert_eq!(resource_kind(ComponentType::Prop), None);
-        assert_eq!(resource_kind(ComponentType::Transform), None);
+        assert_eq!(asset_resource_kind("PointLight"), None);
+        assert_eq!(asset_resource_kind("Prop"), None);
+        assert_eq!(asset_resource_kind("Transform"), None);
 
         // AudioClip has left the component registry: it is a resource-only asset,
         // classified through `ResourceAssetType`, and no longer a `ComponentType`.

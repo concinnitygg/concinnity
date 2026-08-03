@@ -88,11 +88,7 @@ fn graphics_config_companions(world: &[serde_json::Value]) -> Vec<CompanionSpec>
 // world state (GraphicsConfig's default shader set). GraphicsConfig itself
 // declares the render stack; every other type flagged `renders` in the
 // registry implies the GraphicsConfig marker. Remaining types imply none.
-pub(crate) fn companions_for(
-    type_norm: &str,
-    _args: &serde_json::Value,
-    world: &[serde_json::Value],
-) -> Vec<CompanionSpec> {
+pub(crate) fn companions_for(type_norm: &str, world: &[serde_json::Value]) -> Vec<CompanionSpec> {
     if type_norm == "graphicsconfig" {
         graphics_config_companions(world)
     } else if crate::registry::type_renders(type_norm) {
@@ -118,7 +114,7 @@ mod tests {
             "instancedprop",
             "skinnedmesh",
         ] {
-            let specs = companions_for(ty, &json!({}), &[]);
+            let specs = companions_for(ty, &[]);
             assert!(
                 specs.iter().any(|c| c.asset_type == "GraphicsConfig"),
                 "{ty} should imply a GraphicsConfig companion"
@@ -128,13 +124,13 @@ mod tests {
 
     #[test]
     fn unknown_type_implies_no_companions() {
-        assert!(companions_for("window", &json!({}), &[]).is_empty());
-        assert!(companions_for("mesh", &json!({}), &[]).is_empty());
+        assert!(companions_for("window", &[]).is_empty());
+        assert!(companions_for("mesh", &[]).is_empty());
     }
 
     #[test]
     fn graphics_config_injects_window_and_default_shader() {
-        let specs = companions_for("graphicsconfig", &json!({}), &[]);
+        let specs = companions_for("graphicsconfig", &[]);
         assert!(specs.iter().any(|c| c.asset_type == "Window"));
         let shader = specs
             .iter()
@@ -149,7 +145,7 @@ mod tests {
     #[test]
     fn graphics_config_skips_default_shaders_when_world_has_one() {
         let world = vec![json!({"type": "Shader", "args": {"vertex": {"source": "x.metal"}}})];
-        let specs = companions_for("graphicsconfig", &json!({}), &world);
+        let specs = companions_for("graphicsconfig", &world);
         assert!(specs.iter().any(|c| c.asset_type == "Window"));
         assert!(!specs.iter().any(|c| c.asset_type == "Shader"));
     }
@@ -157,7 +153,7 @@ mod tests {
     #[test]
     fn graphics_config_adds_instanced_stage_when_world_has_instancing() {
         let world = vec![json!({"type": "InstancedProp", "args": {}})];
-        let specs = companions_for("graphicsconfig", &json!({}), &world);
+        let specs = companions_for("graphicsconfig", &world);
         let shader = specs
             .iter()
             .find(|c| c.asset_type == "Shader")

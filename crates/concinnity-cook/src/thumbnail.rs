@@ -151,12 +151,16 @@ fn bake_models(
             mesh_payloads.insert(record.handle, bytes);
         }
     }
+    let def_index: HashMap<&str, usize> = result
+        .names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
     for (handle, name) in &result.mesh_component_names {
-        let bytes = result
-            .names
-            .iter()
-            .position(|n| n == name)
-            .and_then(|i| def_payload_of(result, &result.defs[i]));
+        let bytes = def_index
+            .get(name.as_str())
+            .and_then(|&i| def_payload_of(result, &result.defs[i]));
         if let Some(bytes) = bytes {
             mesh_payloads.insert(*handle, bytes);
         }
@@ -265,11 +269,9 @@ fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
         .or_else(|| image.mips.first())?;
     let rgba = match image.format {
         TextureFormat::Rgba8 => mip.data.clone(),
-        TextureFormat::Bc1 => crate::bcn::decode_bc1(&mip.data, mip.width, mip.height).ok()?,
-        TextureFormat::Bc3 => crate::bcn::decode_bc3(&mip.data, mip.width, mip.height).ok()?,
-        TextureFormat::Bc5 => crate::bcn::decode_bc5(&mip.data, mip.width, mip.height).ok()?,
-        // No CPU decoder; the browser shows a typed icon instead.
+        // No CPU decoder for BC7; the browser shows a typed icon instead.
         TextureFormat::Bc7 => return None,
+        other => crate::bcn::decode(other, &mip.data, mip.width, mip.height).ok()?,
     };
     Some(downscale_rgba(mip.width, mip.height, rgba, THUMB_SIZE))
 }

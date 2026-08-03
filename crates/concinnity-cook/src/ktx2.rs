@@ -116,7 +116,7 @@ fn compile_block_format(
     // single compressed level.
     let decodes = level_blocks.len() == 1 && tex_format != TextureFormat::Bc7;
     if decodes {
-        let rgba = decode_blocks_to_rgba8(tex_format, &level_blocks[0], width, height)?;
+        let rgba = crate::bcn::decode(tex_format, &level_blocks[0], width, height)?;
         tracing::info!(
             "KTX2 {:?} texture decoded to RGBA8 ({} stored level(s))",
             tex_format,
@@ -239,10 +239,8 @@ pub fn decode_ktx2_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let (w, h) = (image.width(), image.height());
     match image.format {
         TextureFormat::Rgba8 => image.into_rgba8(),
-        TextureFormat::Bc1 => Ok((w, h, crate::bcn::decode_bc1(&image.mips[0].data, w, h)?)),
-        TextureFormat::Bc3 => Ok((w, h, crate::bcn::decode_bc3(&image.mips[0].data, w, h)?)),
-        TextureFormat::Bc5 => Ok((w, h, crate::bcn::decode_bc5(&image.mips[0].data, w, h)?)),
         TextureFormat::Bc7 => Err("hot-reload preview of a BC7 KTX2 is not supported".to_string()),
+        other => Ok((w, h, crate::bcn::decode(other, &image.mips[0].data, w, h)?)),
     }
 }
 
@@ -273,22 +271,6 @@ fn inflate_zstd(data: &[u8]) -> Result<Vec<u8>, String> {
         .read_to_end(&mut out)
         .map_err(|e| format!("zstd inflate failed: {}", e))?;
     Ok(out)
-}
-
-// Decode BC1/BC3/BC5 blocks back to RGBA8 (the no-mip-chain fallback). BC7 has
-// no CPU decoder, so callers never route it here.
-fn decode_blocks_to_rgba8(
-    format: TextureFormat,
-    blocks: &[u8],
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, String> {
-    match format {
-        TextureFormat::Bc1 => crate::bcn::decode_bc1(blocks, width, height),
-        TextureFormat::Bc3 => crate::bcn::decode_bc3(blocks, width, height),
-        TextureFormat::Bc5 => crate::bcn::decode_bc5(blocks, width, height),
-        other => Err(format!("no CPU decoder for {:?}", other)),
-    }
 }
 
 // Mip dimensions for level `level`: each axis halves, floored, minimum 1 (the
@@ -760,7 +742,7 @@ mod tests {
 
     #[test]
     fn decode_blocks_to_rgba8_has_no_bc7_decoder() {
-        let err = decode_blocks_to_rgba8(TextureFormat::Bc7, &[0u8; 16], 4, 4).unwrap_err();
+        let err = crate::bcn::decode(TextureFormat::Bc7, &[0u8; 16], 4, 4).unwrap_err();
         assert_eq!(err, "no CPU decoder for Bc7");
     }
 

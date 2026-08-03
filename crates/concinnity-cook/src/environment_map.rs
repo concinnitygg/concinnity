@@ -34,13 +34,14 @@
 //
 // Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
-use crate::hdr::{HdrImage, decode_hdr, equirect_to_cube};
+use serde::Deserialize;
+
+use crate::hdr::{HdrImage, equirect_to_cube};
 use concinnity_core::assets::EnvironmentMap;
 use concinnity_core::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
     compute_prefilter, max_mip_count, resolve_hdr_source, serialise_payload,
 };
-use std::io::Read;
 
 // Validation + entry point
 //
@@ -50,7 +51,7 @@ use std::io::Read;
 // from the JSONL inherits the core default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
-    let params: EnvironmentMap = serde_json::from_value(args.clone())
+    let params: EnvironmentMap = Deserialize::deserialize(args)
         .map_err(|e| format!("invalid EnvironmentMap args: {}", e))?;
     match (params.source.is_empty(), params.generator.is_empty()) {
         (true, true) => return Err("EnvironmentMap requires either `source` or `generator`".into()),
@@ -102,7 +103,6 @@ pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u
     let prefilter_face = params.prefilter_face_size;
     let irradiance_face = params.irradiance_face_size;
     let prefilter_samples = params.prefilter_samples;
-    let prefilter_mips = max_mip_count(prefilter_face);
 
     let hdr = if !params.source.is_empty() {
         // A bare filename (no directory component) is resolved via the same
@@ -110,14 +110,34 @@ pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u
         // .concinnity/assets/ recursively, falling back to the raw path so an
         // absolute or relative path also works.
         let resolved = resolve_hdr_source(&params.source);
-        load_hdr_file(&resolved)?
+        crate::hdr::load_file(&resolved)?
     } else {
         match params.generator.as_str() {
             "sky" => generate_sky_equirect(),
             other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
         }
     };
-    let source_cube = equirect_to_cube(&hdr, prefilter_face);
+    Ok(bake_payload(
+        &hdr,
+        prefilter_face,
+        irradiance_face,
+        prefilter_samples,
+        params.prefilter_clamp,
+    ))
+}
+
+// Convolve an equirectangular source into the serialised IBL payload (header +
+// irradiance + prefilter mips). The single bake both the build pass and the
+// hot-reload decode run, so a preview can never diverge from the built asset.
+fn bake_payload(
+    hdr: &HdrImage,
+    prefilter_face: u32,
+    irradiance_face: u32,
+    prefilter_samples: u32,
+    prefilter_clamp: f32,
+) -> Vec<u8> {
+    let source_cube = equirect_to_cube(hdr, prefilter_face);
+    let prefilter_mips = max_mip_count(prefilter_face);
     let irradiance = compute_irradiance(
         &source_cube,
         prefilter_face,
@@ -130,17 +150,17 @@ pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u
         prefilter_face,
         prefilter_mips,
         prefilter_samples,
-        params.prefilter_clamp,
+        prefilter_clamp,
         // Imported environment map: mip 0 IS the on-screen skybox, keep it unclamped.
         false,
     );
-    Ok(serialise_payload(
+    serialise_payload(
         irradiance_face,
         prefilter_face,
         prefilter_mips,
         &irradiance,
         &prefilter,
-    ))
+    )
 }
 
 // Decode an EnvironmentMap source path the same way
@@ -160,42 +180,14 @@ pub fn decode_source(
     prefilter_clamp: f32,
 ) -> Result<Vec<u8>, String> {
     let resolved = resolve_hdr_source(source);
-    let hdr = load_hdr_file(&resolved)?;
-    let source_cube = equirect_to_cube(&hdr, prefilter_face);
-    let prefilter_mips = max_mip_count(prefilter_face);
-    let irradiance = compute_irradiance(
-        &source_cube,
+    let hdr = crate::hdr::load_file(&resolved)?;
+    Ok(bake_payload(
+        &hdr,
         prefilter_face,
         irradiance_face,
-        DEFAULT_IRRADIANCE_PHI_SAMPLES,
-        DEFAULT_IRRADIANCE_THETA_SAMPLES,
-    );
-    let prefilter = compute_prefilter(
-        &source_cube,
-        prefilter_face,
-        prefilter_mips,
         prefilter_samples,
         prefilter_clamp,
-        // Imported environment map: mip 0 IS the on-screen skybox, keep it unclamped.
-        false,
-    );
-    Ok(serialise_payload(
-        irradiance_face,
-        prefilter_face,
-        prefilter_mips,
-        &irradiance,
-        &prefilter,
     ))
-}
-
-// Read a Radiance `.hdr` file off disk and decode it to a linear-light image.
-fn load_hdr_file(path: &str) -> Result<HdrImage, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("failed to read HDR source '{}': {}", path, e))?;
-    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{}': {}", path, e))
 }
 
 // Synthetic equirectangular HDR for the `generator: "sky"` source. Same

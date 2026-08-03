@@ -11,19 +11,21 @@
 // This is the additive first step of the resource-table migration; nothing
 // consumes the map yet.
 
+use serde::Deserialize;
+
 use crate::ecs::asset_id::AssetId;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Once;
 
 // The vocabulary half -- `ResourceAssetType`, `ResourceKind`, and the
-// classifiers (`asset_resource_kind`, `resource_kind`, `is_mesh_source`) --
+// classifiers (`asset_resource_kind`, `is_mesh_source`) --
 // lives in concinnity-world; re-exported here so cook code and downstream
 // consumers keep resolving `resource_handles::...` paths. This module keeps
 // the build mechanics: handle assignment, the resolver seams, and the compile
 // dispatch below.
 pub use concinnity_world::resource_type::{
-    ResourceAssetType, ResourceKind, asset_resource_kind, is_mesh_source, resource_kind,
+    ResourceAssetType, ResourceKind, asset_resource_kind, is_mesh_source,
 };
 
 // Compile dispatch for resource assets, as an extension trait: the vocabulary
@@ -132,7 +134,7 @@ impl ResourceAssetCompile for ResourceAssetType {
 // bytes straight back into a `Material` to build its material map.
 fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mat: crate::assets::Material =
-        serde_json::from_value(args.clone()).map_err(|e| format!("Material args: {e}"))?;
+        Deserialize::deserialize(args).map_err(|e| format!("Material args: {e}"))?;
     let mat = concinnity_world::validate::material(mat);
     postcard::to_allocvec(&mat).map_err(|e| format!("Material serialize: {e}"))
 }
@@ -142,14 +144,14 @@ fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
 // material fields ride separately in the record's `data_bytes` (see
 // `compile_skinned_mesh_data`).
 fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec<u8>> {
-    let mesh: crate::assets::SkinnedMesh = serde_json::from_value(args.clone())
+    let mesh: crate::assets::SkinnedMesh = Deserialize::deserialize(args)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     // `skeleton` is not a field on the schema struct; the desugar pass writes it
     // into the args JSON for glTF-sourced meshes, and inline-authored worlds may
     // carry it directly. Read it straight from the JSON so it can be baked into
     // the compiled payload alongside vertices and indices.
     let skeleton: Vec<crate::assets::JointDef> = match args.get("skeleton") {
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+        Some(v) => Deserialize::deserialize(v).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("SkinnedMesh: invalid skeleton args: {e}"),
@@ -179,7 +181,7 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
 // still needs) travels beside it.
 fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mut sm: crate::assets::SkinnedMesh =
-        serde_json::from_value(args.clone()).map_err(|e| format!("SkinnedMesh args: {e}"))?;
+        Deserialize::deserialize(args).map_err(|e| format!("SkinnedMesh args: {e}"))?;
     // A zero scale would collapse the world matrix; clamp to a sane unit.
     if sm.scale == [0.0, 0.0, 0.0] {
         sm.scale = [1.0, 1.0, 1.0];
@@ -323,8 +325,7 @@ thread_local! {
 // `fn` pointer the seam holds; it resolves a name to its `AssetId` through the
 // shared build interner, then looks up that resource's handle for its kind. An
 // unknown name yields `None`, letting the deserializer fall back or fail as its
-// context requires. Idempotent and cheap after the first call. Windows kinds
-// (Texture aside) plug in here as they migrate.
+// context requires. Idempotent and cheap after the first call.
 pub fn ensure_resource_handle_resolvers() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {

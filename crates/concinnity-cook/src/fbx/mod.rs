@@ -34,9 +34,7 @@ use fbxcel::tree::v7400::NodeHandle;
 use crate::assets::VertexData;
 use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 
-// Neutral grey vertex colour so imported geometry takes the material albedo
-// unmodified, matching the glTF and OBJ importers.
-const NEUTRAL_COLOR: [f32; 3] = [0.75, 0.74, 0.72];
+use crate::import::NEUTRAL_COLOR;
 
 // A material with its scalar factors and resolved on-disk texture paths.
 pub struct FbxMaterial {
@@ -82,14 +80,6 @@ pub struct FbxScene {
     pub aabb: Option<([f32; 3], [f32; 3])>,
 }
 
-// Vertex count of a primitive, for deciding u16 chunk splitting.
-pub fn primitive_vertex_count(scene: &FbxScene, index: u32) -> Option<usize> {
-    scene
-        .primitives
-        .get(index as usize)
-        .map(|p| p.vertices.len())
-}
-
 // Raw geometry of a primitive (clones out of the parsed scene), in the same
 // `(Vec<VertexData>, Vec<u32>)` shape the glTF importer produces so the shared
 // `split_into_u16_chunks` chunker applies unchanged.
@@ -129,32 +119,24 @@ fn attr_f64(a: &AttributeValue) -> Option<f64> {
     }
 }
 
-fn arr_f64<'a>(n: &NodeHandle<'a>) -> Option<&'a [f64]> {
-    match n.attributes().first()? {
-        AttributeValue::ArrF64(v) => Some(v),
-        _ => None,
-    }
+// First attribute of a node as a typed array, one accessor per FBX array
+// attribute kind.
+macro_rules! arr_accessors {
+    ($($name:ident => $ty:ty, $variant:ident;)*) => {$(
+        fn $name<'a>(n: &NodeHandle<'a>) -> Option<&'a [$ty]> {
+            match n.attributes().first()? {
+                AttributeValue::$variant(v) => Some(v),
+                _ => None,
+            }
+        }
+    )*};
 }
 
-fn arr_i32<'a>(n: &NodeHandle<'a>) -> Option<&'a [i32]> {
-    match n.attributes().first()? {
-        AttributeValue::ArrI32(v) => Some(v),
-        _ => None,
-    }
-}
-
-fn arr_i64<'a>(n: &NodeHandle<'a>) -> Option<&'a [i64]> {
-    match n.attributes().first()? {
-        AttributeValue::ArrI64(v) => Some(v),
-        _ => None,
-    }
-}
-
-fn arr_f32<'a>(n: &NodeHandle<'a>) -> Option<&'a [f32]> {
-    match n.attributes().first()? {
-        AttributeValue::ArrF32(v) => Some(v),
-        _ => None,
-    }
+arr_accessors! {
+    arr_f64 => f64, ArrF64;
+    arr_i32 => i32, ArrI32;
+    arr_i64 => i64, ArrI64;
+    arr_f32 => f32, ArrF32;
 }
 
 // First string attribute of a named child node (e.g. RelativeFilename).
@@ -250,10 +232,9 @@ fn rot_z(deg: f64) -> Mat4 {
     m
 }
 
-// XYZ euler composition: X applied first, then Y, then Z, which is
-// Rz * Ry * Rx for column vectors. FBX PreRotation is always XYZ.
-fn rot_xyz(r_deg: [f64; 3]) -> Mat4 {
-    mat4_mul(rot_z(r_deg[2]), mat4_mul(rot_y(r_deg[1]), rot_x(r_deg[0])))
+// XYZ euler composition, the order FBX PreRotation always uses.
+fn rot_ordered_xyz(r_deg: [f64; 3]) -> Mat4 {
+    rot_ordered(r_deg, 0)
 }
 
 // Euler composition honouring an FBX RotationOrder enum: 0 XYZ, 1 XZY,
@@ -276,7 +257,7 @@ fn rot_ordered(r_deg: [f64; 3], order: i32) -> Mat4 {
 
 // Compose an FBX node transform T * R * S with XYZ rotation order.
 fn trs_matrix(t: [f64; 3], r_deg: [f64; 3], s: [f64; 3]) -> Mat4 {
-    mat4_mul(translate(t), mat4_mul(rot_xyz(r_deg), scale_mat(s)))
+    mat4_mul(translate(t), mat4_mul(rot_ordered_xyz(r_deg), scale_mat(s)))
 }
 
 // Scene-pose local transform of a node including its PreRotation and
@@ -291,7 +272,7 @@ fn node_scene_local(model: &NodeHandle) -> Mat4 {
     let s = prop_vec3(&p70, "Lcl Scaling").unwrap_or([1.0, 1.0, 1.0]);
     let pre = prop_vec3(&p70, "PreRotation").unwrap_or([0.0, 0.0, 0.0]);
     let order = prop_scalar(&p70, "RotationOrder").unwrap_or(0.0) as i32;
-    let rot = mat4_mul(rot_xyz(pre), rot_ordered(r, order));
+    let rot = mat4_mul(rot_ordered_xyz(pre), rot_ordered(r, order));
     mat4_mul(translate(t), mat4_mul(rot, scale_mat(s)))
 }
 
@@ -708,6 +689,9 @@ fn extract_geometry_groups(
     type Group = (HashMap<(i32, i32), u32>, Vec<VertexData>, Vec<u32>);
     let mut groups: HashMap<Option<usize>, Group> = HashMap::new();
     let mut corners: Vec<(i32, usize)> = Vec::new();
+    // Reused across polygons alongside `corners`, so a millions-of-polygons
+    // scene does not allocate a fresh index buffer per face.
+    let mut corner_idx: Vec<u32> = Vec::new();
     let mut poly = 0usize;
 
     for (pv, &raw) in pvi.iter().enumerate() {
@@ -730,7 +714,6 @@ fn extract_geometry_groups(
         let group = groups
             .entry(material)
             .or_insert_with(|| (HashMap::new(), Vec::new(), Vec::new()));
-        let mut corner_idx: Vec<u32> = Vec::with_capacity(corners.len());
         for &(cp, pv) in &corners {
             let uv_key = if uv_indexed {
                 uv_index.and_then(|ui| ui.get(pv)).copied().unwrap_or(0)
@@ -767,6 +750,7 @@ fn extract_geometry_groups(
         }
 
         corners.clear();
+        corner_idx.clear();
         poly += 1;
     }
 
@@ -975,13 +959,6 @@ mod tests {
             props: Vec::new(),
             aabb: None,
         }
-    }
-
-    #[test]
-    fn primitive_vertex_count_reads_the_indexed_primitive() {
-        let scene = one_primitive_scene();
-        assert_eq!(primitive_vertex_count(&scene, 0), Some(2));
-        assert_eq!(primitive_vertex_count(&scene, 1), None);
     }
 
     #[test]

@@ -20,7 +20,7 @@ use fbxcel::tree::v7400::NodeHandle;
 
 use super::{
     arr_f32, arr_i64, attr_i64, attr_str, object_id, object_name, prop_scalar, prop_vec3,
-    rot_ordered, rot_xyz,
+    rot_ordered, rot_ordered_xyz,
 };
 use crate::gfx::skinning::{decompose, euler_yxz_from_quat, mat4_mul};
 use crate::glb::{ImportedAnimation, ImportedAnimationTrack, ImportedKeyframe};
@@ -252,6 +252,9 @@ pub fn import_fbx_animation(
 
         let bind = &skin.joints[joint];
         let mut keys: Vec<ImportedKeyframe> = Vec::with_capacity(samples);
+        // Constant for the whole track: the PreRotation matrix would otherwise be
+        // rebuilt from three sin_cos pairs on every sampled keyframe.
+        let pre_rotation_mat = rot_ordered_xyz([pre_rotation[0], pre_rotation[1], pre_rotation[2]]);
         for s in 0..samples {
             let time = (s as f32 / rate).min(duration);
             let kt = start_kt + (time as f64) * KTIME_PER_SEC;
@@ -266,7 +269,7 @@ pub fn import_fbx_animation(
             if let Some(r) = &rotation {
                 let euler = r.eval3(kt);
                 let m = mat4_mul(
-                    rot_xyz([pre_rotation[0], pre_rotation[1], pre_rotation[2]]),
+                    pre_rotation_mat,
                     rot_ordered(
                         [euler[0] as f64, euler[1] as f64, euler[2] as f64],
                         rotation_order,
