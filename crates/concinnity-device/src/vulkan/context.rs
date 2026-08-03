@@ -533,6 +533,12 @@ pub(super) struct VkCull {
     // elements than the layout is legal Vulkan, so drift is silent and costs the
     // trailing flat-normal fallback slot.
     pub(super) bindless_pool_size: usize,
+    // Whether `bindless_set_layout` was created with
+    // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, which every
+    // descriptor pool that allocates it must declare in turn. Set on a
+    // sampler-constrained device (MoltenVK) whose plain per-stage sampler budget
+    // cannot seat the texture pool; false on every desktop driver.
+    pub(super) bindless_update_after_bind: bool,
     // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
     // (bucket 0 is `bindless_pipeline`). Each renders its bucket's slice of the
     // GPU-culled command buffer through the shared bindless pipeline layout.
@@ -1165,6 +1171,13 @@ pub struct VkContext {
     // whenever capable (mirroring how the static VB/IB gate their RT flags at
     // init), and by the RT toggle to reject an enable on an incapable device.
     pub(super) rt_capable: bool,
+    // Whether `descriptorBindingSampledImageUpdateAfterBind` was enabled at device
+    // creation, letting the bindless texture pool's set layout declare itself
+    // update-after-bind and budget against the far larger update-after-bind
+    // sampler limit. Only true on a sampler-constrained device (MoltenVK); every
+    // desktop driver keeps the plain layout. Carried on the context so a live
+    // editor reload rebuilds the same layout the running device was created for.
+    pub(super) update_after_bind: bool,
     // Total static vertices uploaded at init (the shared VB element count). The
     // acceleration-structure build needs it to size the hit-shader vertex SSBO;
     // there is no separate count field, so it is captured here for a live RT

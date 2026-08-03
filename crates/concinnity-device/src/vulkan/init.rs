@@ -189,6 +189,7 @@ impl VkContext {
             hdr_mode,
             memory_budget_supported,
             rt_capable,
+            update_after_bind,
             device_local_heaps,
             debug_utils,
             debug_messenger,
@@ -358,7 +359,12 @@ impl VkContext {
                 //  acceleration-structure build + RT pass below are gated on
                 //  `rt_settings.is_some() && rt_capable` (everything falls back to SSR
                 //  when RT is off or the device is incapable).
-                let (device, memory_budget_supported, rt_capable) = create_logical_device(
+                let super::device::LogicalDevice {
+                    device,
+                    memory_budget: memory_budget_supported,
+                    rt_capable,
+                    update_after_bind,
+                } = create_logical_device(
                     &instance,
                     physical_device,
                     graphics_family,
@@ -548,6 +554,7 @@ impl VkContext {
                     hdr_mode,
                     memory_budget_supported,
                     rt_capable,
+                    update_after_bind,
                     device_local_heaps,
                     debug_utils,
                     debug_messenger,
@@ -1131,11 +1138,12 @@ impl VkContext {
         // device rather than fixed at the `MAX_PROBES` ceiling. It sizes the
         // binding below, the descriptor pool, every probe cube write, the GLSL
         // arrays, and the placement list, so they can never disagree.
-        let probe_cube_count = super::descriptor_layout::probe_cube_array_count(
+        let max_per_stage_samplers =
             unsafe { instance.get_physical_device_properties(physical_device) }
                 .limits
-                .max_per_stage_descriptor_samplers,
-        );
+                .max_per_stage_descriptor_samplers;
+        let probe_cube_count =
+            super::descriptor_layout::probe_cube_array_count(max_per_stage_samplers);
         if (probe_cube_count as usize) < super::probe_uniforms::MAX_PROBES {
             tracing::info!(
                 "reflection probes: device sampler headroom binds {probe_cube_count} of {}",
@@ -1720,6 +1728,28 @@ impl VkContext {
         } else {
             0
         };
+        // The texture pool's length is the world's texture table, so it cannot be
+        // clamped to the device's per-stage sampler headroom the way the probe
+        // cube array is. Where it does not fit, its set layout is declared
+        // update-after-bind, which moves it off `maxPerStageDescriptorSamplers`
+        // (16 on MoltenVK) and onto the update-after-bind limit (1024 there). This
+        // reshapes the layout, its binding flags, and the descriptor pool it is
+        // allocated from, so it is resolved once here. Desktop drivers report six
+        // figures and always stay on the plain path.
+        let pool_overflows_samplers = bindless_active
+            && super::descriptor_layout::bindless_pool_needs_update_after_bind(
+                max_per_stage_samplers,
+                probe_cube_count,
+                bindless_pool_size as u32,
+            );
+        if pool_overflows_samplers && !update_after_bind {
+            tracing::warn!(
+                "bindless texture pool: {bindless_pool_size} samplers exceed the device's \
+                 per-stage budget ({max_per_stage_samplers}) and update-after-bind is \
+                 unavailable"
+            );
+        }
+        let bindless_uab = pool_overflows_samplers && update_after_bind;
 
         //  Descriptor pool
         let n_obj = draw_objects.len().max(1) as u32;
@@ -1813,9 +1843,14 @@ impl VkContext {
             + bindless_sets_count
             + shadow_cull_set_count
             + gbuffer_sets_count;
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
+        // An update-after-bind set layout can only be allocated from a pool that
+        // declares the same, so the flag rides along with the bindless decision.
+        let mut pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(total_sets);
+        if bindless_uab {
+            pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
+        }
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("descriptor pool: {e}"))?;
 
@@ -2105,13 +2140,25 @@ impl VkContext {
                     .descriptor_count(bindless_pool_size as u32)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             ];
-            let set_layout = unsafe {
-                device.create_descriptor_set_layout(
-                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
-                    None,
-                )
+            // On a sampler-constrained device the pool binding is declared
+            // update-after-bind so it budgets against the update-after-bind
+            // sampler limit instead of the plain one. The pool is written once at
+            // init, before any frame binds it, so nothing depends on the relaxed
+            // update timing itself: this is purely how the layout is budgeted.
+            let binding_flags = [
+                vk::DescriptorBindingFlags::empty(),
+                vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            ];
+            let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                .binding_flags(&binding_flags);
+            let mut set_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings);
+            if bindless_uab {
+                set_info = set_info
+                    .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+                    .push_next(&mut flags_info);
             }
-            .map_err(|e| format!("bindless set layout: {e}"))?;
+            let set_layout = unsafe { device.create_descriptor_set_layout(&set_info, None) }
+                .map_err(|e| format!("bindless set layout: {e}"))?;
 
             let layouts = [global_set_layout, set_layout];
             let pipeline_layout = unsafe {
@@ -3860,6 +3907,7 @@ impl VkContext {
                 bindless_pipeline_layout,
                 bindless_set_layout,
                 bindless_pool_size,
+                bindless_update_after_bind: bindless_uab,
                 world_pipelines,
                 bucket_stride: n_cull,
                 bindless_main_spv,
@@ -3955,6 +4003,7 @@ impl VkContext {
             rt_dynamic_mode,
             rt_topology_dirty: false,
             rt_capable,
+            update_after_bind,
             rt_static_vertex_count: vertices.len(),
             decals_state,
             decals: Vec::new(),
@@ -4198,6 +4247,7 @@ impl VkContext {
             hdr_mode: self.hdr_mode,
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,
+            update_after_bind: self.update_after_bind,
             device_local_heaps: self.device_local_heaps.clone(),
             debug_utils: self.debug_utils.take(),
             debug_messenger: self.debug_messenger.take(),
@@ -4239,6 +4289,7 @@ struct SharedHardware {
     hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
+    update_after_bind: bool,
     device_local_heaps: Vec<u32>,
     debug_utils: Option<ash::ext::debug_utils::Instance>,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
@@ -4275,6 +4326,7 @@ pub(in crate::vulkan) struct VkReuse {
     hdr_mode: crate::gfx::hdr_output::HdrOutputMode,
     memory_budget_supported: bool,
     rt_capable: bool,
+    update_after_bind: bool,
     device_local_heaps: Vec<u32>,
     debug_utils: Option<ash::ext::debug_utils::Instance>,
     debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
@@ -4314,6 +4366,7 @@ impl VkReuse {
             hdr_mode: self.hdr_mode,
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,
+            update_after_bind: self.update_after_bind,
             device_local_heaps: self.device_local_heaps,
             debug_utils: self.debug_utils,
             debug_messenger: self.debug_messenger,

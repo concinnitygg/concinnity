@@ -1178,9 +1178,14 @@ impl BakeResources {
                 .descriptor_count(sampler_count.max(1)),
         ];
         let max_sets = 1 + 2 * PROBE_FACE_COUNT as u32 + u32::from(has_hiz);
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
+        // The per-face bindless sets below come from `cull.bindless_set_layout`,
+        // so this pool has to declare update-after-bind whenever that layout does.
+        let mut pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(max_sets);
+        if ctx.cull.bindless_update_after_bind {
+            pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
+        }
         let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("probe descriptor pool: {e}"))?;
 

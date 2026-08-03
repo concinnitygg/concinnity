@@ -116,21 +116,37 @@ const INLINE_GLOBAL_SAMPLERS: [u32; 3] = [
     LTC_MAGNITUDE_BINDING,
 ];
 
+fn count_fragment_samplers(bindings: &[Binding]) -> u32 {
+    bindings
+        .iter()
+        .filter(|&&(_, ty, stage)| {
+            ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+                && stage.contains(vk::ShaderStageFlags::FRAGMENT)
+        })
+        .count() as u32
+}
+
+// Count-1 fragment samplers global set 0 declares, outside the reflection-probe
+// cube array: the `global_set()` table's shadow / IBL / SSAO taps plus the
+// inline-appended spot shadow array and LTC tables. Every pipeline layout that
+// binds set 0 pays this.
+fn global_fragment_samplers() -> u32 {
+    count_fragment_samplers(&global_set()) + INLINE_GLOBAL_SAMPLERS.len() as u32
+}
+
+// Count-1 fragment samplers per-object set 1 declares (albedo + normal map).
+// Only the geometry path pays these; the bindless path replaces the set with its
+// texture pool.
+fn object_fragment_samplers() -> u32 {
+    count_fragment_samplers(&object_set())
+}
+
 // Fragment-stage samplers the geometry pipeline layout (global set 0 + per-object
 // set 1) declares outside the reflection-probe cube array. All are
 // descriptorCount 1, so this is the fixed cost the probe array is budgeted
 // against.
 fn fixed_fragment_samplers() -> u32 {
-    let count = |bindings: &[Binding]| {
-        bindings
-            .iter()
-            .filter(|&&(_, ty, stage)| {
-                ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER
-                    && stage.contains(vk::ShaderStageFlags::FRAGMENT)
-            })
-            .count() as u32
-    };
-    count(&global_set()) + count(&object_set()) + INLINE_GLOBAL_SAMPLERS.len() as u32
+    global_fragment_samplers() + object_fragment_samplers()
 }
 
 // How many descriptors the reflection-probe cube array (global set 0, binding 8)
@@ -145,6 +161,34 @@ fn fixed_fragment_samplers() -> u32 {
 pub(in crate::vulkan) fn probe_cube_array_count(max_per_stage_samplers: u32) -> u32 {
     let headroom = max_per_stage_samplers.saturating_sub(fixed_fragment_samplers());
     headroom.clamp(1, MAX_PROBES as u32)
+}
+
+// Whether the bindless main pipeline layout must declare its texture pool
+// `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`. The layout is
+// global set 0 + the bindless set, so its per-stage sampler cost is the count-1
+// global samplers, the probe cube array, and the pool itself; unlike the probe
+// array the pool cannot be clamped, since its length is the world's texture
+// table. Descriptors in an update-after-bind set layout are budgeted against
+// `maxPerStageDescriptorUpdateAfterBindSamplers` instead, which MoltenVK reports
+// as 1024 against a plain limit of 16. Desktop drivers report six figures for
+// both and never take the update-after-bind path.
+pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
+    max_per_stage_samplers: u32,
+    probe_cube_count: u32,
+    pool_size: u32,
+) -> bool {
+    let declared = global_fragment_samplers() + probe_cube_count + pool_size;
+    declared > max_per_stage_samplers
+}
+
+// Whether a device's per-stage sampler budget is too tight to seat the geometry
+// path at its `MAX_PROBES` ceiling. Such a device cannot seat a bindless texture
+// pool of any useful length either, so device creation enables the
+// descriptor-indexing update-after-bind features the pool's set layout opts into
+// (see `bindless_pool_needs_update_after_bind`). True on MoltenVK, false on every
+// desktop driver, which leaves their device-creation feature chain untouched.
+pub(in crate::vulkan) fn sampler_budget_is_constrained(max_per_stage_samplers: u32) -> bool {
+    max_per_stage_samplers < fixed_fragment_samplers() + MAX_PROBES as u32
 }
 
 // Per-object set (set 1): albedo at 0, normal map at 1.
@@ -266,6 +310,8 @@ mod tests {
     #[test]
     fn fixed_fragment_sampler_count_is_nine() {
         assert_eq!(fixed_fragment_samplers(), 9);
+        assert_eq!(global_fragment_samplers(), 7);
+        assert_eq!(object_fragment_samplers(), 2);
     }
 
     // A driver with room to spare gets the full CPU-side ceiling, so every
@@ -303,6 +349,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The bindless layout drops per-object set 1 for the texture pool, so it
+    // budgets against the global samplers only. On MoltenVK's 16 that leaves
+    // 16 - 7 - 7 = 2 pool entries, the one-texture world; anything larger needs
+    // update-after-bind. This is the overflow the runtime decision exists for.
+    #[test]
+    fn bindless_pool_needs_update_after_bind_past_moltenvk_headroom() {
+        let probes = probe_cube_array_count(16);
+        assert!(!bindless_pool_needs_update_after_bind(16, probes, 2));
+        assert!(bindless_pool_needs_update_after_bind(16, probes, 3));
+    }
+
+    // A driver with room to spare keeps the plain layout for any pool a world
+    // can realistically declare, so desktop never changes descriptor path.
+    #[test]
+    fn bindless_pool_stays_plain_on_desktop_drivers() {
+        let probes = probe_cube_array_count(1_048_576);
+        for pool_size in [2, 64, 4096, 65_536] {
+            assert!(!bindless_pool_needs_update_after_bind(
+                1_048_576, probes, pool_size
+            ));
+        }
+    }
+
+    // The device-creation gate and the per-layout decision must agree about who
+    // is starved: every device that can overflow on a plausible pool has to have
+    // had the update-after-bind features enabled for it.
+    #[test]
+    fn constrained_budget_covers_every_device_that_can_overflow() {
+        for limit in 0..=64u32 {
+            let probes = probe_cube_array_count(limit);
+            if bindless_pool_needs_update_after_bind(limit, probes, 2) {
+                assert!(
+                    sampler_budget_is_constrained(limit),
+                    "limit {limit} overflows on a one-texture world but reads unconstrained"
+                );
+            }
+        }
+        assert!(sampler_budget_is_constrained(16));
+        assert!(!sampler_budget_is_constrained(1_048_576));
     }
 
     #[test]

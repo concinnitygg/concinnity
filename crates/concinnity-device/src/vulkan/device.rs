@@ -55,18 +55,33 @@ pub(super) fn query_queue_families(
     }
 }
 
-// Builds the logical device. Returns the device, whether `VK_EXT_memory_budget`
-// was enabled (for the VRAM-residency chip), and whether the hardware ray-query
-// path is CAPABLE (the device exposes `VK_KHR_acceleration_structure` +
-// `VK_KHR_ray_query` + `VK_KHR_deferred_host_operations` + the matching features
-// AND XeSS does not own the feature chain). Capability is independent of whether
-// the world requested RT: the RT extensions + feature structs are enabled
-// whenever the device is capable so a live `apply_quality_settings` toggle can
-// bring RT up at runtime (a device extension cannot be enabled after
-// `create_device`). The caller decides whether to BUILD RT at launch
-// (`rt_settings.is_some() && rt_capable`); a capable-but-unused device just
-// carries the inert extension enables. RT comes back `false` on an
-// RT-incapable GPU or under XeSS, and the renderer stays on SSR.
+// A built logical device and the optional capabilities it was created with.
+pub(super) struct LogicalDevice {
+    pub device: Device,
+    // `VK_EXT_memory_budget` was enabled, for the VRAM-residency chip.
+    pub memory_budget: bool,
+    // The hardware ray-query path is CAPABLE (the device exposes
+    // `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` +
+    // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
+    // not own the feature chain). Capability is independent of whether the world
+    // requested RT: the RT extensions + feature structs are enabled whenever the
+    // device is capable so a live `apply_quality_settings` toggle can bring RT up
+    // at runtime (a device extension cannot be enabled after `create_device`).
+    // The caller decides whether to BUILD RT at launch (`rt_settings.is_some() &&
+    // rt_capable`); a capable-but-unused device just carries the inert extension
+    // enables. False on an RT-incapable GPU or under XeSS, and the renderer stays
+    // on SSR.
+    pub rt_capable: bool,
+    // `descriptorBindingSampledImageUpdateAfterBind` was enabled, so the bindless
+    // texture pool's set layout may opt into
+    // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` and budget
+    // against the far larger update-after-bind sampler limit. Only enabled on a
+    // device whose plain per-stage sampler budget is too tight to seat the pool
+    // (`descriptor_layout::sampler_budget_is_constrained`), which is MoltenVK and
+    // no desktop driver.
+    pub update_after_bind: bool,
+}
+
 pub(super) fn create_logical_device(
     instance: &ash::Instance,
     pd: vk::PhysicalDevice,
@@ -74,7 +89,7 @@ pub(super) fn create_logical_device(
     present_family: u32,
     validation: bool,
     upscaler_sdk: &UpscaleSdk,
-) -> Result<(Device, bool, bool), String> {
+) -> Result<LogicalDevice, String> {
     let priority = [1.0f32];
     let mut queue_infos = vec![
         vk::DeviceQueueCreateInfo::default()
@@ -147,9 +162,12 @@ pub(super) fn create_logical_device(
     let mut accel_probe = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut rq_probe = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
     let mut rt_bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
-    // The textured RT-reflection shader indexes the bindless pool with a
-    // per-pixel (non-uniform) hit index via `nonuniformEXT`, which needs the
-    // `shaderSampledImageArrayNonUniformIndexing` descriptor-indexing feature.
+    // Descriptor indexing serves two independent needs, so it is probed
+    // unconditionally: the textured RT-reflection shader indexes the bindless
+    // pool with a per-pixel (non-uniform) hit index via `nonuniformEXT`
+    // (`shaderSampledImageArrayNonUniformIndexing`), and a sampler-constrained
+    // device declares that pool update-after-bind
+    // (`descriptorBindingSampledImageUpdateAfterBind`).
     let mut di_probe = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     // Present only on a portability driver (MoltenVK). Probed here and chained
     // back verbatim at device creation, which enables exactly the subset the
@@ -169,12 +187,12 @@ pub(super) fn create_logical_device(
         if has_portability_subset {
             probe = probe.push_next(&mut portability_probe);
         }
+        probe = probe.push_next(&mut di_probe);
         if rt_exts_present {
             probe = probe
                 .push_next(&mut accel_probe)
                 .push_next(&mut rq_probe)
-                .push_next(&mut rt_bda_probe)
-                .push_next(&mut di_probe);
+                .push_next(&mut rt_bda_probe);
         }
         unsafe { instance.get_physical_device_features2(pd, &mut probe) };
     }
@@ -226,6 +244,20 @@ pub(super) fn create_logical_device(
     // GPU the renderer stays on SSR. `buffer_device_address` is core in 1.2, so
     // the three RT extensions are all that's added here.
     let rt_capable = rt_device_capable && upscaler_sdk.choice != ResolvedBackend::Xess;
+
+    // Update-after-bind gate for the bindless texture pool. Enabled only on a
+    // device whose plain per-stage sampler budget cannot seat the pool, which
+    // keeps every desktop driver on the untouched feature chain, and never under
+    // XeSS, which forbids the descriptor-indexing struct alongside the
+    // `Vulkan12Features` it appends.
+    let want_update_after_bind = di_probe.descriptor_binding_sampled_image_update_after_bind != 0
+        && upscaler_sdk.choice != ResolvedBackend::Xess
+        && super::descriptor_layout::sampler_budget_is_constrained(
+            unsafe { instance.get_physical_device_properties(pd) }
+                .limits
+                .max_per_stage_descriptor_samplers,
+        );
+
     if rt_capable {
         enabled.push(CString::new("VK_KHR_acceleration_structure").unwrap());
         enabled.push(CString::new("VK_KHR_ray_query").unwrap());
@@ -325,7 +357,8 @@ pub(super) fn create_logical_device(
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
     let mut rq_enable = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
     let mut di_enable = vk::PhysicalDeviceDescriptorIndexingFeatures::default()
-        .shader_sampled_image_array_non_uniform_indexing(true);
+        .shader_sampled_image_array_non_uniform_indexing(rt_capable)
+        .descriptor_binding_sampled_image_update_after_bind(want_update_after_bind);
     // The probed portability subset, reused as the enable struct so every
     // feature the driver supports is on. Its `p_next` still points into the
     // probe chain, so clear it before it is pushed onto a different chain.
@@ -335,7 +368,8 @@ pub(super) fn create_logical_device(
     tracing::info!(
         "Vulkan device features: fp16={want_f16}, 16bit_storage={want_16bit}, \
          subgroup_extended_types={want_subgroup_ext}, buffer_device_address={want_bda}, \
-         ray_query={rt_capable} (upscaler + RT enablers)"
+         ray_query={rt_capable}, update_after_bind={want_update_after_bind} \
+         (upscaler + RT enablers)"
     );
 
     // XeSS patches a device-feature `pNext` chain (it adds a
@@ -365,8 +399,14 @@ pub(super) fn create_logical_device(
         device_info.p_next = head as *const c_void;
         let device = unsafe { instance.create_device(pd, &device_info, None) }
             .map_err(|e| format!("create device (xess features): {e}"))?;
-        // RT is never co-enabled with XeSS (see `rt_capable` above).
-        return Ok((device, has_memory_budget, false));
+        // Neither RT nor update-after-bind is ever co-enabled with XeSS (see
+        // `rt_capable` / `want_update_after_bind` above).
+        return Ok(LogicalDevice {
+            device,
+            memory_budget: has_memory_budget,
+            rt_capable: false,
+            update_after_bind: false,
+        });
     }
 
     let mut device_info = vk::DeviceCreateInfo::default()
@@ -388,8 +428,10 @@ pub(super) fn create_logical_device(
     if rt_capable {
         device_info = device_info
             .push_next(&mut accel_enable)
-            .push_next(&mut rq_enable)
-            .push_next(&mut di_enable);
+            .push_next(&mut rq_enable);
+    }
+    if rt_capable || want_update_after_bind {
+        device_info = device_info.push_next(&mut di_enable);
     }
     if has_portability_subset {
         device_info = device_info.push_next(&mut portability_enable);
@@ -397,7 +439,12 @@ pub(super) fn create_logical_device(
 
     let device = unsafe { instance.create_device(pd, &device_info, None) }
         .map_err(|e| format!("create device: {e}"))?;
-    Ok((device, has_memory_budget, rt_capable))
+    Ok(LogicalDevice {
+        device,
+        memory_budget: has_memory_budget,
+        rt_capable,
+        update_after_bind: want_update_after_bind,
+    })
 }
 
 pub(super) fn get_max_usable_sample_count(
