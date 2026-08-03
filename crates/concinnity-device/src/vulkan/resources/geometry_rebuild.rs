@@ -441,18 +441,13 @@ impl VkContext {
             );
         }
 
-        // Allocate new DEVICE_LOCAL skinned buffers + ship through staging. When
-        // the device is RT-capable the new buffers must carry the same RT usage
-        // flags `upload_skinned` added, or the RT skinning path loses its inputs
-        // after a size-changing skinned reload (the flags ride along whenever
-        // capable so a live RT toggle keeps working across reloads).
+        // Allocate new DEVICE_LOCAL skinned buffers + ship through staging. The
+        // new buffers must carry the same usage flags `upload_skinned` added, or
+        // the skinning paths lose their inputs after a size-changing skinned
+        // reload (the RT-only IB flags ride along whenever the device is capable
+        // so a live RT toggle keeps working across reloads).
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
-        let skinned_vb_rt = if self.rt_capable {
-            vk::BufferUsageFlags::STORAGE_BUFFER
-        } else {
-            vk::BufferUsageFlags::empty()
-        };
         let skinned_ib_rt = if self.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -467,7 +462,7 @@ impl VkContext {
             new_v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
-                | skinned_vb_rt,
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let (new_ibuf, new_imem) = create_buffer(

@@ -107,19 +107,16 @@ impl VkContext {
 
         let vtx_bytes = bytemuck::cast_slice(vertices);
         let idx_bytes = bytemuck::cast_slice(indices);
-        // When ray-traced reflections are live the skinned VB/IB feed the RT
-        // skinning path: the skin compute kernel reads the bind-pose VB as a
-        // storage buffer, and the IB is both the skinned BLAS index input
-        // (device-addressed) and the hit-shader's u16 index SSBO. These flags
-        // require the ray-query extensions, so add them whenever the device is
-        // RT-capable (not only when RT is on at launch) so a later live toggle
-        // finds the skinned buffers already usable, mirroring how the static
-        // VB/IB gate their RT flags at init. Inert when RT is never built.
-        let skinned_vb_rt = if self.rt_capable {
-            vk::BufferUsageFlags::STORAGE_BUFFER
-        } else {
-            vk::BufferUsageFlags::empty()
-        };
+        // The skin compute kernel reads the bind-pose VB as a storage buffer, so
+        // STORAGE_BUFFER is unconditional: the main-pass skinning fold runs
+        // whether or not the device is RT-capable.
+        //
+        // The IB's extra flags are genuinely RT-only: it is the skinned BLAS
+        // index input (device-addressed) and the hit shader's u16 index SSBO,
+        // and nothing outside the RT path binds it as a buffer. Added whenever
+        // the device is RT-capable (not only when RT is on at launch) so a later
+        // live toggle finds the skinned IB already usable, mirroring how the
+        // static VB/IB gate their RT flags at init. Inert when RT is never built.
         let skinned_ib_rt = if self.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -134,7 +131,7 @@ impl VkContext {
             vtx_bytes.len() as u64,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
-                | skinned_vb_rt,
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let (skinned_ibuf, skinned_imem) = create_buffer(
@@ -607,19 +604,19 @@ impl VkContext {
         }
 
         // Re-point the main fold's skin descriptor sets' morph bindings (3 =
-        // deltas, 4 = weights). Morphless objects keep the src-VB dummy the
+        // deltas, 4 = weights). Morphless objects keep the dummy SSBO the
         // `build_main_skin` write left. A no-op when the fold is inactive.
-        let src = self.skinned.vertex_buffer;
         if let Some(skin) = self.skinned.skin.as_ref() {
+            let dummy = skin.morph_dummy;
             for (f, frame_sets) in skin.sets.iter().enumerate() {
                 for (o, &set) in frame_sets.iter().enumerate() {
                     let delta_buf = match delta_buffers.get(o) {
                         Some(&b) if b != vk::Buffer::null() => b,
-                        _ => src,
+                        _ => dummy,
                     };
                     let weight_buf = match weight_buffers.get(f).and_then(|fb| fb.get(o)) {
                         Some(&b) => b,
-                        None => src,
+                        None => dummy,
                     };
                     let delta_info = vk::DescriptorBufferInfo::default()
                         .buffer(delta_buf)

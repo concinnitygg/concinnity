@@ -190,6 +190,11 @@ pub(super) struct SkinPipeline {
     // the morph bindings (3, 4) on the main fold's sets.
     descriptor_pool: vk::DescriptorPool,
     pub(in crate::vulkan) sets: Vec<Vec<vk::DescriptorSet>>,
+    // A never-read storage buffer bound to the morph slots (3, 4) of every set
+    // whose object carries no morph targets, so those bindings stay valid
+    // without borrowing an unrelated buffer for the job.
+    pub(in crate::vulkan) morph_dummy: vk::Buffer,
+    morph_dummy_memory: vk::DeviceMemory,
 }
 
 impl SkinPipeline {
@@ -201,6 +206,8 @@ impl SkinPipeline {
             if self.descriptor_pool != vk::DescriptorPool::null() {
                 device.destroy_descriptor_pool(self.descriptor_pool, None);
             }
+            device.destroy_buffer(self.morph_dummy, None);
+            device.free_memory(self.morph_dummy_memory, None);
         }
     }
 }
@@ -697,7 +704,9 @@ fn create_device_buffer(
 // geometry). Per-(frame, object) descriptor sets are allocated lazily on the
 // first `rebuild_skinned`, when the skinned object count is known.
 pub(super) fn build_skin_pipeline(
+    instance: &ash::Instance,
     device: &Device,
+    pd: vk::PhysicalDevice,
     hot_reload: bool,
 ) -> Result<SkinPipeline, String> {
     let spv = super::builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
@@ -770,12 +779,33 @@ pub(super) fn build_skin_pipeline(
         format!("create rt skin pipeline: {e}")
     })?[0];
 
+    // Sized to one `MorphDelta` (two packed float3s) so even a stray read of
+    // slot 0 stays in bounds; `target_count == 0` keeps it unread.
+    let (morph_dummy, morph_dummy_memory) = create_buffer(
+        instance,
+        device,
+        pd,
+        24,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )
+    .map_err(|e| {
+        unsafe {
+            device.destroy_pipeline(pipeline, None);
+            device.destroy_pipeline_layout(pipeline_layout, None);
+            device.destroy_descriptor_set_layout(set_layout, None);
+        }
+        format!("rt skin morph dummy buffer: {e}")
+    })?;
+
     Ok(SkinPipeline {
         set_layout,
         pipeline_layout,
         pipeline,
         descriptor_pool: vk::DescriptorPool::null(),
         sets: Vec::new(),
+        morph_dummy,
+        morph_dummy_memory,
     })
 }
 
@@ -1110,7 +1140,7 @@ pub(super) fn build_rt_accel(
     // The compute-skinning pipeline (gated on RT, which is the only path that
     // reaches `build_rt_accel`). A build failure is non-fatal: the RT pass still
     // runs for static geometry, just without skinned hits.
-    let skin = match build_skin_pipeline(device, hot_reload) {
+    let skin = match build_skin_pipeline(instance, device, pd, hot_reload) {
         Ok(s) => Some(s),
         Err(e) => {
             tracing::warn!(
@@ -1937,8 +1967,11 @@ impl RtAccelData {
             let set = frame_sets[*obj_idx];
             // The RT skin runs at bind pose (before per-frame morph weights
             // exist); morphing happens in the per-frame main fold. Bindings 3/4
-            // are dummies (the src VB) and target_count is 0, so they go unread.
-            let dummy_info = src_info;
+            // take the dummy SSBO and target_count is 0, so they go unread.
+            let dummy_info = vk::DescriptorBufferInfo::default()
+                .buffer(skin.morph_dummy)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -2503,7 +2536,12 @@ impl super::context::VkContext {
             return Ok(());
         }
 
-        let mut skin = build_skin_pipeline(&device, self.hot_reload)?;
+        let mut skin = build_skin_pipeline(
+            &self.instance,
+            &device,
+            self.physical_device,
+            self.hot_reload,
+        )?;
         ensure_skin_sets(&device, &mut skin, frames, n)?;
 
         let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
@@ -2537,10 +2575,13 @@ impl super::context::VkContext {
                     .buffer(deformed_buf.buffer)
                     .offset(0)
                     .range(vk::WHOLE_SIZE);
-                // Morph bindings 3 (deltas) + 4 (weights) start as dummies (the
-                // src VB); `upload_skinned_morphs` re-points them for objects that
+                // Morph bindings 3 (deltas) + 4 (weights) start on the dummy
+                // SSBO; `upload_skinned_morphs` re-points them for objects that
                 // carry morph targets. target_count == 0 leaves them unread.
-                let dummy_info = src_info;
+                let dummy_info = vk::DescriptorBufferInfo::default()
+                    .buffer(skin.morph_dummy)
+                    .offset(0)
+                    .range(vk::WHOLE_SIZE);
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
