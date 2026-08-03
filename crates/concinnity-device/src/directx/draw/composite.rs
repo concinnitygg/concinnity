@@ -179,10 +179,15 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
 
         // Scissor a clipped (scrollable-panel) call to its band, restoring the
         // full-window scissor for an unclipped call so chrome is never cropped.
-        // The clip rect is already in attachment pixels (see `clip_rect_to_scissor`).
+        // Windows client pixels are the overlay units, so this is a pure clamp.
+        let ui = (args.width as f32, args.height as f32);
         let scissor = match call.clip_rect {
             Some(clip) => {
-                match crate::gfx::fullscreen::clip_rect_to_scissor(clip, args.width, args.height) {
+                match crate::gfx::fullscreen::clip_rect_to_scissor(
+                    clip,
+                    ui,
+                    (args.width, args.height),
+                ) {
                     // Row scrolled fully out of its band: nothing to draw.
                     None => return Ok(()),
                     Some((x, y, w, h)) => RECT {

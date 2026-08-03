@@ -156,6 +156,13 @@ impl Win32Window {
         (self.win_state.width, self.win_state.height)
     }
 
+    // The overlay coordinate space. Windows reports WM_MOUSEMOVE in the same
+    // client pixels the swapchain is sized to, so logical units are framebuffer
+    // pixels here and this equals `framebuffer_size`.
+    pub fn logical_size(&self) -> (f32, f32) {
+        (self.win_state.width as f32, self.win_state.height as f32)
+    }
+
     // Create the presentation surface for this window via
     // VK_KHR_win32_surface.
     pub fn create_surface(

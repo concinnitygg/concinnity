@@ -173,6 +173,13 @@ impl AppKitVkWindow {
         self.sync_drawable_size()
     }
 
+    // The overlay coordinate space: the view's size in points, larger than
+    // `framebuffer_size` by the backing scale on a retina display. Comes from
+    // the shared AppKit layer, which reports the cursor in the same units.
+    pub fn logical_size(&self) -> (f32, f32) {
+        self.win.logical_size()
+    }
+
     // Create the presentation surface from the hosted CAMetalLayer.
     // `_entry` keeps the signature shared with the GLFW / Win32 windows.
     pub fn create_surface(

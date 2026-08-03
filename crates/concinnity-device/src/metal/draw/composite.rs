@@ -140,8 +140,6 @@ impl MtlContext {
                     None => (win_w.max(0.0) as usize, win_h.max(0.0) as usize),
                 }
             };
-            let scale_x = fb_w as f32 / win_w.max(1.0);
-            let scale_y = fb_h as f32 / win_h.max(1.0);
 
             post_encoder.setRenderPipelineState(&text_ps);
 
@@ -154,19 +152,20 @@ impl MtlContext {
                 // an empty rectangle means the element scrolled fully out of its
                 // band: skip the draw entirely.
                 match call.clip_rect {
-                    Some([cx, cy, cw, ch]) => {
-                        let x0 = (cx * scale_x).floor().clamp(0.0, fb_w as f32) as usize;
-                        let y0 = (cy * scale_y).floor().clamp(0.0, fb_h as f32) as usize;
-                        let x1 = ((cx + cw) * scale_x).ceil().clamp(0.0, fb_w as f32) as usize;
-                        let y1 = ((cy + ch) * scale_y).ceil().clamp(0.0, fb_h as f32) as usize;
-                        if x1 <= x0 || y1 <= y0 {
+                    Some(clip) => {
+                        let scissor = crate::gfx::fullscreen::clip_rect_to_scissor(
+                            clip,
+                            (win_w, win_h),
+                            (fb_w as u32, fb_h as u32),
+                        );
+                        let Some((x, y, w, h)) = scissor else {
                             continue;
-                        }
+                        };
                         post_encoder.setScissorRect(MTLScissorRect {
-                            x: x0,
-                            y: y0,
-                            width: x1 - x0,
-                            height: y1 - y0,
+                            x: x as usize,
+                            y: y as usize,
+                            width: w as usize,
+                            height: h as usize,
                         });
                     }
                     None => {

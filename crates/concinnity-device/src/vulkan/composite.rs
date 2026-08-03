@@ -134,18 +134,21 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         }
         let device = &self.device;
         let extent = self.swapchain_extent;
+        // The text vertices are in overlay units (mapped to NDC by the shader's
+        // divide by win_width/height); the scissor is in attachment pixels, so a
+        // per-call clip rect scales between the two.
+        let ui = self.logical_size();
 
         // Scissor a clipped (scrollable-panel) call to its band, restoring the
         // full-window scissor for an unclipped call so chrome is never cropped.
-        // The clip rect is already in attachment pixels (see `clip_rect_to_scissor`);
-        // resolve it first so a fully-scrolled-out row skips before allocating
-        // its transient buffers.
+        // Resolved first so a fully-scrolled-out row skips before allocating its
+        // transient buffers.
         let scissor = match call.clip_rect {
             Some(clip) => {
                 match crate::gfx::fullscreen::clip_rect_to_scissor(
                     clip,
-                    extent.width,
-                    extent.height,
+                    ui,
+                    (extent.width, extent.height),
                 ) {
                     None => return Ok(()),
                     Some((x, y, w, h)) => vk::Rect2D {
@@ -161,8 +164,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         };
 
         let text_push = TextPush {
-            win_width: extent.width as f32,
-            win_height: extent.height as f32,
+            win_width: ui.0,
+            win_height: ui.1,
             _pad0: 0.0,
             _pad1: 0.0,
         };

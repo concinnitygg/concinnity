@@ -1021,11 +1021,11 @@ impl MtlContext {
         .ok_or_else(|| "failed to create indirect command buffer".to_string())
     }
 
-    // Logical (point-space) size of the drawable area. Used by systems to pass
-    // viewport dimensions to text layout (e.g. for centred labels).
+    // The overlay coordinate space, in points. Read from the shared AppKit
+    // window (which reports the cursor in the same units) rather than the
+    // `MTKView` directly, so both macOS backends resolve it identically.
     pub fn logical_size(&self) -> (f32, f32) {
-        let s = self.mtk_view.bounds().size;
-        (s.width as f32, s.height as f32)
+        self.win.logical_size()
     }
 
     // Device capability flags for the settings menu. Ray tracing is queried

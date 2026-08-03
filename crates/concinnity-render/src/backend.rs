@@ -16,8 +16,8 @@
 //     ignores the (texture_slot, normal_map_slot) args; DX/VK bake them
 //     into a shared descriptor at setup time.
 //
-// `logical_size` and `render_stats` are Metal-only today and have default
-// no-op impls so DX/VK don't need to override them.
+// `render_stats` is Metal-only today and has a default no-op impl so DX/VK
+// don't need to override it.
 
 use crate::auto_exposure::AutoExposureSettings;
 use crate::backend_init::{BackendInit, ShaderBytes, SwapchainConfig};
@@ -486,10 +486,19 @@ pub trait RenderBackend: SceneControl + Send {
         GpuProfile::UNKNOWN
     }
 
-    // Metal-only diagnostics; default no-op for parity.
+    // The overlay coordinate space: the window's content size in logical,
+    // DPI-independent units (points on macOS, client pixels on Windows, window
+    // coordinates on Linux). Every backend reports the cursor in these same
+    // units, so UI hit-testing, text layout, and the overlay shader's divide to
+    // NDC all share one space regardless of the backing scale. A backend
+    // converts to attachment pixels only where a pixel rect is unavoidable,
+    // through `fullscreen::clip_rect_to_scissor`.
+    //
+    // Default `(0.0, 0.0)` for a headless backend with no window.
     fn logical_size(&self) -> (f32, f32) {
         (0.0, 0.0)
     }
+    // Metal-only diagnostics; default no-op for parity.
     fn render_stats(&self) -> RenderStats {
         RenderStats::default()
     }

@@ -99,29 +99,6 @@ fn resolve_cursor_mode(captured: bool, ui_cursor_hidden: bool) -> glfw::CursorMo
     }
 }
 
-// Map a cursor position from GLFW window (screen) coordinates into framebuffer
-// pixels. GLFW reports the cursor in window coordinates, but the overlay UI is
-// hit-tested in framebuffer pixels (`VkContext::logical_size` returns the
-// swapchain extent). `win`/`fb` are the window and framebuffer sizes: equal on
-// Windows and unscaled X11, so the scale is 1.0 and this is a no-op; on a scaled
-// surface (hi-DPI Wayland) the framebuffer is larger than the window by the
-// content scale, so the cursor must be multiplied up to land on the right
-// overlay region. A zero window dimension (minimised / mid-resize) falls back to
-// a 1.0 scale rather than dividing by zero.
-fn scale_cursor_to_framebuffer(x: f32, y: f32, win: (i32, i32), fb: (i32, i32)) -> (f32, f32) {
-    let sx = if win.0 > 0 {
-        fb.0 as f32 / win.0 as f32
-    } else {
-        1.0
-    };
-    let sy = if win.1 > 0 {
-        fb.1 as f32 / win.1 as f32
-    } else {
-        1.0
-    };
-    (x * sx, y * sy)
-}
-
 // Apply a key transition to whichever gameplay actions are bound to `key`.
 // `pressed` is the held state (movement / sprint follow it) and, on a press,
 // fires the one-shot actions (jump / interact). Mirrors the Metal / DirectX
@@ -642,19 +619,12 @@ impl GlfwWindow {
                     } else {
                         // GLFW CursorPos has origin top-left with Y increasing
                         // downward -- matches TextLabel coords directly. It
-                        // arrives in window (screen) coordinates; map it into
-                        // framebuffer pixels so it lines up with the overlay
-                        // hit-testing space (logical_size = swapchain extent).
-                        // No-op where window coords equal framebuffer pixels
-                        // (Windows / unscaled X11); scales up on hi-DPI Wayland.
-                        let (mx, my) = scale_cursor_to_framebuffer(
-                            x as f32,
-                            y as f32,
-                            self.window.get_size(),
-                            self.window.get_framebuffer_size(),
-                        );
-                        self.input.mouse_x = mx;
-                        self.input.mouse_y = my;
+                        // arrives in window coordinates, which are the overlay
+                        // space (`logical_size`), so it needs no scaling: a
+                        // hi-DPI framebuffer larger than the window is absorbed
+                        // by the overlay's divide to NDC.
+                        self.input.mouse_x = x as f32;
+                        self.input.mouse_y = y as f32;
                     }
                 }
                 glfw::WindowEvent::MouseButton(
@@ -739,6 +709,14 @@ impl GlfwWindow {
         self.window.get_framebuffer_size()
     }
 
+    // The overlay coordinate space: GLFW window coordinates, the same units
+    // `CursorPos` reports the cursor in. Equal to `framebuffer_size` on an
+    // unscaled surface; smaller by the content scale on hi-DPI Wayland.
+    pub fn logical_size(&self) -> (f32, f32) {
+        let (w, h) = self.window.get_size();
+        (w as f32, h as f32)
+    }
+
     // Create the presentation surface for this window (GLFW picks the
     // platform's surface extension). `_entry` keeps the signature shared with
     // the Win32 window, which loads VK_KHR_win32_surface through it.
@@ -788,29 +766,6 @@ mod tests {
         assert_eq!(resolve_cursor_mode(false, true), glfw::CursorMode::Hidden);
         // Neither: the OS cursor is visible.
         assert_eq!(resolve_cursor_mode(false, false), glfw::CursorMode::Normal);
-    }
-
-    #[test]
-    fn cursor_scale_is_noop_when_window_equals_framebuffer() {
-        // Windows / unscaled X11: window coords already equal framebuffer pixels.
-        let p = scale_cursor_to_framebuffer(640.0, 360.0, (1280, 720), (1280, 720));
-        assert_eq!(p, (640.0, 360.0));
-    }
-
-    #[test]
-    fn cursor_scales_up_on_hidpi_surface() {
-        // hi-DPI Wayland at 2x: a 1280x720 window backs a 2560x1440 framebuffer,
-        // so a cursor at the window centre maps to the framebuffer centre.
-        let p = scale_cursor_to_framebuffer(640.0, 360.0, (1280, 720), (2560, 1440));
-        assert_eq!(p, (1280.0, 720.0));
-    }
-
-    #[test]
-    fn cursor_scale_guards_zero_window_size() {
-        // A zero window dimension (minimised / mid-resize) must not divide by
-        // zero; fall back to a 1.0 scale on that axis.
-        let p = scale_cursor_to_framebuffer(10.0, 20.0, (0, 0), (1280, 720));
-        assert_eq!(p, (10.0, 20.0));
     }
 
     #[test]

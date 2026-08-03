@@ -20,28 +20,33 @@
 
 use crate::render_types::TextDrawCall;
 
-// Convert a `TextDrawCall.clip_rect` (a window-space rectangle `[x, y, w, h]`,
-// already mapped through the overlay transform by `gfx::text::band_to_window`)
-// into an integer scissor rect `(x, y, w, h)` clamped to the attachment's pixel
-// bounds. Returns `None` when the clamped rectangle is empty (a row scrolled
-// fully out of its band), so the caller skips the draw entirely.
+// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
+// units, already mapped through the overlay transform by
+// `gfx::text::band_to_window`) into an integer scissor rect `(x, y, w, h)` in
+// attachment pixels, clamped to the attachment's bounds. Returns `None` when the
+// clamped rectangle is empty (a row scrolled fully out of its band), so the
+// caller skips the draw entirely.
 //
-// On DirectX / Vulkan the overlay's logical size is the swapchain pixel size
-// (see each backend's `logical_size`), so a clip band's window-space rect is
-// already in attachment pixels and needs no DPI scaling -- only the clamp, which
-// keeps a partially-scrolled row's rect inside the target. (Metal scales
-// logical points to its larger drawable in its own composite encoder.)
+// `ui` is the overlay's logical size (see `RenderBackend::logical_size`) and
+// `attach` the pixel size of the target the text pass writes. The two are equal
+// wherever a window's logical units are pixels (Windows, unscaled X11), leaving
+// a pure clamp; on a hi-DPI surface (macOS retina, scaled Wayland) the
+// attachment is larger by the backing scale and the rect scales up with it. A
+// zero logical dimension (minimised / mid-resize) falls back to a 1.0 scale
+// rather than dividing by zero.
 pub fn clip_rect_to_scissor(
     clip: [f32; 4],
-    attach_w: u32,
-    attach_h: u32,
+    ui: (f32, f32),
+    attach: (u32, u32),
 ) -> Option<(i32, i32, u32, u32)> {
-    let aw = attach_w as f32;
-    let ah = attach_h as f32;
-    let x0 = clip[0].floor().clamp(0.0, aw);
-    let y0 = clip[1].floor().clamp(0.0, ah);
-    let x1 = (clip[0] + clip[2]).ceil().clamp(0.0, aw);
-    let y1 = (clip[1] + clip[3]).ceil().clamp(0.0, ah);
+    let aw = attach.0 as f32;
+    let ah = attach.1 as f32;
+    let sx = if ui.0 > 0.0 { aw / ui.0 } else { 1.0 };
+    let sy = if ui.1 > 0.0 { ah / ui.1 } else { 1.0 };
+    let x0 = (clip[0] * sx).floor().clamp(0.0, aw);
+    let y0 = (clip[1] * sy).floor().clamp(0.0, ah);
+    let x1 = ((clip[0] + clip[2]) * sx).ceil().clamp(0.0, aw);
+    let y1 = ((clip[1] + clip[3]) * sy).ceil().clamp(0.0, ah);
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -202,10 +207,26 @@ mod tests {
 
     #[test]
     fn clip_inside_attachment_passes_through() {
-        // A band fully inside the attachment maps 1:1 (no scaling on DX/VK).
+        // Logical units are attachment pixels (Windows, unscaled X11): 1:1.
         assert_eq!(
-            clip_rect_to_scissor([100.0, 50.0, 300.0, 200.0], 1280, 720),
+            clip_rect_to_scissor([100.0, 50.0, 300.0, 200.0], (1280.0, 720.0), (1280, 720)),
             Some((100, 50, 300, 200))
+        );
+    }
+
+    #[test]
+    fn clip_scales_from_logical_units_to_a_hi_dpi_attachment() {
+        // A 2x backing scale (macOS retina, scaled Wayland): the band covers the
+        // same fraction of an attachment twice the logical size.
+        assert_eq!(
+            clip_rect_to_scissor([100.0, 50.0, 300.0, 200.0], (1024.0, 768.0), (2048, 1536)),
+            Some((200, 100, 600, 400))
+        );
+        // A non-integer scale still lands on whole pixels, rounded outward so a
+        // band never crops the glyphs it should show.
+        assert_eq!(
+            clip_rect_to_scissor([10.0, 10.0, 100.0, 100.0], (1000.0, 1000.0), (1500, 1500)),
+            Some((15, 15, 150, 150))
         );
     }
 
@@ -213,13 +234,18 @@ mod tests {
     fn clip_is_clamped_to_attachment_bounds() {
         // A band hanging off the right / bottom edge is clamped to the target.
         assert_eq!(
-            clip_rect_to_scissor([1200.0, 700.0, 400.0, 400.0], 1280, 720),
+            clip_rect_to_scissor([1200.0, 700.0, 400.0, 400.0], (1280.0, 720.0), (1280, 720)),
             Some((1200, 700, 80, 20))
         );
         // A negative origin is clamped to zero, shrinking the width/height.
         assert_eq!(
-            clip_rect_to_scissor([-40.0, -10.0, 100.0, 100.0], 1280, 720),
+            clip_rect_to_scissor([-40.0, -10.0, 100.0, 100.0], (1280.0, 720.0), (1280, 720)),
             Some((0, 0, 60, 90))
+        );
+        // The clamp is against the attachment, after scaling.
+        assert_eq!(
+            clip_rect_to_scissor([600.0, 350.0, 200.0, 200.0], (640.0, 360.0), (1280, 720)),
+            Some((1200, 700, 80, 20))
         );
     }
 
@@ -227,13 +253,23 @@ mod tests {
     fn fully_offscreen_clip_is_skipped() {
         // A band entirely past the attachment yields no scissor (skip the draw).
         assert_eq!(
-            clip_rect_to_scissor([2000.0, 50.0, 100.0, 100.0], 1280, 720),
+            clip_rect_to_scissor([2000.0, 50.0, 100.0, 100.0], (1280.0, 720.0), (1280, 720)),
             None
         );
         // A zero-area band is also skipped.
         assert_eq!(
-            clip_rect_to_scissor([10.0, 10.0, 0.0, 50.0], 1280, 720),
+            clip_rect_to_scissor([10.0, 10.0, 0.0, 50.0], (1280.0, 720.0), (1280, 720)),
             None
+        );
+    }
+
+    #[test]
+    fn a_zero_logical_size_falls_back_to_an_unscaled_clip() {
+        // Minimised / mid-resize: no divide by zero, and the rect is still
+        // clamped into the attachment.
+        assert_eq!(
+            clip_rect_to_scissor([10.0, 20.0, 100.0, 100.0], (0.0, 0.0), (1280, 720)),
+            Some((10, 20, 100, 100))
         );
     }
 

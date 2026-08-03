@@ -191,9 +191,10 @@ impl AppKitWindow {
         self.fullscreen.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    // Logical (point-space) size of the view. Used by systems to pass viewport
-    // dimensions to text layout (e.g. for centred labels).
-    #[cfg(backend_metal)] // Vulkan sizes from the swapchain extent
+    // The overlay coordinate space on macOS: the view's size in points, the same
+    // units `cursor_in_content` reports the cursor in. Both macOS backends read
+    // it from here, so the drawable's backing scale never leaks into UI space
+    // (see `RenderBackend::logical_size`).
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         let s = self.view.bounds().size;
         (s.width as f32, s.height as f32)
@@ -593,7 +594,7 @@ impl AppKitWindow {
                         }
                     } else {
                         // Track the absolute cursor position for UI hit-testing and
-                        // the in-engine pointer, in view pixels with a top-left
+                        // the in-engine pointer, in view points with a top-left
                         // origin (see cursor_in_content: sourced from the global
                         // cursor position so a fullscreen menu-bar reveal cannot
                         // fling the pointer off screen).
@@ -656,7 +657,7 @@ impl AppKitWindow {
         self.update_ui_cursor_confinement(mtm);
     }
 
-    // The live cursor position in view pixels with a top-left origin, for UI
+    // The live cursor position in view points with a top-left origin, for UI
     // hit-testing and the in-engine pointer. The Y flip is about the live
     // `view.bounds()` height -- the exact view the renderer draws the overlay
     // + cursor against (`logical_size`) -- and the conversion goes through that

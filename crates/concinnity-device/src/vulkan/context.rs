@@ -2249,19 +2249,15 @@ impl VkContext {
     }
 
     // Live window size for overlay (view-owned UI) scaling and cursor
-    // hit-testing. Returns the swapchain pixel extent, which is the attachment
-    // the composite + text pass writes and the space the UI shader divides
-    // vertices by. The cursor reported by `poll()` is mapped from GLFW window
-    // coordinates into this framebuffer-pixel space at the source (see
-    // `scale_cursor_to_framebuffer` in window.rs), so the overlay forward /
-    // inverse transforms stay consistent both where the two are equal (Windows,
-    // unscaled X11) and on a scaled surface (hi-DPI Wayland, framebuffer larger
-    // than the window).
+    // hit-testing, in the window's logical units. Read from the platform window
+    // rather than the swapchain extent so the overlay space matches the units
+    // `poll()` reports the cursor in on every platform: points on macOS, client
+    // pixels on Windows, window coordinates on Linux. Where the framebuffer is
+    // larger (a retina drawable, a scaled Wayland surface) the difference is
+    // absorbed by the UI shader's divide to NDC, and only the text scissor
+    // converts back to pixels.
     pub fn logical_size(&self) -> (f32, f32) {
-        (
-            self.swapchain_extent.width as f32,
-            self.swapchain_extent.height as f32,
-        )
+        self.window().logical_size()
     }
 
     // Device capability flags for the settings menu. RT reflects whether the
