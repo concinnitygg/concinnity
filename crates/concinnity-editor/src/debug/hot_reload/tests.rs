@@ -2346,7 +2346,7 @@ fn drive_run_frame(
             world_reload: &world_reload,
             last_fog_settings: &mut last_fog,
         };
-        run_frame(state, &mut apply)
+        run_frame(state, &mut apply, None)
     };
     (effects, backend, last_fog)
 }

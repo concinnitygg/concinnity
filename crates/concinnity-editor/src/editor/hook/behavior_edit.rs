@@ -325,7 +325,9 @@ impl EditorHook {
         };
         entry.insert("args".to_string(), args);
         self.mark_changed();
+        let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
+        self.notify_behavior_fault(prev_fault);
         self.seed_behavior_value(world);
     }
 
@@ -592,7 +594,7 @@ impl EditorHook {
     // rather than the open behavior's body, so it steps to the chart on the way:
     // a complaint is about a place inside one behavior, and the chart is the view
     // that shows one.
-    fn select_behavior_fault(&mut self, world: &mut World) {
+    pub(super) fn select_behavior_fault(&mut self, world: &mut World) {
         let data = self.behavior_data();
         let Some(row) = self
             .behavior_status

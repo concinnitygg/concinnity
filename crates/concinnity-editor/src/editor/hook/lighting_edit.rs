@@ -75,6 +75,7 @@ impl EditorHook {
                 .lighting_focus
                 .filter(|_| self.panel_order.last() == Some(&PanelKey::Lighting)),
             status: self.lighting_status.as_deref(),
+            dirty: self.lighting_touched,
             mouse,
         }
     }
@@ -83,6 +84,9 @@ impl EditorHook {
     // section's asset, and after a successful Apply. Deliberately NOT on every
     // external entry change, so in-progress edits are never clobbered mid-type.
     pub(super) fn seed_lighting(&mut self, world: &mut World) {
+        // Re-seeded controls match the committed values again, so any
+        // unapplied-edit marker is stale.
+        self.lighting_touched = false;
         for (b, field) in self.lighting_fields().iter().enumerate() {
             if let Some(f) = field
                 && f.kind.has_text_input()

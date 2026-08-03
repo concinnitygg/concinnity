@@ -163,35 +163,65 @@ impl EditorHook {
         }
     }
 
-    // SAVE: persist the working entries to disk (world.jsonl + recompiled blobs).
-    // The live preview is already up to date (every edit swaps it in), so SAVE is
-    // purely persistence -- it does not rebuild or swap the running world. On
-    // success the world is clean again; on failure it stays dirty and the next
-    // SAVE retries.
+    // SAVE: persist the working entries to disk. world.jsonl is the source of
+    // truth, so its atomic write is the save -- `dirty` clears on it. The
+    // compiled blobs are a derived cache (boot rebuilds them when missing), so
+    // their recompile runs on the cook worker with a progress card instead of
+    // stalling the frame loop; a blob failure toasts but the world stays
+    // saved. The live preview is already up to date (every edit swaps it in),
+    // so nothing is rebuilt or swapped here. On a write failure the world
+    // stays dirty and the next SAVE retries.
     pub(super) fn save(&mut self) {
-        // A console-launched build is writing the same blobs; stay dirty and
-        // let the next SAVE retry instead of racing it.
+        // A cook is already writing the same blobs; stay dirty and let the
+        // next SAVE retry instead of racing it. The swap also claims the
+        // guard for this save's own blob cook.
         if self
             .console_build_running
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
             tracing::warn!("editor: save deferred, a cook is writing blobs");
+            self.notifier
+                .warning("Save deferred: a cook is writing blobs");
             return;
         }
-        match self.persist() {
-            Ok(()) => {
-                self.dirty = false;
-                self.saved = self.entries.clone();
-                tracing::info!("editor: saved {}", self.world_path);
+        let release = |hook: &Self| {
+            hook.console_build_running
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        };
+        let content = match crate::world::write_world_jsonl(&self.entries) {
+            Ok(c) => c,
+            Err(e) => {
+                release(self);
+                tracing::error!("editor: save failed: {e}");
+                self.notifier
+                    .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
+                return;
             }
-            Err(e) => tracing::error!("editor: save failed: {e}"),
+        };
+        if let Err(e) = self.write_jsonl_content(&content) {
+            release(self);
+            tracing::error!("editor: save failed: {e}");
+            self.notifier
+                .error_with(&format!("Save failed: {e}"), notify::Action::OpenConsole);
+            return;
         }
-    }
-
-    pub(super) fn persist(&self) -> std::io::Result<()> {
-        self.write_jsonl()?;
-        crate::build_world_to_disk(&self.world_path)?;
-        Ok(())
+        self.dirty = false;
+        self.saved = self.entries.clone();
+        tracing::info!("editor: saved {}", self.world_path);
+        self.notifier.success(&format!("Saved {}", self.world_path));
+        // The worker releases the guard when it finishes. Success stays quiet
+        // (the save already toasted); only a blob failure surfaces.
+        let sink = self.console_sink.clone();
+        let toasts = self.notifier.clone();
+        self.spawn_cook_worker("Cooking blobs", content, move |outcome, _secs| {
+            if let Err(e) = outcome {
+                sink.error(&format!("save: blob cook failed: {e}"));
+                toasts.error_with(
+                    &format!("Blob cook failed: {e}"),
+                    notify::Action::OpenConsole,
+                );
+            }
+        });
     }
 
     // Build a ready-to-run world from the in-memory entries, without touching disk
@@ -226,13 +256,21 @@ impl EditorHook {
     }
 
     // Write the working entries to world.jsonl atomically (temp file + rename),
-    // so a crash mid-write cannot truncate the user's world. Split from `persist`
-    // so the serialization is unit-testable without the compile step.
+    // so a crash mid-write cannot truncate the user's world. SAVE inlines the
+    // serialization (it reuses the string for the blob cook); this remains the
+    // test seam for the write itself.
+    #[cfg(test)]
     pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
         let out = crate::world::write_world_jsonl(&self.entries)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        self.write_jsonl_content(&out)
+    }
+
+    // The file-write tail of `write_jsonl`, for a caller that already
+    // serialized the entries (SAVE reuses the string for the blob cook).
+    fn write_jsonl_content(&self, content: &str) -> std::io::Result<()> {
         let tmp = format!("{}.tmp", self.world_path);
-        std::fs::write(&tmp, out)?;
+        std::fs::write(&tmp, content)?;
         std::fs::rename(&tmp, &self.world_path)
     }
 }

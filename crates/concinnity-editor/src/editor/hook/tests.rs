@@ -7521,3 +7521,104 @@ fn display_menu_rows_set_mode_and_flags() {
     // Closed: presses route normally again.
     assert!(!h.route_display_menu_click(&away, vp));
 }
+
+// The toast stack claims only presses on its live cards; everywhere else the
+// press falls through to normal routing. Clicking a card runs its action and
+// dismisses it.
+#[test]
+fn toast_presses_claim_cards_and_fall_through_elsewhere() {
+    let mut h = hook(Vec::new());
+    let vp = [1280.0, 720.0];
+    let mut world = World::new_empty();
+    // Empty queue: any press falls straight through.
+    assert!(!h.try_toast_press(vp[0] - 20.0, vp[1] - 20.0, vp, &mut world));
+    h.notifier
+        .error_with("cook failed", notify::Action::OpenConsole);
+    h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
+    assert!(!h.toasts_hidden, "a live toast draws");
+    // While live, the stack's ids join the layer map above the modal band.
+    let card_id = toast_overlay::all_sprite_ids()[0];
+    assert!(h.compute_layers().contains_key(&card_id));
+    // A press off the stack still falls through.
+    assert!(!h.try_toast_press(10.0, 10.0, vp, &mut world));
+    // A press on the newest card claims it, runs its action, and dismisses.
+    let r = toast_overlay::card_rect(vp, 0, 0);
+    assert!(h.try_toast_press(r[0] + 5.0, r[1] + 5.0, vp, &mut world));
+    assert!(h.console_open, "the error's action opened the Console");
+    assert!(h.notifier.is_empty(), "the card dismissed");
+}
+
+// After the last toast goes, the drive hides the overlay once and then does
+// nothing per frame; the layer map drops the stack's ids again.
+#[test]
+fn toast_drive_settles_hidden_when_the_queue_empties() {
+    let mut h = hook(Vec::new());
+    let vp = [1280.0, 720.0];
+    let mut world = World::new_empty();
+    h.notifier.success("saved");
+    h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
+    assert!(!h.toasts_hidden);
+    h.notifier.click_card(0);
+    h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
+    assert!(h.toasts_hidden, "one hide pass after the stack empties");
+    let card_id = toast_overlay::all_sprite_ids()[0];
+    assert!(!h.compute_layers().contains_key(&card_id));
+}
+
+// A behavior fault pushed on commit dedupes against the persisting fault, so
+// per-keystroke re-checks of the same complaint do not re-toast.
+#[test]
+fn behavior_fault_toasts_only_on_a_new_fault() {
+    let mut h = hook(Vec::new());
+    h.behavior_status = Some(Status::message("a behavior needs a name"));
+    h.notify_behavior_fault(None);
+    assert!(!h.notifier.is_empty(), "a fresh fault toasts");
+    h.notifier.click_card(0);
+    let prev = h.behavior_fault_message();
+    h.notify_behavior_fault(prev);
+    assert!(h.notifier.is_empty(), "the same fault stays quiet");
+    h.notify_behavior_fault(Some("a different complaint".to_string()));
+    assert!(!h.notifier.is_empty(), "a changed fault toasts again");
+}
+
+// Unapplied-edit markers: set by control edits, cleared by the panel's own
+// open / apply, and surfaced as a "*" heading suffix.
+#[test]
+fn unapplied_markers_follow_edit_and_apply() {
+    let mut h = hook(vec![entry("cube", "PointLight")]);
+    let mut world = world_with_fields();
+    // The Edit form: opening starts clean, a control edit marks, closing clears.
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    assert!(!h.form_touched);
+    assert!(!h.panel_data(&world).form_title.ends_with('*'));
+    h.apply_form(FormAction::CycleField(0), &mut world);
+    assert!(h.form_touched, "a control edit marks the form");
+    assert!(h.panel_data(&world).form_title.ends_with('*'));
+    // Focus moves alone do not mark.
+    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    h.apply_form(FormAction::FocusName, &mut world);
+    assert!(!h.form_touched, "focus is not an edit");
+    h.form_touched = true;
+    h.close_form();
+    assert!(!h.form_touched, "closing discards the marker");
+    // Lighting: re-seeding (open / apply / undo) clears the marker.
+    h.lighting_touched = true;
+    h.seed_lighting(&mut world);
+    assert!(!h.lighting_touched);
+    // Story: a changed line marks on commit; loading clears.
+    h.story_lines = vec!["hello".to_string()];
+    h.story_line = 0;
+    world.add_component(TextInput {
+        asset_id: story_panel::LINE_INPUT,
+        ..Default::default()
+    });
+    set_field(&mut world, story_panel::LINE_INPUT, "hello edited");
+    h.commit_story_line(&world);
+    assert!(h.story_touched, "a changed line marks the story");
+    // An unchanged commit does not re-mark after a clear.
+    h.story_touched = false;
+    h.commit_story_line(&world);
+    assert!(!h.story_touched, "an identical line is not an edit");
+    let dirty_view = h.make_story_view([0.0, 0.0]);
+    assert!(!dirty_view.dirty);
+}

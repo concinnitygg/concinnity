@@ -111,6 +111,10 @@ impl EditorHook {
             let msg = format!("{path}: no such file");
             self.console_sink.error(&format!("import: {msg}"));
             self.import_status = Some(ImportStatus::Error(short_status(&msg)));
+            self.notifier.error_with(
+                &format!("Import failed: {msg}"),
+                notify::Action::OpenConsole,
+            );
             return;
         }
         let mut new_entries = match crate::authoring::entry_from_path(&path) {
@@ -119,6 +123,8 @@ impl EditorHook {
                 // The console keeps the full error; the status line clips it.
                 self.console_sink.error(&format!("import: {e}"));
                 self.import_status = Some(ImportStatus::Error(short_status(&e.to_string())));
+                self.notifier
+                    .error_with(&format!("Import failed: {e}"), notify::Action::OpenConsole);
                 return;
             }
         };
@@ -128,18 +134,27 @@ impl EditorHook {
         if let Some((name, source)) =
             crate::authoring::try_retarget_environment_map(&mut self.entries, &new_entries)
         {
-            self.import_status = Some(ImportStatus::Notice(short_status(&format!(
-                "{name} now uses {source}"
-            ))));
+            let notice = format!("{name} now uses {source}");
+            self.import_status = Some(ImportStatus::Notice(short_status(&notice)));
+            self.notifier.info(&notice);
             self.mark_changed();
             widget::seed_field(world, import_panel::PATH_INPUT, "");
             return;
         }
+        let mut first_name = String::new();
         for entry in &mut new_entries {
             let base = entry_name(entry).unwrap_or("import").to_string();
             let unique = self.unique_from(&base);
-            entry["name"] = serde_json::Value::String(unique);
+            entry["name"] = serde_json::Value::String(unique.clone());
+            if first_name.is_empty() {
+                first_name = unique;
+            }
             self.entries.push(entry.clone());
+        }
+        match new_entries.len() {
+            0 => {}
+            1 => self.notifier.success(&format!("Imported '{first_name}'")),
+            n => self.notifier.success(&format!("Imported {n} assets")),
         }
         self.mark_changed();
         widget::seed_field(world, import_panel::PATH_INPUT, "");

@@ -18,7 +18,7 @@ pub(crate) use add::{
     IMPORT_EXTENSION_GROUPS, apply_name_override, entry_from_path, is_path_like,
     resolve_add_target, try_retarget_environment_map,
 };
-pub(crate) use build::build_world_str_to_disk;
+pub(crate) use build::build_world_str_to_disk_with_progress;
 pub use build::{
     build_world_from_path, build_world_from_str, build_world_to_disk, world_from_loaded,
 };

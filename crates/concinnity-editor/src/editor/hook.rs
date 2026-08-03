@@ -77,6 +77,7 @@ use super::group_transform;
 use super::highlight;
 use super::history::History;
 use super::marquee;
+use super::notify;
 use super::orbit;
 use super::outlines;
 use super::resize;
@@ -84,6 +85,7 @@ use super::seeded_content;
 use super::selection::Selection;
 use super::session_store;
 use super::sim;
+use super::toast_overlay;
 use super::visibility;
 use crate::app::state::App;
 use crate::assets::FrameInput;
@@ -176,6 +178,12 @@ pub(crate) struct EditorHook {
     console_pinned: bool,
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // The toast queue (`editor/notify.rs`): result sites push, the per-frame
+    // drive (`hook/notify_drive.rs`) draws the stack. The latch skips the
+    // overlay's hide pass while nothing is live, so an idle queue costs one
+    // lock check a frame.
+    notifier: notify::Notifier,
+    toasts_hidden: bool,
     // The Behavior panel: shown state, which of the world's Behavior entries is
     // open (an ordinal into them, so an unrelated add / delete cannot retarget
     // it), the selected outline row, the outline and palette scrolls, whether
@@ -396,6 +404,22 @@ pub(crate) struct EditorHook {
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
     // panels occlude cleanly instead of merging.
     panel_order: Vec<PanelKey>,
+    // Unapplied-edit markers: typed-or-clicked control state a panel holds
+    // that has not been committed by its Apply / Add. Event-driven (set on
+    // edit input, cleared on open / apply), so no per-frame comparisons. The
+    // panels suffix their heading with "*" while set. Behavior / Variables
+    // commit per change and never hold unapplied state, so they carry none.
+    form_touched: bool,
+    lighting_touched: bool,
+    story_touched: bool,
+    // The preview rebuild blocks the frame loop, so when the last one measured
+    // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
+    // `rebuild_countdown` the frames left before the rebuild runs (the card
+    // must be drawn and presented first), and `last_rebuild_secs` the honest
+    // measure that gates the whole affordance.
+    rebuild_op: Option<notify::OpHandle>,
+    rebuild_countdown: u8,
+    last_rebuild_secs: f32,
 }
 
 // The template a form-edited asset derives from.
@@ -535,6 +559,7 @@ mod browse;
 mod console_edit;
 mod content_drag;
 mod content_edit;
+mod cook_worker;
 // Named to avoid colliding with the `use super::create_menu` module import.
 mod create_menu_drive;
 mod drop_floor;
@@ -558,6 +583,7 @@ mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
+mod notify_drive;
 pub(super) mod panels;
 mod routing;
 mod select_edit;
@@ -626,6 +652,8 @@ impl EditorHook {
             console_pinned: true,
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            notifier: notify::Notifier::default(),
+            toasts_hidden: true,
             behavior_open: false,
             behavior_index: 0,
             behavior_row: None,
@@ -726,6 +754,12 @@ impl EditorHook {
             // the Template detail panel frontmost, over the Templates list it
             // spawns from).
             panel_order: PanelKey::ALL.to_vec(),
+            form_touched: false,
+            lighting_touched: false,
+            story_touched: false,
+            rebuild_op: None,
+            rebuild_countdown: 0,
+            last_rebuild_secs: 0.0,
         }
     }
 }
@@ -736,6 +770,12 @@ impl EditorHook {
     pub(crate) fn with_console_sink(mut self, sink: ConsoleSink) -> Self {
         self.console_sink = sink;
         self
+    }
+
+    // A clone of the toast queue handle, for the sibling hooks (the debug
+    // server's hot-reload passes report through it).
+    pub(crate) fn notifier(&self) -> notify::Notifier {
+        self.notifier.clone()
     }
 
     // Whether any editor text control holds keyboard focus this frame: the
@@ -819,6 +859,19 @@ impl DebugHook for EditorHook {
             self.shift_held = input.shift;
             self.ctrl_held = input.ctrl;
             self.viewport = input.viewport;
+            // Typing into a batching panel's focused field marks its
+            // unapplied-edit state (the heading's "*"). Frontmost-gated,
+            // because only the frontmost panel's field owns the keyboard.
+            if input.typed_char.is_some() {
+                match self.frontmost_open_panel() {
+                    Some(PanelKey::Edit) => self.form_touched = true,
+                    Some(PanelKey::Lighting) if self.lighting_focus.is_some() => {
+                        self.lighting_touched = true;
+                    }
+                    Some(PanelKey::Story) if self.story_focus => self.story_touched = true,
+                    _ => {}
+                }
+            }
             // Escape hands the cursor back to the editor: a running world
             // pauses mid-state, the fly camera exits, and the create menu
             // dismisses.
@@ -1114,6 +1167,7 @@ impl DebugHook for EditorHook {
         self.drive_marquee_draw(world, shown);
         self.drive_create_menu_draw(world, shown, mouse);
         self.drive_display_menu_draw(world, vp, shown, mouse);
+        self.drive_toasts(world, vp, shown, mouse);
     }
 
     // Rebuild the live preview world from the in-memory entries and swap it under
@@ -1130,12 +1184,45 @@ impl DebugHook for EditorHook {
         if !self.rebuild_preview {
             return;
         }
+        // A rebuild that measured slow last time announces itself first: its
+        // card needs a drawn-and-presented frame before the stall, so the
+        // rebuild waits two applies (tick draws on the frame between them).
+        // Fast rebuilds (the common case) show nothing and run immediately.
+        if self.last_rebuild_secs > SLOW_REBUILD_SECS {
+            if self.rebuild_op.is_none() {
+                self.rebuild_op = Some(self.notifier.begin_op("Rebuilding preview"));
+                self.rebuild_countdown = 2;
+            }
+            if self.rebuild_countdown > 0 {
+                self.rebuild_countdown -= 1;
+                return;
+            }
+        }
         self.rebuild_preview = false;
+        let started = std::time::Instant::now();
+        self.swap_preview_world(app);
+        self.last_rebuild_secs = started.elapsed().as_secs_f32();
+        if let Some(op) = self.rebuild_op.take() {
+            op.finish();
+        }
+    }
+}
 
+// A preview rebuild slower than this earns the announce card above.
+const SLOW_REBUILD_SECS: f32 = 0.15;
+
+impl EditorHook {
+    // The rebuild + backend transplant itself (see `apply_world_swap` for the
+    // timing shell around it).
+    fn swap_preview_world(&mut self, app: &mut App) {
         let world = match self.build_preview_world() {
             Ok(w) => w,
             Err(e) => {
                 tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
+                self.notifier.error_with(
+                    &format!("Preview rebuild failed: {e}"),
+                    notify::Action::OpenConsole,
+                );
                 return;
             }
         };
@@ -1158,6 +1245,10 @@ impl DebugHook for EditorHook {
         app.load_world(new_world);
         if let Err(e) = app.start() {
             tracing::error!("editor: live preview start failed: {e:?}");
+            self.notifier.error_with(
+                &format!("Preview start failed: {e:?}"),
+                notify::Action::OpenConsole,
+            );
         }
     }
 }

@@ -60,6 +60,16 @@ impl EditorHook {
         {
             layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
         }
+        // The toast stack floats above even the modal menus. Its ids join the
+        // map only while a toast is live, so an idle stack adds nothing.
+        if !self.notifier.is_empty() {
+            for id in toast_overlay::all_sprite_ids()
+                .into_iter()
+                .chain(toast_overlay::all_label_ids())
+            {
+                layers.insert(id, TOP_BAR_LAYER + 2 * PANEL_LAYER_SPAN);
+            }
+        }
         layers
     }
 

@@ -45,6 +45,12 @@ pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];
 pub(crate) const LOG_ERROR: [f32; 3] = [0.95, 0.55, 0.55];
 pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
 
+// Toast severity accents (the notification stack's edge stripe).
+pub(crate) const NOTIFY_INFO: [f32; 4] = [0.58, 0.72, 0.95, 1.0];
+pub(crate) const NOTIFY_SUCCESS: [f32; 4] = [0.42, 0.72, 0.46, 1.0];
+pub(crate) const NOTIFY_WARNING: [f32; 4] = [0.95, 0.78, 0.45, 1.0];
+pub(crate) const NOTIFY_ERROR: [f32; 4] = [0.90, 0.42, 0.42, 1.0];
+
 // How far a row's hover / selection highlight is inset from the row rect, so
 // the highlight reads as a floating pill rather than a full-width band.
 pub(crate) const HIGHLIGHT_INSET_X: f32 = 4.0;

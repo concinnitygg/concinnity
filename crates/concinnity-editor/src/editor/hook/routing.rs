@@ -90,6 +90,11 @@ impl EditorHook {
     // claims it comes to the front. A press on a panel's title bar starts a drag.
     pub(super) fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
+        // The toast stack draws above everything, so it claims its presses
+        // first (rect-guarded: a miss falls straight through).
+        if self.try_toast_press(mx, my, vp, world) {
+            return;
+        }
         if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
             // SAVE only writes to disk now; it neither rebuilds nor re-injects the
             // world, so an open form is left intact (no blank-field risk).

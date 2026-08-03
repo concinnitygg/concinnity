@@ -403,7 +403,9 @@ impl EditorHook {
     // A variable's type or starting value changes what the behaviors reading it
     // type-check against, so the Behavior panel's verdict is re-taken too.
     fn after_variables_change(&mut self, world: &mut World) {
+        let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
+        self.notify_behavior_fault(prev_fault);
         let _ = world;
     }
 

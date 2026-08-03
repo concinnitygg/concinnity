@@ -196,8 +196,24 @@ pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
 // editor console's build command goes through here so it compiles the
 // in-memory entries as they stand, saved or not.
 pub(crate) fn build_world_str_to_disk(content: &str) -> std::io::Result<()> {
+    build_world_str_to_disk_with_progress(content, None)
+}
+
+// `build_world_str_to_disk` with a compile-progress callback (the editor's
+// cook workers feed their operation card through it).
+pub(crate) fn build_world_str_to_disk_with_progress(
+    content: &str,
+    progress: Option<&(dyn Fn(concinnity_cook::BuildProgress) + Sync)>,
+) -> std::io::Result<()> {
     let loaded = prepare(content)?;
-    let result = concinnity_cook::build_compiled(loaded.assets, None)?;
+    let result = concinnity_cook::build_compiled_with_progress(loaded.assets, None, progress)?;
+    if let Some(p) = progress {
+        p(concinnity_cook::BuildProgress {
+            stage: "write",
+            done: 0,
+            total: 0,
+        });
+    }
     concinnity_cook::write_build_outputs(&result, &loaded.injected, &loaded.shadowed)?;
     Ok(())
 }

@@ -230,14 +230,42 @@ pub fn build_pipeline_from_str(
     build_compiled(loaded.assets, artifacts_dir)
 }
 
+/// A progress report from the compile pipeline: the stage's name and its
+/// done / total counts. `total == 0` marks a stage that cannot count its work
+/// (progress there is indeterminate).
+#[derive(Debug, Clone, Copy)]
+pub struct BuildProgress {
+    pub stage: &'static str,
+    pub done: u32,
+    pub total: u32,
+}
+
 // Compile an already-prepared world (expanded + structurally and semantically
 // validated) into in-memory blobs. This is the compile-only stage; it assumes
 // the assets have passed crate::world::prepare_world.
 pub fn build_compiled(
-    mut assets: Vec<WorldJsonlAsset>,
+    assets: Vec<WorldJsonlAsset>,
     artifacts_dir: Option<&str>,
 ) -> std::io::Result<PipelineResult> {
+    build_compiled_with_progress(assets, artifacts_dir, None)
+}
+
+/// [`build_compiled`] with a progress callback. The callback fires from the
+/// desugar stage and, concurrently, from the parallel payload compile (hence
+/// `Sync`); it must be cheap and non-blocking.
+pub fn build_compiled_with_progress(
+    mut assets: Vec<WorldJsonlAsset>,
+    artifacts_dir: Option<&str>,
+    progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
+) -> std::io::Result<PipelineResult> {
     let config = WorldConfig::default();
+    if let Some(p) = progress {
+        p(BuildProgress {
+            stage: "desugar",
+            done: 0,
+            total: 0,
+        });
+    }
 
     // Cache probe runs before desugar. For every glTF-sourced Mesh /
     // SkinnedMesh, hash the un-desugared args + referenced .glb and look up
@@ -433,6 +461,7 @@ pub fn build_compiled(
             max_blob_bytes: config.max_blob_bytes,
             artifacts_dir,
             gltf_cache: &gltf_cache,
+            progress,
         },
     )?;
 
@@ -1348,6 +1377,7 @@ struct PackContext<'a> {
     max_blob_bytes: u64,
     artifacts_dir: Option<&'a str>,
     gltf_cache: &'a std::collections::HashMap<String, GltfCacheEntry>,
+    progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
 }
 
 fn compile_and_pack_payloads(
@@ -1366,6 +1396,7 @@ fn compile_and_pack_payloads(
         max_blob_bytes,
         artifacts_dir,
         gltf_cache,
+        progress,
     } = pack_ctx;
 
     let compiled_indices: Vec<usize> = named
@@ -1409,6 +1440,18 @@ fn compile_and_pack_payloads(
     // content-addressed, so concurrent hits and stores never collide. The
     // collected order follows `jobs`, so packing below stays deterministic.
     let cache_hits = AtomicUsize::new(0);
+    let compile_total = jobs.len() as u32;
+    let compiled_count = AtomicUsize::new(0);
+    let report_one = || {
+        if let Some(p) = progress {
+            let done = compiled_count.fetch_add(1, Ordering::Relaxed) as u32 + 1;
+            p(BuildProgress {
+                stage: "compile",
+                done,
+                total: compile_total,
+            });
+        }
+    };
     let pending: Vec<(usize, Vec<u8>)> = jobs
         .par_iter()
         .map(
@@ -1458,6 +1501,7 @@ fn compile_and_pack_payloads(
                 Ok((*idx, compiled_bytes))
             },
         )
+        .inspect(|_| report_one())
         .collect::<std::io::Result<Vec<_>>>()?;
 
     let component_hits = cache_hits.into_inner();
@@ -3781,6 +3825,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &cache,
+                progress: None,
             },
         )
         .expect("probed payloads need no compiler");
@@ -3859,6 +3904,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
                 gltf_cache: &cache,
+                progress: None,
             },
         )
         .expect("probed payloads need no compiler");
@@ -3901,6 +3947,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
                 gltf_cache: &Default::default(),
+                progress: None,
             },
         )
         .expect("box compiles");
@@ -3951,6 +3998,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 artifacts_dir: None,
                 gltf_cache: &cache,
+                progress: None,
             },
         )
         .expect("a probe miss compiles");
@@ -3992,6 +4040,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &Default::default(),
+                progress: None,
             },
         )
         .expect("pack");
@@ -4034,6 +4083,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 artifacts_dir: None,
                 gltf_cache: &Default::default(),
+                progress: None,
             },
         )
         .expect("pack");
@@ -4082,6 +4132,7 @@ mod tests {
                 max_blob_bytes: 8,
                 artifacts_dir: None,
                 gltf_cache: &cache,
+                progress: None,
             },
         )
         .expect("pack");

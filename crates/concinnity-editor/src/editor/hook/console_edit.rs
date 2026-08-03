@@ -294,18 +294,17 @@ impl EditorHook {
             }
         };
         let sink = self.console_sink.clone();
-        let running = self.console_build_running.clone();
+        let toasts = self.notifier.clone();
         sink.info("cook started");
-        std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            match crate::authoring::build_world_str_to_disk(&content) {
-                Ok(()) => sink.info(&format!(
-                    "cook finished in {:.1}s",
-                    start.elapsed().as_secs_f32()
-                )),
-                Err(e) => sink.error(&format!("cook failed: {e}")),
+        self.spawn_cook_worker("Cooking", content, move |outcome, secs| match outcome {
+            Ok(()) => {
+                sink.info(&format!("cook finished in {secs:.1}s"));
+                toasts.success(&format!("Cook finished in {secs:.1}s"));
             }
-            running.store(false, Ordering::SeqCst);
+            Err(e) => {
+                sink.error(&format!("cook failed: {e}"));
+                toasts.error_with(&format!("Cook failed: {e}"), notify::Action::OpenConsole);
+            }
         });
     }
 }

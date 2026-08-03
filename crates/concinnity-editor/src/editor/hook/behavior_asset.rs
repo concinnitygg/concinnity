@@ -86,7 +86,9 @@ impl EditorHook {
         self.behavior_name_focus = false;
         // The checker's messages carry the behavior's name, so its verdict is
         // re-read under the new one rather than left quoting the old.
+        let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
+        self.notify_behavior_fault(prev_fault);
         self.seed_behavior_name(world);
     }
 }

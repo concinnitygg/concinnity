@@ -37,6 +37,7 @@ mod lighting;
 mod lighting_panel;
 mod list_panel;
 mod marquee;
+pub(crate) mod notify;
 mod orbit;
 mod outlines;
 mod overrides;
@@ -57,6 +58,7 @@ mod template_panel;
 mod templates;
 mod theme;
 mod thumbs;
+mod toast_overlay;
 mod variables;
 mod variables_panel;
 mod view;
@@ -125,7 +127,8 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     let editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
-            let server = crate::debug::DebugServer::start(port)?;
+            let server =
+                crate::debug::DebugServer::start(port)?.with_notifier(editor_hook.notifier());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
         }
         None => Box::new(editor_hook),

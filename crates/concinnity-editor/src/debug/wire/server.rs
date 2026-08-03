@@ -39,6 +39,10 @@ pub struct DebugServer {
     // once per frame by `drive_hot_reload` until exhausted or cleared by a
     // `camera-stop`. `None` when no motion is in progress. Main-thread only.
     camera_motion: Option<runtime_spawn::CameraMotion>,
+    // The editor's toast queue, when this server runs alongside an editor
+    // session: the reload passes report apply results through it. `None`
+    // under a bare `cn debug`, which has no toast surface.
+    notifier: Option<crate::editor::notify::Notifier>,
 }
 
 impl DebugServer {
@@ -59,7 +63,15 @@ impl DebugServer {
             frame: 0,
             hot_reload: None,
             camera_motion: None,
+            notifier: None,
         })
+    }
+
+    // Report reload results through an editor session's toast queue as well as
+    // the log.
+    pub(crate) fn with_notifier(mut self, notifier: crate::editor::notify::Notifier) -> Self {
+        self.notifier = Some(notifier);
+        self
     }
 }
 
@@ -125,7 +137,11 @@ impl DebugServer {
                         // Asset / shader / world.jsonl reload passes, only when
                         // the reload state was armed at init.
                         if let Some(state) = self.hot_reload.as_mut() {
-                            effects = Some(hot_reload::run_frame(state, &mut apply));
+                            effects = Some(hot_reload::run_frame(
+                                state,
+                                &mut apply,
+                                self.notifier.as_ref(),
+                            ));
                         }
                     }
                 }

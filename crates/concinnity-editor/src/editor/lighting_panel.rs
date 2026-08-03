@@ -79,6 +79,8 @@ pub(crate) struct LightingView<'a> {
     pub fields: &'a [Option<FormField>],
     pub focus: Option<usize>,
     pub status: Option<&'a str>,
+    // Typed-but-not-Applied field edits exist: the heading marks them.
+    pub dirty: bool,
     pub mouse: [f32; 2],
 }
 
@@ -215,7 +217,8 @@ pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2],
     let n = view.rows.len();
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
     let title = widget::title_rect(o, w);
-    widget::place_heading(world, TITLE_LABEL, title, "Lighting");
+    let heading = if view.dirty { "Lighting *" } else { "Lighting" };
+    widget::place_heading(world, TITLE_LABEL, title, heading);
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
 
@@ -416,6 +419,7 @@ mod tests {
             fields,
             focus: None,
             status: None,
+            dirty: false,
             mouse: [0.0, 0.0],
         }
     }

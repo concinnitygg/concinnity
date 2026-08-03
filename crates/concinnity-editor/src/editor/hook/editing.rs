@@ -56,6 +56,7 @@ impl EditorHook {
             (None, None) => self.unique_name(&ty),
         };
         self.form_template = template;
+        self.form_touched = false;
         self.override_menu = None;
         self.entity_menu_open = false;
         // The working args tree: type defaults with the edited entry merged over
@@ -177,6 +178,7 @@ impl EditorHook {
     // Close the form panel, discarding its transient state.
     pub(super) fn close_form(&mut self) {
         self.selected_type = None;
+        self.form_touched = false;
         self.form_target = FormTarget::New;
         self.form_fields.clear();
         self.form_args = serde_json::Map::new();
@@ -194,6 +196,18 @@ impl EditorHook {
     // Route a resolved form-panel click. Field-focus transitions mutate the
     // injected `TextInput` components, so this needs the world.
     pub(super) fn apply_form(&mut self, action: FormAction, world: &mut World) {
+        // Control edits (as opposed to focus moves / dropdown toggles) mark
+        // the form's unapplied-edit state.
+        if matches!(
+            action,
+            FormAction::ToggleField(_)
+                | FormAction::CycleField(_)
+                | FormAction::PickFieldOption(_)
+                | FormAction::AddArrayElement(_)
+                | FormAction::RemoveArrayElement(_)
+        ) {
+            self.form_touched = true;
+        }
         match action {
             FormAction::FocusName => self.form_focus = FormFocus::Name,
             FormAction::FocusField(i) => self.form_focus = FormFocus::Field(i),

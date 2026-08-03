@@ -35,11 +35,14 @@ impl EditorHook {
     // cooked model plus the live search field, then borrowed for both
     // hit-testing and layout.
     pub(super) fn panel_data(&self, world: &World) -> PanelData {
-        let form_title = match (self.form_target.is_edit(), &self.selected_type) {
+        let mut form_title = match (self.form_target.is_edit(), &self.selected_type) {
             (true, Some(t)) => format!("Edit {t}"),
             (false, Some(t)) => format!("New {t}"),
             _ => "New asset".to_string(),
         };
+        if self.form_touched {
+            form_title.push_str(" *");
+        }
         PanelData {
             rows: self.tree_rows(world),
             picker_options: self.picker_options(world),

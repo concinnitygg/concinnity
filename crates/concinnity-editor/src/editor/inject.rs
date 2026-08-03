@@ -141,6 +141,14 @@ pub(crate) fn editor_hud(world: &mut World) {
         world.add_component(row_label(id, "", hidden, font, false));
     }
     inject_top_bar(world, font);
+    // The toast stack goes in after the top bar: it draws over everything (its
+    // per-frame layer also pins it there while live).
+    for id in super::toast_overlay::all_sprite_ids() {
+        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+    }
+    for id in super::toast_overlay::all_label_ids() {
+        world.add_component(row_label(id, "", hidden, font, false));
+    }
 }
 
 // Whether the editor drops its window's title bar. macOS keeps the close /

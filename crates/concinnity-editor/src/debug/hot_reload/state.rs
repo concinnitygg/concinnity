@@ -312,7 +312,9 @@ pub(crate) struct FrameHotReloadEffects {
 pub(crate) fn run_frame(
     state: &mut AssetHotReloadState,
     apply: &mut HotReloadApplyParts,
+    notify: Option<&crate::editor::notify::Notifier>,
 ) -> FrameHotReloadEffects {
+    use crate::editor::notify::Action;
     let mut effects = FrameHotReloadEffects {
         skeleton_updates: Vec::new(),
         story_updates: Vec::new(),
@@ -345,6 +347,18 @@ pub(crate) fn run_frame(
                 ss_result.failed,
                 ss_result.pipelines_rebuilt,
             );
+            // The failure count decides the toast: the log line above stays
+            // INFO either way, so severity cannot be read off it.
+            if let Some(n) = notify {
+                if ss_result.failed > 0 {
+                    n.error_with(
+                        &format!("Shader reload: {} failed", ss_result.failed),
+                        Action::OpenConsole,
+                    );
+                } else {
+                    n.success(&format!("Shaders reloaded ({})", ss_result.recompiled));
+                }
+            }
         }
     }
 
@@ -360,6 +374,12 @@ pub(crate) fn run_frame(
                     "story hot-reload: {} story graph(s) re-compiled",
                     effects.story_updates.len(),
                 );
+                if let Some(n) = notify {
+                    n.success(&format!(
+                        "{} story graph(s) reloaded",
+                        effects.story_updates.len()
+                    ));
+                }
             }
         }
     }
@@ -380,6 +400,16 @@ pub(crate) fn run_frame(
                     pm_result.unchanged,
                     pm_result.failed,
                 );
+                if let Some(n) = notify {
+                    if pm_result.failed > 0 {
+                        n.error_with(
+                            &format!("Mesh reload: {} failed", pm_result.failed),
+                            Action::OpenConsole,
+                        );
+                    } else {
+                        n.success(&format!("Meshes regenerated ({})", pm_result.regenerated));
+                    }
+                }
             }
             let fog_result = reload_volumetric_fog(&path, apply.last_fog_settings, apply.backend);
             if fog_result.updated {

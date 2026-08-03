@@ -37,6 +37,7 @@ impl EditorHook {
     // and never implicitly in between (in-progress edits are not clobbered).
     pub(super) fn load_story(&mut self, world: &mut World) {
         self.story_status = None;
+        self.story_touched = false;
         self.story_line = 0;
         self.story_scroll = 0;
         self.story_focus = false;
@@ -77,7 +78,11 @@ impl EditorHook {
     // Fold the edit control's live text back into the current line.
     pub(super) fn commit_story_line(&mut self, world: &World) {
         if let Some(line) = self.story_lines.get_mut(self.story_line) {
-            *line = widget::field_text(world, story_panel::LINE_INPUT);
+            let text = widget::field_text(world, story_panel::LINE_INPUT);
+            if *line != text {
+                self.story_touched = true;
+                *line = text;
+            }
         }
     }
 
@@ -125,6 +130,7 @@ impl EditorHook {
             path: &self.story_path,
             status: self.story_status.as_deref(),
             create: self.story_import_index().is_none(),
+            dirty: self.story_touched,
             mouse,
         }
     }
@@ -204,12 +210,20 @@ impl EditorHook {
         let content = story::join_lines(&self.story_lines);
         if let Err(e) = concinnity_cook::world::validate_story_source(&content) {
             self.story_status = Some(short_status(&e));
+            self.notifier
+                .error_with(&format!("Story rejected: {e}"), notify::Action::OpenConsole);
             return;
         }
         if let Err(e) = std::fs::write(&path, content) {
             self.story_status = Some(short_status(&format!("{path}: {e}")));
+            self.notifier.error_with(
+                &format!("Story write failed: {path}: {e}"),
+                notify::Action::OpenConsole,
+            );
             return;
         }
+        self.notifier.success(&format!("Applied story {path}"));
+        self.story_touched = false;
         self.rebuild_preview = true;
     }
 
