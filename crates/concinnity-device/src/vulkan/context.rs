@@ -51,11 +51,16 @@ pub(super) struct VkShadow {
     pub(super) sampler: vk::Sampler,
     pub(super) skinned_pipeline: Option<vk::Pipeline>,
     pub(super) skinned_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) ubo: vk::Buffer,
-    pub(super) ubo_memory: vk::DeviceMemory,
+    // Per-frame-in-flight `ShadowUniforms` ring, persistently mapped. One slot
+    // per frame: a single buffer would let this frame's cascade VPs overwrite
+    // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
+    // freshly-jumped far-cascade VP with depth rasterized from the old one.
+    pub(super) ubos: Vec<vk::Buffer>,
+    pub(super) ubo_memories: Vec<vk::DeviceMemory>,
+    pub(super) ubo_ptrs: Vec<*mut u8>,
     // Carried CSM uniforms: skipped cascades keep the VP their slice was last
     // rendered with. Splits refresh every frame; per-cascade light VPs only when
-    // `render_mask` includes that cascade. Uploaded to `ubo` each frame.
+    // `render_mask` includes that cascade. Written to `ubo_ptrs[frame]` each frame.
     pub(super) uniforms: ShadowUniforms,
     // World-space direction toward the first directional light, cached at init.
     // Per-frame CSM updates use this; refresh it when lights change for a moving
@@ -108,8 +113,13 @@ impl VkShadow {
         self.map.destroy(device);
         unsafe {
             device.destroy_render_pass(self.render_pass, None);
-            device.destroy_buffer(self.ubo, None);
-            device.free_memory(self.ubo_memory, None);
+            for &buf in &self.ubos {
+                device.destroy_buffer(buf, None);
+            }
+            for &mem in &self.ubo_memories {
+                device.unmap_memory(mem);
+                device.free_memory(mem, None);
+            }
             device.destroy_sampler(self.sampler, None);
         }
     }

@@ -412,7 +412,7 @@ impl VkContext {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
             }
-            upload_shadow_uniforms(device, self.shadow.ubo_memory, &self.shadow.uniforms)?;
+            upload_shadow_uniforms(self.shadow.ubo_ptrs[frame_idx], &self.shadow.uniforms);
         }
 
         // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
@@ -853,21 +853,19 @@ impl DeferredBuffer {
     }
 }
 
-// Helper: update the shared ShadowUniforms UBO (called at init and when lights change).
-pub(super) fn upload_shadow_uniforms(
-    device: &ash::Device,
-    shadow_ubo_memory: vk::DeviceMemory,
-    su: &ShadowUniforms,
-) -> Result<(), String> {
-    let size = std::mem::size_of::<ShadowUniforms>() as u64;
+// Helper: write ShadowUniforms into one persistently-mapped slot of the
+// per-frame-in-flight ring. `ptr` must be that slot's mapping, which is at least
+// `size_of::<ShadowUniforms>()` bytes and HOST_COHERENT.
+pub(super) fn upload_shadow_uniforms(ptr: *mut u8, su: &ShadowUniforms) {
+    // SAFETY: `ptr` maps a HOST_COHERENT allocation of exactly this size, and
+    // the ring slot belongs to a frame whose fence the caller already waited.
     unsafe {
-        let ptr = device
-            .map_memory(shadow_ubo_memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map shadow ubo: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(su as *const ShadowUniforms as *const u8, ptr, size as usize);
-        device.unmap_memory(shadow_ubo_memory);
+        std::ptr::copy_nonoverlapping(
+            su as *const ShadowUniforms as *const u8,
+            ptr,
+            std::mem::size_of::<ShadowUniforms>(),
+        );
     }
-    Ok(())
 }
 
 // Helper: upload LightUniforms to the shared light UBO.

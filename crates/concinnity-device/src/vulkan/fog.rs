@@ -123,10 +123,11 @@ pub(in crate::vulkan) struct FogFrameTargets<'a> {
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
-// The shared CSM resources the froxel kernel taps per slab.
+// The shared CSM resources the froxel kernel taps per slab. `ubos` is the
+// per-frame-in-flight ShadowUniforms ring; slot `i` binds into froxel set `i`.
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct FogShadowResources {
-    pub(in crate::vulkan) ubo: vk::Buffer,
+pub(in crate::vulkan) struct FogShadowResources<'a> {
+    pub(in crate::vulkan) ubos: &'a [vk::Buffer],
     pub(in crate::vulkan) map_view: vk::ImageView,
     pub(in crate::vulkan) sampler: vk::Sampler,
 }
@@ -138,7 +139,7 @@ impl FogResources {
     pub(in crate::vulkan) fn new(
         ctx: FogDeviceContext,
         targets: FogFrameTargets,
-        shadow: FogShadowResources,
+        shadow: FogShadowResources<'_>,
         hot_reload: bool,
     ) -> Result<Self, String> {
         let FogDeviceContext {
@@ -158,7 +159,7 @@ impl FogResources {
             extent,
         } = targets;
         let FogShadowResources {
-            ubo: shadow_ubo,
+            ubos: shadow_ubos,
             map_view: shadow_map_view,
             sampler: shadow_sampler,
         } = shadow;
@@ -247,7 +248,7 @@ impl FogResources {
                 FogFroxelBindings {
                     params_ubo: params_ubos[i],
                     froxel_ubo: froxel_ubos[i],
-                    shadow_ubo,
+                    shadow_ubo: shadow_ubos[i],
                     shadow_map_view,
                     shadow_sampler,
                     volume_storage_view,

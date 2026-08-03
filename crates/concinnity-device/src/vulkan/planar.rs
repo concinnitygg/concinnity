@@ -343,7 +343,7 @@ pub(in crate::vulkan) struct PlanarGlobalSet {
 // prefilter cubes (+ their sampler), and the SSAO white fallback (+ its sampler).
 // All Copy vk handles, shared unchanged across every (plane, frame) global set.
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct PlanarLightingBindings {
+pub(in crate::vulkan) struct PlanarLightingBindings<'a> {
     pub(in crate::vulkan) light_ubo: vk::Buffer,
     pub(in crate::vulkan) light_size: u64,
     // Per-scene local-light SSBO (global set 0 binding 9) + its byte size; the
@@ -366,7 +366,9 @@ pub(in crate::vulkan) struct PlanarLightingBindings {
     pub(in crate::vulkan) ltc_matrix_view: vk::ImageView,
     pub(in crate::vulkan) ltc_magnitude_view: vk::ImageView,
     pub(in crate::vulkan) ltc_sampler: vk::Sampler,
-    pub(in crate::vulkan) shadow_ubo: vk::Buffer,
+    // Per-frame-in-flight ShadowUniforms ring; set `i` covers plane
+    // `i / frames`, frame `i % frames`.
+    pub(in crate::vulkan) shadow_ubos: &'a [vk::Buffer],
     pub(in crate::vulkan) shadow_size: u64,
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
     pub(in crate::vulkan) shadow_sampler: vk::Sampler,
@@ -427,7 +429,7 @@ impl PlanarReflectionSet {
             ltc_matrix_view,
             ltc_magnitude_view,
             ltc_sampler,
-            shadow_ubo,
+            shadow_ubos,
             shadow_size,
             shadow_map_view,
             shadow_sampler,
@@ -591,7 +593,7 @@ impl PlanarReflectionSet {
         for (i, &set) in global_sets.iter().enumerate() {
             let view_info = buf_info(view_bufs[i], view_size);
             let light_info = buf_info(light_ubo, light_size);
-            let shadow_info = buf_info(shadow_ubo, shadow_size);
+            let shadow_info = buf_info(shadow_ubos[i % frames], shadow_size);
             let probeset_info = buf_info(probeset_buf, probeset_size);
             let shadow_img = img_info(shadow_map_view, shadow_sampler);
             let irr_img = img_info(irradiance_view, cube_sampler);

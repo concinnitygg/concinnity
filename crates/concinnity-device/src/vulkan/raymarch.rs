@@ -1019,7 +1019,7 @@ pub(in crate::vulkan) struct RaymarchTargetConfig {
 // light + shadow UBOs, and the depth-only shadow render pass the shadow-caster
 // pipelines target.
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct RaymarchSharedBindings {
+pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
     pub(in crate::vulkan) shadow_sampler: vk::Sampler,
     pub(in crate::vulkan) irradiance_view: vk::ImageView,
@@ -1027,7 +1027,8 @@ pub(in crate::vulkan) struct RaymarchSharedBindings {
     pub(in crate::vulkan) cube_sampler: vk::Sampler,
     pub(in crate::vulkan) linear_sampler: vk::Sampler,
     pub(in crate::vulkan) light_ubo: vk::Buffer,
-    pub(in crate::vulkan) shadow_ubo: vk::Buffer,
+    // Per-frame-in-flight ShadowUniforms ring, indexed by frame slot.
+    pub(in crate::vulkan) shadow_ubos: &'a [vk::Buffer],
     pub(in crate::vulkan) shadow_render_pass: vk::RenderPass,
 }
 
@@ -1066,7 +1067,7 @@ impl RaymarchResources {
             cube_sampler,
             linear_sampler,
             light_ubo,
-            shadow_ubo,
+            shadow_ubos,
             shadow_render_pass,
         } = bindings;
         // Filter `.glsl` volumes; Metal/DirectX-first SDFs get dropped with a
@@ -1164,7 +1165,7 @@ impl RaymarchResources {
                 RaymarchViewSetBuffers {
                     view_ubo: view_ubos[i],
                     light_ubo,
-                    shadow_ubo,
+                    shadow_ubo: shadow_ubos[i],
                 },
                 RaymarchViewSetTextures {
                     shadow_map_view,
@@ -1221,7 +1222,7 @@ impl RaymarchResources {
             let shadow_layouts: Vec<_> = (0..frames).map(|_| shadow_view_set_layout).collect();
             shadow_view_sets = alloc_sets(device, descriptor_pool, &shadow_layouts)?;
             for (i, &set) in shadow_view_sets.iter().enumerate() {
-                write_shadow_view_set(device, set, shadow_view_ubos[i], light_ubo, shadow_ubo);
+                write_shadow_view_set(device, set, shadow_view_ubos[i], light_ubo, shadow_ubos[i]);
             }
         }
 

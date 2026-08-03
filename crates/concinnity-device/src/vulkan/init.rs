@@ -1001,14 +1001,33 @@ impl VkContext {
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        let (shadow_ubo, shadow_ubo_memory) = create_buffer(
-            &instance,
-            &device,
-            physical_device,
-            shadow_ubo_size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        // Per-frame-in-flight `ShadowUniforms` UBO ring, persistently mapped.
+        // One slot per frame so writing this frame's cascade VPs cannot land in
+        // memory an in-flight frame is still sampling: under `Hybrid` a far
+        // cascade's VP is frozen for several frames and then jumps a whole
+        // texel-snap quantum, so an aliased read samples that cascade with the
+        // jumped VP against depth rasterized with the old one.
+        let mut shadow_ubos = Vec::with_capacity(frames);
+        let mut shadow_ubo_memories = Vec::with_capacity(frames);
+        let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            let (buf, mem) = create_buffer(
+                &instance,
+                &device,
+                physical_device,
+                shadow_ubo_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            let ptr = unsafe {
+                device
+                    .map_memory(mem, 0, shadow_ubo_size, vk::MemoryMapFlags::empty())
+                    .map_err(|e| format!("map shadow ubo: {e}"))? as *mut u8
+            };
+            shadow_ubos.push(buf);
+            shadow_ubo_memories.push(mem);
+            shadow_ubo_ptrs.push(ptr);
+        }
         // Static per-scene local-light SSBO; uploaded once below, never per-frame.
         let (local_light_buffer, local_light_memory) = create_buffer(
             &instance,
@@ -1044,7 +1063,9 @@ impl VkContext {
             [1.0, 1.0, 1.0]
         };
         let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
-        upload_shadow_uniforms(&device, shadow_ubo_memory, &shadow_uniforms)?;
+        for &ptr in &shadow_ubo_ptrs {
+            upload_shadow_uniforms(ptr, &shadow_uniforms);
+        }
         upload_light_uniforms(&device, light_ubo_memory, &light_uniforms)?;
         // Empty scene keeps the 1-element placeholder (nothing copied in).
         upload_static_records(&device, local_light_memory, &local_lights, "local-light")?;
@@ -1894,7 +1915,7 @@ impl VkContext {
                 .offset(0)
                 .range(light_ubo_size);
             let shadow_info = vk::DescriptorBufferInfo::default()
-                .buffer(shadow_ubo)
+                .buffer(shadow_ubos[i])
                 .offset(0)
                 .range(shadow_ubo_size);
             // Layout must match the post-cascade transition in draw.rs, which
@@ -2081,9 +2102,9 @@ impl VkContext {
         let shadow_global_layouts: Vec<_> = (0..frames).map(|_| shadow_global_set_layout).collect();
         let shadow_global_sets =
             alloc_descriptor_sets(&device, descriptor_pool, &shadow_global_layouts)?;
-        for &set in &shadow_global_sets {
+        for (i, &set) in shadow_global_sets.iter().enumerate() {
             let su_info = vk::DescriptorBufferInfo::default()
-                .buffer(shadow_ubo)
+                .buffer(shadow_ubos[i])
                 .offset(0)
                 .range(shadow_ubo_size);
             let write = vk::WriteDescriptorSet::default()
@@ -3521,7 +3542,7 @@ impl VkContext {
                     extent: render_extent,
                 },
                 crate::vulkan::fog::FogShadowResources {
-                    ubo: shadow_ubo,
+                    ubos: &shadow_ubos,
                     map_view: shadow_map.view,
                     sampler: shadow_sampler,
                 },
@@ -3557,7 +3578,7 @@ impl VkContext {
                 cube_sampler,
                 linear_sampler,
                 light_ubo,
-                shadow_ubo,
+                shadow_ubos: &shadow_ubos,
                 shadow_render_pass,
             },
             &sdf_volumes,
@@ -3628,7 +3649,7 @@ impl VkContext {
                     ltc_matrix_view: ltc_matrix_image.view,
                     ltc_magnitude_view: ltc_magnitude_image.view,
                     ltc_sampler,
-                    shadow_ubo,
+                    shadow_ubos: &shadow_ubos,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
                     shadow_sampler,
@@ -3902,8 +3923,9 @@ impl VkContext {
                 sampler: shadow_sampler,
                 skinned_pipeline: None,
                 skinned_pipeline_layout: None,
-                ubo: shadow_ubo,
-                ubo_memory: shadow_ubo_memory,
+                ubos: shadow_ubos,
+                ubo_memories: shadow_ubo_memories,
+                ubo_ptrs: shadow_ubo_ptrs,
                 uniforms: shadow_uniforms,
                 light_dir: shadow_light_dir,
                 update: shadow_update,

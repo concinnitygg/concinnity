@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "bistro"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-toolchain",
  "example-common",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-asset"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "postcard",
  "serde",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-audio"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-core",
  "kira",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-blob"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-asset",
  "postcard",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cli"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "ash",
  "clap",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "ash",
  "block2",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-docs"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-world",
  "syn",
@@ -728,11 +728,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-eas"
-version = "0.17.12"
+version = "0.17.13"
 
 [[package]]
 name = "concinnity-editor"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "argon2",
  "async-stream",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "ciborium",
  "concinnity-audio",
@@ -801,11 +801,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-memory"
-version = "0.17.12"
+version = "0.17.13"
 
 [[package]]
 name = "concinnity-physics"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-core",
  "rapier3d",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-render"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-runtime"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-engine",
  "concinnity-toolchain",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -848,18 +848,18 @@ dependencies = [
 
 [[package]]
 name = "concinnity-templates"
-version = "0.17.12"
+version = "0.17.13"
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "concinnity-world"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-core",
  "concinnity-templates",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "example-common"
-version = "0.17.12"
+version = "0.17.13"
 dependencies = [
  "concinnity-cook",
  "concinnity-engine",
