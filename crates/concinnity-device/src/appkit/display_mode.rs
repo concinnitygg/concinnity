@@ -138,7 +138,7 @@ fn find_native_mode(
 }
 
 // Holds the display to the user's chosen mode while the window is in native
-// fullscreen. Owned by MtlContext; `reconcile` runs once per frame from the
+// fullscreen. Owned by `AppKitWindow`; `reconcile` runs once per frame from the
 // delegate-tracked fullscreen flag, so entry (after the animation starts),
 // menu-driven exit, and OS-driven exit (green traffic-light button, Mission
 // Control) all converge on the right display state.
@@ -226,7 +226,7 @@ impl FullscreenDisplayMode {
     }
 
     // Put the display back on the desktop mode captured before the first
-    // switch. Idempotent; also called from MtlContext::drop so quitting while
+    // switch. Idempotent, and run from this type's own `Drop`, so quitting while
     // fullscreen never strands the desktop on the game's mode.
     pub(super) fn restore(&mut self) {
         let Some(original) = self.original.take() else {

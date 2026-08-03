@@ -2245,7 +2245,9 @@ impl VkContext {
     // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
     // size, unlike the residency chip which sums live usage).
     pub fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
-        use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
+        use crate::gfx::backend::{
+            GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
+        };
         let props = unsafe {
             self.instance
                 .get_physical_device_properties(self.physical_device)
@@ -2275,7 +2277,7 @@ impl VkContext {
             vendor,
             memory_budget_bytes: budget,
             discrete,
-            apple_family: 0,
+            apple_family: apple_family_from_device_name(&super::gpu_profile::device_name(&props)),
         });
         GpuProfile {
             vendor,

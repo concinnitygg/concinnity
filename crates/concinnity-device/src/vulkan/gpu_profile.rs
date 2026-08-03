@@ -12,7 +12,9 @@
 
 use ash::vk;
 
-use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
+use crate::gfx::backend::{
+    GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
+};
 
 pub(crate) fn probe_gpu_profile() -> GpuProfile {
     probe_device().unwrap_or(GpuProfile::UNKNOWN)
@@ -20,12 +22,28 @@ pub(crate) fn probe_gpu_profile() -> GpuProfile {
 
 fn probe_device() -> Option<GpuProfile> {
     // Dynamically load the Vulkan loader; `None` when it is absent.
-    let entry = unsafe { ash::Entry::load() }.ok()?;
+    let entry = super::loader::load_entry().ok()?;
     // A minimal instance: no window/surface extensions, no validation layer, no
     // debug-utils messenger. Enumerating + querying physical devices needs none
-    // of those, so the probe stays cheap and avoids loader-layer init.
+    // of those, so the probe stays cheap and avoids loader-layer init. The one
+    // exception is `VK_KHR_portability_enumeration`, without which the loader
+    // hides a portability driver (MoltenVK) and the probe sees no device at all.
     let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_0);
-    let instance_info = vk::InstanceCreateInfo::default().application_info(&app_info);
+    let available = unsafe { entry.enumerate_instance_extension_properties(None) }.ok()?;
+    let portability = super::instance_exts::select(
+        &super::instance_exts::names_of(&available),
+        // The probe never presents, so it has no use for the HDR colour spaces.
+        false,
+    );
+    let ext_names: Vec<*const std::os::raw::c_char> = portability
+        .names()
+        .iter()
+        .map(|n| n.as_ptr())
+        .collect::<Vec<_>>();
+    let instance_info = vk::InstanceCreateInfo::default()
+        .application_info(&app_info)
+        .flags(portability.flags())
+        .enabled_extension_names(&ext_names);
     let instance = unsafe { entry.create_instance(&instance_info, None) }.ok()?;
     let profile = pick_and_classify(&instance);
     // The probe owns the instance (no VkContext drops it), so destroy it before
@@ -71,6 +89,14 @@ fn renderer_eligible(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
     })
 }
 
+// The device's reported name. Apple silicon's GPU generation is only reachable
+// through it under MoltenVK, so `VkContext::gpu_profile` shares this helper.
+pub(super) fn device_name(props: &vk::PhysicalDeviceProperties) -> String {
+    unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 // Classify a chosen physical device, mirroring `VkContext::gpu_profile`.
 fn device_profile(instance: &ash::Instance, pd: vk::PhysicalDevice) -> GpuProfile {
     let props = unsafe { instance.get_physical_device_properties(pd) };
@@ -96,7 +122,7 @@ fn device_profile(instance: &ash::Instance, pd: vk::PhysicalDevice) -> GpuProfil
         vendor,
         memory_budget_bytes: budget,
         discrete,
-        apple_family: 0,
+        apple_family: apple_family_from_device_name(&device_name(&props)),
     });
     GpuProfile {
         vendor,

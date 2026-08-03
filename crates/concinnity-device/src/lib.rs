@@ -44,6 +44,10 @@ pub mod vulkan;
 // backends (DirectX always; Vulkan on Windows instead of GLFW).
 #[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
 pub(crate) mod win32;
+// Native AppKit window/input/display-mode layer shared by the NSView-rendering
+// backends (Metal always; Vulkan on macOS instead of GLFW).
+#[cfg(all(target_os = "macos", any(backend_metal, backend_vk)))]
+pub(crate) mod appkit;
 
 // Disk cache for the built-in shader binaries the DirectX and Vulkan backends
 // compile at init. Metal reaches its equivalent at build time (the toolchain

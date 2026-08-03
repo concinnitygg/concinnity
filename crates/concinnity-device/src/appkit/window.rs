@@ -1,95 +1,28 @@
+// src/appkit/window.rs
+//
+// The AppKit window + input state every macOS backend owns, extracted from what
+// used to be a block of `MtlContext` fields plus `metal/input.rs`. It works
+// entirely through `NSView`, never the concrete view subclass, so the Metal
+// backend can hand it its `MTKView` (kept for drawable acquisition) and the
+// Vulkan backend a plain `CAMetalLayer`-backed view, and both get one
+// window/input/display-mode implementation. Mirrors `win32/window.rs`.
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
-    NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
 use crate::assets::{Key, WindowMode};
+use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 
 use super::chrome::{apply_title_bar, set_window_buttons_hidden, windowed_style_mask};
-use super::context::MtlContext;
-
-// The previously-duplicated InputState collapsed into the shared
-// crate::gfx::input::RenderInput; this alias keeps the historical name.
-pub use crate::gfx::input::RenderInput as InputState;
-
-// Persistent key state tracked across frames. Key booleans are set on KeyDown
-// and cleared on KeyUp; they are never reset between frames so that held keys
-// remain active even when no repeat event arrives (avoiding the OS key-repeat
-// delay gap). Mouse deltas are accumulated here and cleared by take_input().
-// Pulse fields are set on KeyDown and cleared after one take_input() call so
-// callers see exactly one true frame per press.
-#[derive(Default)]
-pub(super) struct KeyState {
-    pub(super) forward: bool,
-    pub(super) backward: bool,
-    pub(super) left: bool,
-    pub(super) right: bool,
-    pub(super) sprint: bool,
-    pub(super) interact_pulse: bool,
-    pub(super) jump_pulse: bool,
-    pub(super) mouse_dx: f32,
-    pub(super) mouse_dy: f32,
-    // Accumulated vertical scroll-wheel delta since the last take_input();
-    // cleared by take_input() like the mouse deltas. Used by scrollable UI.
-    pub(super) scroll_delta: f32,
-    // Absolute cursor position in window-content pixels (origin top-left).
-    pub(super) mouse_x: f32,
-    pub(super) mouse_y: f32,
-    // Pulse: set on left-mouse-down when cursor is free; cleared by take_input().
-    pub(super) left_click_pulse: bool,
-    // Held: set on left-mouse-down and cleared on left-mouse-up (cursor free).
-    // Unlike the pulse it persists across frames, so a UI drag (slider) can
-    // track the cursor for the whole press. NOT cleared by take_input().
-    pub(super) left_button_down: bool,
-    // Pulse: set on right-mouse-down when cursor is free; cleared by take_input().
-    pub(super) right_click_pulse: bool,
-    // Pulse: set on F1 key-down; cleared by take_input().
-    pub(super) hud_toggle_pulse: bool,
-    // Pulse: set on Escape key-down when the cursor is not captured;
-    // cleared by take_input(). When the cursor is captured Escape continues
-    // to call release_cursor() instead.
-    pub(super) escape_pulse: bool,
-    // Pulse: the canonical key pressed since the last take_input(), for the
-    // settings menu's rebind capture. Set on any KeyDown with a known mapping
-    // (and on the Shift rising edge); cleared by take_input(). Not gated by
-    // capture / menu state so a rebind row can read it while a menu is open.
-    pub(super) captured_key: Option<Key>,
-    // Pulse: the printable character produced by the last key press, taken from
-    // the NSEvent's `characters` (so shift / option / dead keys resolve to the
-    // right glyph), for text-input fields; cleared by take_input(). Control
-    // glyphs (Backspace, Enter, Escape, arrows) are filtered out -- those travel
-    // as `captured_key`.
-    pub(super) typed_char: Option<char>,
-    // Whether Shift is currently held, tracked from FlagsChanged so the rising
-    // edge can fire `captured_key` and drive any action bound to Shift (Shift is
-    // a pure modifier on macOS: it generates FlagsChanged, not KeyDown/KeyUp).
-    pub(super) shift_down: bool,
-    // Whether Control is currently held, tracked from FlagsChanged like Shift.
-    // Surfaced as a held modifier (a story fast-forwards while it is down).
-    pub(super) control_down: bool,
-    // Whether Option/Alt is currently held, tracked from FlagsChanged like
-    // Control. Surfaced as a held modifier (the editor's orbit drag).
-    pub(super) alt_down: bool,
-    // Whether Command is currently held, tracked from FlagsChanged like
-    // Control. Surfaced as a held modifier (the editor's palette shortcut); a
-    // Command chord also suppresses text and gameplay bindings in `handle_key`.
-    pub(super) command_down: bool,
-    // Set by capture_cursor(); the next mouse-motion event after capture
-    // has its delta discarded so queued pre-capture events (which were
-    // produced before CGAssociateMouseAndMouseCursorPosition(0) took
-    // effect, often during init) can't snap the camera.
-    pub(super) discard_next_motion: bool,
-    // Whether the real cursor has left the window content area while the cursor
-    // is free (windowed / borderless). Recomputed each frame by
-    // `update_ui_cursor_confinement`; the renderer hides the in-engine cursor
-    // when set. False while captured or in fullscreen (which confines instead).
-    pub(super) cursor_outside_window: bool,
-}
+use super::display_mode::{self, FullscreenDisplayMode};
+use super::input::{InputState, KeyState, key_from_mac, printable_char};
 
 unsafe extern "C" {
     // Moves the OS cursor without generating a mouse-moved event.
@@ -100,24 +33,202 @@ unsafe extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
 }
 
-impl MtlContext {
+// The window, view, and input state shared by the macOS backends. The backend
+// keeps whatever it additionally needs to present (Metal: the `MTKView` this
+// view upcasts from; Vulkan: the surface built from the view's CAMetalLayer).
+pub(crate) struct AppKitWindow {
+    // None in embedded mode (no separate NSWindow is created).
+    window: Option<Retained<NSWindow>>,
+    // The rendered-into view. Held as `NSView` so the concrete subclass stays a
+    // backend concern; every operation here is inherited from NSView.
+    view: Retained<NSView>,
+    // The world's authored `Window.title_bar`. Held because `set_window_mode`
+    // restyles the window every time the settings menu cycles back to Windowed
+    // and has to reinstate the authored chrome, not a standard title bar.
+    title_bar: bool,
+    window_closed: bool,
+    // Whether the frame loop should pump NSEvents and honour cursor capture.
+    // True for windowed mode and for the blocking-in-view play path; false
+    // for the preview (which lets the host own input dispatch).
+    pump_events: bool,
+    cursor_captured: bool,
+    // Set when the cursor is released via Escape so a subsequent left-click
+    // recaptures it rather than firing a UI click event.
+    recapture_on_click: bool,
+    // Whether the OS cursor is currently hidden for an in-engine UI cursor
+    // (e.g. a MainMenu). Tracked so `set_ui_cursor_hidden` only calls the
+    // ref-counted NSCursor hide/unhide on a transition, not every frame.
+    ui_cursor_hidden: bool,
+    // A togglable menu coexists with a captured camera (a MainMenu over a
+    // Camera3D world). When set, Escape routes to the ECS and clicks never
+    // recapture; GraphicsSystem drives capture from the active menu instead.
+    menu_mode: bool,
+    // Authoritative native-fullscreen state, kept in sync by `window_delegate`
+    // (the NSWindow `FullScreen` style-mask bit lags the animated transition).
+    // Read by `set_window_mode` / `set_window_size`; an `AtomicBool` because the
+    // delegate stores into it from AppKit's notification callbacks. Always
+    // false in embedded mode (no NSWindow to go fullscreen).
+    fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // NSWindowDelegate that tracks the fullscreen transition. None in embedded
+    // mode. Retained here because NSWindow holds its delegate as a zeroing weak
+    // reference, so dropping this would detach the delegate; the field is never
+    // read directly (the delegate communicates through `fullscreen`).
+    #[allow(
+        dead_code,
+        reason = "retained only to keep NSWindow's weak delegate reference alive"
+    )]
+    window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+    // Holds the display to the user's chosen mode while the window is in
+    // native fullscreen; restores the desktop mode on exit / drop. Reconciled
+    // once per frame by the backend's draw path.
+    fullscreen_display: FullscreenDisplayMode,
+    keys: KeyState,
+    // The runtime movement key map (canonical action -> key). `handle_key`
+    // decodes physical events through this instead of hardcoded keys, so a
+    // settings-menu rebind takes effect immediately. Defaults to W/S/A/D/Shift/
+    // Space/E; GraphicsSystem pushes any persisted override via `set_keymap`.
+    keymap: KeyMap,
+}
+
+// What the backend hands over at construction, after it has created (or been
+// given) the window and the view it renders into.
+pub(crate) struct AppKitWindowParts {
+    pub window: Option<Retained<NSWindow>>,
+    pub view: Retained<NSView>,
+    pub title_bar: bool,
+    pub pump_events: bool,
+    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+}
+
+// The window-side handles a live world reload transplants onto the rebuilt
+// context, so a save reuses the window instead of spawning a new one. The view
+// is not carried: the backend owns the concrete subclass and supplies its own.
+#[cfg(backend_metal)]
+pub(crate) struct WindowHandles {
+    pub window: Option<Retained<NSWindow>>,
+    pub pump_events: bool,
+    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+}
+
+impl AppKitWindow {
+    pub(crate) fn new(parts: AppKitWindowParts) -> Self {
+        let AppKitWindowParts {
+            window,
+            view,
+            title_bar,
+            pump_events,
+            fullscreen,
+            window_delegate,
+        } = parts;
+        Self {
+            window,
+            view,
+            title_bar,
+            window_closed: false,
+            pump_events,
+            cursor_captured: false,
+            recapture_on_click: false,
+            ui_cursor_hidden: false,
+            menu_mode: false,
+            fullscreen,
+            window_delegate,
+            fullscreen_display: FullscreenDisplayMode::new(),
+            keys: KeyState::default(),
+            keymap: KeyMap::default(),
+        }
+    }
+
+    // The view the backend renders into, for the presentation resources it owns
+    // (Metal's drawable, Vulkan's surface) and for size queries.
+    #[cfg(backend_vk)] // Metal reaches its MTKView directly
+    pub(crate) fn view(&self) -> &NSView {
+        &self.view
+    }
+
+    // The engine-created NSWindow, or None in embedded mode.
+    pub(crate) fn window(&self) -> Option<&NSWindow> {
+        self.window.as_deref()
+    }
+
+    // The window / delegate handles a live world reload transplants onto the
+    // rebuilt context, so a save reuses the window instead of spawning a new
+    // one. The caller supplies the view (it owns the concrete subclass).
+    #[cfg(backend_metal)] // Vulkan carries its window through `VkReuse`
+    pub(crate) fn handles_for_reuse(&self) -> WindowHandles {
+        WindowHandles {
+            window: self.window.clone(),
+            pump_events: self.pump_events,
+            fullscreen: std::sync::Arc::clone(&self.fullscreen),
+            window_delegate: self.window_delegate.clone(),
+        }
+    }
+
+    // Carry over the live state a fresh build resets but a world reload must
+    // keep. The keymap is re-pushed by GraphicsSystem immediately, but the
+    // fullscreen display-mode hold is not, so a fullscreen editor would lose its
+    // mode-restore state. NSCursor's hide count and the CGAssociate coupling are
+    // process-global and survive teardown, so the flags tracking them must come
+    // across too or a reload leaks a hide and strands the OS cursor.
+    #[cfg(backend_metal)] // Vulkan carries its window through `VkReuse`
+    pub(crate) fn adopt_live_state(&mut self, prev: &mut AppKitWindow) {
+        self.fullscreen_display =
+            std::mem::replace(&mut prev.fullscreen_display, FullscreenDisplayMode::new());
+        self.keymap = prev.keymap;
+        self.ui_cursor_hidden = prev.ui_cursor_hidden;
+        self.cursor_captured = prev.cursor_captured;
+    }
+
+    // Whether the frame loop should pump NSEvents and honour cursor capture.
+    #[cfg(backend_metal)] // the Vulkan adapter always pumps
+    pub(crate) fn pump_events(&self) -> bool {
+        self.pump_events
+    }
+
+    // Whether native fullscreen is active, as tracked by the window delegate.
+    pub(crate) fn is_fullscreen(&self) -> bool {
+        self.fullscreen.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    // Logical (point-space) size of the view. Used by systems to pass viewport
+    // dimensions to text layout (e.g. for centred labels).
+    #[cfg(backend_metal)] // Vulkan sizes from the swapchain extent
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
+        let s = self.view.bounds().size;
+        (s.width as f32, s.height as f32)
+    }
+
+    // Whether a window-close event has been seen.
+    pub(crate) fn closed(&self) -> bool {
+        self.window_closed
+    }
+
+    // Hold the display at the chosen fullscreen mode, or restore the desktop
+    // mode when fullscreen ends. Driven once per frame by the backend.
+    pub(crate) fn reconcile_display_mode(&mut self) {
+        let fullscreen = self.is_fullscreen();
+        self.fullscreen_display
+            .reconcile(self.window.as_deref(), fullscreen);
+    }
+
     // The NSWindow currently hosting the renderer. In windowed mode this is
     // the NSWindow we created; in embedded mode (preview tab, or the
-    // play-in-view path where the host owns the window) it is the MTKView's
-    // host. Returns None only when the MTKView isn't yet in a window
+    // play-in-view path where the host owns the window) it is the view's
+    // host. Returns None only when the view isn't yet in a window
     // (transient: during init the parent hasn't been set yet).
-    pub(super) fn host_window(&self) -> Option<Retained<NSWindow>> {
+    fn host_window(&self) -> Option<Retained<NSWindow>> {
         if let Some(ref w) = self.window {
             return Some(w.clone());
         }
-        self.mtk_view.window()
+        self.view.window()
     }
 
     // Hide the cursor and begin accumulating relative mouse deltas. No-op
     // for the preview tab (pump_events=false), where the cursor must remain
     // usable for a host UI's tab bar and sidebar controls. Also a no-op when
     // no host window is yet attached.
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         if !self.pump_events {
             return;
         }
@@ -145,7 +256,7 @@ impl MtlContext {
     // without engaging camera capture. Edge-triggered: NSCursor hide/unhide are
     // ref-counted, so we only toggle on a state change. No-op for the preview
     // tab (pump_events=false), which must keep the system cursor usable.
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         if !self.pump_events || hidden == self.ui_cursor_hidden {
             return;
         }
@@ -160,7 +271,7 @@ impl MtlContext {
     // Whether the real cursor has left the window so the renderer should stop
     // drawing the in-engine UI cursor. Recomputed each frame by
     // `update_ui_cursor_confinement`.
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.keys.cursor_outside_window
     }
 
@@ -186,7 +297,7 @@ impl MtlContext {
         // Global cursor position (AppKit screen coordinates, origin bottom-left
         // of the primary display, y up).
         let cursor = NSEvent::mouseLocation();
-        if self.fullscreen.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.is_fullscreen() {
             // Confine to the fullscreen display: if the cursor strayed onto
             // another monitor, warp it back just inside the edge. A
             // single-display fullscreen is already confined by the OS, so this
@@ -230,7 +341,7 @@ impl MtlContext {
     }
 
     // Show the cursor and stop accumulating mouse deltas.
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         if !self.cursor_captured {
             return;
         }
@@ -249,13 +360,13 @@ impl MtlContext {
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`.
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;
     }
 
     // Edge-triggered capture: capture for camera control, release while a menu
     // is open. GraphicsSystem calls this each frame in menu mode.
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         if capture == self.cursor_captured {
             return;
         }
@@ -266,19 +377,12 @@ impl MtlContext {
         }
     }
 
-    // Turn display sync (vsync) on or off at runtime via the backing
-    // CAMetalLayer. Setting displaySyncEnabled is an idempotent property write
-    // (no swapchain rebuild on Metal), so a redundant call is cheap.
-    pub fn set_vsync(&mut self, on: bool) {
-        super::init::set_display_sync(&self.mtk_view, on);
-    }
-
     // Switch the engine-created window between windowed / borderless /
     // fullscreen. Only `self.window` is touched: in embedded mode (the preview
     // tab or a host-owned window) this is a no-op so we never restyle a host
-    // window. The change flows through the per-frame drawableSize() resize
+    // window. The change flows through the backend's per-frame resize
     // detection, so no render targets are rebuilt here.
-    pub fn set_window_mode(&mut self, mode: WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         let Some(window) = self.window.as_ref() else {
             return;
         };
@@ -350,35 +454,35 @@ impl MtlContext {
     // engine window sits on. Empty in embedded mode: the host owns the window,
     // so the engine never switches its display and the Resolution row falls
     // back to the windowed presets.
-    pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
         if self.window.is_none() {
             return Vec::new();
         }
-        super::display_mode::enumerate(self.window.as_deref())
+        display_mode::enumerate(self.window.as_deref())
     }
 
     // The mode the engine window's display is currently running (what the
     // Resolution row shows before the user ever picks one). None in embedded
     // mode, matching display_modes.
-    pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         let window = self.window.as_deref()?;
-        super::display_mode::current(Some(window))
+        display_mode::current(Some(window))
     }
 
     // Remember the display mode to hold while the window is in native
-    // fullscreen. Applied by the per-frame reconcile in draw_frame (which also
+    // fullscreen. Applied by the per-frame `reconcile_display_mode` (which also
     // restores the desktop mode on leaving fullscreen), so a choice made in
     // any window mode takes effect when fullscreen is (or becomes) active.
-    pub fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
         self.fullscreen_display.set_desired(mode);
     }
 
     // Resize the engine-created window's content area (windowed mode only).
     // No-op in embedded mode or while in native fullscreen.
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         // Resizing the content area is meaningless while in native fullscreen;
         // read the delegate-tracked flag (not the lagging style-mask bit).
-        if self.fullscreen.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.is_fullscreen() {
             return;
         }
         let Some(window) = self.window.as_ref() else {
@@ -387,79 +491,11 @@ impl MtlContext {
         window.setContentSize(NSSize::new(width as f64, height as f64));
     }
 
-    // Replace the live post-process parameters. They are pushed to the bloom
-    // prefilter + composite shaders every frame (see draw/composite.rs), so a
-    // change takes effect on the next draw with no allocation or pipeline
-    // rebuild. Auto-exposure, when on, overwrites `exposure` each frame from
-    // the adapted EV, so a static exposure change is only visible with
-    // auto-exposure off.
-    pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
-        self.post_process = params;
-    }
-
-    // Set the live ambient (IBL) light scale. `ambient_intensity` lives in
-    // `LightUniforms`, which the main lighting pass uploads every frame, so the
-    // change takes effect on the next draw with no allocation. It is not
-    // re-derived per frame (unlike auto-exposure's `exposure`), so the value
-    // stands until changed again.
-    pub fn set_ambient_intensity(&mut self, value: f32) {
-        self.light_uniforms.ambient_intensity = value;
-    }
-
-    // Set the live shadow cascade re-render cadence. The scheduler reads
-    // `shadow_update` at the start of each shadow pass, so a change takes effect
-    // on the next draw. Every cascade is already primed, so switching policy never
-    // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
-    pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
-        self.shadow_update = update;
-    }
-
-    // Set the live shadow distance (world units). The per-frame cascade-split
-    // computation reads `shadow_distance` each draw, so a change takes effect on
-    // the next frame with no allocation (it sizes no GPU resource).
-    pub fn set_shadow_distance(&mut self, distance: u32) {
-        self.shadow_distance = distance;
-    }
-
-    // Set the live shadow cascade count (1..=4). The per-frame split + schedule
-    // read `shadow_cascades` each draw; only the first `count` of the four slots
-    // are rendered + sampled, so a change takes effect on the next frame with no
-    // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub fn set_shadow_cascades(&mut self, count: u32) {
-        self.shadow_cascades = count;
-    }
-
-    // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
-    // passes without rebuilding anything. The draw path rebuilds each pass's
-    // per-frame uniform from these stored `*Settings` structs every frame
-    // (`settings.params(...)`), so mutating the stored struct here is picked up on
-    // the next draw. Only a feature that is currently on has a settings struct to
-    // mutate; the rest are skipped (the value still persists for the next launch).
-    // SSAO / SSR / auto-exposure settings are fully scalar, so they are replaced
-    // wholesale; SSGI keeps its gather resolution / ray / step counts (those size
-    // the gather target or ride `apply_quality_settings`), so only its scalar
-    // intensity / distance are updated.
-    pub fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
-        if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
-            *cur = live;
-        }
-        if let (Some(live), Some(cur)) = (q.ssr, self.ssr.settings.as_mut()) {
-            *cur = live;
-        }
-        if let (Some(live), Some(cur)) = (q.ssgi, self.ssgi.settings.as_mut()) {
-            cur.intensity = live.intensity;
-            cur.max_distance = live.max_distance;
-        }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.settings.as_mut()) {
-            *cur = live;
-        }
-    }
-
     // Snapshot the current input state for this frame.
     // Key booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
     // `interact` and `jump` are true for exactly one frame per key press then cleared.
-    pub fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> InputState {
         let snapshot = InputState {
             forward: self.keys.forward,
             backward: self.keys.backward,
@@ -499,10 +535,10 @@ impl MtlContext {
         snapshot
     }
 
-    // Dequeue all pending NSEvents and update input state. Sets window_closed=true
+    // Dequeue all pending NSEvents and update input state. Sets the closed flag
     // on a window-will-close application event. Key events update the persistent
     // key state; mouse moved events accumulate deltas if the cursor is captured.
-    pub(super) fn pump_ns_events(&mut self, mtm: objc2::MainThreadMarker) {
+    pub(crate) fn pump_ns_events(&mut self, mtm: objc2::MainThreadMarker) {
         let ns_app = NSApplication::sharedApplication(mtm);
         loop {
             let event = ns_app.nextEventMatchingMask_untilDate_inMode_dequeue(
@@ -557,7 +593,7 @@ impl MtlContext {
                         }
                     } else {
                         // Track the absolute cursor position for UI hit-testing and
-                        // the in-engine pointer, in MTKView pixels with a top-left
+                        // the in-engine pointer, in view pixels with a top-left
                         // origin (see cursor_in_content: sourced from the global
                         // cursor position so a fullscreen menu-bar reveal cannot
                         // fling the pointer off screen).
@@ -620,13 +656,13 @@ impl MtlContext {
         self.update_ui_cursor_confinement(mtm);
     }
 
-    // The live cursor position in MTKView pixels with a top-left origin, for UI
+    // The live cursor position in view pixels with a top-left origin, for UI
     // hit-testing and the in-engine pointer. The Y flip is about the live
-    // `mtk_view.bounds()` height -- the exact view the renderer draws the overlay
-    // + cursor against (`MtlContext::logical_size`) -- and the conversion goes
-    // through the MTKView (not `window.contentView()`, which in embedded
-    // play-in-view mode is the host's content view rather than our subview), so
-    // pointer and draw share one reference in every window mode.
+    // `view.bounds()` height -- the exact view the renderer draws the overlay
+    // + cursor against (`logical_size`) -- and the conversion goes through that
+    // view (not `window.contentView()`, which in embedded play-in-view mode is
+    // the host's content view rather than our subview), so pointer and draw
+    // share one reference in every window mode.
     fn cursor_in_content(&self) -> (f32, f32) {
         // Source the pointer from the GLOBAL cursor position, NOT from a mouse
         // event's `locationInWindow`. When macOS auto-reveals the menu bar over a
@@ -635,33 +671,33 @@ impl MtlContext {
         // collapses to a bogus value (measured: cursor pinned at the physical
         // screen top -> loc.y jumps from ~1060 to 64 in a 1084-tall window,
         // flinging the pointer to the bottom). `NSEvent::mouseLocation()` stays
-        // correct throughout, so convert THAT through our own window + MTKView.
+        // correct throughout, so convert THAT through our own window + view.
         let glob = NSEvent::mouseLocation();
         let Some(window) = self.host_window() else {
             return (glob.x as f32, 0.0);
         };
         let win_pt = window.convertPointFromScreen(glob);
-        let p = self.mtk_view.convertPoint_fromView(win_pt, None);
-        let h = self.mtk_view.bounds().size.height;
+        let p = self.view.convertPoint_fromView(win_pt, None);
+        let h = self.view.bounds().size.height;
         (p.x as f32, (h - p.y) as f32)
     }
 
-    // Returns true when the event's click position is inside the MTKView's
+    // Returns true when the event's click position is inside the view's
     // drawable area (below the title bar). Title-bar clicks (traffic lights,
     // drag area) land above the view and return false so they don't trigger
-    // cursor recapture. Uses the MTKView's own coordinate system + bounds (the
+    // cursor recapture. Uses the view's own coordinate system + bounds (the
     // same reference as cursor_in_content) rather than
     // `contentRectForFrameRect(frame)`, which diverges during a fullscreen
     // title-bar reveal.
     fn in_content_area(&self, event: &NSEvent) -> bool {
         let loc = event.locationInWindow();
-        let p = self.mtk_view.convertPoint_fromView(loc, None);
-        p.y >= 0.0 && p.y < self.mtk_view.bounds().size.height
+        let p = self.view.convertPoint_fromView(loc, None);
+        p.y >= 0.0 && p.y < self.view.bounds().size.height
     }
 
     // Replace the runtime movement key map. `handle_key` decodes events through
     // it, so a settings-menu rebind takes effect on the next key event.
-    pub fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.keymap = *keymap;
     }
 
@@ -702,7 +738,7 @@ impl MtlContext {
     // (not rebindable); every other key is decoded to a canonical `Key` and
     // routed through the runtime key map. Sprint's default (Shift) is a pure
     // modifier and is handled in the FlagsChanged arm, not here.
-    fn handle_key(&mut self, event: &objc2_app_kit::NSEvent, pressed: bool) {
+    fn handle_key(&mut self, event: &NSEvent, pressed: bool) {
         let kc = event.keyCode();
         // Fixed keys.
         match kc {
@@ -749,128 +785,5 @@ impl MtlContext {
         {
             self.keys.typed_char = Some(c);
         }
-    }
-}
-
-// Whether a character is a printable glyph suitable for a text field, i.e. not a
-// control character and not in the NSFunctionKey private-use range
-// (0xF700-0xF8FF: arrows, F-keys, Home/End, and the like).
-fn is_printable_glyph(c: char) -> bool {
-    !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c)
-}
-
-// The printable glyph a key event produces, or None for a control / navigation
-// key (Backspace, Enter, Escape, arrows, etc.). macOS puts the layout- and
-// modifier-resolved characters on the event, so casing and shifted symbols are
-// already correct.
-fn printable_char(event: &objc2_app_kit::NSEvent) -> Option<char> {
-    let text = event.characters()?.to_string();
-    let c = text.chars().next()?;
-    is_printable_glyph(c).then_some(c)
-}
-
-// Map a macOS virtual key code to a canonical `Key`, or `None` for a key the
-// engine does not bind (modifiers other than Shift, function keys, Escape, etc.).
-// The codes are hardware-independent (the same on every Mac keyboard). Shift is
-// deliberately absent: it arrives via FlagsChanged, not a key code.
-fn key_from_mac(kc: u16) -> Option<Key> {
-    Some(match kc {
-        0 => Key::A,
-        11 => Key::B,
-        8 => Key::C,
-        2 => Key::D,
-        14 => Key::E,
-        3 => Key::F,
-        5 => Key::G,
-        4 => Key::H,
-        34 => Key::I,
-        38 => Key::J,
-        40 => Key::K,
-        37 => Key::L,
-        46 => Key::M,
-        45 => Key::N,
-        31 => Key::O,
-        35 => Key::P,
-        12 => Key::Q,
-        15 => Key::R,
-        1 => Key::S,
-        17 => Key::T,
-        32 => Key::U,
-        9 => Key::V,
-        13 => Key::W,
-        7 => Key::X,
-        16 => Key::Y,
-        6 => Key::Z,
-        29 => Key::Num0,
-        18 => Key::Num1,
-        19 => Key::Num2,
-        20 => Key::Num3,
-        21 => Key::Num4,
-        23 => Key::Num5,
-        22 => Key::Num6,
-        26 => Key::Num7,
-        28 => Key::Num8,
-        25 => Key::Num9,
-        49 => Key::Space,
-        48 => Key::Tab,
-        36 => Key::Enter,
-        51 => Key::Backspace,
-        117 => Key::Delete,
-        123 => Key::Left,
-        124 => Key::Right,
-        125 => Key::Down,
-        126 => Key::Up,
-        27 => Key::Minus,
-        24 => Key::Equals,
-        33 => Key::LeftBracket,
-        30 => Key::RightBracket,
-        42 => Key::Backslash,
-        41 => Key::Semicolon,
-        39 => Key::Quote,
-        43 => Key::Comma,
-        47 => Key::Period,
-        44 => Key::Slash,
-        50 => Key::Backtick,
-        _ => return None,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn key_from_mac_covers_the_defaults() {
-        // The default bindings must decode, so a fresh world keeps moving.
-        assert_eq!(key_from_mac(13), Some(Key::W));
-        assert_eq!(key_from_mac(0), Some(Key::A));
-        assert_eq!(key_from_mac(1), Some(Key::S));
-        assert_eq!(key_from_mac(2), Some(Key::D));
-        assert_eq!(key_from_mac(49), Some(Key::Space));
-        assert_eq!(key_from_mac(14), Some(Key::E));
-        // Escape / F1 stay fixed (no canonical mapping).
-        assert_eq!(key_from_mac(53), None);
-        assert_eq!(key_from_mac(122), None);
-    }
-
-    #[test]
-    fn editing_keys_decode() {
-        // Backspace and forward-delete decode so text fields can edit; they ride
-        // `captured_key`, not `typed_char`.
-        assert_eq!(key_from_mac(51), Some(Key::Backspace));
-        assert_eq!(key_from_mac(117), Some(Key::Delete));
-    }
-
-    #[test]
-    fn printable_glyph_filter() {
-        // Real glyphs (including space) type; control and function keys don't.
-        assert!(is_printable_glyph('a'));
-        assert!(is_printable_glyph('Z'));
-        assert!(is_printable_glyph(' '));
-        assert!(is_printable_glyph('/'));
-        assert!(!is_printable_glyph('\u{8}')); // Backspace
-        assert!(!is_printable_glyph('\r')); // Enter
-        assert!(!is_printable_glyph('\u{7f}')); // Delete
-        assert!(!is_printable_glyph('\u{F702}')); // Left arrow (NSFunctionKey range)
     }
 }

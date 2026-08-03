@@ -4,7 +4,7 @@ The rendering backend is chosen automatically from the target platform:
 
 | Platform | Default backend | Notes                                         |
 | -------- | --------------- | --------------------------------------------- |
-| macOS    | Metal           | Only backend available.                       |
+| macOS    | Metal           | Build with `--features vulkan` to use Vulkan. |
 | Windows  | DirectX 12      | Build with `--features vulkan` to use Vulkan. |
 | Linux    | Vulkan          | Only backend available.                       |
 
@@ -56,6 +56,73 @@ below.
 ```sh
 cargo build --release
 ```
+
+## macOS (Vulkan)
+
+Metal is the default on macOS; the `vulkan` feature selects a Vulkan build
+instead, which runs over the MoltenVK portability driver. This is a **testing
+backend, not a shipping one**: it exists so Vulkan-backend changes can be
+exercised on a Mac without a Linux or Windows host.
+
+### Prerequisites
+
+The [macOS Metal prerequisites](#macos-metal) are still required for a workspace
+build (the Metal toolchain compiles the Metal shaders for the crates that always
+build them). In addition:
+
+1. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) from LunarG,
+   choosing the **system-wide install** so the loader, the MoltenVK ICD, and the
+   validation layers land under `/usr/local`. The engine looks for the loader
+   through the dynamic linker first, then at `/usr/local/lib/libvulkan.dylib`
+   and Homebrew's prefix, so no `DYLD_LIBRARY_PATH` or `VK_ICD_FILENAMES` needs
+   to be set.
+
+   Confirm the loader, the MoltenVK ICD, and the validation layer all resolve:
+
+   ```sh
+   vulkaninfo --summary
+   ```
+
+2. Building `shaderc` from source (which compiles GLSL to SPIR-V at runtime)
+   needs **CMake**, **Python 3**, and **Git** on `PATH`. The first build takes a
+   few minutes; the result is cached in `target/`.
+
+   ```sh
+   brew install cmake python git
+   ```
+
+Windowing and input use the native AppKit window (shared with the Metal
+backend), so no windowing-library install is involved and GLFW is not built.
+GLFW remains the windowing layer on Linux only.
+
+### Build
+
+```sh
+cargo build --release --features vulkan
+```
+
+Switching between the Metal and Vulkan builds changes a `cfg` across the whole
+workspace, so each switch is a full rebuild. Pass `--target-dir` to keep both
+warm:
+
+```sh
+cargo build --features vulkan --target-dir target-vk
+```
+
+### Known gaps
+
+MoltenVK is not a native Vulkan driver, and the backend is newer here than on
+Linux or Windows. Current deltas against the same scene on Metal:
+
+- Directional lighting reads as fully shadowed, so the sun and ambient terms are
+  missing; point, spot, and area lights are correct.
+- `GraphicsConfig.shadow_map_size = 0` (the 1x1 fallback shadow array) renders
+  corrupt geometry rather than an unshadowed scene.
+- The geometry pipeline layout declares 17 per-stage fragment samplers where
+  MoltenVK's limit is 16, which the validation layer reports at init.
+- Ray-traced reflections are unavailable: MoltenVK exposes neither
+  `VK_KHR_ray_query` nor `VK_KHR_acceleration_structure`, so the renderer stays
+  on screen-space reflections.
 
 ## Windows (DirectX 12)
 

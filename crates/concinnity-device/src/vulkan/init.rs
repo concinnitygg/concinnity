@@ -209,8 +209,7 @@ impl VkContext {
                 )?;
 
                 //  Vulkan entry
-                let entry =
-                    unsafe { ash::Entry::load() }.map_err(|e| format!("load vulkan: {e}"))?;
+                let entry = super::loader::load_entry()?;
 
                 // Resolve which (if any) upscaler SDK needs Vulkan instance / device
                 // extensions enabled at creation time (DLSS / XeSS). Queried before
@@ -264,33 +263,26 @@ impl VkContext {
                     ext_names_raw.push(debug_ext);
                 }
 
-                // HDR display: enable `VK_EXT_swapchain_colorspace` (instance
-                // extension) when the world asked for HDR and the loader exposes
-                // it. With the extension enabled, the surface formats query
-                // includes the extended-range colour spaces; without it, the
-                // scRGB-linear pair we look for is unreachable. The extension
-                // landed pre-Vulkan-1.0.43 and is supported on every recent
-                // desktop driver; the availability check makes a missing-loader
-                // case (older Linux distros, headless CI) degrade to SDR rather
-                // than failing instance creation.
-                let swapchain_colorspace_ext_available = hdr_display
-                    && unsafe { entry.enumerate_instance_extension_properties(None) }
-                        .map(|exts| {
-                            exts.iter().any(|p| {
-                                let name =
-                                    unsafe { std::ffi::CStr::from_ptr(p.extension_name.as_ptr()) };
-                                name == ash::ext::swapchain_colorspace::NAME
-                            })
-                        })
-                        .unwrap_or(false);
-                if swapchain_colorspace_ext_available {
-                    ext_names_raw.push(ash::ext::swapchain_colorspace::NAME.as_ptr());
-                } else if hdr_display {
+                // The optional instance extensions the loader actually exposes:
+                // `VK_EXT_swapchain_colorspace` for the extended-range surface
+                // formats HDR output needs, and `VK_KHR_portability_enumeration`
+                // so a portability driver (MoltenVK) is enumerable at all. A
+                // missing one degrades rather than failing instance creation.
+                let available_ext_props =
+                    unsafe { entry.enumerate_instance_extension_properties(None) }
+                        .unwrap_or_default();
+                let optional_exts = super::instance_exts::select(
+                    &super::instance_exts::names_of(&available_ext_props),
+                    hdr_display,
+                );
+                let swapchain_colorspace_ext_available = optional_exts.swapchain_colorspace;
+                if hdr_display && !swapchain_colorspace_ext_available {
                     tracing::warn!(
                         "HDR display requested but VK_EXT_swapchain_colorspace is not exposed by the \
                  Vulkan loader; falling back to SDR (BGRA8 sRGB) output"
                     );
                 }
+                ext_names_raw.extend(optional_exts.names().iter().map(|n| n.as_ptr()));
 
                 // Instance extensions the chosen upscaler SDK requires (DLSS / XeSS).
                 // The pointers borrow from `upscale_sdk`, which outlives this scope.
@@ -309,6 +301,7 @@ impl VkContext {
 
                 let instance_info = vk::InstanceCreateInfo::default()
                     .application_info(&app_info)
+                    .flags(optional_exts.flags())
                     .enabled_extension_names(&ext_names_raw)
                     .enabled_layer_names(&layer_names_raw);
 

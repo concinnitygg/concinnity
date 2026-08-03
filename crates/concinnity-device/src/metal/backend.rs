@@ -54,29 +54,60 @@ macro_rules! forward {
     };
 }
 
+// The same forwarding, for the entry points whose implementation lives on the
+// shared AppKit window layer (`crate::appkit::AppKitWindow`) rather than on
+// `MtlContext` itself. Metal and Vulkan share that layer, so these arms carry no
+// backend-specific behaviour; only the main-thread assertion differs from a
+// direct call.
+macro_rules! forward_win {
+    () => {};
+    (fn $name:ident(&self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
+        fn $name(&self $(, $arg: $ty)*) -> $ret { self.win.$name($($arg),*) }
+        forward_win!($($rest)*);
+    };
+    (fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
+        fn $name(&mut self $(, $arg: $ty)*) -> $ret {
+            debug_assert_main_thread(stringify!($name));
+            self.win.$name($($arg),*)
+        }
+        forward_win!($($rest)*);
+    };
+    (fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?); $($rest:tt)*) => {
+        fn $name(&mut self $(, $arg: $ty)*) {
+            debug_assert_main_thread(stringify!($name));
+            self.win.$name($($arg),*)
+        }
+        forward_win!($($rest)*);
+    };
+}
+
 impl RenderBackend for MtlContext {
-    forward! {
+    forward_win! {
         fn capture_cursor(&mut self);
         fn set_ui_cursor_hidden(&mut self, hidden: bool);
         fn cursor_outside_window(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
-        fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]);
-        fn set_vsync(&mut self, on: bool);
         fn set_window_mode(&mut self, mode: crate::assets::WindowMode);
         fn set_window_size(&mut self, width: u32, height: u32);
         fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode>;
         fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode);
+        fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
+        fn take_input(&mut self) -> RenderInput;
+        fn logical_size(&self) -> (f32, f32);
+    }
+
+    forward! {
+        fn set_reflection_probes(&mut self, probes: &[crate::gfx::reflection_probe::ProbePlacement]);
+        fn set_vsync(&mut self, on: bool);
         fn update_post_process(&mut self, params: PostProcessParams);
         fn set_ambient_intensity(&mut self, value: f32);
-        fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap);
         fn apply_quality_settings(&mut self, settings: QualitySettings);
         fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);
         fn update_quality_params(&mut self, settings: QualitySettings);
-        fn take_input(&mut self) -> RenderInput;
         fn wait_idle(&self);
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
@@ -98,7 +129,6 @@ impl RenderBackend for MtlContext {
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities;
         fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
-        fn logical_size(&self) -> (f32, f32);
         fn render_stats(&self) -> RenderStats;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
         fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String>;

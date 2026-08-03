@@ -62,11 +62,12 @@ pub struct SdkOptions {
 }
 
 // Resolve the backend from the target OS and whether the `vulkan` feature is on.
-// macOS is always Metal; Windows defaults to DirectX and opts into Vulkan with
-// the feature; everything else (Linux) is Vulkan.
+// macOS defaults to Metal and Windows to DirectX; both opt into Vulkan with the
+// feature. Everything else (Linux) is Vulkan regardless. macOS Vulkan runs over
+// MoltenVK and exists for cross-backend testing, not for shipping.
 pub fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
     match (target_os, vulkan) {
-        ("macos", _) => Backend::Metal,
+        ("macos", false) => Backend::Metal,
         ("windows", false) => Backend::Dx,
         _ => Backend::Vk,
     }
@@ -167,7 +168,7 @@ mod tests {
     #[test]
     fn backend_resolution_covers_every_target() {
         assert_eq!(resolve_backend("macos", false), Backend::Metal);
-        assert_eq!(resolve_backend("macos", true), Backend::Metal);
+        assert_eq!(resolve_backend("macos", true), Backend::Vk);
         assert_eq!(resolve_backend("windows", false), Backend::Dx);
         assert_eq!(resolve_backend("windows", true), Backend::Vk);
         assert_eq!(resolve_backend("linux", false), Backend::Vk);

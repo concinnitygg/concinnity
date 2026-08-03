@@ -274,6 +274,24 @@ pub struct GpuClassInput {
     pub apple_family: u8,
 }
 
+// The Apple GPU family generation rank a device name implies, or 0 when the name
+// is not an Apple silicon GPU. Metal reads the rank straight off the device
+// (`MTLDevice::supportsFamily`); Vulkan has no equivalent query, so a MoltenVK
+// build recovers it from the reported device name ("Apple M2 Max"). Without it
+// Apple silicon falls through `classify_tier`'s integrated branch and the two
+// backends disagree on the same GPU. `M<n>` maps to `n + 6`, matching Metal's
+// `MTLGPUFamily::Apple7` = M1.
+pub fn apple_family_from_device_name(name: &str) -> u8 {
+    let Some(rest) = name.strip_prefix("Apple M") else {
+        return 0;
+    };
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    match digits.parse::<u8>() {
+        Ok(n) if n >= 1 => n.saturating_add(6),
+        _ => 0,
+    }
+}
+
 // Map the gathered GPU signals to a coarse performance tier. Apple silicon is
 // classified by GPU family generation (family alone cannot separate base from
 // Pro / Max / Ultra within a generation -- a working-set refinement can split
@@ -1044,6 +1062,50 @@ mod tests {
         assert!(GpuTier::Integrated < GpuTier::EntryDiscrete);
         assert!(GpuTier::EntryDiscrete < GpuTier::MidDiscrete);
         assert!(GpuTier::MidDiscrete < GpuTier::HighDiscrete);
+    }
+
+    #[test]
+    fn apple_family_reads_the_generation_out_of_the_device_name() {
+        // The names MoltenVK reports, mapped onto Metal's family ranks.
+        assert_eq!(apple_family_from_device_name("Apple M1"), 7);
+        assert_eq!(apple_family_from_device_name("Apple M2 Max"), 8);
+        assert_eq!(apple_family_from_device_name("Apple M3 Pro"), 9);
+        assert_eq!(apple_family_from_device_name("Apple M4 Ultra"), 10);
+        // A generation past what Metal's SDK names yet still ranks above M3, so
+        // a newer Mac is not demoted.
+        assert!(apple_family_from_device_name("Apple M9") > 9);
+    }
+
+    #[test]
+    fn non_apple_device_names_report_no_family() {
+        for name in [
+            "NVIDIA GeForce RTX 4090",
+            "AMD Radeon RX 7900 XTX",
+            "Intel(R) Arc(tm) A770",
+            // Apple's own non-M naming, and a truncated / malformed report.
+            "Apple A17 Pro",
+            "Apple M",
+            "Apple MX",
+            "",
+        ] {
+            assert_eq!(apple_family_from_device_name(name), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn apple_family_from_a_name_reaches_the_same_tier_metal_does() {
+        // The whole point of the name probe: a MoltenVK build must land on the
+        // tier the Metal backend reports for the same silicon, not on the
+        // integrated floor a zero family falls through to.
+        let family = apple_family_from_device_name("Apple M2 Max");
+        assert_eq!(
+            classify_tier(&input(GpuVendor::Apple, 32 * GB, false, family)),
+            GpuTier::MidDiscrete
+        );
+        assert_eq!(
+            classify_tier(&input(GpuVendor::Apple, 32 * GB, false, 0)),
+            GpuTier::Integrated
+        );
     }
 
     #[test]

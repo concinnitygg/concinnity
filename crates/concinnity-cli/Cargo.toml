@@ -65,5 +65,11 @@ windows = { version = "0.61", features = [
 ash = { version = "0.38", optional = true }
 shaderc = { version = "0.10.1", optional = true }
 
+# A macOS Vulkan build, activated by the `vulkan` feature. No GLFW: windowing is
+# the shared native AppKit layer the Metal backend also uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+ash = { version = "0.38", optional = true }
+shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
+
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }

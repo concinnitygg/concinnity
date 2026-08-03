@@ -135,6 +135,11 @@ pub(super) fn create_logical_device(
     let has_deferred_host = has_ext(b"VK_KHR_deferred_host_operations");
     let rt_exts_present = has_accel_struct && has_ray_query && has_deferred_host;
 
+    // A portability driver (MoltenVK) exposes `VK_KHR_portability_subset`, and
+    // Vulkan requires an implementation that exposes it to have it enabled, so
+    // `create_device` is invalid without this.
+    let has_portability_subset = has_ext(b"VK_KHR_portability_subset");
+
     // Probe which of those features the device actually supports.
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut s16_probe = vk::PhysicalDevice16BitStorageFeatures::default();
@@ -146,6 +151,10 @@ pub(super) fn create_logical_device(
     // per-pixel (non-uniform) hit index via `nonuniformEXT`, which needs the
     // `shaderSampledImageArrayNonUniformIndexing` descriptor-indexing feature.
     let mut di_probe = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+    // Present only on a portability driver (MoltenVK). Probed here and chained
+    // back verbatim at device creation, which enables exactly the subset the
+    // driver supports.
+    let mut portability_probe = vk::PhysicalDevicePortabilitySubsetFeaturesKHR::default();
     {
         let mut probe = vk::PhysicalDeviceFeatures2::default();
         if has_f16 {
@@ -156,6 +165,9 @@ pub(super) fn create_logical_device(
         }
         if has_subgroup_ext {
             probe = probe.push_next(&mut sub_probe);
+        }
+        if has_portability_subset {
+            probe = probe.push_next(&mut portability_probe);
         }
         if rt_exts_present {
             probe = probe
@@ -199,6 +211,9 @@ pub(super) fn create_logical_device(
     }
     if has_dedicated {
         enabled.push(CString::new("VK_KHR_dedicated_allocation").unwrap());
+    }
+    if has_portability_subset {
+        enabled.push(CString::new("VK_KHR_portability_subset").unwrap());
     }
 
     // RT capability gate: the device is capable AND XeSS is not the active
@@ -311,6 +326,11 @@ pub(super) fn create_logical_device(
     let mut rq_enable = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
     let mut di_enable = vk::PhysicalDeviceDescriptorIndexingFeatures::default()
         .shader_sampled_image_array_non_uniform_indexing(true);
+    // The probed portability subset, reused as the enable struct so every
+    // feature the driver supports is on. Its `p_next` still points into the
+    // probe chain, so clear it before it is pushed onto a different chain.
+    let mut portability_enable = portability_probe;
+    portability_enable.p_next = std::ptr::null_mut();
 
     tracing::info!(
         "Vulkan device features: fp16={want_f16}, 16bit_storage={want_16bit}, \
@@ -370,6 +390,9 @@ pub(super) fn create_logical_device(
             .push_next(&mut accel_enable)
             .push_next(&mut rq_enable)
             .push_next(&mut di_enable);
+    }
+    if has_portability_subset {
+        device_info = device_info.push_next(&mut portability_enable);
     }
 
     let device = unsafe { instance.create_device(pd, &device_info, None) }

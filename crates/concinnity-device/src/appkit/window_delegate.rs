@@ -73,7 +73,7 @@ impl WindowDelegate {
 // zeroing weak reference) plus the shared flag both it and the renderer read.
 // The flag is seeded from the window's current style mask; a freshly created
 // window is not fullscreen, so this is normally false.
-pub(in crate::metal) fn attach_fullscreen_delegate(
+pub(crate) fn attach_fullscreen_delegate(
     mtm: objc2::MainThreadMarker,
     window: &NSWindow,
 ) -> (Retained<WindowDelegate>, Arc<AtomicBool>) {

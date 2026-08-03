@@ -13,12 +13,10 @@ path = "src/lib.rs"
 doctest = false
 
 [features]
-# Build the Windows client against the Vulkan backend instead of the default
-# DirectX one. Linux always uses Vulkan and macOS always uses Metal regardless
-# of this feature; build.rs resolves the backend cfg from the target and this
-# feature. On non-Windows targets the feature is inert (the deps it activates
-# are Windows-only optional deps). Windows Vulkan uses the shared native Win32
-# window layer (no glfw; GLFW is the Linux windowing layer only).
+# Build the macOS or Windows client against the Vulkan backend instead of the
+# default Metal / DirectX one. Linux always uses Vulkan regardless; build.rs
+# resolves the backend cfg from the target and this feature. Windows Vulkan uses
+# the shared native Win32 window layer; macOS Vulkan uses GLFW, as Linux does.
 vulkan = [
     "concinnity-device/vulkan",
     "concinnity-core/vulkan",

@@ -26,6 +26,83 @@ use super::raytrace::{
 use super::resources::skinning::make_skinned_vertex_descriptor;
 
 impl MtlContext {
+    // Turn display sync (vsync) on or off at runtime via the view's backing
+    // CAMetalLayer. Setting displaySyncEnabled is an idempotent property write
+    // (no swapchain rebuild on Metal), so a redundant call is cheap. Backend
+    // specific: Vulkan reaches the same end by rebuilding the swapchain with a
+    // different present mode, so this does not live on the shared window layer.
+    pub fn set_vsync(&mut self, on: bool) {
+        super::init::set_display_sync(&self.mtk_view, on);
+    }
+
+    // Replace the live post-process parameters. They are pushed to the bloom
+    // prefilter + composite shaders every frame (see draw/composite.rs), so a
+    // change takes effect on the next draw with no allocation or pipeline
+    // rebuild. Auto-exposure, when on, overwrites `exposure` each frame from
+    // the adapted EV, so a static exposure change is only visible with
+    // auto-exposure off.
+    pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
+        self.post_process = params;
+    }
+
+    // Set the live ambient (IBL) light scale. `ambient_intensity` lives in
+    // `LightUniforms`, which the main lighting pass uploads every frame, so the
+    // change takes effect on the next draw with no allocation. It is not
+    // re-derived per frame (unlike auto-exposure's `exposure`), so the value
+    // stands until changed again.
+    pub fn set_ambient_intensity(&mut self, value: f32) {
+        self.light_uniforms.ambient_intensity = value;
+    }
+
+    // Set the live shadow cascade re-render cadence. The scheduler reads
+    // `shadow_update` at the start of each shadow pass, so a change takes effect
+    // on the next draw. Every cascade is already primed, so switching policy never
+    // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
+    pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+        self.shadow_update = update;
+    }
+
+    // Set the live shadow distance (world units). The per-frame cascade-split
+    // computation reads `shadow_distance` each draw, so a change takes effect on
+    // the next frame with no allocation (it sizes no GPU resource).
+    pub fn set_shadow_distance(&mut self, distance: u32) {
+        self.shadow_distance = distance;
+    }
+
+    // Set the live shadow cascade count (1..=4). The per-frame split + schedule
+    // read `shadow_cascades` each draw; only the first `count` of the four slots
+    // are rendered + sampled, so a change takes effect on the next frame with no
+    // resize (the shadow-map array stays sized for the 4-cascade capacity).
+    pub fn set_shadow_cascades(&mut self, count: u32) {
+        self.shadow_cascades = count;
+    }
+
+    // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
+    // passes without rebuilding anything. The draw path rebuilds each pass's
+    // per-frame uniform from these stored `*Settings` structs every frame
+    // (`settings.params(...)`), so mutating the stored struct here is picked up on
+    // the next draw. Only a feature that is currently on has a settings struct to
+    // mutate; the rest are skipped (the value still persists for the next launch).
+    // SSAO / SSR / auto-exposure settings are fully scalar, so they are replaced
+    // wholesale; SSGI keeps its gather resolution / ray / step counts (those size
+    // the gather target or ride `apply_quality_settings`), so only its scalar
+    // intensity / distance are updated.
+    pub fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+        if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) = (q.ssr, self.ssr.settings.as_mut()) {
+            *cur = live;
+        }
+        if let (Some(live), Some(cur)) = (q.ssgi, self.ssgi.settings.as_mut()) {
+            cur.intensity = live.intensity;
+            cur.max_distance = live.max_distance;
+        }
+        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.settings.as_mut()) {
+            *cur = live;
+        }
+    }
+
     // Rebuild the toggle-controlled effects in place to match `q`, applied
     // between frames (the GraphicsSystem drain runs before the next
     // `draw_frame`). A build failure logs and leaves the prior state intact.

@@ -2,7 +2,6 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::NSWindow;
 use objc2_metal::{
     MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue, MTLDepthStencilState,
     MTLDevice as _, MTLIndirectCommandBuffer, MTLIndirectCommandBufferDescriptor,
@@ -19,7 +18,6 @@ use super::auto_exposure::AutoExposureGpu;
 use super::cull::CullState;
 use super::decal::DecalState;
 use super::fog::FogState;
-use super::input::KeyState;
 use super::line::LineState;
 use super::particle::ParticleState;
 use super::post::{
@@ -502,14 +500,14 @@ pub struct MtlContext {
     // spawn claims one, a despawn returns it. Empty when no skinned mesh opted
     // into runtime spawning.
     pub(super) skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool,
-    // None in embedded mode (no separate NSWindow is created).
-    pub(super) window: Option<Retained<NSWindow>>,
-    // The world's authored `Window.title_bar`. Held because `set_window_mode`
-    // restyles the window every time the settings menu cycles back to Windowed
-    // and has to reinstate the authored chrome, not a standard title bar.
-    pub(super) title_bar: bool,
+    // The shared AppKit window + input layer (crate::appkit), which also owns
+    // the NSWindow, the fullscreen tracking, and the display-mode hold. Holds
+    // the same view as `mtk_view` below, upcast to `NSView`.
+    pub(super) win: crate::appkit::AppKitWindow,
     // MTKView with isPaused=true and enableSetNeedsDisplay=false so its internal
     // display link never fires. draw() is called manually from draw_frame().
+    // Metal-only: the drawable and its render-pass descriptor come from here,
+    // which is why the shared window layer keeps only the NSView upcast.
     pub(super) mtk_view: Retained<MTKView>,
     // Whether this context is responsible for tearing the window / view down on
     // drop (closing the NSWindow, or removing the embedded subview). True for a
@@ -518,46 +516,7 @@ pub struct MtlContext {
     // successor owns it now, so the outgoing drop must NOT close the shared
     // window (that would order it out from under the reused context).
     pub(super) owns_window: bool,
-    pub(super) window_closed: bool,
-    // Whether draw_frame should pump NSEvents and honour cursor capture.
-    // True for windowed mode and for the blocking-in-view play path; false
-    // for the preview (which lets the host own input dispatch).
-    pub(super) pump_events: bool,
     pub(super) was_visible: bool,
-    pub(super) cursor_captured: bool,
-    // Set when the cursor is released via Escape so a subsequent left-click
-    // recaptures it rather than firing a UI click event.
-    pub(super) recapture_on_click: bool,
-    // Whether the OS cursor is currently hidden for an in-engine UI cursor
-    // (e.g. a MainMenu). Tracked so `set_ui_cursor_hidden` only calls the
-    // ref-counted NSCursor hide/unhide on a transition, not every frame.
-    pub(super) ui_cursor_hidden: bool,
-    // A togglable menu coexists with a captured camera (a MainMenu over a
-    // Camera3D world). When set, Escape routes to the ECS and clicks never
-    // recapture; GraphicsSystem drives capture from the active menu instead.
-    pub(super) menu_mode: bool,
-    // Authoritative native-fullscreen state, kept in sync by `window_delegate`
-    // (the NSWindow `FullScreen` style-mask bit lags the animated transition).
-    // Read by `set_window_mode` / `set_window_size`; an `AtomicBool` because the
-    // delegate stores into it from AppKit's notification callbacks. Always
-    // false in embedded mode (no NSWindow to go fullscreen).
-    pub(super) fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // NSWindowDelegate that tracks the fullscreen transition. None in embedded
-    // mode. Retained here because NSWindow holds its delegate as a zeroing weak
-    // reference, so dropping this would detach the delegate; the field is never
-    // read directly (the delegate communicates through `fullscreen`).
-    #[allow(dead_code)]
-    pub(super) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
-    // Holds the display to the user's chosen mode while the window is in
-    // native fullscreen; restores the desktop mode on exit / drop. Reconciled
-    // once per frame in draw_frame from the delegate-tracked flag above.
-    pub(super) fullscreen_display: super::display_mode::FullscreenDisplayMode,
-    pub(super) keys: KeyState,
-    // The runtime movement key map (canonical action -> key). `handle_key`
-    // decodes physical events through this instead of hardcoded keys, so a
-    // settings-menu rebind takes effect immediately. Defaults to W/S/A/D/Shift/
-    // Space/E; GraphicsSystem pushes any persisted override via `set_keymap`.
-    pub(super) keymap: crate::gfx::keymap::KeyMap,
     // Render statistics for the most recent frame: draw-call and object
     // counts (filled by `draw_frame`) plus the GPU frame time pulled from
     // `gpu_time_us`. Surfaced to the profiler overlay via `render_stats()`.
@@ -1353,14 +1312,14 @@ impl MtlContext {
 
     // Returns true if the window has been closed by the user.
     pub fn window_closed(&self) -> bool {
-        if self.window_closed {
+        if self.win.closed() {
             return true;
         }
         // Detect close via the red-X button: NSWindow.close() hides the window
         // without posting an ApplicationDefined event, so window_closed never
         // becomes true through the event pump alone. Guard with was_visible so
         // we don't misfire before the first frame appears.
-        self.was_visible && self.window.as_ref().is_some_and(|w| !w.isVisible())
+        self.was_visible && self.win.window().is_some_and(|w| !w.isVisible())
     }
 
     // Block until the GPU has finished all in-flight work.
@@ -1398,8 +1357,8 @@ impl Drop for MtlContext {
         }
         // Always release the cursor on teardown so the OS mouse association and
         // cursor visibility are restored even if the caller didn't do it.
-        self.release_cursor();
-        if let Some(ref window) = self.window {
+        self.win.release_cursor();
+        if let Some(window) = self.win.window() {
             // Close the game window so it doesn't linger after the run loop exits.
             window.close();
         } else {

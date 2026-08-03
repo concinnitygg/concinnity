@@ -38,7 +38,6 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
 use super::context::*;
-use super::input::KeyState;
 use super::math::IDENTITY4;
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::texture::{
@@ -1371,24 +1370,21 @@ impl MtlContext {
             // Seeded later by `seed_skinned_instance_pool` once skinned geometry
             // (with its pre-reserved copies) has been uploaded.
             skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
-            window,
-            title_bar,
+            win: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
+                window,
+                // The shared layer drives the view through NSView alone; the
+                // MTKView below stays for drawable acquisition.
+                view: objc2::rc::Retained::into_super(mtk_view.clone()),
+                title_bar,
+                pump_events,
+                fullscreen,
+                window_delegate,
+            }),
             mtk_view,
             // A freshly built context owns its window; a live reload flips the
             // outgoing context's flag off before handing this one the window.
             owns_window: true,
-            window_closed: false,
-            pump_events,
             was_visible: false,
-            cursor_captured: false,
-            recapture_on_click: false,
-            ui_cursor_hidden: false,
-            menu_mode: false,
-            fullscreen,
-            window_delegate,
-            fullscreen_display: super::display_mode::FullscreenDisplayMode::new(),
-            keys: KeyState::default(),
-            keymap: crate::gfx::keymap::KeyMap::default(),
             frame_stats: crate::gfx::profile::RenderStats::default(),
             gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1460,38 +1456,22 @@ impl MtlContext {
     ) -> Result<(), String> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
+        let h = self.win.handles_for_reuse();
         let reuse = ReuseHandles {
             device: self.device.clone(),
             command_queue: self.command_queue.clone(),
             existing: window::ExistingWindow {
-                window: self.window.clone(),
+                window: h.window,
                 mtk_view: self.mtk_view.clone(),
-                pump_events: self.pump_events,
-                fullscreen: self.fullscreen.clone(),
-                window_delegate: self.window_delegate.clone(),
+                pump_events: h.pump_events,
+                fullscreen: h.fullscreen,
+                window_delegate: h.window_delegate,
             },
         };
-        // Carry over live state the fresh build resets that GraphicsSystem does
-        // not re-push after a reload. The keymap is re-pushed by GraphicsSystem
-        // immediately, but the fullscreen display-mode bookkeeping is not, so a
-        // fullscreen editor would otherwise lose its mode-restore state.
-        let fullscreen_display = std::mem::replace(
-            &mut self.fullscreen_display,
-            super::display_mode::FullscreenDisplayMode::new(),
-        );
-        let keymap = self.keymap;
-        // NSCursor's hide count and the CGAssociate coupling are process-global
-        // and survive teardown (the outgoing context's Drop skips its cursor
-        // release for a transplanted window), but a fresh build resets the flags
-        // tracking that state to "visible". Carry them so a reload does not leak a
-        // hide and strand the OS cursor hidden outside the window.
-        let ui_cursor_hidden = self.ui_cursor_hidden;
-        let cursor_captured = self.cursor_captured;
         let mut rebuilt = MtlContext::build(init, Some(reuse))?;
-        rebuilt.fullscreen_display = fullscreen_display;
-        rebuilt.keymap = keymap;
-        rebuilt.ui_cursor_hidden = ui_cursor_hidden;
-        rebuilt.cursor_captured = cursor_captured;
+        // Carry over the live window state the fresh build resets but a reload
+        // must keep (see `AppKitWindow::adopt_live_state`).
+        rebuilt.win.adopt_live_state(&mut self.win);
         // Hand the window over: the outgoing context (dropped by the assignment
         // below) must not close the shared window -- `rebuilt` owns it now.
         self.owns_window = false;

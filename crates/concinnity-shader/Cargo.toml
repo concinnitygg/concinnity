@@ -34,6 +34,12 @@ windows = { version = "0.61", features = [
 ] }
 shaderc = { version = "0.10.1", optional = true }
 
+# The macOS default build is Metal, whose shaders precompile at build time.
+# `shaderc` is optional and activated by the `vulkan` feature for a Vulkan build
+# on macOS.
+[target.'cfg(target_os = "macos")'.dependencies]
+shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
+
 [dev-dependencies]
 tempfile = "3.25.0"
 

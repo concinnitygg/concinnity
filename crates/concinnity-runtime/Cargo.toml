@@ -7,9 +7,9 @@ license.workspace = true
 publish = false
 
 [features]
-# Pass-through so a Windows host can target the Vulkan backend instead of the
-# default DirectX one, matching the rest of the workspace. Inert on macOS
-# (always Metal) and Linux (always Vulkan).
+# Pass-through so a macOS or Windows host can target the Vulkan backend instead
+# of the default Metal / DirectX one, matching the rest of the workspace. Inert
+# on Linux (always Vulkan).
 vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]

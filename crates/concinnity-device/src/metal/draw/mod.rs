@@ -139,8 +139,8 @@ impl MtlContext {
         // delivery (pumping there would dequeue mouse clicks meant for the
         // tab bar before they reach their targets); the windowed CLI path
         // and the blocking-in-view play path opt in.
-        if self.pump_events {
-            self.pump_ns_events(mtm);
+        if self.win.pump_events() {
+            self.win.pump_ns_events(mtm);
             if self.window_closed() {
                 return Ok(());
             }
@@ -151,9 +151,7 @@ impl MtlContext {
         // Runs off the delegate-tracked flag so OS-driven fullscreen exits
         // (green traffic-light button, Mission Control) restore too. Cheap
         // when nothing changed.
-        let is_fullscreen = self.fullscreen.load(std::sync::atomic::Ordering::Relaxed);
-        self.fullscreen_display
-            .reconcile(self.window.as_deref(), is_fullscreen);
+        self.win.reconcile_display_mode();
 
         // Frames-in-flight gate: block until the GPU has retired an older frame
         // so the CPU never queues more than `frames_in_flight` frames ahead,

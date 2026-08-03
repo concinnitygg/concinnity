@@ -9,21 +9,16 @@
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSScreen, NSView, NSWindow,
-};
+use objc2_app_kit::{NSApplication, NSAutoresizingMaskOptions, NSScreen, NSView, NSWindow};
 use objc2_core_graphics::{
     CGColorSpace, kCGColorSpaceDisplayP3_PQ, kCGColorSpaceExtendedLinearDisplayP3,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
 use objc2_metal::{MTLDevice, MTLPixelFormat};
 use objc2_metal_kit::MTKView;
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::gfx::hdr_output::HdrOutputMode;
-use crate::metal::chrome::{apply_title_bar, windowed_style_mask};
 use crate::metal::context::{take_embedded_pump_events, take_embedded_view};
-use crate::metal::pipeline::ns_str;
 
 pub(crate) struct WindowSetup {
     pub window: Option<Retained<NSWindow>>,
@@ -36,7 +31,7 @@ pub(crate) struct WindowSetup {
     pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // NSWindowDelegate tracking the fullscreen transition; None in embedded
     // mode. The caller stores it so the window's weak delegate stays attached.
-    pub window_delegate: Option<Retained<crate::metal::window_delegate::WindowDelegate>>,
+    pub window_delegate: Option<Retained<crate::appkit::window_delegate::WindowDelegate>>,
     // Resolved swapchain colour-output mode. `Sdr` when the world did not
     // request HDR or the active display lacks EDR headroom; `Hdr` when the
     // CAMetalLayer was configured with `RGBA16Float` + extended-linear
@@ -76,7 +71,7 @@ pub(crate) struct ExistingWindow {
     pub mtk_view: Retained<MTKView>,
     pub pump_events: bool,
     pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub window_delegate: Option<Retained<crate::metal::window_delegate::WindowDelegate>>,
+    pub window_delegate: Option<Retained<crate::appkit::window_delegate::WindowDelegate>>,
 }
 
 pub(crate) fn setup_window_and_view(
@@ -169,7 +164,7 @@ pub(crate) fn setup_window_and_view(
     let pump_events = embedded_ptr.is_null() || take_embedded_pump_events();
     let (window, mtk_view, fullscreen, window_delegate) = if embedded_ptr.is_null() {
         // Windowed mode: create a new NSWindow containing the MTKView.
-        let window = create_window(mtm, title, width, height, title_bar)?;
+        let window = crate::appkit::chrome::create_window(mtm, title, width, height, title_bar)?;
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
@@ -179,7 +174,7 @@ pub(crate) fn setup_window_and_view(
         // lags the animated transition) so the settings menu's Window Mode row
         // never toggles the wrong way.
         let (delegate, fullscreen) =
-            crate::metal::window_delegate::attach_fullscreen_delegate(mtm, &window);
+            crate::appkit::window_delegate::attach_fullscreen_delegate(mtm, &window);
         NSApplication::sharedApplication(mtm).activate();
         window.makeKeyAndOrderFront(None);
         (Some(window), mtk_view, fullscreen, Some(delegate))
@@ -383,39 +378,4 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
     // above, but make it explicit so a future refactor that drops the MTKView
     // hop does not silently bring the layer back to BGRA8Unorm.
     metal_layer.setPixelFormat(MTLPixelFormat::RGBA16Float);
-}
-
-pub(crate) fn create_window(
-    mtm: objc2::MainThreadMarker,
-    title: &str,
-    width: u32,
-    height: u32,
-    title_bar: bool,
-) -> Result<Retained<NSWindow>, String> {
-    let content_rect = NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(width as f64, height as f64),
-    );
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            content_rect,
-            windowed_style_mask(title_bar),
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    window.setTitle(&ns_str(title));
-    apply_title_bar(&window, title_bar);
-    window.center();
-    // Prevent AppKit from releasing the window when it is closed. The default
-    // is YES for alloc/init-created windows, which causes AppKit to release
-    // (and possibly deallocate) the window on close while Rust's Retained<NSWindow>
-    // still holds a reference, leading to EXC_BAD_ACCESS in objc_release.
-    unsafe { window.setReleasedWhenClosed(false) };
-    // Receive mouse-moved events even when the cursor is outside the window
-    // area (necessary when CGAssociateMouseAndMouseCursorPosition decouples
-    // cursor position from hardware movement).
-    window.setAcceptsMouseMovedEvents(true);
-    Ok(window)
 }

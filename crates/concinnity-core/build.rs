@@ -4,9 +4,9 @@
 // does. `Platform::current` is the only consumer: it reports which shader
 // source language the target backend consumes.
 //
-//   backend_metal  macOS (always)
+//   backend_metal  macOS, default
 //   backend_dx     Windows, default
-//   backend_vk     Linux (always), or Windows with the `vulkan` feature
+//   backend_vk     Linux (always), or macOS / Windows with the `vulkan` feature
 // The choice must stay in lockstep with concinnity-engine/build.rs.
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(backend_metal)");
@@ -17,7 +17,7 @@ fn main() {
     let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
 
     let backend = match (target_os.as_str(), vulkan) {
-        ("macos", _) => "backend_metal",
+        ("macos", false) => "backend_metal",
         ("windows", false) => "backend_dx",
         _ => "backend_vk",
     };
