@@ -461,9 +461,8 @@ fn write_view_set(
 
 fn compile_line_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = super::builtins::Ctx {
-        hot_reload,
         msaa,
-        pool_size: 0,
+        ..super::builtins::Ctx::plain(hot_reload)
     };
     let vert = super::builtins::LINE_VERT.compile(&ctx)?;
     let frag = super::builtins::LINE_FRAG.compile(&ctx)?;

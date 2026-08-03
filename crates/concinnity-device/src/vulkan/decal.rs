@@ -606,9 +606,8 @@ fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u
     // The vert source doesn't branch on USE_MSAA but it costs nothing to
     // define it there too.
     let ctx = super::builtins::Ctx {
-        hot_reload,
         msaa,
-        pool_size: 0,
+        ..super::builtins::Ctx::plain(hot_reload)
     };
     let vert = super::builtins::DECAL_VERT.compile(&ctx)?;
     let frag = super::builtins::DECAL_FRAG.compile(&ctx)?;

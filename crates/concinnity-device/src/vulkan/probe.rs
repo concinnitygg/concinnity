@@ -62,9 +62,10 @@ impl VkContext {
     // Set the reflection-probe placements (declared `ReflectionProbe` assets,
     // converted to `ProbePlacement`s by the graphics system). An empty list
     // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. Capped at `MAX_PROBES`. Pushed once after
-    // construction; the cube capture that fills the probe set runs across later
-    // frames (next slice).
+    // reflections without authoring. Capped at the cube array's descriptor count,
+    // so `probe_set.count` can never index past what the shader declares. Pushed
+    // once after construction; the cube capture that fills the probe set runs
+    // across later frames (next slice).
     pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
         let mut placements: Vec<ProbePlacement> = if declared.is_empty() {
             match self.scene_world_bounds() {
@@ -84,13 +85,23 @@ impl VkContext {
         } else {
             declared.to_vec()
         };
-        if placements.len() > MAX_PROBES {
-            tracing::warn!(
-                "reflection probes: {} placements, capping at MAX_PROBES={}",
-                placements.len(),
-                MAX_PROBES
-            );
-            placements.truncate(MAX_PROBES);
+        let bind_count = self.descriptors.probe_cube_count as usize;
+        if placements.len() > bind_count {
+            // Past the CPU ceiling means authored (or seeded) probes are dropped;
+            // between the device's bind count and the ceiling is only what this
+            // GPU's sampler headroom affords, which init already reported.
+            if placements.len() > MAX_PROBES {
+                tracing::warn!(
+                    "reflection probes: {} placements, capping at {bind_count}",
+                    placements.len()
+                );
+            } else {
+                tracing::debug!(
+                    "reflection probes: binding {bind_count} of {} placements",
+                    placements.len()
+                );
+            }
+            placements.truncate(bind_count);
         }
         // A re-placement (rare -- this is normally a one-time init call) abandons any
         // in-flight staggered bake and frees the previously baked cubes. Idle first
@@ -133,7 +144,7 @@ impl VkContext {
     // dangles a freed view (Vulkan requires every descriptor in a bound set be
     // valid, even slots the shader's `i < count` loop never samples).
     fn reset_probe_cube_slots_to_sky(&self) {
-        let sky: Vec<vk::DescriptorImageInfo> = (0..MAX_PROBES)
+        let sky: Vec<vk::DescriptorImageInfo> = (0..self.descriptors.probe_cube_count)
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -1152,8 +1163,9 @@ impl BakeResources {
         // local-light, binding-11 cluster-list, binding-13 spot-shadow and
         // binding-14 area-light SSBOs, one of each per global set.
         let storage_count = 4 + PROBE_FACE_COUNT as u32 * 5;
-        let sampler_count =
-            PROBE_FACE_COUNT as u32 * (tex_pool + 7 + MAX_PROBES as u32) + u32::from(has_hiz);
+        let sampler_count = PROBE_FACE_COUNT as u32
+            * (tex_pool + 7 + ctx.descriptors.probe_cube_count)
+            + u32::from(has_hiz);
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1254,7 +1266,7 @@ impl BakeResources {
             .map(|_| ctx.descriptors.global_set_layout)
             .collect();
         let global_sets = alloc_descriptor_sets(device, pool, &layouts)?;
-        let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..MAX_PROBES)
+        let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..ctx.descriptors.probe_cube_count)
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)

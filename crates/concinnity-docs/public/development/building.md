@@ -118,8 +118,10 @@ Linux or Windows. Current deltas against the same scene on Metal:
   missing; point, spot, and area lights are correct.
 - `GraphicsConfig.shadow_map_size = 0` (the 1x1 fallback shadow array) renders
   corrupt geometry rather than an unshadowed scene.
-- The geometry pipeline layout declares 17 per-stage fragment samplers where
-  MoltenVK's limit is 16, which the validation layer reports at init.
+- MoltenVK reports a `maxPerStageDescriptorSamplers` limit of 16, far below what
+  desktop drivers allow. The geometry pipeline layout fits by binding fewer
+  reflection probes (7 rather than 8); the bindless texture pool has no such
+  headroom, so a world with more than one texture still exceeds the limit.
 - Ray-traced reflections are unavailable: MoltenVK exposes neither
   `VK_KHR_ray_query` nor `VK_KHR_acceleration_structure`, so the renderer stays
   on screen-space reflections.

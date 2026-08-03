@@ -219,9 +219,8 @@ fn build_hiz_pipelines(
     // (the depth resource is a `sampler2DMS` when multisampled, a `sampler2D`
     // otherwise), mirroring the decal shader's MSAA split.
     let ctx = super::builtins::Ctx {
-        hot_reload,
         msaa: sample_count > 1,
-        pool_size: 0,
+        ..super::builtins::Ctx::plain(hot_reload)
     };
     let init_spv = super::builtins::HIZ_INIT.compile(&ctx)?;
     let downsample_spv = super::builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;

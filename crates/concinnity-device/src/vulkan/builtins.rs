@@ -66,15 +66,21 @@ pub(crate) struct Ctx {
     // Bindless texture-pool length for `{POOL_SIZE}` programs; ignored by the
     // rest. Callers pass the live pool size (see `bindless_pool_size`).
     pub pool_size: usize,
+    // Reflection-probe cube-array length for `{MAX_PROBES}` programs; ignored by
+    // the rest. Callers pass the descriptor count the global set layout was
+    // built with (`descriptor_layout::probe_cube_array_count`), so the GLSL array
+    // and the layout binding always agree.
+    pub probe_count: usize,
 }
 
 impl Ctx {
-    // For programs whose assembly needs neither the MSAA state nor a pool size.
+    // For programs whose assembly needs no MSAA state, pool size, or probe count.
     pub fn plain(hot_reload: bool) -> Self {
         Self {
             hot_reload,
             msaa: false,
             pool_size: 0,
+            probe_count: 0,
         }
     }
 }
@@ -104,14 +110,16 @@ impl GlslProgram {
             src = inject_define(&src, define);
         }
         if let Some(set) = self.assembly.probe_desc_set {
+            debug_assert!(
+                ctx.probe_count > 0,
+                "{}: probe program assembled with no probe count",
+                self.label
+            );
             let probe_common =
                 shader_source(ctx.hot_reload, "probe_common.glsl", PROBE_COMMON_GLSL);
             src = src
                 .replace("{PROBE_COMMON}", &probe_common)
-                .replace(
-                    "{MAX_PROBES}",
-                    &super::probe_uniforms::MAX_PROBES.to_string(),
-                )
+                .replace("{MAX_PROBES}", &ctx.probe_count.to_string())
                 .replace("{PROBE_DESC_SET}", set);
         }
         if self.assembly.pool_size {
@@ -141,6 +149,10 @@ fn msaa_define(msaa: bool) -> &'static str {
 // Compile every declared program (all enumerable variants) into `out_dir`,
 // reusing local cache artifacts where present. `texture_count` sizes the
 // `{POOL_SIZE}` substitution exactly as the exported world's first launch will.
+// The probe cube-array length is a property of the device the bundle eventually
+// runs on, so the probe programs are baked at the `MAX_PROBES` ceiling every
+// desktop driver affords; a device that reports less per-stage sampler headroom
+// (MoltenVK) simply misses these entries and compiles them at first launch.
 pub(crate) fn precompile(
     out_dir: &std::path::Path,
     texture_count: usize,
@@ -153,6 +165,7 @@ pub(crate) fn precompile(
                 hot_reload: false,
                 msaa,
                 pool_size,
+                probe_count: super::probe_uniforms::MAX_PROBES,
             };
             let source = program.source(&ctx);
             let key = if program.rt {
@@ -765,6 +778,7 @@ mod tests {
                 hot_reload: false,
                 msaa: false,
                 pool_size: 4,
+                probe_count: 4,
             };
             assert!(
                 seen.insert((p.source(&ctx), p.kind as u32, p.rt)),
@@ -780,6 +794,7 @@ mod tests {
             hot_reload: false,
             msaa: true,
             pool_size: 3,
+            probe_count: 3,
         };
         let src = HIZ_INIT.source(&ctx);
         let mut lines = src.lines();
@@ -801,6 +816,7 @@ mod tests {
             hot_reload: false,
             msaa: false,
             pool_size: 5,
+            probe_count: 5,
         };
         for p in [&MAIN_BINDLESS_FRAG, &SSR_RESOLVE_FRAG, &GLASS_RT_FRAG] {
             let src = p.source(&ctx);
@@ -811,6 +827,29 @@ mod tests {
                 "{POOL_SIZE}",
             ] {
                 assert!(!src.contains(marker), "{} left {}", p.label, marker);
+            }
+        }
+    }
+
+    // Every probe program sizes its cube array from the context, so the GLSL
+    // array length tracks whatever descriptor count the global set layout was
+    // built with instead of a compile-time constant the device may not afford.
+    #[test]
+    fn probe_programs_size_their_cube_array_from_the_context() {
+        for probe_count in [1usize, 7, super::super::probe_uniforms::MAX_PROBES] {
+            let ctx = Ctx {
+                hot_reload: false,
+                msaa: false,
+                pool_size: 4,
+                probe_count,
+            };
+            for p in ALL.iter().filter(|p| p.assembly.probe_desc_set.is_some()) {
+                let src = p.source(&ctx);
+                assert!(
+                    src.contains(&format!("probe_cubes[{probe_count}]")),
+                    "{} did not size its cube array at {probe_count}",
+                    p.label
+                );
             }
         }
     }

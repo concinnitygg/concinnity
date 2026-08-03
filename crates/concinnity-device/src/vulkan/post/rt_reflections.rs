@@ -49,15 +49,18 @@ pub(in crate::vulkan) struct RtShaders {
 pub(in crate::vulkan) fn compile_rt_shaders(
     hot_reload: bool,
     pool_size: usize,
+    probe_cube_count: u32,
 ) -> Result<RtShaders, String> {
     use super::super::builtins;
     // The fragment's probe sampling ({PROBE_DESC_SET} = 1, the global set the
-    // probe set/cubes ride) and the bindless pool size are substituted by the
-    // builtins assembly; the pool declaration needs at least one slot.
+    // probe set/cubes ride, sized by that set layout's binding-8 descriptor
+    // count) and the bindless pool size are substituted by the builtins
+    // assembly; the pool declaration needs at least one slot.
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
         pool_size: pool_size.max(1),
+        probe_count: probe_cube_count as usize,
     };
     let vs = builtins::RT_FULLSCREEN_VERT.compile(&ctx)?;
     let flat_fs = builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?;
@@ -123,6 +126,11 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // Bindless texture-pool length, kept for the hot-reload recompile of the
     // textured variant.
     pool_size: usize,
+
+    // Probe cube-array length the fragments were built against, kept so the
+    // hot-reload recompile sizes `probe_cubes[]` to the same global set layout
+    // the pipeline layouts already reference.
+    probe_cube_count: u32,
 }
 
 // Raw `params_ptrs` are host-mapped, render-thread-only; the whole struct lives
@@ -264,7 +272,7 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
     rt: &RtReflectionsResources,
     hot_reload: bool,
 ) -> Result<RebuiltRtPipelines, String> {
-    let shaders = compile_rt_shaders(hot_reload, rt.pool_size)?;
+    let shaders = compile_rt_shaders(hot_reload, rt.pool_size, rt.probe_cube_count)?;
     let flat = create_rt_pipeline(
         device,
         rt.render_pass,
@@ -333,8 +341,10 @@ pub(in crate::vulkan) struct RtAccelHandles {
 pub(in crate::vulkan) struct RtLayoutConfig {
     pub bindless_set_layout: Option<vk::DescriptorSetLayout>,
     // The forward global set's layout, bound as set 1 so the pass can sample the
-    // reflection-probe set + cube array (binding 7/8) on a ray miss.
+    // reflection-probe set + cube array (binding 7/8) on a ray miss, and that
+    // layout's binding-8 descriptor count (sizes the fragment's array).
     pub global_set_layout: vk::DescriptorSetLayout,
+    pub probe_cube_count: u32,
     pub pool_size: usize,
     pub hot_reload: bool,
 }
@@ -378,6 +388,7 @@ impl RtReflectionsResources {
         let RtLayoutConfig {
             bindless_set_layout,
             global_set_layout,
+            probe_cube_count,
             pool_size,
             hot_reload,
         } = layout;
@@ -476,7 +487,7 @@ impl RtReflectionsResources {
             None
         };
 
-        let shaders = compile_rt_shaders(hot_reload, pool_size)?;
+        let shaders = compile_rt_shaders(hot_reload, pool_size, probe_cube_count)?;
         let flat_pso = create_rt_pipeline(
             device,
             render_pass,
@@ -582,6 +593,7 @@ impl RtReflectionsResources {
             dummy_ssbo,
             dummy_ssbo_memory,
             pool_size,
+            probe_cube_count,
         };
         me.build_targets(instance, device, physical_device, width, height)?;
         me.wire_static(
@@ -1184,12 +1196,15 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
-        let shaders = super::compile_rt_shaders(false, 4).expect("rt shaders compile");
-        assert!(super::is_spirv(&shaders.vs));
-        assert!(super::is_spirv(&shaders.flat_fs));
-        assert!(shaders.textured_fs.is_some(), "pool_size>0 builds textured");
+        // Both the ceiling and a device-shortened probe cube array must compile.
+        for probes in [1, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+            let shaders = super::compile_rt_shaders(false, 4, probes).expect("rt shaders compile");
+            assert!(super::is_spirv(&shaders.vs));
+            assert!(super::is_spirv(&shaders.flat_fs));
+            assert!(shaders.textured_fs.is_some(), "pool_size>0 builds textured");
+        }
         // pool_size 0 builds only the flat variant.
-        let flat_only = super::compile_rt_shaders(false, 0).expect("rt flat compiles");
+        let flat_only = super::compile_rt_shaders(false, 0, 4).expect("rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

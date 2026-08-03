@@ -51,8 +51,14 @@ impl ProbeUniforms {
     };
 }
 
-// Maximum reflection probes a frame can bind. The GLSL `MAX_PROBES` constant
-// (probe_common.glsl) and the probe cube array must match this.
+// Reflection-probe capacity of the CPU-side `ProbeSet`, and the ceiling on the
+// probe cube array's descriptor count. A device with less per-stage sampler
+// headroom than that (MoltenVK reports 16 for `maxPerStageDescriptorSamplers`,
+// against nine fixed samplers in the geometry pipeline layout) binds fewer:
+// `vulkan::descriptor_layout::probe_cube_array_count` derives the live count,
+// which sizes the layout binding, the GLSL arrays, and the placement list
+// together. The struct below keeps the full capacity either way -- a shorter
+// GLSL `probes[]` is a prefix of the same std140 layout.
 pub const MAX_PROBES: usize = 8;
 
 // Auto-seed must never request more probes than a frame can bind, or
@@ -99,7 +105,10 @@ mod tests {
 
     // ProbeSet is `uint count; uint _pad[3]; ProbeUniforms probes[8];` = 400 bytes,
     // with `probes` at offset 16 (NOT 32 -- the std140 uvec3 trap from
-    // reflection_probes.md §7 that silently disabled box parallax on Metal).
+    // reflection_probes.md §7 that silently disabled box parallax on Metal). The
+    // GLSL array may declare fewer than 8 on a sampler-starved device; that is a
+    // prefix of this layout, so the offsets and the 48-byte stride locked here
+    // still describe every element the shader reads.
     #[test]
     fn probe_set_layout_matches_glsl() {
         assert_eq!(size_of::<ProbeSet>(), 400);

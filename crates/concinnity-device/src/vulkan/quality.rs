@@ -161,6 +161,7 @@ impl VkContext {
                     prefilter_view: self.env_map.prefilter.view,
                     cube_sampler: self.cube_sampler,
                     global_set_layout: self.descriptors.global_set_layout,
+                    probe_cube_count: self.descriptors.probe_cube_count,
                 },
                 self.hot_reload,
             )?;
@@ -442,6 +443,7 @@ impl VkContext {
             super::post::rt_reflections::RtLayoutConfig {
                 bindless_set_layout: self.cull.bindless_set_layout,
                 global_set_layout: self.descriptors.global_set_layout,
+                probe_cube_count: self.descriptors.probe_cube_count,
                 pool_size: bindless_pool_size,
                 hot_reload: self.hot_reload,
             },

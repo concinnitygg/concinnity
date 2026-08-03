@@ -66,16 +66,20 @@ pub(in crate::vulkan) fn shader_source(
 
 // Compile the bindless static-pass shaders (bindless). `pool_size` is
 // the bindless texture-pool length, substituted into the fragment source's
-// `sampler2D tex_pool[]` array declaration. Always built from the built-in
-// GLSL: the bindless path only drives the built-in shader.
+// `sampler2D tex_pool[]` array declaration; `probe_cube_count` is the global set
+// layout's binding-8 descriptor count, substituted into the probe cube array.
+// Always built from the built-in GLSL: the bindless path only drives the
+// built-in shader.
 pub(super) fn compile_bindless_shaders(
     hot_reload: bool,
     pool_size: usize,
+    probe_cube_count: u32,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
         pool_size,
+        probe_count: probe_cube_count as usize,
     };
     let vert = builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
     let frag = builtins::MAIN_BINDLESS_FRAG.compile(&ctx)?;
@@ -1315,16 +1319,23 @@ mod tests {
     // Guards the probe forward path (the box-parallax partition-of-unity blend +
     // the ProbeSet UBO / probe cube array declarations) offline: a GLSL error in
     // the injection fails here without needing a GPU.
+    // A device-shortened probe cube array is compiled too: the array length is a
+    // runtime value on a sampler-starved driver, so the shortest and the ceiling
+    // forms both have to survive the GLSL injection.
     #[test]
     fn bindless_shaders_compile() {
-        let (vs, fs) = compile_bindless_shaders(false, 4).expect("bindless shaders compile");
-        assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
-        assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
+        for probes in [1, 7, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+            let (vs, fs) =
+                compile_bindless_shaders(false, 4, probes).expect("bindless shaders compile");
+            assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
+            assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
+        }
         // The probe markers must be fully substituted (no literal token survives).
         let frag_src = builtins::MAIN_BINDLESS_FRAG.source(&builtins::Ctx {
             hot_reload: false,
             msaa: false,
             pool_size: 4,
+            probe_count: 4,
         });
         assert!(!frag_src.contains("{PROBE_COMMON}"));
         assert!(!frag_src.contains("{MAX_PROBES}"));

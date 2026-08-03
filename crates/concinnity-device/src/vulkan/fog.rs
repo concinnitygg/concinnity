@@ -801,9 +801,8 @@ fn create_volume_sampler(device: &Device) -> Result<vk::Sampler, String> {
 
 fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = super::builtins::Ctx {
-        hot_reload,
         msaa,
-        pool_size: 0,
+        ..super::builtins::Ctx::plain(hot_reload)
     };
     let vert = super::builtins::FOG_VERT.compile(&ctx)?;
     let frag = super::builtins::FOG_FRAG.compile(&ctx)?;

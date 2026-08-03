@@ -1124,6 +1124,24 @@ impl VkContext {
         };
 
         //  Descriptor set layouts
+        // Reflection-probe cube-array length this device affords. The geometry
+        // pipeline layout's per-stage sampler count is nine count-1 bindings plus
+        // this array, and `maxPerStageDescriptorSamplers` is 16 on MoltenVK
+        // against six figures on desktop drivers, so the count is read from the
+        // device rather than fixed at the `MAX_PROBES` ceiling. It sizes the
+        // binding below, the descriptor pool, every probe cube write, the GLSL
+        // arrays, and the placement list, so they can never disagree.
+        let probe_cube_count = super::descriptor_layout::probe_cube_array_count(
+            unsafe { instance.get_physical_device_properties(physical_device) }
+                .limits
+                .max_per_stage_descriptor_samplers,
+        );
+        if (probe_cube_count as usize) < super::probe_uniforms::MAX_PROBES {
+            tracing::info!(
+                "reflection probes: device sampler headroom binds {probe_cube_count} of {}",
+                super::probe_uniforms::MAX_PROBES
+            );
+        }
         // Global set (set 0): view UBO, light UBO, shadow UBO, shadow array
         // sampler (binding 3), IBL irradiance cube (4), IBL prefilter cube (5),
         // SSAO occlusion (binding 6, bound to the live `ssao.ao` image when
@@ -1134,9 +1152,9 @@ impl VkContext {
         // reflection-probe cube array (binding 8). Binding table + lock-down test
         // live in `descriptor_layout.rs`. Built inline (not via the count-1
         // `create_descriptor_set_layout` helper) because binding 8 is a
-        // `descriptorCount = MAX_PROBES` cube array; the count-1 bindings come from
-        // the locked `global_set()` table, then the array binding is appended (the
-        // same shape as the bindless texture pool's array binding below).
+        // `probe_cube_count` cube array; the count-1 bindings come from the locked
+        // `global_set()` table, then the array binding is appended (the same shape
+        // as the bindless texture pool's array binding below).
         let global_set_layout = {
             let mut bindings: Vec<vk::DescriptorSetLayoutBinding> =
                 super::descriptor_layout::global_set()
@@ -1153,7 +1171,7 @@ impl VkContext {
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(super::descriptor_layout::PROBE_CUBE_ARRAY_BINDING)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .descriptor_count(super::probe_uniforms::MAX_PROBES as u32)
+                    .descriptor_count(probe_cube_count)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             );
             // Binding 9: per-scene local-light SSBO (count-1 STORAGE_BUFFER, FS).
@@ -1594,6 +1612,7 @@ impl VkContext {
                     prefilter_view: env_map.prefilter.view,
                     cube_sampler,
                     global_set_layout,
+                    probe_cube_count,
                 },
                 hot_reload,
             )?)
@@ -1729,14 +1748,14 @@ impl VkContext {
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 // per-obj(2) + per-frame {shadow + spot shadow + IBL
                 // irradiance + IBL prefilter + SSAO occlusion + the 2 area-light
-                // LTC tables} + per-frame probe cube array (MAX_PROBES) + text
+                // LTC tables} + per-frame probe cube array + text
                 // atlas + per-cluster(2) + per-frame composite(6: HDR resolve +
                 // bloom mip 0 + 3D colour LUT + the 3 view-mode G-buffer
                 // channels) + per-frame bindless texture pool.
                 .descriptor_count(
                     n_obj * 2
                         + n_frames * 7
-                        + n_frames * super::probe_uniforms::MAX_PROBES as u32
+                        + n_frames * probe_cube_count
                         + n_atlas
                         + n_cluster * 2
                         + n_frames * 6
@@ -1888,11 +1907,11 @@ impl VkContext {
                 .range(super::light_cull::cluster_list_size());
             // Probe cube array (binding 8): every slot points at the IBL prefilter
             // cube until a probe bakes. No descriptor-indexing extension is
-            // enabled, so every one of the MAX_PROBES descriptors must hold a valid
-            // cube (an unwritten slot is UB); the EMPTY ProbeSet (count 0) keeps the
-            // shader on the sky path, so these are never actually sampled yet.
-            let probe_cube_infos: Vec<vk::DescriptorImageInfo> = (0
-                ..super::probe_uniforms::MAX_PROBES)
+            // enabled, so every one of the `probe_cube_count` descriptors must hold
+            // a valid cube (an unwritten slot is UB); the EMPTY ProbeSet (count 0)
+            // keeps the shader on the sky path, so these are never actually sampled
+            // yet.
+            let probe_cube_infos: Vec<vk::DescriptorImageInfo> = (0..probe_cube_count)
                 .map(|_| {
                     vk::DescriptorImageInfo::default()
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -2103,7 +2122,8 @@ impl VkContext {
             }
             .map_err(|e| format!("bindless pipeline layout: {e}"))?;
 
-            let (bvs, bfs) = compile_bindless_shaders(hot_reload, bindless_pool_size)?;
+            let (bvs, bfs) =
+                compile_bindless_shaders(hot_reload, bindless_pool_size, probe_cube_count)?;
             let pipeline = create_main_pipeline(
                 &device,
                 MeshPipelineTargets {
@@ -2311,6 +2331,7 @@ impl VkContext {
                         super::post::rt_reflections::RtLayoutConfig {
                             bindless_set_layout,
                             global_set_layout,
+                            probe_cube_count,
                             pool_size: bindless_pool_size,
                             hot_reload,
                         },
@@ -3517,7 +3538,10 @@ impl VkContext {
                 },
                 &planar_assignment.representatives,
                 main_render_pass,
-                global_set_layout,
+                crate::vulkan::planar::PlanarGlobalSet {
+                    layout: global_set_layout,
+                    probe_cube_count,
+                },
                 crate::vulkan::planar::PlanarLightingBindings {
                     light_ubo,
                     light_size: light_ubo_size,
@@ -3603,6 +3627,7 @@ impl VkContext {
                     width: render_extent.width,
                     height: render_extent.height,
                     global_set_layout,
+                    probe_cube_count,
                     hot_reload,
                 },
                 crate::vulkan::glass::GlassSceneTargets {
@@ -3965,6 +3990,7 @@ impl VkContext {
             memory_budget_supported,
             descriptors: VkDescriptors {
                 global_set_layout,
+                probe_cube_count,
                 object_set_layout,
                 text_set_layout,
                 descriptor_pool,

@@ -40,6 +40,11 @@ pub(in crate::vulkan) struct SsrResources {
     pub(in crate::vulkan) resolve_layout: vk::PipelineLayout,
     pub(in crate::vulkan) resolve_pso: vk::Pipeline,
 
+    // Probe cube-array length the resolve fragment was built against, kept so a
+    // hot-reload recompile sizes its `probe_cubes[]` to the same global set
+    // layout the pipeline layout already references.
+    probe_cube_count: u32,
+
     // Per-frame resolve sets: each binds that frame's HDR resolve as the
     // scene SRV. The G-buffer / roughness come from the unified pre-pass's
     // per-frame views; the prefilter cube is shared across all frames.
@@ -67,10 +72,17 @@ pub(in crate::vulkan) struct SsrShaders {
 // through the builtins' disk-first path. The resolve fragment's shared
 // reflection-probe sampling ({PROBE_COMMON} / {MAX_PROBES} / {PROBE_DESC_SET}
 // = 1, the global set carrying the probe set/cubes here) is substituted by
-// the builtins assembly. Mirrors `compile_rt_shaders`.
-pub(in crate::vulkan) fn compile_ssr_shaders(hot_reload: bool) -> Result<SsrShaders, String> {
+// the builtins assembly, sized by `probe_cube_count` (that global set layout's
+// binding-8 descriptor count). Mirrors `compile_rt_shaders`.
+pub(in crate::vulkan) fn compile_ssr_shaders(
+    hot_reload: bool,
+    probe_cube_count: u32,
+) -> Result<SsrShaders, String> {
     use super::super::builtins;
-    let ctx = builtins::Ctx::plain(hot_reload);
+    let ctx = builtins::Ctx {
+        probe_count: probe_cube_count as usize,
+        ..builtins::Ctx::plain(hot_reload)
+    };
     Ok(SsrShaders {
         fullscreen_vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
         resolve_fs: builtins::SSR_RESOLVE_FRAG.compile(&ctx)?,
@@ -89,7 +101,7 @@ pub(in crate::vulkan) fn rebuild_ssr_pipelines(
     ssr: &SsrResources,
     hot_reload: bool,
 ) -> Result<RebuiltSsrPipelines, String> {
-    let shaders = compile_ssr_shaders(hot_reload)?;
+    let shaders = compile_ssr_shaders(hot_reload, ssr.probe_cube_count)?;
     let resolve = create_resolve_pipeline(
         device,
         ssr.resolve_render_pass,
@@ -322,8 +334,10 @@ pub(in crate::vulkan) struct SsrInitInputs<'a> {
     pub prefilter_view: vk::ImageView,
     pub cube_sampler: vk::Sampler,
     // The forward global set's layout, bound as set 1 so the resolve can sample
-    // the reflection-probe set + cube array (binding 7/8) on a missed ray.
+    // the reflection-probe set + cube array (binding 7/8) on a missed ray, and
+    // that layout's binding-8 descriptor count (sizes the fragment's array).
     pub global_set_layout: vk::DescriptorSetLayout,
+    pub probe_cube_count: u32,
 }
 
 // The per-frame view + sampler wiring the resolve descriptor sets bind on a
@@ -358,6 +372,7 @@ impl SsrResources {
             prefilter_view,
             cube_sampler,
             global_set_layout,
+            probe_cube_count,
         } = inputs;
         let resolve_render_pass = create_resolve_render_pass(device)?;
 
@@ -406,7 +421,7 @@ impl SsrResources {
         .map_err(|e| format!("ssr resolve layout: {e}"))?;
 
         // Pipeline.
-        let shaders = compile_ssr_shaders(hot_reload)?;
+        let shaders = compile_ssr_shaders(hot_reload, probe_cube_count)?;
         let resolve_pso = create_resolve_pipeline(
             device,
             resolve_render_pass,
@@ -442,6 +457,7 @@ impl SsrResources {
             resolve_set_layout,
             resolve_layout,
             resolve_pso,
+            probe_cube_count,
             resolve_sets,
             descriptor_pool,
             sampler,
@@ -762,8 +778,11 @@ mod tests {
     // gfx::render_types.
     #[test]
     fn ssr_shaders_compile() {
-        let shaders = super::compile_ssr_shaders(false).expect("ssr shaders compile");
-        assert!(super::is_spirv(&shaders.fullscreen_vs));
-        assert!(super::is_spirv(&shaders.resolve_fs));
+        // Both the ceiling and a device-shortened probe cube array must compile.
+        for probes in [1, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+            let shaders = super::compile_ssr_shaders(false, probes).expect("ssr shaders compile");
+            assert!(super::is_spirv(&shaders.fullscreen_vs));
+            assert!(super::is_spirv(&shaders.resolve_fs));
+        }
     }
 }

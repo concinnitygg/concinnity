@@ -110,11 +110,16 @@ fn ordered_visible(centres: &[[f32; 3]], visible: &[bool], cam: [f32; 3]) -> Vec
 // fragment's shared reflection-probe sampling ({PROBE_DESC_SET} = 2, the global
 // set carrying the probe set/cubes here) is substituted by the builtins
 // assembly. Mirrors compile_ssr_shaders.
-fn compile_glass_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile_glass_shaders(
+    hot_reload: bool,
+    msaa: bool,
+    probe_cube_count: u32,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
         pool_size: 0,
+        probe_count: probe_cube_count as usize,
     };
     let vert = super::builtins::GLASS_VERT.compile(&ctx)?;
     let frag = super::builtins::GLASS_FRAG.compile(&ctx)?;
@@ -141,6 +146,7 @@ fn compile_glass_rt_shaders(
     hot_reload: bool,
     msaa: bool,
     pool_size: usize,
+    probe_cube_count: u32,
 ) -> Result<GlassRtShaders, String> {
     // The pool declaration needs at least one slot even when the bindless pool
     // is absent (the textured variant is then skipped).
@@ -148,6 +154,7 @@ fn compile_glass_rt_shaders(
         hot_reload,
         msaa,
         pool_size: pool_size.max(1),
+        probe_count: probe_cube_count as usize,
     };
     let vs = super::builtins::GLASS_RT_VERT.compile(&ctx)?;
     let flat_fs = super::builtins::GLASS_RT_FRAG.compile(&ctx)?;
@@ -324,11 +331,14 @@ struct GlassRtPipelineConfig {
 // The descriptor set layouts the glass RT pipeline layouts reference: the shared
 // glass view / params / global sets (0/1/2) plus the bindless texture pool set
 // (with its pool size) that gates the textured hit-shading variant.
+// `probe_cube_count` is the global set layout's binding-8 descriptor count, which
+// sizes the fragment's probe cube array.
 #[derive(Clone, Copy)]
 struct GlassRtSetLayouts {
     view: vk::DescriptorSetLayout,
     params: vk::DescriptorSetLayout,
     global: vk::DescriptorSetLayout,
+    probe_cube_count: u32,
     bindless: Option<vk::DescriptorSetLayout>,
     bindless_pool_size: usize,
 }
@@ -369,6 +379,7 @@ fn build_glass_rt(
         view: view_set_layout,
         params: params_set_layout,
         global: global_set_layout,
+        probe_cube_count,
         bindless: bindless_set_layout,
         bindless_pool_size,
     } = layouts;
@@ -377,7 +388,7 @@ fn build_glass_rt(
         index_buffer,
         rt_inputs,
     } = geometry;
-    let shaders = compile_glass_rt_shaders(hot_reload, msaa, bindless_pool_size)?;
+    let shaders = compile_glass_rt_shaders(hot_reload, msaa, bindless_pool_size, probe_cube_count)?;
     let set_layout = create_rt_set_layout(device)?;
 
     let flat_layouts = [
@@ -1083,8 +1094,10 @@ pub(in crate::vulkan) struct GlassBuildConfig {
     // The per-frame global descriptor set layout (ViewUniforms, IBL cubes, probe
     // set + cube array). Bound as glass set 2 so the fragment shader reflects the
     // probe set / sky prefilter cube; the pipeline layout must reference it even
-    // though glass only samples bindings 5 / 7 / 8.
+    // though glass only samples bindings 5 / 7 / 8. `probe_cube_count` is that
+    // layout's binding-8 descriptor count, sizing the fragment's cube array.
     pub global_set_layout: vk::DescriptorSetLayout,
+    pub probe_cube_count: u32,
     pub hot_reload: bool,
 }
 
@@ -1168,6 +1181,7 @@ impl GlassResources {
             width,
             height,
             global_set_layout,
+            probe_cube_count,
             hot_reload,
         } = config;
         let GlassSceneTargets {
@@ -1199,7 +1213,7 @@ impl GlassResources {
                 .map_err(|e| format!("glass pipeline layout: {e}"))?
         };
 
-        let (vert_spv, frag_spv) = compile_glass_shaders(hot_reload, msaa)?;
+        let (vert_spv, frag_spv) = compile_glass_shaders(hot_reload, msaa, probe_cube_count)?;
         let pipeline = create_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
 
         // Per-pixel RT glass pipelines, when the device is RT-capable. A compile /
@@ -1220,6 +1234,7 @@ impl GlassResources {
                     view: view_set_layout,
                     params: params_set_layout,
                     global: global_set_layout,
+                    probe_cube_count,
                     bindless: bindless_set_layout,
                     bindless_pool_size,
                 },
@@ -1971,8 +1986,11 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
-        super::compile_glass_shaders(false, true).expect("glass shaders compile (msaa)");
-        super::compile_glass_shaders(false, false).expect("glass shaders compile (no msaa)");
+        // Both the ceiling and a device-shortened probe cube array must compile.
+        for probes in [1, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+            super::compile_glass_shaders(false, true, probes).expect("glass compiles (msaa)");
+            super::compile_glass_shaders(false, false, probes).expect("glass compiles (no msaa)");
+        }
     }
 
     // Compile the ray-traced glass shaders (both MSAA variants, both flat +
@@ -1984,8 +2002,8 @@ mod tests {
     #[test]
     fn glass_rt_shaders_compile() {
         for &msaa in &[true, false] {
-            let shaders =
-                super::compile_glass_rt_shaders(false, msaa, 4).expect("glass rt shaders compile");
+            let shaders = super::compile_glass_rt_shaders(false, msaa, 4, 4)
+                .expect("glass rt shaders compile");
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.flat_fs));
             assert!(
@@ -1995,7 +2013,7 @@ mod tests {
         }
         // pool_size 0 builds only the flat variant.
         let flat_only =
-            super::compile_glass_rt_shaders(false, false, 0).expect("glass rt flat compiles");
+            super::compile_glass_rt_shaders(false, false, 0, 4).expect("glass rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

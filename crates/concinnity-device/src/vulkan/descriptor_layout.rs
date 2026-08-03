@@ -16,6 +16,8 @@
 
 use ash::vk;
 
+use super::probe_uniforms::MAX_PROBES;
+
 // One descriptor binding: (binding index, descriptor type, shader stages).
 pub(in crate::vulkan) type Binding = (u32, vk::DescriptorType, vk::ShaderStageFlags);
 
@@ -28,11 +30,12 @@ pub(in crate::vulkan) type Binding = (u32, vk::DescriptorType, vk::ShaderStageFl
 //   5  prefiltered env cube      (FS)
 //   6  SSAO occlusion / fallback (FS)
 //   7  ProbeSet UBO              (FS)
-// Binding 8 is the reflection-probe cube array; it carries `descriptorCount =
-// MAX_PROBES` rather than 1, so it does NOT go through `create_descriptor_set_layout`
-// (which fixes every binding at count 1). It is appended inline where the global
-// layout is built in `init.rs` (the same way the bindless texture pool's array
-// binding is built); `PROBE_CUBE_ARRAY_BINDING` is its locked binding number.
+// Binding 8 is the reflection-probe cube array; it carries the
+// `probe_cube_array_count` descriptors rather than 1, so it does NOT go through
+// `create_descriptor_set_layout` (which fixes every binding at count 1). It is
+// appended inline where the global layout is built in `init.rs` (the same way the
+// bindless texture pool's array binding is built); `PROBE_CUBE_ARRAY_BINDING` is
+// its locked binding number.
 pub(in crate::vulkan) fn global_set() -> [Binding; 8] {
     use vk::DescriptorType as T;
     use vk::ShaderStageFlags as S;
@@ -49,9 +52,9 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 8] {
 }
 
 // Binding number of the reflection-probe cube array in global set 0. A
-// `samplerCube probe_cubes[MAX_PROBES]` array (descriptorCount = MAX_PROBES),
-// appended to the layout inline in `init.rs` since the count-1 layout helper
-// cannot express it. Sits exactly one past the count-1 `global_set()` table.
+// `samplerCube probe_cubes[N]` array sized by `probe_cube_array_count`, appended
+// to the layout inline in `init.rs` since the count-1 layout helper cannot
+// express it. Sits exactly one past the count-1 `global_set()` table.
 pub(in crate::vulkan) const PROBE_CUBE_ARRAY_BINDING: u32 = 8;
 
 // Binding number of the per-scene local-light storage buffer (SSBO) in global
@@ -103,6 +106,46 @@ pub(in crate::vulkan) const AREA_LIGHT_SSBO_BINDING: u32 = 14;
 // no area light declared.
 pub(in crate::vulkan) const LTC_MATRIX_BINDING: u32 = 15;
 pub(in crate::vulkan) const LTC_MAGNITUDE_BINDING: u32 = 16;
+
+// The count-1 sampler bindings appended to global set 0 inline in `init.rs`,
+// past the `global_set()` table. Listed here so `probe_cube_array_count` can
+// budget against every sampler the geometry pipeline layout declares.
+const INLINE_GLOBAL_SAMPLERS: [u32; 3] = [
+    SPOT_SHADOW_MAP_BINDING,
+    LTC_MATRIX_BINDING,
+    LTC_MAGNITUDE_BINDING,
+];
+
+// Fragment-stage samplers the geometry pipeline layout (global set 0 + per-object
+// set 1) declares outside the reflection-probe cube array. All are
+// descriptorCount 1, so this is the fixed cost the probe array is budgeted
+// against.
+fn fixed_fragment_samplers() -> u32 {
+    let count = |bindings: &[Binding]| {
+        bindings
+            .iter()
+            .filter(|&&(_, ty, stage)| {
+                ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+                    && stage.contains(vk::ShaderStageFlags::FRAGMENT)
+            })
+            .count() as u32
+    };
+    count(&global_set()) + count(&object_set()) + INLINE_GLOBAL_SAMPLERS.len() as u32
+}
+
+// How many descriptors the reflection-probe cube array (global set 0, binding 8)
+// may declare on a device reporting `max_per_stage_samplers` for
+// `VkPhysicalDeviceLimits::maxPerStageDescriptorSamplers`. `MAX_PROBES` is the
+// CPU-side ceiling; a driver with less headroom than that binds fewer probes
+// rather than building a pipeline layout it rejects. MoltenVK reports 16, which
+// leaves room for `MAX_PROBES - 1`; desktop Vulkan drivers report six figures or
+// more, where this is exactly `MAX_PROBES`. Never returns 0: the GLSL array
+// declaration needs at least one element, and a device with no headroom at all
+// cannot run the geometry path either way.
+pub(in crate::vulkan) fn probe_cube_array_count(max_per_stage_samplers: u32) -> u32 {
+    let headroom = max_per_stage_samplers.saturating_sub(fixed_fragment_samplers());
+    headroom.clamp(1, MAX_PROBES as u32)
+}
 
 // Per-object set (set 1): albedo at 0, normal map at 1.
 pub(in crate::vulkan) fn object_set() -> [Binding; 2] {
@@ -214,6 +257,52 @@ mod tests {
         assert_eq!(AREA_LIGHT_SSBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING + 1);
         assert_eq!(LTC_MATRIX_BINDING, AREA_LIGHT_SSBO_BINDING + 1);
         assert_eq!(LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING + 1);
+    }
+
+    // The nine count-1 fragment samplers the probe array is budgeted against:
+    // global set 0's shadow cascades / irradiance / prefilter / SSAO taps (3-6),
+    // the spot shadow array (12), the two LTC tables (15/16), and per-object set
+    // 1's albedo + normal maps.
+    #[test]
+    fn fixed_fragment_sampler_count_is_nine() {
+        assert_eq!(fixed_fragment_samplers(), 9);
+    }
+
+    // A driver with room to spare gets the full CPU-side ceiling, so every
+    // desktop Vulkan device keeps binding `MAX_PROBES` probes exactly as before.
+    #[test]
+    fn probe_cube_array_count_is_max_probes_on_desktop_drivers() {
+        for limit in [1_048_576, 500_000, 1_048_575, MAX_PROBES as u32 + 9] {
+            assert_eq!(probe_cube_array_count(limit), MAX_PROBES as u32);
+        }
+    }
+
+    // MoltenVK reports 16, which leaves 7 after the nine fixed samplers: one
+    // short of `MAX_PROBES`, and the reason the count is a runtime value at all.
+    #[test]
+    fn probe_cube_array_count_fits_moltenvk_limit() {
+        let count = probe_cube_array_count(16);
+        assert_eq!(count, 7);
+        assert_eq!(fixed_fragment_samplers() + count, 16);
+    }
+
+    // Any reported limit yields a declarable array (a zero-length GLSL sampler
+    // array will not compile) that never exceeds the ceiling, and stays inside
+    // the reported budget wherever the fixed samplers leave room at all.
+    #[test]
+    fn probe_cube_array_count_never_zero_or_over_ceiling() {
+        let fixed = fixed_fragment_samplers();
+        for limit in 0..=64u32 {
+            let count = probe_cube_array_count(limit);
+            assert!(count >= 1, "limit {limit} produced a zero-length array");
+            assert!(count <= MAX_PROBES as u32, "limit {limit} exceeded ceiling");
+            if limit > fixed {
+                assert!(
+                    fixed + count <= limit,
+                    "limit {limit} produced {count}, overrunning the budget"
+                );
+            }
+        }
     }
 
     #[test]

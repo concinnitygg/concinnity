@@ -98,7 +98,11 @@ impl VkContext {
                 self.cull.bindless_pipeline,
                 self.cull.bindless_pipeline_layout,
             ) {
-                let (vs, fs) = compile_bindless_shaders(hr, self.textures.len())?;
+                let (vs, fs) = compile_bindless_shaders(
+                    hr,
+                    self.textures.len(),
+                    self.descriptors.probe_cube_count,
+                )?;
                 built.bindless = Some(create_main_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {

@@ -8,15 +8,20 @@
 // distance when the surface lies outside every box.
 //
 // shaderc has no #include resolver, so this file is substituted into the consuming
-// shader at its PROBE_COMMON marker; the MAX_PROBES token is replaced with the bind
-// count (probe_uniforms::MAX_PROBES), and PROBE_DESC_SET with the descriptor-set
-// index the global set (which owns bindings 7 + 8) is bound at in that shader -- 0
-// for the forward bindless pass (the global set IS set 0 there), or a higher index
-// for the SSR / RT passes that bind the global set as an extra set. The consumer
-// must NOT redeclare probe_set / probe_cubes. The ProbeBlock UBO matches
-// probe_uniforms::ProbeSet byte-for-byte: `count` is padded with THREE scalar uints
-// (NOT a uvec3, which std140 would 16-byte-align, pushing probes to offset 32 and
-// silently disabling box parallax).
+// shader at its PROBE_COMMON marker; the MAX_PROBES token is replaced with the live
+// bind count (descriptor_layout::probe_cube_array_count, which the global set
+// layout's binding-8 descriptorCount is built from), and PROBE_DESC_SET with the
+// descriptor-set index the global set (which owns bindings 7 + 8) is bound at in
+// that shader -- 0 for the forward bindless pass (the global set IS set 0 there),
+// or a higher index for the SSR / RT passes that bind the global set as an extra
+// set. The consumer must NOT redeclare probe_set / probe_cubes. The ProbeBlock UBO
+// is the std140 mirror of probe_uniforms::ProbeSet: `count` is padded with THREE
+// scalar uints (NOT a uvec3, which std140 would 16-byte-align, pushing probes to
+// offset 32 and silently disabling box parallax). The declared probes[] array is
+// the live bind count, which may be a PREFIX of the Rust struct's MAX_PROBES
+// capacity on a device with less per-stage sampler headroom -- same offsets, same
+// stride, and the CPU truncates `count` to the bind count so the loop below never
+// reads past what is declared.
 
 const float PROBE_BLEND_MARGIN = 0.2;
 

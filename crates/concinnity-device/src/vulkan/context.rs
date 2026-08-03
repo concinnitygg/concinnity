@@ -384,6 +384,12 @@ impl VkGeometry {
 // chunk, clone, and skinned descriptors live in their own pools, not here.
 pub(super) struct VkDescriptors {
     pub(super) global_set_layout: vk::DescriptorSetLayout,
+    // Descriptor count of `global_set_layout`'s reflection-probe cube array
+    // (binding 8), derived at init from the device's per-stage sampler limit by
+    // `descriptor_layout::probe_cube_array_count`. Every later probe cube write,
+    // re-rendered global set, and probe-shader recompile reads it from here so
+    // they stay sized to the layout the pipelines were built against.
+    pub(super) probe_cube_count: u32,
     pub(super) object_set_layout: vk::DescriptorSetLayout,
     pub(super) text_set_layout: vk::DescriptorSetLayout,
     pub(super) descriptor_pool: vk::DescriptorPool,

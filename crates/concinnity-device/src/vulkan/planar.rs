@@ -326,6 +326,15 @@ pub(in crate::vulkan) struct PlanarConfig {
     pub(in crate::vulkan) height: u32,
 }
 
+// The forward global set every planar re-render binds: its layout and the
+// binding-8 reflection-probe cube array's descriptor count, which sizes the
+// sky-filled writes each per-(plane, frame) set makes.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct PlanarGlobalSet {
+    pub(in crate::vulkan) layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) probe_cube_count: u32,
+}
+
 // The shared lighting + environment bindings every planar global set carries: the
 // light + shadow UBOs (buffer + size), the shadow map, the IBL irradiance +
 // prefilter cubes (+ their sampler), and the SSAO white fallback (+ its sampler).
@@ -379,11 +388,16 @@ impl PlanarReflectionSet {
         config: PlanarConfig,
         planes: &[[f32; 4]],
         main_render_pass: vk::RenderPass,
-        global_set_layout: vk::DescriptorSetLayout,
+        global_set: PlanarGlobalSet,
         lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
     ) -> Result<Self, String> {
-        use super::probe_uniforms::{MAX_PROBES, ProbeSet};
+        use super::probe_uniforms::ProbeSet;
+
+        let PlanarGlobalSet {
+            layout: global_set_layout,
+            probe_cube_count,
+        } = global_set;
 
         let PlanarDevice {
             instance,
@@ -537,7 +551,9 @@ impl PlanarReflectionSet {
                 .descriptor_count((ring * 5 + usize::from(has_hiz)).max(1) as u32),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count((ring * (7 + MAX_PROBES) + usize::from(has_hiz)).max(1) as u32),
+                .descriptor_count(
+                    (ring * (7 + probe_cube_count as usize) + usize::from(has_hiz)).max(1) as u32,
+                ),
             // ring * 4 cull-set SSBOs + the binding-9 local-light, binding-11
             // cluster-list, binding-13 spot-shadow and binding-14 area-light
             // SSBOs, one of each per global set.
@@ -554,7 +570,7 @@ impl PlanarReflectionSet {
         let layouts: Vec<_> = (0..ring).map(|_| global_set_layout).collect();
         let global_sets = alloc_descriptor_sets(device, pool, &layouts)?;
 
-        let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..MAX_PROBES)
+        let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..probe_cube_count)
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
