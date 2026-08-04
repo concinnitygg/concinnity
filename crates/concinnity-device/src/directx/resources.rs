@@ -867,6 +867,9 @@ impl DxContext {
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
+        // The mesh joins the RT-relevant draw set at a freshly allocated region;
+        // the next RT update builds its BLAS over the new slice.
+        self.rt_topology_dirty = true;
         Ok(())
     }
 
@@ -1008,9 +1011,9 @@ impl DxContext {
     // pass `current_frame + frames_in_flight` for a runtime eviction so a
     // still-in-flight command list never has its region overwritten by a
     // later `upload_mesh`, and `0` at init, where nothing has been drawn.
-    // The region is not zeroed -- a non-resident draw is skipped everywhere,
-    // and an `alloc` hands back exactly `size` bytes that `upload_mesh` then
-    // fully overwrites, so no pass ever reads stale geometry.
+    // The region is not zeroed: the draw leaves the RT-relevant set here, so
+    // the next RT update retires its BLAS rather than tracing the vacated
+    // bytes, and every raster pass skips a non-resident draw.
     pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
             .draw_objects
@@ -1023,6 +1026,9 @@ impl DxContext {
         self.mesh_stream.vtx_alloc.free(v_off, v_len, retire_frame);
         self.mesh_stream.idx_alloc.free(i_off, i_len, retire_frame);
         self.draw_objects[draw_idx].resident = false;
+        // The mesh leaves the RT-relevant draw set; the next RT update drops its
+        // BLAS (deferred-freed once in-flight traces retire).
+        self.rt_topology_dirty = true;
         Ok(())
     }
 

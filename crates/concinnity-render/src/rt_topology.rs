@@ -19,10 +19,12 @@ use crate::render_types::DrawObject;
 // Identifies the geometry slice a draw-object BLAS traces, on the shared
 // vertex/index buffers. Two draw objects with the same signature trace
 // identical geometry, so a topology refresh can reuse the existing BLAS instead
-// of building a new one. Sound because the shared buffer regions are stable
-// once streaming is set up and a slot's bytes cannot be overwritten while its
-// BLAS is live (the deferred free holds the region until the frames-in-flight
-// fence retires it). `base_vertex` + `index_offset` + `index_count` are exactly
+// of building a new one. A streamed mesh is placed wherever the sub-allocator
+// has room, so a slot that streams out and back in generally returns on a
+// different slice; the signature moves with it and the BLAS is rebuilt rather
+// than wrongly reused. A slot's bytes cannot be overwritten while its BLAS is
+// live: the deferred free holds the region until the frames-in-flight fence
+// retires it. `base_vertex` + `index_offset` + `index_count` are exactly
 // the inputs the per-backend geometry descriptor uses; `vertex_offset` is
 // carried too so a static draw (whose `base_vertex` is 0) still distinguishes
 // distinct vertex regions.

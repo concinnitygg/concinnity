@@ -136,6 +136,9 @@ impl VkContext {
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
+        // The mesh joins the RT-relevant draw set at a freshly allocated region;
+        // the next RT update builds its BLAS over the new slice.
+        self.rt_topology_dirty = true;
         Ok(())
     }
 
@@ -266,6 +269,9 @@ impl VkContext {
             .mesh_idx_alloc
             .free(i_off, i_len, retire_frame);
         self.draw_objects[draw_idx].resident = false;
+        // The mesh leaves the RT-relevant draw set; the next RT update drops its
+        // BLAS (deferred-freed once in-flight traces retire).
+        self.rt_topology_dirty = true;
         Ok(())
     }
 

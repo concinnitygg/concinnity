@@ -121,7 +121,9 @@ pub(crate) struct RtState {
 // streaming is set up (`add_chunk_mesh` / `remove_chunk_mesh` write regions in
 // place; a buffer swap goes through a full rebuild, not this path), and a slot's
 // bytes cannot be overwritten while its BLAS is live (the deferred free holds the
-// region until the frames-in-flight fence retires it). `base_vertex` +
+// region until the frames-in-flight fence retires it). A streamed mesh returns on
+// whatever slice the sub-allocator hands out, so the signature moves with it and
+// the BLAS is rebuilt rather than wrongly reused. `base_vertex` +
 // `index_offset` + `index_count` are exactly the inputs `prim_desc_for` uses;
 // `vertex_offset` is carried too so a static draw (whose `base_vertex` is 0)
 // still distinguishes distinct vertex regions.
