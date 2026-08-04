@@ -24,7 +24,7 @@ You can install it manually from this repo:
 cargo install --path crates/concinnity-cli
 ```
 
-See [building.md](crates/concinnity-docs/public/development/building.md) for
+See [building.md](docs/development/building.md) for
 more build options.
 
 ## Quick Start
@@ -33,7 +33,7 @@ Since this project is in early development and CLI commands are bound to change,
 there currently isn't any CLI documentation. Run `concinnity help` for a list of
 supported commands.
 
-Check out the [asset documentation](crates/concinnity-docs/public/assets/index.md) for all
+Check out the [asset documentation](docs/assets/index.md) for all
 supported asset types and fields.
 
 This project currently has one example, which uses the

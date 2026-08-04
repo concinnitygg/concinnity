@@ -1,10 +1,10 @@
 // Renders the per-asset reference pages from the docs extracted at build time.
 // Each page's body is the same `full_doc` string surfaced by the
-// describe_asset_type tool, so a generated public/assets/<Name>.md matches what
+// describe_asset_type tool, so a generated docs/assets/<Name>.md matches what
 // the server serves for that type.
 //
 // Shared by two compilation units:
-//   - build.rs includes it via #[path] to write the public/assets/*.md pages.
+//   - build.rs includes it via #[path] to write the docs/assets/*.md pages.
 //   - the crate compiles it normally, so the lib tests can re-render from
 //     ASSET_DOCS and assert the committed pages are in sync.
 // Kept std-only so the build script can include it without extra dependencies.

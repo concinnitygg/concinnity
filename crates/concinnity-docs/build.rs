@@ -3,7 +3,7 @@
 //   - $OUT_DIR/assets_doc.rs: a static `ASSET_DOCS` table embedded in the crate
 //     for the Rust consumers (the describe_asset_type tool and the new-chat
 //     asset summary).
-//   - ../concinnity-docs/public/assets/<Name>.md: one page per documented type,
+//   - ../../docs/assets/<Name>.md: one page per documented type,
 //     plus an index.md table of contents.
 //
 // For each asset (and each nested value type) the emitted entry contains:
@@ -50,7 +50,7 @@ const ASSET_SCHEMA_DIR: &str = "../concinnity-asset/src";
 const ASSET_IMPL_DIR: &str = "../concinnity-core/src/assets";
 
 // Per-type markdown pages written into the source tree, relative to this crate.
-const PAGES_DIR: &str = "../concinnity-docs/public/assets";
+const PAGES_DIR: &str = "../../docs/assets";
 
 // Cross-file indices over the parsed asset sources. Enums, value-type structs,
 // and `impl Default` blocks can each live in a different file from the asset

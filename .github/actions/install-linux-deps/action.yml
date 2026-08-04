@@ -1,5 +1,5 @@
 # Installs the system development libraries needed to build Concinnity on Linux.
-# The package set mirrors concinnity-docs/development/building.md (Linux/Vulkan).
+# The package set mirrors docs/development/building.md (Linux/Vulkan).
 # Does nothing on macOS or Windows. Checkout the repository before using it.
 
 name: Install Linux dependencies

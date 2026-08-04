@@ -1,7 +1,7 @@
 // LLM-facing asset reference. Built at compile time by this crate's build.rs,
 // which parses the concinnity-core asset modules with syn and extracts the
 // rustdoc on each Component struct. The table is embedded in the binary; no
-// runtime file I/O. The same data is also written to public/assets/*.md, one
+// runtime file I/O. The same data is also written to docs/assets/*.md, one
 // page per type, for a docs site to fetch and render.
 //
 // Two consumers:
@@ -166,7 +166,8 @@ mod tests {
     }
 
     fn pages_dir() -> std::path::PathBuf {
-        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/public/assets")).to_path_buf()
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/assets"))
+            .to_path_buf()
     }
 
     #[test]
@@ -183,7 +184,7 @@ mod tests {
             let expected = render_page(d.type_name, d.full_doc);
             assert_eq!(
                 on_disk, expected,
-                "public/assets/{}.md is out of date - rebuild concinnity-infra to regenerate it",
+                "docs/assets/{}.md is out of date - rebuild concinnity-infra to regenerate it",
                 d.type_name
             );
         }
@@ -213,7 +214,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert_eq!(
             on_disk, expected,
-            "public/assets/index.md is out of date - rebuild concinnity-infra to regenerate it"
+            "docs/assets/index.md is out of date - rebuild concinnity-infra to regenerate it"
         );
     }
 }
