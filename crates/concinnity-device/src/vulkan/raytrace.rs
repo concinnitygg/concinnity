@@ -2519,6 +2519,60 @@ pub(super) fn create_main_deformed_buffer(
 }
 
 impl super::context::VkContext {
+    // Replace the live acceleration structure with one built over the current
+    // shared vertex / index buffers, and re-point every pass that reads those
+    // buffers directly. Called by `rebuild_static_geometry`, which destroys both
+    // buffers and re-lays out every draw underneath the BVH: its BLAS then trace
+    // the old geometry, its geometry table indexes offsets into freed memory,
+    // and the RT / glass descriptor sets still name the destroyed buffers.
+    //
+    // An empty scene or a failed build drops the BVH rather than keeping the
+    // stale one; RT falls back to SSR. The caller has already drained the device.
+    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) {
+        let fresh = match build_rt_accel(
+            RtDeviceCtx {
+                instance: &self.instance,
+                device: &self.device,
+                pd: self.physical_device,
+            },
+            self.commands.command_pool,
+            self.graphics_queue,
+            RtSceneGeometry {
+                vertex_buffer: self.geometry.vertex_buffer,
+                index_buffer: self.geometry.index_buffer,
+                draw_objects: &self.draw_objects,
+                clusters: &self.instanced.clusters,
+                albedo_count: self.textures.len(),
+                total_vertices: self.rt_static_vertex_count,
+            },
+            self.frames_in_flight,
+            self.hot_reload,
+        ) {
+            Ok(accel) => accel,
+            Err(e) => {
+                tracing::warn!("RT acceleration-structure rebuild failed (dropping BVH): {e}");
+                None
+            }
+        };
+        if let Some(mut old) = self.rt_accel.take() {
+            old.destroy(&self.device);
+        }
+        self.rt_accel = fresh;
+
+        // The resolve + glass sets bind the shared vertex / index buffers
+        // directly (the trace fetches attributes at hit points), so they must
+        // follow the swap even when the BVH itself was dropped.
+        let device = self.device.clone();
+        let (vertex_buffer, index_buffer) =
+            (self.geometry.vertex_buffer, self.geometry.index_buffer);
+        if let Some(rt) = self.rt_reflections.as_ref() {
+            rt.rewire_geometry(&device, vertex_buffer, index_buffer);
+        }
+        if let Some(glass) = self.glass.as_ref() {
+            glass.wire_rt_geometry(&device, vertex_buffer, index_buffer);
+        }
+    }
+
     // Build the GPU-driven main-pass skinning resources: the `rt_skin` compute
     // pipeline (reused independently of RT), one deformed-vertex buffer per
     // frame-in-flight (storage + vertex usage), and the per-(frame, object)

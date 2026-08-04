@@ -909,6 +909,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     // Static geometry: indices are absolute into the shared
                     // vertex buffer, so no per-draw base.
                     base_vertex: 0,
+                    geometry_generation: 0,
                     model: model_mat,
                     texture_slot: mat_entry.albedo_slot,
                     normal_map_slot: mat_entry.normal_map_slot,
@@ -989,6 +990,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 index_offset,
                 index_count,
                 base_vertex: 0,
+                geometry_generation: 0,
                 model: model_mat,
                 texture_slot: mat_entry.albedo_slot,
                 normal_map_slot: mat_entry.normal_map_slot,
@@ -1136,6 +1138,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 index_offset,
                 index_count,
                 base_vertex: 0,
+                geometry_generation: 0,
                 model: IDENTITY4,
                 texture_slot: 0,
                 normal_map_slot: NO_NORMAL_MAP_SLOT,
@@ -1179,6 +1182,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             index_offset: index_elem_offset,
             index_count: idxs.len(),
             base_vertex: 0,
+            geometry_generation: 0,
             model: IDENTITY4,
             texture_slot,
             normal_map_slot: NO_NORMAL_MAP_SLOT,

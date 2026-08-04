@@ -210,14 +210,16 @@ impl VkContext {
 
         // Allocate new DEVICE_LOCAL buffers + ship the rebuilt contents
         // through staging (write_geometry_region's one-shot pattern).
+        let new_vertex_count = new_vertices.len();
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        let shared = super::shared_geometry_usage(self.rt_capable);
         let (new_vbuf, new_vmem) = create_buffer(
             &self.instance,
             &self.device,
             self.physical_device,
             new_v_bytes,
-            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let (new_ibuf, new_imem) = create_buffer(
@@ -225,7 +227,7 @@ impl VkContext {
             &self.device,
             self.physical_device,
             new_i_bytes,
-            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let vert_bytes = bytemuck::cast_slice(&new_vertices);
@@ -264,6 +266,16 @@ impl VkContext {
             obj.index_count = i_count;
             obj.base_vertex = base_v;
             obj.lod_alternates = lods;
+        }
+
+        // The RT acceleration structure was built against the buffers just
+        // destroyed and the per-draw offsets just rewritten. Rebuild it over the
+        // fresh layout and re-point the passes that read the buffers directly.
+        // The static vertex count (which bounds each BLAS's vertex range) moved
+        // with the rebuild, so it is refreshed first.
+        self.rt_static_vertex_count = new_vertex_count;
+        if self.rt_accel.is_some() {
+            self.rebuild_rt_accel();
         }
         Ok(())
     }

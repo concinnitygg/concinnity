@@ -678,6 +678,41 @@ impl RtReflectionsResources {
         Ok(())
     }
 
+    // Re-point every frame's shared static verts (3) + u32 indices (4) at the
+    // given buffers. Called by `wire_static`, and again on its own when an asset
+    // hot-reload replaces the shared geometry buffers under the pass (the sets
+    // would otherwise keep descriptors on destroyed buffers).
+    pub(in crate::vulkan) fn rewire_geometry(
+        &self,
+        device: &Device,
+        vertex_buffer: vk::Buffer,
+        index_buffer: vk::Buffer,
+    ) {
+        let verts_info = vk::DescriptorBufferInfo::default()
+            .buffer(vertex_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+        let indices_info = vk::DescriptorBufferInfo::default()
+            .buffer(index_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+        for &set in &self.resolve_sets {
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(3)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&verts_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(4)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&indices_info)),
+            ];
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+        }
+    }
+
     // Wire the static per-frame bindings (UBO, verts, indices, scene, gbuffer,
     // roughness, prefilter). The TLAS + geom table (bindings 1/2) are wired by
     // `wire_dynamic`. Called at init + on swapchain resize.
@@ -697,14 +732,7 @@ impl RtReflectionsResources {
             prefilter_view,
             cube_sampler,
         } = inputs;
-        let verts_info = vk::DescriptorBufferInfo::default()
-            .buffer(vertex_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let indices_info = vk::DescriptorBufferInfo::default()
-            .buffer(index_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
+        self.rewire_geometry(device, vertex_buffer, index_buffer);
         let cube_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(prefilter_view)
@@ -733,16 +761,6 @@ impl RtReflectionsResources {
                     .dst_binding(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(std::slice::from_ref(&ubo_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(3)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&verts_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&indices_info)),
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(5)

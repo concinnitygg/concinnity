@@ -397,6 +397,7 @@ mod tests {
             index_offset: 0,
             index_count: 0,
             base_vertex: 0,
+            geometry_generation: 0,
             shader_bucket: 0,
             model: ident_vp(),
             texture_slot: 0,

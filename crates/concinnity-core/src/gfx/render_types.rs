@@ -963,6 +963,12 @@ pub struct DrawObject {
     // 65 535-vertex `u16` index range still renders. Read by all three
     // backends' shadow/main/velocity passes.
     pub base_vertex: i32,
+    // Bumped every time the slot's vertex / index bytes are rewritten in place
+    // at unchanged offsets (a size-matched asset hot-reload). The offsets and
+    // counts above identify only *where* the geometry lives, so without this
+    // counter an in-place rewrite is indistinguishable from no change at all
+    // and a ray-tracing BLAS built over the previous contents would be reused.
+    pub geometry_generation: u32,
     // Column-major model-to-world matrix.
     pub model: [[f32; 4]; 4],
     // Index into the shared texture pool for this object's albedo map.
@@ -1940,6 +1946,7 @@ mod tests {
             index_offset: 12,
             index_count: 36,
             base_vertex: 4,
+            geometry_generation: 0,
             shader_bucket: 0,
             model: [
                 [1.0, 0.0, 0.0, 0.0],

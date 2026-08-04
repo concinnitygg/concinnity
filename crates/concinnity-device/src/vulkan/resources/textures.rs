@@ -532,6 +532,7 @@ impl VkContext {
             index_offset: src.index_offset,
             index_count: src.index_count,
             base_vertex: src.base_vertex,
+            geometry_generation: src.geometry_generation,
             model,
             texture_slot,
             normal_map_slot,

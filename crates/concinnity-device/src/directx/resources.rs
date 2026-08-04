@@ -631,6 +631,7 @@ impl DxContext {
             index_offset: src.index_offset,
             index_count: src.index_count,
             base_vertex: src.base_vertex,
+            geometry_generation: src.geometry_generation,
             model,
             texture_slot,
             normal_map_slot,
@@ -1001,6 +1002,13 @@ impl DxContext {
         {
             slice.switch_distance = *switch_distance;
         }
+        // The slot now holds different triangles at the same offsets, so its RT
+        // BLAS traces the pre-reload positions. Nothing else in the geometry
+        // signature moved, so bump the generation (which the signature carries)
+        // and flag the topology: the next RT update rebuilds this slot's BLAS
+        // rather than reusing the stale one.
+        slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
+        self.rt_topology_dirty = true;
         Ok(())
     }
 
@@ -1259,6 +1267,7 @@ impl DxContext {
             index_offset: i_off / std::mem::size_of::<u32>(),
             index_count: indices.len(),
             base_vertex,
+            geometry_generation: 0,
             model,
             texture_slot,
             normal_map_slot,

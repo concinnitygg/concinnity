@@ -163,6 +163,7 @@ mod tests {
             index_offset,
             index_count,
             base_vertex,
+            geometry_generation: 0,
             shader_bucket: 0,
             model,
             texture_slot: 0,

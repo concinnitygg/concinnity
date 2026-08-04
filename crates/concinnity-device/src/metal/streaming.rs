@@ -122,6 +122,7 @@ impl MtlContext {
             index_offset: i_off / std::mem::size_of::<u32>(),
             index_count: indices.len(),
             base_vertex,
+            geometry_generation: 0,
             model,
             texture_slot,
             normal_map_slot,

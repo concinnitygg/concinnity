@@ -248,6 +248,13 @@ impl VkContext {
         {
             slice.switch_distance = *switch_distance;
         }
+        // The slot now holds different triangles at the same offsets, so its RT
+        // BLAS traces the pre-reload positions. Nothing else in the geometry
+        // signature moved, so bump the generation (which the signature carries)
+        // and flag the topology: the next RT update rebuilds this slot's BLAS
+        // rather than reusing the stale one.
+        slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
+        self.rt_topology_dirty = true;
         Ok(())
     }
 

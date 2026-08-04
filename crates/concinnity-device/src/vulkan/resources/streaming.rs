@@ -33,14 +33,13 @@ impl VkContext {
         let new_v = old_v + chunk_vtx_bytes as u64;
         let new_i = old_i + chunk_idx_bytes as u64;
 
+        let shared = super::shared_geometry_usage(self.rt_capable);
         let (new_vbuf, new_vmem) = create_buffer(
             &self.instance,
             &self.device,
             self.physical_device,
             new_v,
-            vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let (new_ibuf, new_imem) = create_buffer(
@@ -48,9 +47,7 @@ impl VkContext {
             &self.device,
             self.physical_device,
             new_i,
-            vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
@@ -205,6 +202,7 @@ impl VkContext {
             index_offset: i_off / std::mem::size_of::<u32>(),
             index_count: indices.len(),
             base_vertex,
+            geometry_generation: 0,
             model,
             texture_slot,
             normal_map_slot,

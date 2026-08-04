@@ -890,22 +890,10 @@ impl VkContext {
             &bloom_mip_extents,
         )?;
 
-        //  Geometry buffers. When ray-traced reflections are live the shared
-        //  vertex / index buffers double as acceleration-structure build inputs
-        //  (device-addressed) and as storage buffers the RT fragment shader
-        //  fetches hit-triangle attributes from, so they carry the extra usage.
-        //  These flags require the ray-query extensions enabled at device
-        //  creation, so they are added whenever the device is RT-capable (not
-        //  only when RT is on at launch) -- a later live toggle needs the shared
-        //  buffers already AS-build-input + device-addressable, and the buffers
-        //  cannot gain usage flags after creation. Inert when RT is never built.
-        let rt_geo_usage = if rt_capable {
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                | vk::BufferUsageFlags::STORAGE_BUFFER
-        } else {
-            vk::BufferUsageFlags::empty()
-        };
+        //  Geometry buffers. See `shared_geometry_usage` for why an RT-capable
+        //  device carries the acceleration-structure / storage usage here even
+        //  when RT is off at launch. Inert when RT is never built.
+        let rt_geo_usage = super::resources::shared_geometry_usage(rt_capable);
         let (vertex_buffer, vertex_buffer_memory) = upload_geometry_buffer(
             &instance,
             &device,

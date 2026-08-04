@@ -114,25 +114,30 @@ pub(crate) struct RtState {
     pub skin_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
 }
 
-// Identifies the geometry slice a draw-object BLAS traces, on the shared
+// Identifies the geometry a draw-object BLAS traces, on the shared
 // vertex/index buffers. Two draw objects with the same signature trace identical
 // geometry, so a topology refresh can reuse the existing BLAS instead of
-// building a new one. Sound because: the shared buffer *objects* are stable once
+// building a new one. Sound because the shared buffer *objects* are stable once
 // streaming is set up (`add_chunk_mesh` / `remove_chunk_mesh` write regions in
-// place; a buffer swap goes through a full rebuild, not this path), and a slot's
-// bytes cannot be overwritten while its BLAS is live (the deferred free holds the
-// region until the frames-in-flight fence retires it). A streamed mesh returns on
-// whatever slice the sub-allocator hands out, so the signature moves with it and
-// the BLAS is rebuilt rather than wrongly reused. `base_vertex` +
-// `index_offset` + `index_count` are exactly the inputs `prim_desc_for` uses;
-// `vertex_offset` is carried too so a static draw (whose `base_vertex` is 0)
-// still distinguishes distinct vertex regions.
+// place; a buffer swap goes through a full rebuild, not this path). A streamed
+// mesh returns on whatever slice the sub-allocator hands out, so the signature
+// moves with it and the BLAS is rebuilt rather than wrongly reused.
+// `base_vertex` + `index_offset` + `index_count` are exactly the inputs
+// `prim_desc_for` uses; `vertex_offset` is carried too so a static draw (whose
+// `base_vertex` is 0) still distinguishes distinct vertex regions.
+//
+// The slice location alone is not enough: an asset hot-reload rewrites a slot's
+// bytes in place at unchanged offsets, which leaves every field above equal.
+// `generation` (the draw object's `geometry_generation`) moves on each such
+// rewrite so the stale BLAS is rebuilt instead of reused. Mirrors
+// `concinnity_render::rt_topology::GeomSig`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GeomSig {
     base_vertex: i32,
     vertex_offset: usize,
     index_offset: usize,
     index_count: usize,
+    generation: u32,
 }
 
 impl GeomSig {
@@ -142,6 +147,7 @@ impl GeomSig {
             vertex_offset: obj.vertex_offset,
             index_offset: obj.index_offset,
             index_count: obj.index_count,
+            generation: obj.geometry_generation,
         }
     }
 }
@@ -1770,6 +1776,7 @@ mod tests {
             vertex_offset: tag * 100,
             index_offset: tag,
             index_count: 3,
+            generation: 0,
         }
     }
 

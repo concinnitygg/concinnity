@@ -1893,6 +1893,27 @@ impl super::context::DxContext {
     // A build failure / still-empty scene is non-fatal: `rt_accel` stays `None`
     // and the next topology change retries.
     fn seed_rt_accel(&mut self) {
+        if let Some(accel) = self.build_scene_accel() {
+            self.rt_accel = Some(accel);
+        }
+    }
+
+    // Replace the live acceleration structure with one built over the current
+    // shared vertex / index buffers. Called by `rebuild_static_geometry`, which
+    // swaps both buffers and re-lays out every draw underneath the BVH: its BLAS
+    // then trace the old geometry and its geometry table indexes offsets into a
+    // buffer that no longer exists. An empty scene or a failed build drops the
+    // BVH rather than keeping the stale one (which would have the trace read the
+    // new, possibly smaller, buffers at old offsets); RT falls back to SSR until
+    // the next topology change re-seeds it.
+    pub(super) fn rebuild_rt_accel(&mut self) {
+        self.rt_accel = self.build_scene_accel();
+    }
+
+    // Build a scene acceleration structure from scratch over the current draw set
+    // + shared geometry buffers, with the skin pipeline attached. `None` when the
+    // scene has no participating geometry or the build failed (warned).
+    fn build_scene_accel(&self) -> Option<RtAccelData> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match build_rt_accel(RtInitGeometry {
             device: &self.device,
@@ -1905,19 +1926,19 @@ impl super::context::DxContext {
             albedo_count: self.descriptors.textures.len() as u32,
         }) {
             Ok(Some(accel)) => accel,
-            Ok(None) => return,
+            Ok(None) => return None,
             Err(e) => {
-                tracing::warn!("RT topology seed: acceleration-structure build failed: {e}");
-                return;
+                tracing::warn!("RT acceleration-structure build failed: {e}");
+                return None;
             }
         };
         match build_rt_skin_pipeline(&self.device, hot_reload) {
             Ok(skin) => accel.set_skin_pipeline(skin),
-            Err(e) => tracing::warn!(
-                "RT topology seed: skin pipeline build failed (skinned meshes absent): {e}"
-            ),
+            Err(e) => {
+                tracing::warn!("RT skin pipeline build failed (skinned meshes absent): {e}")
+            }
         }
-        self.rt_accel = Some(accel);
+        Some(accel)
     }
 }
 

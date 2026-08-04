@@ -196,6 +196,30 @@ impl GlassRt {
     // static verts (3) + u32 indices (4). The TLAS / geom table / skinned buffers
     // (1/2/5/6) are filled by `wire_dynamic`. Called once at init.
     fn wire_static(&self, device: &Device, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer) {
+        for (i, &set) in self.sets.iter().enumerate() {
+            let ubo_info = vk::DescriptorBufferInfo::default()
+                .buffer(self.params_buffers[i])
+                .offset(0)
+                .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
+            let writes = [vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&ubo_info))];
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+        }
+        self.rewire_geometry(device, vertex_buffer, index_buffer);
+    }
+
+    // Re-point every frame's shared static verts (3) + u32 indices (4) at the
+    // given buffers. Called by `wire_static`, and again on its own when an asset
+    // hot-reload replaces the shared geometry buffers under the pass.
+    fn rewire_geometry(
+        &self,
+        device: &Device,
+        vertex_buffer: vk::Buffer,
+        index_buffer: vk::Buffer,
+    ) {
         let verts_info = vk::DescriptorBufferInfo::default()
             .buffer(vertex_buffer)
             .offset(0)
@@ -204,17 +228,8 @@ impl GlassRt {
             .buffer(index_buffer)
             .offset(0)
             .range(vk::WHOLE_SIZE);
-        for (i, &set) in self.sets.iter().enumerate() {
-            let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(self.params_buffers[i])
-                .offset(0)
-                .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
+        for &set in &self.sets {
             let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(std::slice::from_ref(&ubo_info)),
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(3)
@@ -1398,6 +1413,20 @@ impl GlassResources {
     ) {
         if let Some(rt) = self.rt.as_ref() {
             rt.wire_dynamic(device, frame_idx, dynamic);
+        }
+    }
+
+    // Re-point the glass RT set's shared static verts + indices at new buffers,
+    // after an asset hot-reload replaced the shared geometry buffers. A no-op
+    // when the RT pipelines are absent.
+    pub(in crate::vulkan) fn wire_rt_geometry(
+        &self,
+        device: &Device,
+        vertex_buffer: vk::Buffer,
+        index_buffer: vk::Buffer,
+    ) {
+        if let Some(rt) = self.rt.as_ref() {
+            rt.rewire_geometry(device, vertex_buffer, index_buffer);
         }
     }
 

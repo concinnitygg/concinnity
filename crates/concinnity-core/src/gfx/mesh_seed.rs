@@ -296,6 +296,7 @@ mod tests {
             index_count: i_count,
             shader_bucket: 0,
             base_vertex: 0,
+            geometry_generation: 0,
             model: [[0.0; 4]; 4],
             texture_slot: 0,
             normal_map_slot: 0,

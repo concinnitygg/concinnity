@@ -131,9 +131,7 @@ pub struct ProceduralMeshReloadResult {
 // subsequent reload diffs against the post-edit state.
 //
 // Backend-agnostic: rides on the existing `update_mesh_geometry` /
-// `rebuild_static_geometry` trait surface, so it lights up on every backend
-// as soon as those have real implementations (Metal today; default no-ops on
-// Vulkan + DirectX).
+// `rebuild_static_geometry` trait surface, implemented on all three backends.
 pub(super) fn reload_procedural_meshes(
     path: &str,
     procedural_meshes: &mut ProceduralMeshSourceMap,

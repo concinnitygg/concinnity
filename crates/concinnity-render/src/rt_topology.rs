@@ -16,24 +16,28 @@
 
 use crate::render_types::DrawObject;
 
-// Identifies the geometry slice a draw-object BLAS traces, on the shared
+// Identifies the geometry a draw-object BLAS traces, on the shared
 // vertex/index buffers. Two draw objects with the same signature trace
 // identical geometry, so a topology refresh can reuse the existing BLAS instead
 // of building a new one. A streamed mesh is placed wherever the sub-allocator
 // has room, so a slot that streams out and back in generally returns on a
 // different slice; the signature moves with it and the BLAS is rebuilt rather
-// than wrongly reused. A slot's bytes cannot be overwritten while its BLAS is
-// live: the deferred free holds the region until the frames-in-flight fence
-// retires it. `base_vertex` + `index_offset` + `index_count` are exactly
-// the inputs the per-backend geometry descriptor uses; `vertex_offset` is
-// carried too so a static draw (whose `base_vertex` is 0) still distinguishes
-// distinct vertex regions.
-#[derive(Clone, Copy, PartialEq, Eq)]
+// than wrongly reused. `base_vertex` + `index_offset` + `index_count` are
+// exactly the inputs the per-backend geometry descriptor uses; `vertex_offset`
+// is carried too so a static draw (whose `base_vertex` is 0) still
+// distinguishes distinct vertex regions.
+//
+// The slice location alone is not enough: an asset hot-reload rewrites a slot's
+// bytes in place at unchanged offsets, which leaves every field above equal.
+// `generation` (the draw object's `geometry_generation`) moves on each such
+// rewrite so the stale BLAS is rebuilt instead of reused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GeomSig {
     base_vertex: i32,
     vertex_offset: usize,
     index_offset: usize,
     index_count: usize,
+    generation: u32,
 }
 
 impl GeomSig {
@@ -43,6 +47,7 @@ impl GeomSig {
             vertex_offset: obj.vertex_offset,
             index_offset: obj.index_offset,
             index_count: obj.index_count,
+            generation: obj.geometry_generation,
         }
     }
 }
@@ -106,6 +111,7 @@ mod tests {
             vertex_offset: tag * 100,
             index_offset: tag,
             index_count: 3,
+            generation: 0,
         }
     }
 
@@ -153,6 +159,50 @@ mod tests {
         let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
         assert_eq!(plan.reuse, vec![None]);
         assert_eq!(plan.retire, vec![0]);
+    }
+
+    #[test]
+    fn topology_plan_rebuilds_a_slot_rewritten_in_place() {
+        // A size-matched asset hot-reload overwrites the slot's bytes at its
+        // existing offsets, so every location field stays equal and only the
+        // generation moves. The BLAS traces the old contents and must rebuild.
+        let old_i = [5usize];
+        let old_s = [sig(5)];
+        let new_i = [5usize];
+        let mut moved = sig(5);
+        moved.generation = 1;
+        let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &[moved]);
+        assert_eq!(plan.reuse, vec![None]);
+        assert_eq!(plan.retire, vec![0]);
+    }
+
+    #[test]
+    fn geom_sig_tracks_the_draw_object_generation() {
+        // A draw object whose slice never moves: only an in-place rewrite of
+        // its bytes (the generation bump) may change its signature.
+        let mut obj = DrawObject {
+            vertex_offset: 256,
+            vertex_count: 8,
+            index_offset: 12,
+            index_count: 6,
+            base_vertex: 0,
+            geometry_generation: 0,
+            shader_bucket: 0,
+            model: [[0.0; 4]; 4],
+            texture_slot: 0,
+            normal_map_slot: 0,
+            material: crate::render_types::MaterialUniforms::DEFAULT,
+            visible: true,
+            resident: true,
+            bb_min: [0.0; 3],
+            bb_max: [1.0; 3],
+            cull_distance: 0.0,
+            lod_alternates: Vec::new(),
+        };
+        let before = GeomSig::of(&obj);
+        assert_eq!(before, GeomSig::of(&obj));
+        obj.geometry_generation += 1;
+        assert_ne!(before, GeomSig::of(&obj));
     }
 
     #[test]

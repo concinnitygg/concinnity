@@ -3211,6 +3211,7 @@ mod tests {
             index_offset,
             index_count,
             base_vertex: 0,
+            geometry_generation: 0,
             shader_bucket: 0,
             model: [
                 [1.0, 0.0, 0.0, 0.0],
