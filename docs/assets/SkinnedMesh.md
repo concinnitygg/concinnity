@@ -1,0 +1,46 @@
+<!-- Auto-generated - do not edit. -->
+
+# SkinnedMesh
+
+A skeletally animated mesh placed directly in the world.
+
+Unlike a [Mesh](Mesh.md), a `SkinnedMesh` carries its own world transform and a
+`skeleton` (a joint hierarchy with a bind pose). Each vertex is bound to up
+to four joints; an [Animation](Animation.md) targeting this mesh deforms it at
+runtime. With no animation the mesh renders in its bind pose.
+
+The geometry + skeleton may be authored inline (`vertices` / `indices` /
+`skeleton`) or imported with `source` from a glTF (`.glb` / `.gltf`) or
+binary `.fbx` file. The import fills the mesh, the skeleton bind pose,
+and (for glTF) any morph targets; animations are imported separately by
+[Animation](Animation.md) assets referencing the same file.
+
+The `skeleton` (joint hierarchy and bind pose) is provided as an arg
+(authored inline alongside `vertices`/`indices`, or filled in from the
+imported `.glb`) and is baked into the mesh at build time.
+
+Normals and tangents are computed automatically at build time. Do not
+supply them.
+
+```jsonl
+{"name":"flag","type":"SkinnedMesh","args":{"position":[0,1,0],"material":"mat_cloth","skeleton":[{"parent":-1},{"parent":0,"translation":[0,1,0]}],"vertices":[{"pos":[0,0,0],"joints":[0,0,0,0],"weights":[1,0,0,0]}],"indices":[0,0,0]}}
+{"name":"hero","type":"SkinnedMesh","args":{"source":"models/hero.glb","position":[0,0,0],"material":"mat_skin"}}
+```
+
+## Parameters
+
+- `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
+- `skin_index`: An integer. Which skinned mesh of `source` to import, in file declaration order (default 0). A character split into several meshes bound to one skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each naming its own index.
+- `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list.
+- `indices`: An array of integers. Triangle index list.
+- `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets.
+- `morph_deltas`: An array of [MorphDelta](MorphDelta.md) objects. Dense morph-target deltas, target-major: entry `t * vertex_count + v` is target `t`'s delta for vertex `v`. Length must be `morph_target_names.len() * vertices.len()`. An [Animation](Animation.md) with a `morph_track` drives the per-target weights at runtime.
+- `material`: A string. [Material](Material.md); provides the albedo texture plus lighting parameters. Optional.
+- `texture`: A string. [Texture](Texture.md) (older path); ignored when `material` is set. Optional.
+- `position`: An array of 3 floats. World-space position.
+- `rotation_deg`: An array of 3 floats. World rotation, Euler degrees [pitch, yaw, roll], YXZ order.
+- `scale`: An array of 3 floats. World scale.
+- `lod_levels`: An integer. Number of level-of-detail versions to generate, including the original. `1` (the default) generates none; values are clamped to `[1, 8]`.
+- `lod_distances`: An array of floats. Camera distances at which to switch to each lower-detail version. When non-empty, must have exactly `lod_levels - 1` entries; empty lets the build choose defaults.
+- `max_instances`: An integer. How many runtime copies of this mesh may exist at once beyond the authored one. `0` (the default) means the mesh is not runtime-spawnable. A non-zero value pre-reserves that many extra instance slots at load: the engine appends that many hidden bind-pose copies to the skinned geometry so a runtime spawn can claim one without growing any GPU buffer, and a despawn returns it to the pool. Spawns past the reserve are dropped (a warning is logged). Capped at 4096.
+- `capsule`: A [CharacterCapsule](CharacterCapsule.md) object. Optional character capsule. When set, the mesh collides with the scene as a kinematic character and is moved by the root motion of its [Animation](Animation.md) clips (those with `root_motion` set): the capsule slides along obstacles and settles under gravity, and the rendered mesh follows it. The capsule stands on the mesh origin (its feet), centred `half_height + radius` above it.

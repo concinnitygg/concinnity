@@ -1,0 +1,137 @@
+<!-- Auto-generated - do not edit. -->
+
+# Assets
+
+- [AnimGraph](AnimGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
+- [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
+- [Application](Application.md) - Runtime half of the Application asset: the process resource budgets.
+- [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
+- [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
+- [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
+- [Behavior](Behavior.md) - A unit of world logic: an event source, the entities it runs against, its state, the world it reads, and the nodes it runs.
+- [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
+- [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
+- [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
+- [ColorLut](ColorLut.md) - A 3D colour-grading lookup table applied as a final post-process step. The build bakes the source into a colour cube; the graded result is blended over the image by [PostProcessConfig](PostProcessConfig.md)'s `lut_strength`.
+- [CubemapTexture](CubemapTexture.md) - A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
+- [DebugHud](DebugHud.md) - Requests the developer debug HUD: a set of [TextLabel](TextLabel.md) chips with diagnostic readouts, anchored to the top-right of the window and toggled with F1 (hidden by default).
+- [Decal](Decal.md) - A projected texture stamped onto whatever scene geometry sits inside the decal's oriented box.
+- [DirectionalLight](DirectionalLight.md) - An infinitely distant directional light (sun, moon, or sky fill).
+- [EngineDefaults](EngineDefaults.md) - Opts a world out of individual engine-injected defaults.
+- [EnvironmentMap](EnvironmentMap.md) - A baked lighting environment built from a Radiance HDR equirectangular source (or a built-in generator). It provides the scene's ambient image-based lighting (soft diffuse fill plus glossy reflections that follow surface roughness) and the on-screen sky.
+- [File](File.md) - References a source file by path.
+- [Font](Font.md) - Rasterises a TrueType font into a glyph atlas at build time.
+- [FpsCounter](FpsCounter.md) - Requests a frames-per-second counter; optionally writes it to a [TextLabel](TextLabel.md).
+- [GlassPanel](GlassPanel.md) - A flat translucent panel of coloured glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
+- [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear colour. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
+- [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
+- [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
+- [Joint](Joint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
+- [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action string.
+- [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, colour, background, padding) but their `x`/`y` are overwritten each frame.
+- [LightRig](LightRig.md) - A named grouping of lights.
+- [LoadingOverlay](LoadingOverlay.md) - Requests the scene-loading overlay: a full-window backdrop with a progress bar, shown while a scene jump waits for its streamed content and faded out once the destination scene is fully resident.
+- [MainMenu](MainMenu.md) - A ready-made menu declared in a single line.
+- [Material](Material.md) - A Material bundles the surface parameters that control how a [Prop](Prop.md) is lit and shaded.
+- [MaterialPalette](MaterialPalette.md) - A named set of [Material](Material.md) entries with short aliases.
+- [Mesh](Mesh.md) - Raw geometry. Supply `vertices` and `indices` directly, or import them from a binary glTF file with `source` + `primitive_index`.
+- [Model](Model.md) - An ordered list of sub-meshes, each with its own material.
+- [OptionSelect](OptionSelect.md) - A settings row that cycles through a fixed set of values on click.
+- [Panel](Panel.md) - A titled background container for grouping UI overlay elements.
+- [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
+- [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics floor / terrain.
+- [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
+- [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used (bloom on at a moderate intensity).
+- [Prefab](Prefab.md) - A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested prefabs.
+- [ProceduralMesh](ProceduralMesh.md) - Geometry built by a named generator at compile time. Use for standard shapes.
+- [Prop](Prop.md) - A scene object: places geometry at a world-space transform.
+- [PropBody](PropBody.md) - Makes a companion [Prop](Prop.md) a dynamic physics body.
+- [RectAreaLight](RectAreaLight.md) - A rectangular area light: a glowing panel that lights the scene from its whole surface rather than from a single point.
+- [ReflectionProbe](ReflectionProbe.md) - A localized reflection probe. The renderer captures the surrounding scene into a cubemap from `position` and uses it for the specular reflection on glossy surfaces within the influence box (`position` plus or minus `half_extents`). The box is also the parallax-correction volume, so a reflection stays anchored to the surrounding geometry as the camera moves.
+- [RigidBody](RigidBody.md) - Gives a player [Camera3D](Camera3D.md) gravity, jumping, and a grounded character body.
+- [Room](Room.md) - A self-contained room (floor, ceiling, four walls), with optional texturing.
+- [Scene](Scene.md) - A named group of world content.
+- [SceneImport](SceneImport.md) - Imports a 3D scene file as a single declaration.
+- [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
+- [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
+- [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
+- [Shader](Shader.md) - Declares a custom shader program: the vertex and fragment stages, plus the optional GPU-instanced vertex stage.
+- [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
+- [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
+- [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
+- [SpotLight](SpotLight.md) - A cone-shaped local light: a point light restricted to the cone around `direction`, with a soft edge between `inner_angle` and `outer_angle`.
+- [Sprite](Sprite.md) - Screen-space 2D rectangle drawn as a UI overlay each frame.
+- [StatHud](StatHud.md) - Requests the default on-screen stats HUD. Drives a set of [TextLabel](TextLabel.md) chips with live engine stats, refreshed on a fixed interval.
+- [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.
+- [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
+- [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.
+- [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
+- [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
+- [Texture](Texture.md) - A 2D texture image.
+- [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
+- [Variables](Variables.md) - The world's shared variables: the state [Behavior](Behavior.md)s read with `var` and write with `set`, and the state a `save` node persists.
+- [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
+- [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
+- [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
+- [WaterSurface](WaterSurface.md) - A translucent animated water surface.
+- [Window](Window.md) - Declares the application window.
+
+## Reference types
+
+- [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
+- [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
+- [AppLimits](AppLimits.md) - Optional per-application overrides for the runtime's thread and memory budgets. Each field of `0` means "auto" (the engine picks a value from the host machine); a non-zero value overrides that choice, clamped to what the machine can safely give.
+- [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
+- [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
+- [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
+- [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
+- [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
+- [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
+- [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
+- [GraphCondition](GraphCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
+- [GraphIkChain](GraphIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
+- [GraphParam](GraphParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
+- [GraphState](GraphState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
+- [GraphTransition](GraphTransition.md) - One directed transition between two states.
+- [IndirectLighting](IndirectLighting.md) - Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`. `Ibl` is the image-based-lighting-only ambient term the renderer has always used; `Ssgi` layers a screen-space global-illumination bounce on top.
+- [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
+- [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
+- [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
+- [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
+- [LocalDecl](LocalDecl.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
+- [MainMenuItem](MainMenuItem.md) - One entry in a [MainMenu](MainMenu.md).
+- [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
+- [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
+- [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. Names in `albedo` / `normal_map` are unresolved [Texture](Texture.md) references, resolved on the expanded Material.
+- [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are unresolved references to other assets, resolved when the entry expands.
+- [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
+- [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
+- [QueryDecl](QueryDecl.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
+- [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
+- [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
+- [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [ScrollPanel](ScrollPanel.md).
+- [ScrollRow](ScrollRow.md) - One row inside a [ScrollPanel](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
+- [SettingsProfile](SettingsProfile.md) - Which settings screen a [MainMenu](MainMenu.md)'s `"settings"` item builds.
+- [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
+- [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
+- [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
+- [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
+- [StageSource](StageSource.md) - Source declaration for one stage of a [Shader](Shader.md).
+- [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
+- [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
+- [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.
+- [StoryImage](StoryImage.md) - One placed stage image: which [Texture](Texture.md) to sample and where it sits on the reference canvas.
+- [StoryNode](StoryNode.md) - One jump target in a [Story](Story.md): a run of pages optionally ending in a choice menu.
+- [StoryOp](StoryOp.md) - One variable operation in a [Story](Story.md)'s script. All story state is named integer variables, starting at `0` each playthrough: a plain flag is a variable set to `1` and cleared to `0`.
+- [StoryPage](StoryPage.md) - One click-through page of a [StoryNode](StoryNode.md).
+- [StoryScaffold](StoryScaffold.md) - The stage scaffolding a [Story](Story.md)'s build expansion generated: the [Screen](Screen.md)s, [Sprite](Sprite.md)s, and [TextLabel](TextLabel.md)s the story system mutates page by page.
+- [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).
+- [StoryStage](StoryStage.md) - The stage dressing current at a page or choice menu: the backdrop and the character portraits standing on stage.
+- [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.
+- [TextAlign](TextAlign.md) - Horizontal alignment of a [TextLabel](TextLabel.md) relative to its `x`.
+- [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
+- [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.
+- [UpscalerBackend](UpscalerBackend.md) - Upscaler backend selector for `PostProcessConfig.temporal_upscaling`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific backend and fall back when it is unavailable. DLSS (NVIDIA NGX) and XeSS (Intel) are DirectX-only; Metal uses MetalFX and Vulkan has no upscaler yet, so both treat any value as their native path.
+- [VarDecl](VarDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
+- [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
+- [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to [`MAX_WATER_WAVES`] of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` metres per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).
