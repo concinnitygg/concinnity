@@ -155,6 +155,26 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 mod tests {
     use super::*;
 
+    // The shipped player counts its own heap. The allocator arrives by linking
+    // the engine (`concinnity_engine::heap`) rather than being declared here,
+    // so this asserts the property survives all the way out to the binary that
+    // actually ships -- which no test inside a library can do for it.
+    #[test]
+    fn the_shipped_player_tracks_its_own_heap() {
+        const MIB: usize = 1 << 20;
+        let held: Vec<u8> = vec![0; MIB];
+
+        let stats = concinnity_memory::stats().expect("linking the engine installs the allocator");
+        assert!(stats.alloc_count > 0);
+        assert!(
+            stats.live_bytes >= MIB as u64,
+            "live bytes {} does not cover a megabyte this test is holding",
+            stats.live_bytes
+        );
+        assert!(stats.peak_bytes >= stats.live_bytes);
+        drop(held);
+    }
+
     #[test]
     fn plain_layout_uses_the_executable_directory() {
         // A portable folder (Windows/Linux, or a bare macOS binary): the state

@@ -110,6 +110,7 @@
 mod commands;
 mod dispatch;
 mod hot_reload;
+mod memory;
 mod protocol;
 mod runtime_spawn;
 mod state;

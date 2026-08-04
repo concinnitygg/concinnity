@@ -105,6 +105,15 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 "pressure": pressure,
             })
         }
+        // The allocation layer's own readout: heap counters, the per-tag
+        // ledger, and the size-class histogram. Global rather than snapshot
+        // state, so it is read here at reply time.
+        "memory" => super::memory::report(
+            state.frame,
+            concinnity_memory::stats(),
+            &concinnity_memory::ledger().snapshot(),
+            concinnity_memory::size_classes().and_then(|c| c.busiest()),
+        ),
         "budget" => match &state.budget {
             Some(b) => serde_json::json!({
                 "ok": true,

@@ -23,6 +23,9 @@ vulkan = ["concinnity-core/vulkan"]
 # The renderer-free foundation: GPU data layouts, CPU-side render math, asset
 # data types, and the runtime-usable build helpers (environment-map baking).
 concinnity-core = { path = "../concinnity-core" }
+# Arena scratch for the per-frame streaming plan, and the tag vocabulary it
+# accounts under. `no_std` like this module, so the boundary above holds.
+concinnity-memory = { path = "../concinnity-memory" }
 bytemuck = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 rayon = "1"

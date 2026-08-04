@@ -23,6 +23,7 @@ use crate::gfx::backend::{ChunkMesh, RenderBackend};
 use crate::gfx::overlay::OverlayFrame;
 use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency};
 
+pub(crate) mod accounting;
 pub(crate) mod pressure;
 pub(crate) mod stats_log;
 
@@ -248,6 +249,9 @@ impl System for StreamingSystem {
         );
 
         ActiveRenderBackend::put(ctx.resources, backend);
+        // Republish each pool's device footprint under the shared tags, so a
+        // readout can name what VRAM is holding.
+        accounting::publish(concinnity_memory::ledger(), state.pool_reports());
         ctx.insert_resource(CameraRelativeView { view, cam_pos });
         // Republish the per-scene load status when it changed, so menus and
         // loading screens can read scene progress without touching the pools.
@@ -648,6 +652,43 @@ impl StreamingState {
             cs.streamer
                 .set_byte_budget(Some(pressure::scale_budget(baseline, factor)));
         }
+    }
+
+    // What each streaming pool holds in device memory, for the shared ledger.
+    // Only pools that are actually streaming report.
+    fn pool_reports(&self) -> impl Iterator<Item = accounting::PoolReport> {
+        [
+            self.texture_streamer.as_ref().map(|s| {
+                (
+                    concinnity_memory::MemTag::Textures,
+                    s.resident_bytes(),
+                    s.byte_budget(),
+                )
+            }),
+            self.mesh_streamer.as_ref().map(|s| {
+                (
+                    concinnity_memory::MemTag::Meshes,
+                    s.resident_bytes(),
+                    s.byte_budget(),
+                )
+            }),
+            self.chunk_stream.as_ref().map(|cs| {
+                (
+                    concinnity_memory::MemTag::Chunks,
+                    cs.streamer.resident_bytes(),
+                    cs.streamer.byte_budget(),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .map(
+            |(tag, resident_bytes, byte_budget)| accounting::PoolReport {
+                tag,
+                resident_bytes,
+                byte_budget,
+            },
+        )
     }
 
     // `(resident, pending, unloaded)` counts for each active streaming pool.

@@ -209,8 +209,10 @@ impl Panel for HealthPanel {
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.health_open = false;
     }
-    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        health_panel::size()
+    // Grows with the breakdown: the panel is as tall as the tags something is
+    // reporting into.
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        health_panel::size(hook.health.snapshot())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         health_panel::default_origin(vp)
@@ -224,13 +226,13 @@ impl Panel for HealthPanel {
     // Read-only: a body press is swallowed so it cannot reach the world.
     fn press(
         &self,
-        _hook: &mut EditorHook,
+        hook: &mut EditorHook,
         _world: &mut World,
         mx: f32,
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        health_panel::hit_test(mx, my, o)
+        health_panel::hit_test(mx, my, o, hook.health.snapshot())
     }
     // The snapshot is refreshed on the hook's throttled sample, not here: `draw`
     // only has `&EditorHook`, and the syscalls behind it must not run per frame.

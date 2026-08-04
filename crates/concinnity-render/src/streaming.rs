@@ -14,6 +14,8 @@
 // `app::texture_stream`. Keep that boundary: no `std::`-only types
 // (threads, files, `HashMap`, `Instant`, ...) belong in this file.
 
+use concinnity_memory::{Arena, MemTag};
+
 // Residency state of a single streamable item.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StreamState {
@@ -74,6 +76,15 @@ pub struct StreamPlanner {
     // `b`, evicting farther residents until it fits. `None` (the default)
     // disables byte accounting entirely, leaving the count-only policy.
     byte_budget: Option<u64>,
+    // Working memory for `plan`'s two id lists, reserved once. `plan` runs
+    // every frame for every pool, and both lists are bounded by the item count,
+    // so they come out of an arena rather than the heap.
+    scratch: Arena,
+}
+
+// Room for the two id lists `plan` builds, each at most one entry per item.
+fn scratch_bytes(count: usize) -> usize {
+    (2 * count * size_of::<usize>()).max(size_of::<usize>())
 }
 
 impl StreamPlanner {
@@ -96,6 +107,7 @@ impl StreamPlanner {
             load_budget: load_budget.max(1),
             resident_cap: resident_cap.max(1),
             byte_budget: None,
+            scratch: Arena::tagged(scratch_bytes(count), MemTag::Scratch),
         }
     }
 
@@ -229,14 +241,23 @@ impl StreamPlanner {
             }
         }
 
+        // Both id lists below come out of the planner's arena, so planning a
+        // frame allocates nothing. Resetting takes `&mut`, which is the proof
+        // that last frame's lists are gone.
+        self.scratch.reset();
+
         // Candidate loads: every unblocked Unloaded item, best score first.
-        let mut candidates: Vec<usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, it)| it.state == StreamState::Unloaded && !it.blocked)
-            .map(|(id, _)| id)
-            .collect();
+        let mut candidates = self
+            .scratch
+            .vec::<usize>(self.items.len())
+            .expect("scratch is sized for every item");
+        candidates.extend(
+            self.items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| it.state == StreamState::Unloaded && !it.blocked)
+                .map(|(id, _)| id),
+        );
         if candidates.is_empty() {
             return plan;
         }
@@ -254,13 +275,17 @@ impl StreamPlanner {
         // per victim. Committed evictions are always a prefix of this list
         // (candidates are best-first and evict worst-first, so each candidate
         // extends the evicted prefix), which a single `evicted` cursor tracks.
-        let mut residents: Vec<usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, it)| it.state == StreamState::Resident)
-            .map(|(id, _)| id)
-            .collect();
+        let mut residents = self
+            .scratch
+            .vec::<usize>(self.items.len())
+            .expect("scratch is sized for every item");
+        residents.extend(
+            self.items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| it.state == StreamState::Resident)
+                .map(|(id, _)| id),
+        );
         residents.sort_by(|&a, &b| {
             let (ia, ib) = (&self.items[a], &self.items[b]);
             ib.score
@@ -279,7 +304,7 @@ impl StreamPlanner {
         // Front of `residents` already evicted (committed) this call.
         let mut evicted = 0usize;
 
-        for &id in &candidates {
+        for &id in candidates.iter() {
             if plan.to_load.len() >= self.load_budget {
                 break;
             }
@@ -361,6 +386,40 @@ mod tests {
         }
         assert_eq!(p.state(3), None);
         assert_eq!(p.counts(), (0, 0, 3));
+    }
+
+    // The reservation must cover the worst frame -- every item a load
+    // candidate, then every item resident -- because `plan` takes it as given.
+    // Reserving less would surface as a panic mid-frame.
+    #[test]
+    fn the_scratch_reservation_covers_the_worst_frame() {
+        const COUNT: usize = 32;
+        let mut p = StreamPlanner::new(COUNT, COUNT, COUNT);
+        let plan = p.plan();
+        assert_eq!(plan.to_load.len(), COUNT, "every item is a candidate");
+        for id in 0..COUNT {
+            p.mark_resident(id, 0, 1);
+        }
+        let _ = p.plan();
+
+        assert!(p.scratch.peak() <= p.scratch.capacity());
+        assert_eq!(p.scratch.capacity(), scratch_bytes(COUNT));
+    }
+
+    // Planning reuses that one reservation frame after frame: the arena is the
+    // point, so a plan must never reach the heap for its working lists.
+    #[test]
+    fn repeated_planning_reuses_the_same_reservation() {
+        let mut p = StreamPlanner::new(16, 4, 8);
+        let capacity = p.scratch.capacity();
+        for frame in 0..16u64 {
+            for id in 0..16 {
+                p.set_score(id, ((id as u64 + frame) % 16) as f32);
+            }
+            let _ = p.plan();
+        }
+        assert_eq!(p.scratch.capacity(), capacity);
+        assert!(p.scratch.peak() <= capacity);
     }
 
     #[test]
@@ -813,6 +872,7 @@ mod tests {
                 load_budget,
                 resident_cap,
                 byte_budget,
+                scratch: Arena::with_capacity(scratch_bytes(items.len())),
             };
             let got = p.plan();
 

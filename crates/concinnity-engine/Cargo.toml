@@ -23,12 +23,20 @@ vulkan = [
     "concinnity-render/vulkan",
 ]
 
+# Per-size-class allocation histograms on top of the counters every binary
+# already gets. The allocator itself is installed by linking this crate (see
+# `src/heap.rs`); this is the tier a shipped build should not pay for, so a
+# development binary asks for it here rather than depending on the allocator
+# crate to reach the feature.
+alloc-detail = ["concinnity-memory/detail"]
+
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
 concinnity-render = { path = "../concinnity-render" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-physics = { path = "../concinnity-physics" }
 concinnity-audio = { path = "../concinnity-audio" }
+concinnity-memory = { path = "../concinnity-memory" }
 
 ciborium = "0.2"
 gilrs = "0.11.2"

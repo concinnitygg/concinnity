@@ -29,8 +29,7 @@ vulkan = [
 concinnity-editor = { path = "../concinnity-editor" }
 concinnity-cook = { path = "../concinnity-cook" }
 concinnity-shader = { path = "../concinnity-shader" }
-concinnity-engine = { path = "../concinnity-engine" }
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-engine = { path = "../concinnity-engine", features = ["alloc-detail"] }
 concinnity-world = { path = "../concinnity-world" }
 concinnity-docs = { path = "../concinnity-docs" }
 

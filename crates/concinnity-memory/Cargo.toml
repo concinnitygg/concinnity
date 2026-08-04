@@ -9,4 +9,10 @@ license.workspace = true
 name = "concinnity_memory"
 doctest = false
 
+[features]
+# Per-size-class allocation histograms, for development binaries only. The
+# global counters and the tagged ledger ship unconditionally; this is the tier a
+# shipped build should not pay for on every allocation.
+detail = []
+
 [dependencies]

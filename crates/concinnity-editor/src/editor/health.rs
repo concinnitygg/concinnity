@@ -17,6 +17,11 @@
 // mapped assets, stacks, the binary). For VRAM it is device memory outside the
 // streaming pools (render targets, shader resources, the swapchain).
 //
+// Under the meters, the tag breakdown names the part of each realm that *is*
+// explained: what every subsystem reports holding, host rows then device ones.
+// It is a floor on real usage, never a total, since it holds only what someone
+// reported.
+//
 // CPU is the one row whose nesting is approximate. System timings are wall-clock
 // spans around each system's step on the main thread, not CPU time across every
 // thread, so a system parked on a GPU fence bills wall time it never spent
@@ -29,7 +34,7 @@
 
 use crate::app::syscpu::CpuSampler;
 use crate::ecs::World;
-use concinnity_memory::MemStats;
+use concinnity_memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
 use std::time::{Duration, Instant};
 
 // Matches the StatHud's chip cadence: often enough to feel live, rare enough
@@ -146,6 +151,50 @@ pub(crate) struct HealthSnapshot {
     pub systems_cores: Option<f32>,
     pub process_cores: Option<f32>,
     pub total_cores: Option<usize>,
+    // What the engine's subsystems report holding, by tag and realm. The named
+    // part of the two byte meters above.
+    pub tags: LedgerSnapshot,
+    // The allocation size class holding the most live blocks. `None` unless the
+    // binary was built with the allocator's `detail` feature.
+    pub hot_class: Option<SizeClass>,
+}
+
+// The most breakdown rows there can be: every tag, in both realms.
+pub(crate) const MAX_TAG_ROWS: usize = MemTag::COUNT * Realm::COUNT;
+
+// One line of the tag breakdown: who is holding memory, where, and how much of
+// its budget that is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TagRow {
+    pub name: &'static str,
+    pub realm: &'static str,
+    // Bytes held, followed by the budget when the tag has one.
+    pub value: String,
+    pub over_budget: bool,
+}
+
+// The breakdown under the meters: every tag something reports into, host rows
+// first. Unreported tags are absent rather than listed at zero -- the ledger
+// holds only what a subsystem published, so a missing row means "nobody
+// accounts for this", not "this is empty".
+pub(crate) fn tag_rows(snap: &HealthSnapshot) -> Vec<TagRow> {
+    Realm::ALL
+        .into_iter()
+        .flat_map(|realm| snap.tags.reported(realm))
+        .map(|usage| TagRow {
+            name: usage.tag.name(),
+            realm: usage.realm.name(),
+            value: match usage.budget {
+                Some(budget) => format!(
+                    "{} / {}",
+                    bytes_text(Some(usage.bytes as f64)),
+                    bytes_text(Some(budget as f64))
+                ),
+                None => bytes_text(Some(usage.bytes as f64)),
+            },
+            over_budget: usage.over_budget(),
+        })
+        .collect()
 }
 
 // The three meters, in panel order. Pure, so the whole model is testable
@@ -191,6 +240,18 @@ pub(crate) fn churn_text(snap: &HealthSnapshot) -> Option<String> {
     Some(format!(
         "peak {}  |  {live} live allocs",
         bytes_text(Some(heap.peak_bytes as f64)),
+    ))
+}
+
+// Where the heap's live blocks concentrate, under the meters' churn line.
+// `None` in a build without the allocator's `detail` feature, which is every
+// shipped one.
+pub(crate) fn hot_class_text(snap: &HealthSnapshot) -> Option<String> {
+    let class = snap.hot_class?;
+    Some(format!(
+        "hot class {}  |  {} live blocks",
+        bytes_text(Some(class.min_bytes as f64)),
+        class.live_blocks,
     ))
 }
 
@@ -257,6 +318,8 @@ impl HealthState {
             // A failed read holds the last known rate rather than blanking the row.
             process_cores: self.cpu.sample().or(self.snapshot.process_cores),
             total_cores: world.thread_budget().map(|b| b.total_cores),
+            tags: concinnity_memory::ledger().snapshot(),
+            hot_class: concinnity_memory::size_classes().and_then(|c| c.busiest()),
         };
     }
 }
@@ -430,5 +493,101 @@ mod tests {
     #[test]
     fn churn_text_is_absent_without_the_tracking_allocator() {
         assert_eq!(churn_text(&HealthSnapshot::default()), None);
+    }
+
+    // A ledger nothing has reported into, which is a world that streams
+    // nothing: the breakdown is empty rather than eighteen zeroes.
+    #[test]
+    fn an_unreported_ledger_lists_no_rows() {
+        assert!(tag_rows(&HealthSnapshot::default()).is_empty());
+    }
+
+    fn tagged_snapshot() -> HealthSnapshot {
+        let ledger = concinnity_memory::Ledger::new();
+        ledger.set(MemTag::Textures, Realm::Device, 3 * GB / 2);
+        ledger.set_budget(MemTag::Textures, Realm::Device, Some(2 * GB));
+        ledger.set(MemTag::Meshes, Realm::Device, GB / 4);
+        ledger.set(MemTag::Scratch, Realm::Host, 64 * 1024);
+        HealthSnapshot {
+            tags: ledger.snapshot(),
+            ..Default::default()
+        }
+    }
+
+    // Host rows first, then device: RAM and VRAM read as separate accounts
+    // under one vocabulary.
+    #[test]
+    fn the_breakdown_lists_host_rows_before_device_rows() {
+        let rows = tag_rows(&tagged_snapshot());
+        let names: Vec<&str> = rows.iter().map(|r| r.name).collect();
+        let realms: Vec<&str> = rows.iter().map(|r| r.realm).collect();
+        assert_eq!(names, ["Scratch", "Textures", "Meshes"]);
+        assert_eq!(realms, ["RAM", "VRAM", "VRAM"]);
+    }
+
+    // A budgeted tag shows what it holds against its ceiling; an unbudgeted one
+    // shows the bytes alone rather than inventing a scale.
+    #[test]
+    fn a_budgeted_row_reads_against_its_ceiling() {
+        let rows = tag_rows(&tagged_snapshot());
+        assert_eq!(rows[1].value, "1.5 GB / 2.0 GB");
+        assert!(!rows[1].over_budget);
+        assert_eq!(rows[2].value, "256.0 MB");
+    }
+
+    #[test]
+    fn a_row_past_its_budget_is_flagged() {
+        let ledger = concinnity_memory::Ledger::new();
+        ledger.set(MemTag::Chunks, Realm::Device, 3 * GB);
+        ledger.set_budget(MemTag::Chunks, Realm::Device, Some(GB));
+        let snap = HealthSnapshot {
+            tags: ledger.snapshot(),
+            ..Default::default()
+        };
+
+        let rows = tag_rows(&snap);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].over_budget);
+    }
+
+    // Every possible row has somewhere to be drawn, which is what keeps the
+    // panel from silently dropping a reporter.
+    #[test]
+    fn the_breakdown_never_outgrows_the_panels_row_budget() {
+        let ledger = concinnity_memory::Ledger::new();
+        for tag in MemTag::ALL {
+            for realm in Realm::ALL {
+                ledger.set(tag, realm, 1);
+            }
+        }
+        let snap = HealthSnapshot {
+            tags: ledger.snapshot(),
+            ..Default::default()
+        };
+        assert_eq!(tag_rows(&snap).len(), MAX_TAG_ROWS);
+    }
+
+    // The size-class line is a development instrument: absent, not zeroed, in a
+    // build without it.
+    #[test]
+    fn the_hot_class_line_is_absent_without_the_detail_feature() {
+        assert_eq!(hot_class_text(&HealthSnapshot::default()), None);
+    }
+
+    #[test]
+    fn the_hot_class_line_names_the_class_and_its_live_blocks() {
+        let snap = HealthSnapshot {
+            hot_class: Some(SizeClass {
+                min_bytes: 128,
+                max_bytes: 255,
+                allocs: 900,
+                live_blocks: 42,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            hot_class_text(&snap).expect("a class was measured"),
+            "hot class 128.0 B  |  42 live blocks"
+        );
     }
 }

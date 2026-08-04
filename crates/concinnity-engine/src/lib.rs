@@ -13,6 +13,8 @@
 pub mod assets;
 pub mod blob;
 pub mod ecs;
+// The process allocator, installed by linking this crate.
+mod heap;
 
 // Renderer-free foundation shared with the build/validate pipeline lives in
 // concinnity-core. Re-export its modules under the historical crate::* paths so

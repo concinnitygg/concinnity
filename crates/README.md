@@ -7,19 +7,22 @@
 | `concinnity-editor`    | lib       |                    | In-engine world editor: live preview, draggable panels, hot-reload. |
 | `concinnity-cook`      | lib       |                    | Asset cook pipeline that bakes an authored world into a blob.       |
 | `concinnity-world`     | lib       |                    | Authored world source, args schema, validation, and spec builders.  |
-| `concinnity-engine`    | lib       |                    | Runtime engine: ECS schedule and graphics/spawn/streaming systems.  |
+| `concinnity-engine`    | lib       |                    | Runtime engine: ECS schedule, graphics/spawn/streaming, allocator.  |
 | `concinnity-device`    | lib       |                    | GPU backends (Metal/Vulkan/DX) behind a device facade.              |
 | `concinnity-shader`    | lib       |                    | Build-time shader compilers for the backend being built.            |
 | `concinnity-render`    | lib       |                    | GPU-free render preparation.                                        |
-| `concinnity-physics`   | lib       |                    | Physics system (rapier3d).                                          |
-| `concinnity-audio`     | lib       |                    | Audio system (kira).                                                |
+| `concinnity-physics`   | lib       |                    | Physics system (wraps [rapier3d]).                                  |
+| `concinnity-audio`     | lib       |                    | Audio system (wraps [kira]).                                        |
 | `concinnity-core`      | lib       |                    | Shared ECS, assets, resources, and math foundation.                 |
 | `concinnity-blob`      | lib       | :white_check_mark: | Packed asset blob format; `write` feature gated to cook.            |
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).         |
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                           |
-| `concinnity-memory`    | lib       | :white_check_mark: | Tracking global allocator and heap stats.                           |
+| `concinnity-memory`    | lib       | :white_check_mark: | Allocation layer: tracking allocator, tagged budgets, arenas, pools. |
 | `concinnity-docs`      | lib       | :white_check_mark: | Asset reference, extracted at build time and embedded.              |
 | `concinnity-toolchain` | build-dep |                    | Build-time codegen for the binary and graphics crates.              |
+
+[kira]: https://docs.rs/kira/latest/kira
+[rapier3d]: https://docs.rs/rapier3d/latest/rapier3d
 
 ## Linkage
 
@@ -55,14 +58,12 @@ space:1
 
 space:6
 
-space:5
-docs
-
 space:1
 physics
 core
 world
-space:2
+space:1
+docs
 
 space:6
 
