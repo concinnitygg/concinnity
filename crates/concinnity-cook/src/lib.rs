@@ -13,11 +13,13 @@
 pub use concinnity_core::{assets, build, ecs, gfx, paths, result};
 
 // The world front half -- the authored model, the type vocabulary
-// (`ComponentType` / `ResourceAssetType`), and the pure semantic checks --
-// lives in concinnity-world; re-exported so cook code and downstream consumers
-// keep resolving `crate::{registry,template_spec}` paths. cook composes its
+// (`ComponentType` / `ResourceAssetType`), the typed spec vocabulary, and the
+// pure semantic checks -- lives in concinnity-world; the registry is bound here
+// so cook code keeps resolving `crate::registry`. cook composes its
 // compile-backed checks on top (crate::check) and owns expansion (crate::world).
-pub use concinnity_world::{refs, registry, template_spec, validate};
+// Consumers reach the rest of the authoring surface through concinnity-world
+// directly.
+pub(crate) use concinnity_world::registry;
 
 pub mod asset;
 pub mod asset_api;

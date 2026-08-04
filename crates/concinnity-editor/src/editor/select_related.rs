@@ -25,7 +25,7 @@ pub(crate) fn names_using(entries: &[serde_json::Value], target: &str) -> Vec<St
             if asset.name.is_empty() {
                 return None;
             }
-            concinnity_cook::refs::referenced_names(&asset)
+            concinnity_world::refs::referenced_names(&asset)
                 .iter()
                 .any(|r| r == target)
                 .then_some(asset.name)

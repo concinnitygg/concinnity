@@ -82,7 +82,7 @@ pub(super) fn reload_volumetric_fog(
             }
         };
         // Apply the build-side validator, exactly as a rebuild would at bake.
-        let clamped = concinnity_cook::validate::volumetric_fog(parsed);
+        let clamped = concinnity_world::validate::volumetric_fog(parsed);
         if clamped.enabled {
             resolved = Some(crate::gfx::volumetric_fog::FogSettings::resolve(
                 clamped.color,

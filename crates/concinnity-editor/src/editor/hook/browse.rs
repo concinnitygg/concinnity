@@ -10,7 +10,7 @@ impl EditorHook {
     // already exists (so re-applying is idempotent). Marks dirty if anything was
     // added.
     pub(super) fn apply_template(&mut self, i: usize) {
-        let Some(t) = concinnity_templates::TEMPLATES.get(i) else {
+        let Some(t) = concinnity_world::template::TEMPLATES.get(i) else {
             return;
         };
         // The template's typed specs become world-line entries via the app bridge;
@@ -140,7 +140,7 @@ impl EditorHook {
     // the assets it would add, with an Apply button), bringing it to the front of
     // the focus stack. The Templates list stays open so another can be picked.
     pub(super) fn open_template_detail(&mut self, i: usize) {
-        if i >= concinnity_templates::TEMPLATES.len() {
+        if i >= concinnity_world::template::TEMPLATES.len() {
             return;
         }
         self.open_template = Some(i);
@@ -173,7 +173,7 @@ impl EditorHook {
     // The per-frame Template detail view data (title, description, grouped rows),
     // borrowed for both hit-testing and layout.
     pub(super) fn template_detail_data(&self, i: usize) -> TemplateDetailData {
-        let (title, description) = concinnity_templates::TEMPLATES
+        let (title, description) = concinnity_world::template::TEMPLATES
             .get(i)
             .map(|t| (format!("Template {}", t.title), t.description.to_string()))
             .unwrap_or_default();

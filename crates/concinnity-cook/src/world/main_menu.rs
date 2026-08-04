@@ -13,8 +13,7 @@ use super::expand::{asset_name, type_norm};
 use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
 use crate::assets::{MainMenu, SettingsProfile};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
-use crate::template_spec::spec_to_value;
-use concinnity_templates::asset;
+use concinnity_world::spec::{asset, spec_to_value};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
 // a label's width when laying out the settings tab bar (the menu items and

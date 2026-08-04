@@ -26,10 +26,10 @@ vulkan = [
 concinnity-engine = { path = "../concinnity-engine" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-cook = { path = "../concinnity-cook" }
+concinnity-world = { path = "../concinnity-world" }
 concinnity-shader = { path = "../concinnity-shader" }
 concinnity-core = { path = "../concinnity-core" }
 concinnity-memory = { path = "../concinnity-memory" }
-concinnity-templates = { path = "../concinnity-templates" }
 
 argon2 = "0.5"
 async-stream = "0.3.6"

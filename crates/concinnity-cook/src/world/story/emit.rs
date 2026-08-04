@@ -1,8 +1,6 @@
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
-use crate::template_spec::spec_to_value;
 use crate::world::ui_spec::sprite;
-use concinnity_templates::AssetSpec;
-use concinnity_templates::asset;
+use concinnity_world::spec::{AssetSpec, asset, spec_to_value};
 
 use super::helpers::wrap_text;
 use super::model::{FlagOp, Gate, ImageDims, Stage, Story};

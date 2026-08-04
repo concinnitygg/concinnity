@@ -90,6 +90,13 @@ enum Commands {
     #[command(name = "explain")]
     Explain(ExplainArgs),
 
+    /// Regenerate the asset reference pages under docs/assets
+    //
+    // Reads the asset schema and its rustdoc out of the engine source tree, so
+    // this runs against a checkout of the engine itself, not an app.
+    #[command(name = "docs")]
+    Docs(DocsArgs),
+
     /// Validate a world without building
     #[command(name = "test")]
     Test(TestArgs),
@@ -326,6 +333,13 @@ pub struct ExplainArgs {
 }
 
 #[derive(Debug, clap::Args)]
+pub struct DocsArgs {
+    /// Engine repository root to read sources from and write pages into
+    #[arg(long, default_value = ".")]
+    pub root: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
 pub struct NewArgs {
     /// Directory to create the project in
     pub path: String,
@@ -477,6 +491,7 @@ pub fn run() -> std::io::Result<()> {
         Commands::Rm(args) => cli::rm(&args.name),
         Commands::List(args) => cli::list(args.file.as_deref(), args.expanded, args.systems),
         Commands::Explain(args) => cli::explain(&args.name, args.file.as_deref()),
+        Commands::Docs(args) => cli::docs(args.root.as_deref()),
         Commands::Test(args) => {
             let path = args.file.as_deref().unwrap_or("");
             cli::check(path)

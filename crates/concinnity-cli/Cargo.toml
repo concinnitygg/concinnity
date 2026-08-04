@@ -31,6 +31,8 @@ concinnity-cook = { path = "../concinnity-cook" }
 concinnity-shader = { path = "../concinnity-shader" }
 concinnity-engine = { path = "../concinnity-engine" }
 concinnity-memory = { path = "../concinnity-memory" }
+concinnity-world = { path = "../concinnity-world" }
+concinnity-docs = { path = "../concinnity-docs" }
 
 clap = { version = "4", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

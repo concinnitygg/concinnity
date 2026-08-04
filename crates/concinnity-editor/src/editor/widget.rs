@@ -319,10 +319,11 @@ pub(crate) fn field_text(world: &World, id: AssetId) -> String {
         .unwrap_or_default()
 }
 
-// Whether `(x, y)` lies inside `rect` ([x, y, w, h], top-left origin). The pure
-// geometry lives in the shared templates crate; re-exported here so the HUD and
-// panel keep using `widget::point_in`.
-pub(crate) use concinnity_templates::ui::point_in;
+// Whether `(x, y)` lies inside `rect` ([x, y, w, h], top-left origin). The
+// top-left edge is inside; the bottom-right edge is outside.
+pub(crate) fn point_in(x: f32, y: f32, rect: [f32; 4]) -> bool {
+    x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3]
+}
 
 // A label's display text clipped to `max` characters with an ellipsis, for
 // panels that show free-length strings (file paths, story lines) in
@@ -592,5 +593,15 @@ mod tests {
         // A never-injected id changes nothing and does not panic.
         place_left_label(&mut world, AssetId(999), [0.0, 0.0], "x", [0.0; 3], true);
         assert_eq!(world.query::<TextLabel>().count(), 1);
+    }
+
+    #[test]
+    fn point_in_includes_top_left_excludes_bottom_right() {
+        let r = [10.0, 20.0, 100.0, 40.0];
+        assert!(point_in(10.0, 20.0, r), "top-left corner is inside");
+        assert!(point_in(50.0, 40.0, r), "interior is inside");
+        assert!(!point_in(110.0, 40.0, r), "right edge is outside");
+        assert!(!point_in(50.0, 60.0, r), "bottom edge is outside");
+        assert!(!point_in(9.9, 40.0, r), "left of the rect is outside");
     }
 }

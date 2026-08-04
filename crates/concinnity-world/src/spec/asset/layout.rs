@@ -1,7 +1,6 @@
 // UI structure builders: a Panel container and a Screen layer.
 
 use crate::spec::AssetSpec;
-use alloc::string::String;
 
 // A Panel (a titled background box) at `rect` ([x, y, w, h], window pixels). The
 // colour, corner radius, and title styling keep their defaults.
@@ -23,7 +22,6 @@ pub fn screen(name: impl Into<String>, initial: bool) -> AssetSpec {
 mod tests {
     use super::*;
     use crate::spec::ArgValue;
-    use alloc::string::ToString;
 
     #[test]
     fn panel_sets_rect_and_title() {

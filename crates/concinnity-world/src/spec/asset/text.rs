@@ -2,7 +2,6 @@
 // editable text input.
 
 use crate::spec::AssetSpec;
-use alloc::string::String;
 
 // A Font compiled at `size_px` pixels. With no `path` set it compiles from the
 // built-in font; chain `.set("path", ...)` for a user typeface.
@@ -61,7 +60,6 @@ pub fn text_input(name: impl Into<String>, placeholder: impl Into<String>) -> As
 mod tests {
     use super::*;
     use crate::spec::ArgValue;
-    use alloc::string::ToString;
 
     #[test]
     fn font_sets_size() {

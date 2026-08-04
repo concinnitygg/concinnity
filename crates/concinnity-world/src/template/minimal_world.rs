@@ -3,10 +3,8 @@
 // cross-references), so applying the template drops a complete little scene into
 // any fresh world -- something to look at the moment it renders.
 
-use crate::asset;
 use crate::spec::AssetSpec;
-use alloc::vec;
-use alloc::vec::Vec;
+use crate::spec::asset;
 
 pub fn assets() -> Vec<AssetSpec> {
     vec![

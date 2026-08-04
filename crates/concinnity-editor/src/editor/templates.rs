@@ -29,10 +29,10 @@ pub(crate) fn row_bg(i: usize) -> AssetId {
 // The number of template rows (one per built-in template) and the title of row
 // `i`, read from the shared templates crate.
 pub(crate) fn count() -> usize {
-    concinnity_templates::TEMPLATES.len()
+    concinnity_world::template::TEMPLATES.len()
 }
 fn title(i: usize) -> &'static str {
-    concinnity_templates::TEMPLATES[i].title
+    concinnity_world::template::TEMPLATES[i].title
 }
 
 // The default (and minimum) panel width; the user can widen it past this.
@@ -152,7 +152,7 @@ mod tests {
                 .query::<TextLabel>()
                 .find(|l| l.asset_id == row_label(BASE, i))
                 .unwrap();
-            assert_eq!(l.content, concinnity_templates::TEMPLATES[i].title);
+            assert_eq!(l.content, concinnity_world::template::TEMPLATES[i].title);
         }
     }
 

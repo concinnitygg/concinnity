@@ -1,13 +1,13 @@
 // World templates: named bundles of asset specs the editor and `cn add --template`
-// layer onto a world. Each template's assets are built from the typed `crate::asset`
-// builders, so a consumer gets structured specs (never a JSON string to parse).
+// layer onto a world. Each template's assets are built from the typed
+// `crate::spec::asset` builders, so a consumer gets structured specs (never a JSON
+// string to parse).
 // Every asset stays standalone (no required cross-references) and free of source-file
 // dependencies, so a template applies cleanly to any fresh world.
 
 mod minimal_world;
 
 use crate::spec::AssetSpec;
-use alloc::vec::Vec;
 
 // A named bundle of asset specs.
 pub struct WorldTemplate {
@@ -46,8 +46,6 @@ pub fn by_name(name: &str) -> Option<&'static WorldTemplate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::String;
-    use alloc::vec::Vec;
 
     // Every template builds at least one asset, each a well-formed spec (a
     // non-empty name and a non-empty args object). This is the structural contract

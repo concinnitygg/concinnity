@@ -1,7 +1,6 @@
 // Sprite element builder.
 
 use crate::spec::AssetSpec;
-use alloc::string::String;
 
 // A rectangular Sprite at `rect` ([x, y, w, h], window pixels) with `tint`
 // (RGBA). Visibility, texture, and corner radius keep their defaults; chain

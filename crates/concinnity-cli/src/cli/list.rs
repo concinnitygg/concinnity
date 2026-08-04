@@ -6,7 +6,7 @@ use concinnity_cook::world::{find_world_jsonl, parse_world_jsonl, resolve_includ
 // Authoring metadata for a type name, whether it is a registry component or a
 // resource asset (AudioClip, Texture, ...) that lives outside the component
 // registry.
-fn registration_for(type_str: &str) -> Option<concinnity_cook::registry::Registration> {
+fn registration_for(type_str: &str) -> Option<concinnity_world::registry::Registration> {
     if let Some(ct) = ComponentType::parse(type_str) {
         return Some(ct.registration());
     }

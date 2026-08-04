@@ -1,51 +1,82 @@
-// LLM-facing asset reference. Built at compile time by this crate's build.rs,
-// which parses the concinnity-core asset modules with syn and extracts the
-// rustdoc on each Component struct. The table is embedded in the binary; no
-// runtime file I/O. The same data is also written to docs/assets/*.md, one
-// page per type, for a docs site to fetch and render.
+// The asset reference, embedded.
 //
-// Two consumers:
-//   - concinnity-ai's describe_asset_type tool returns the full_doc field for a
-//     single type on demand.
-//   - concinnity-infra's new-chat context emits the flat asset list (the
-//     summary field).
+// `build.rs` reads the rustdoc off every authorable asset's schema struct,
+// pairs it with the args metadata in the authoring registry, and bakes the
+// result into a static table. The extraction happens once, at build time, from
+// the tree being built, so the prose and the registry can never disagree and
+// nothing here reads a source file at runtime.
+//
+// That makes the reference usable wherever an asset type needs explaining: the
+// cook pipeline's type discovery, `cn docs` writing the markdown pages, and any
+// authoring or agentic tool that wants a type's documentation on demand.
 
-// The rendering library, shared with build.rs via #[path]. Compiled only under
-// #[cfg(test)] here so its build-time helpers carry no runtime weight; the lib
-// tests below re-render from ASSET_DOCS to assert the committed pages are in
-// sync.
+#![no_std]
+
+extern crate alloc;
+
+// The test harness links std; name it so `#[cfg(test)]` modules can use
+// std-pathed helpers. The library target pulls in nothing beyond core + alloc.
 #[cfg(test)]
-#[path = "render.rs"]
-mod render;
+extern crate std;
+
+mod page;
+
+pub use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
+
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 include!(concat!(env!("OUT_DIR"), "/assets_doc.rs"));
 
-// Look up the full doc for an asset type by NAME (case-insensitive). Finds both
-// top-level assets and the reference types (value-type structs, documented
-// enums) they embed.
+/// Look up a type's documentation by NAME (case-insensitive). Finds both
+/// authorable assets and the reference types (nested value types, documented
+/// enums) they embed.
 pub fn describe(type_name: &str) -> Option<&'static AssetDoc> {
     ASSET_DOCS
         .iter()
         .find(|d| d.type_name.eq_ignore_ascii_case(type_name))
 }
 
-// Render the flat list of `Name - summary` lines for every authorable asset,
-// the shape `gather_new_chat_context` wants. Assets appear alphabetically (the
-// order build.rs emits them in). Reference types are excluded: they document
-// the nested objects and enums assets embed, not user-declarable assets.
-pub fn asset_summary_block() -> String {
-    let assets = || ASSET_DOCS.iter().filter(|d| !d.is_reference_type);
-    let max_name = assets().map(|d| d.type_name.len()).max().unwrap_or(0);
-    let mut out = String::new();
-    for d in assets() {
-        // Pad type names so summaries align, purely cosmetic for the LLM.
-        out.push_str(&format!(
-            "{:<width$} - {}\n",
-            d.type_name,
-            d.summary,
-            width = max_name
-        ));
+/// A type's one-line summary, for a listing that has room for a description but
+/// not a whole page.
+pub fn summary(type_name: &str) -> Option<&'static str> {
+    describe(type_name).map(|d| d.summary)
+}
+
+/// Every authorable asset, in the order the reference lists them. Excludes the
+/// reference types, which document what assets embed rather than what a world
+/// can declare.
+pub fn assets() -> impl Iterator<Item = &'static AssetDoc> {
+    ASSET_DOCS.iter().filter(|d| !d.is_reference_type)
+}
+
+/// The whole reference as markdown, keyed by page file name (`Prop.md`,
+/// `index.md`). What `cn docs` writes to disk.
+pub fn pages() -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for d in ASSET_DOCS {
+        out.insert(
+            format!("{}.md", d.type_name),
+            render_page(d.type_name, d.full_doc),
+        );
     }
+
+    let index = |reference_types: bool| -> Vec<IndexEntry> {
+        ASSET_DOCS
+            .iter()
+            .filter(|d| d.is_reference_type == reference_types)
+            .map(|d| IndexEntry {
+                name: d.type_name.to_string(),
+                summary: d.summary.to_string(),
+            })
+            .collect()
+    };
+    out.insert(
+        "index.md".to_string(),
+        render_index(&index(false), &index(true)),
+    );
     out
 }
 
@@ -54,80 +85,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn describe_finds_known_type() {
-        let d = describe("Texture").expect("Texture should be in ASSET_DOCS");
+    fn describe_finds_assets_case_insensitively() {
+        let d = describe("Texture").expect("Texture should be documented");
         assert_eq!(d.type_name, "Texture");
         assert!(!d.summary.is_empty());
-        assert!(!d.full_doc.is_empty());
         assert!(d.full_doc.contains(d.summary));
-    }
-
-    #[test]
-    fn describe_is_case_insensitive() {
         assert!(describe("texture").is_some());
         assert!(describe("TEXTURE").is_some());
-    }
-
-    #[test]
-    fn describe_returns_none_for_unknown_type() {
         assert!(describe("NotARealAsset").is_none());
     }
 
+    // A nested value type an asset embeds (Prop.collider) is documented in its
+    // own right, not just inlined into the asset that embeds it.
     #[test]
     fn describe_finds_reference_types() {
-        // A nested value type embedded by an asset (Prop.collider) is documented
-        // and reachable by name, not just inlined into the asset page.
-        let d = describe("PropCollider").expect("PropCollider should be in ASSET_DOCS");
+        let d = describe("PropCollider").expect("PropCollider should be documented");
         assert!(d.is_reference_type);
+        assert!(!assets().any(|a| a.type_name == "PropCollider"));
     }
 
+    // The extraction resolved real prose for every type. An empty summary means
+    // the asset sources went unread, which would otherwise surface as a page set
+    // of bare titles.
     #[test]
-    fn asset_summary_block_contains_all_assets() {
-        let block = asset_summary_block();
+    fn every_type_resolved_documentation() {
+        assert!(ASSET_DOCS.len() > 50, "suspiciously small reference");
         for d in ASSET_DOCS {
-            if d.is_reference_type {
-                continue;
-            }
-            assert!(
-                block.contains(d.type_name),
-                "block missing {}: {block}",
-                d.type_name
-            );
-        }
-    }
-
-    #[test]
-    fn asset_summary_block_excludes_reference_types() {
-        let block = asset_summary_block();
-        for d in ASSET_DOCS {
-            if d.is_reference_type {
-                assert!(
-                    !block.lines().any(|l| l.starts_with(d.type_name)),
-                    "block should not list reference type {}",
-                    d.type_name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn all_summaries_are_single_line() {
-        for d in ASSET_DOCS {
+            assert!(!d.summary.is_empty(), "{} has no summary", d.type_name);
             assert!(
                 !d.summary.contains('\n'),
                 "{}'s summary spans multiple lines: {:?}",
                 d.type_name,
                 d.summary
             );
-            assert!(!d.summary.is_empty(), "{} has empty summary", d.type_name);
         }
     }
 
-    // No `](#anchor)` cross-references survive into the embedded docs' prose:
-    // every one is rewritten to a relative `Name.md` link at build time. Code
-    // spans and fenced blocks are exempt; they never render as links, and a
-    // doc may legitimately show anchor-link syntax verbatim (e.g. StoryImport
-    // documenting its Markdown dialect).
+    #[test]
+    fn pages_cover_every_type_plus_the_index() {
+        let pages = pages();
+        assert_eq!(pages.len(), ASSET_DOCS.len() + 1);
+        assert!(pages.contains_key("index.md"));
+        for d in ASSET_DOCS {
+            let page = &pages[&format!("{}.md", d.type_name)];
+            assert!(page.starts_with(AUTOGEN_MARKER));
+            assert!(page.contains(&format!("# {}", d.type_name)));
+        }
+    }
+
+    // No `](#anchor)` cross-reference survives into a page's prose: every one is
+    // rewritten to a relative `Name.md` link at build time. Code spans and
+    // fenced blocks are exempt, since they never render as links and a doc may
+    // legitimately show anchor syntax verbatim (StoryImport documents its own
+    // Markdown dialect).
     #[test]
     fn no_in_page_anchor_links_remain() {
         for d in ASSET_DOCS {
@@ -140,8 +150,8 @@ mod tests {
         }
     }
 
-    // Strip fenced code blocks and inline code spans, leaving only the prose
-    // that renders as markdown.
+    // Strip fenced code blocks and inline code spans, leaving the prose that
+    // renders as markdown.
     fn prose_only(doc: &str) -> String {
         let mut out = String::new();
         let mut in_fence = false;
@@ -163,58 +173,5 @@ mod tests {
             out.push('\n');
         }
         out
-    }
-
-    fn pages_dir() -> std::path::PathBuf {
-        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/assets"))
-            .to_path_buf()
-    }
-
-    #[test]
-    fn each_page_matches_generated_docs() {
-        use crate::render::render_page;
-        for d in ASSET_DOCS {
-            let path = pages_dir().join(format!("{}.md", d.type_name));
-            let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                panic!(
-                    "read {}: {e}; rebuild concinnity-infra to regenerate the asset pages",
-                    path.display()
-                )
-            });
-            let expected = render_page(d.type_name, d.full_doc);
-            assert_eq!(
-                on_disk, expected,
-                "docs/assets/{}.md is out of date - rebuild concinnity-infra to regenerate it",
-                d.type_name
-            );
-        }
-    }
-
-    #[test]
-    fn index_matches_generated_docs() {
-        use crate::render::{IndexEntry, render_index};
-        let entry = |d: &AssetDoc| IndexEntry {
-            name: d.type_name.to_string(),
-            summary: d.summary.to_string(),
-        };
-        let assets: Vec<IndexEntry> = ASSET_DOCS
-            .iter()
-            .filter(|d| !d.is_reference_type)
-            .map(entry)
-            .collect();
-        let ref_types: Vec<IndexEntry> = ASSET_DOCS
-            .iter()
-            .filter(|d| d.is_reference_type)
-            .map(entry)
-            .collect();
-        let expected = render_index(&assets, &ref_types);
-
-        let path = pages_dir().join("index.md");
-        let on_disk = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        assert_eq!(
-            on_disk, expected,
-            "docs/assets/index.md is out of date - rebuild concinnity-infra to regenerate it"
-        );
     }
 }

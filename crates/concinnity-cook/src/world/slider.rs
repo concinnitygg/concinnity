@@ -12,8 +12,7 @@
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{font_sizes, label_value, sprite};
 use crate::assets::Slider;
-use crate::template_spec::spec_to_value;
-use concinnity_templates::asset;
+use concinnity_world::spec::{asset, spec_to_value};
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches

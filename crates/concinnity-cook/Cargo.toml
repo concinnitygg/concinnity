@@ -15,7 +15,7 @@ doctest = false
 concinnity-core = { path = "../concinnity-core" }
 concinnity-blob = { path = "../concinnity-blob" }
 concinnity-world = { path = "../concinnity-world" }
-concinnity-templates = { path = "../concinnity-templates" }
+concinnity-docs = { path = "../concinnity-docs" }
 
 bytemuck = "1"
 serde = { version = "1", features = ["derive"] }

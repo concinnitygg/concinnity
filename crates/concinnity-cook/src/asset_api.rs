@@ -18,11 +18,14 @@ pub struct AssetRequest {
     pub args: Option<serde_json::Value>,
 }
 
-// Describes one addable asset type. Returned by list_addable_types() and
-// used by HTTP GET /assets/types and CLI help output
+// Describes one addable asset type: its name, what it is, and the authoring
+// metadata a caller needs to construct one. The summary is the first line of the
+// type's reference documentation, so a picker can say what an asset does rather
+// than only naming it.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetTypeEntry {
     pub asset_type: String,
+    pub summary: String,
     pub registration: Registration,
 }
 
@@ -68,6 +71,9 @@ pub fn list_addable_types() -> Vec<AssetTypeEntry> {
     let mut entries: Vec<AssetTypeEntry> = ComponentType::addable_types()
         .map(|(ct, reg)| AssetTypeEntry {
             asset_type: ct.as_str().to_string(),
+            summary: concinnity_docs::summary(ct.as_str())
+                .unwrap_or_default()
+                .to_string(),
             registration: reg,
         })
         .collect();
@@ -276,5 +282,23 @@ mod tests {
         );
         assert!(entries.iter().any(|e| e.asset_type == "ProceduralMesh"));
         assert!(entries.iter().all(|e| e.asset_type != "Transform"));
+    }
+
+    // Every addable type carries its reference summary, so a picker can describe
+    // what it offers. An addable type is authorable, so it always has a page.
+    #[test]
+    fn addable_type_listing_carries_summaries() {
+        for e in list_addable_types() {
+            assert!(
+                !e.summary.is_empty(),
+                "{} has no summary in the asset reference",
+                e.asset_type
+            );
+            assert!(
+                !e.summary.contains('\n'),
+                "{} summary is multi-line",
+                e.asset_type
+            );
+        }
     }
 }

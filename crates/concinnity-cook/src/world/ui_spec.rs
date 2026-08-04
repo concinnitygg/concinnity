@@ -4,7 +4,7 @@
 // all expand into the same handful of overlay primitives: settings labels,
 // solid sprites, and a font-size lookup for vertical centering. These once lived
 // as byte-identical copies in each expander; they now build the typed
-// `concinnity_templates::asset` specs once here and convert them to the world's
+// `concinnity_world::spec::asset` specs once here and convert them to the world's
 // `serde_json::Value` with the core bridge, so the element shapes are
 // single-sourced and match the specs the editor and world templates use.
 
@@ -12,8 +12,7 @@ use std::collections::HashMap;
 
 use super::expand::{asset_name, type_norm};
 use crate::assets::Font;
-use crate::template_spec::spec_to_value;
-use concinnity_templates::asset;
+use concinnity_world::spec::{asset, spec_to_value};
 
 // A settings/menu TextLabel value with `centered` pinned false: the default-font
 // pass would otherwise recenter a font-carrying label onto the viewport centre,

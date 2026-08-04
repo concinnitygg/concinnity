@@ -2,13 +2,16 @@
 //
 // An `AssetSpec` is a `{name, type, args}` entry described as data rather than a
 // JSON string. `args` is an ordered list of `(key, ArgValue)` pairs, where
-// `ArgValue` is a small JSON-shaped value tree. Builders in `crate::asset`
-// assemble these; a std consumer turns them into the engine's `serde_json::Value`
-// (or a typed component) without any string parsing. This is the substrate both
-// the asset templates and the world templates are expressed in.
+// `ArgValue` is a small JSON-shaped value tree. Builders in `asset` assemble
+// these; `json` converts one into the engine's `serde_json::Value` so a consumer
+// never parses a JSON string. This is the substrate both the asset builders and
+// the world templates in `crate::template` are expressed in.
 
-use alloc::string::String;
-use alloc::vec::Vec;
+pub mod asset;
+
+mod json;
+
+pub use json::{arg_value_to_json, spec_args, spec_to_value};
 
 // A JSON-shaped value: exactly the shapes an asset's `args` object can hold. Kept
 // deliberately small so it maps one-to-one onto the engine's accept path
@@ -118,8 +121,6 @@ impl AssetSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
-    use alloc::vec;
 
     #[test]
     fn set_records_fields_in_order() {

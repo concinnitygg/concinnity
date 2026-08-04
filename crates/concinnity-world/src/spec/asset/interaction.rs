@@ -1,7 +1,6 @@
 // UI interaction builder: a clickable HitRegion.
 
 use crate::spec::AssetSpec;
-use alloc::string::String;
 
 // A HitRegion over `rect` ([x, y, w, h], window pixels) that fires `action` when
 // clicked. Hover styling and references keep their defaults.
@@ -18,7 +17,6 @@ pub fn hit_region(name: impl Into<String>, rect: [f32; 4], action: impl Into<Str
 mod tests {
     use super::*;
     use crate::spec::ArgValue;
-    use alloc::string::ToString;
 
     #[test]
     fn hit_region_sets_rect_and_action() {

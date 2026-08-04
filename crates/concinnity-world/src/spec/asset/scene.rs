@@ -3,7 +3,6 @@
 // template built from them applies cleanly to any fresh world.
 
 use crate::spec::AssetSpec;
-use alloc::string::String;
 
 // A directional (sun) light of `color` (RGB) shining along `direction`, scaled by
 // `intensity`.
@@ -115,7 +114,6 @@ pub fn post_process(
 mod tests {
     use super::*;
     use crate::spec::ArgValue;
-    use alloc::string::ToString;
 
     #[test]
     fn directional_light_sets_its_fields() {

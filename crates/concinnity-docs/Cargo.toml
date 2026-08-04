@@ -8,7 +8,10 @@ publish = false
 build = "build.rs"
 
 [lib]
+name = "concinnity_docs"
 doctest = false
+
+[dependencies]
 
 [build-dependencies]
 syn = { version = "2", features = ["full", "parsing"] }

@@ -6,6 +6,7 @@
 mod add;
 mod build;
 mod check;
+mod docs;
 mod explain;
 mod export;
 mod list;
@@ -17,6 +18,9 @@ pub use add::add;
 
 // Analyze the current app and report errors, but don't build blob files
 pub use check::check;
+
+// Regenerate the asset reference pages under docs/assets/
+pub use docs::docs;
 
 // Print one asset's effective entry from the expanded world
 pub use explain::explain;

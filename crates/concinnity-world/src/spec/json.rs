@@ -1,15 +1,11 @@
-// The std bridge for `concinnity-templates`.
+// The JSON bridge for typed specs.
 //
-// The templates crate is `#![no_std]` and describes assets as typed `AssetSpec`
-// / `ArgValue` data. This turns that data into the engine's `serde_json::Value`
-// so a std consumer never parses a JSON string: the cook pipeline builds UI
-// assets from the shared `asset::` builders, and authoring consumers turn a spec
-// into a world-line value. The cook crate is the natural home: it owns the
-// build-time asset construction that needs this, and (unlike concinnity-core) it
-// is excluded from the shipped runtime, so a game never links this authoring
-// code. The app authoring layer re-exports these; the editor reaches them there.
+// Turns `AssetSpec` / `ArgValue` data into the engine's `serde_json::Value`, so
+// a consumer never parses a JSON string: the cook pipeline builds UI assets from
+// the shared `asset::` builders, and authoring consumers turn a spec into a
+// world-line value.
 
-use concinnity_templates::{ArgValue, AssetSpec};
+use super::{ArgValue, AssetSpec};
 use serde_json::{Map, Number, Value};
 
 // One `ArgValue` as a `serde_json::Value`.

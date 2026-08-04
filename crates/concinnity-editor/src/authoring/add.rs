@@ -272,7 +272,7 @@ fn scaffold_to_inject(
 }
 
 // Map a `--template <name>` value to its entries, looked up in the engine-owned
-// `concinnity-templates` registry and parsed from its JSONL. Returns:
+// `concinnity_world::template` registry. Returns:
 //   - `Ok(None)`              when no template was requested (use default scaffold)
 //   - `Ok(Some(entries))`     when the named template is known
 //   - `Err(InvalidInput)`     when the name is unrecognised (typo → fail fast)
@@ -280,7 +280,7 @@ fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_
     let Some(name) = template else {
         return Ok(None);
     };
-    match concinnity_templates::by_name(name) {
+    match concinnity_world::template::by_name(name) {
         Some(t) => Ok(Some(
             crate::authoring::template_spec::world_template_entries(t),
         )),
@@ -296,7 +296,7 @@ fn resolve_template(template: Option<&str>) -> std::io::Result<Option<Vec<serde_
 
 // Comma-separated list of known template names, for the "unknown template" error.
 fn available_templates() -> String {
-    concinnity_templates::TEMPLATES
+    concinnity_world::template::TEMPLATES
         .iter()
         .map(|t| t.name)
         .collect::<Vec<_>>()
@@ -326,7 +326,7 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             Err(_) => continue,
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && concinnity_cook::registry::type_renders(t)
+            && concinnity_world::registry::type_renders(t)
         {
             return true;
         }
@@ -1387,10 +1387,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let world = dir.join("world.jsonl");
 
-        let name = concinnity_templates::TEMPLATES[0].name;
+        let name = concinnity_world::template::TEMPLATES[0].name;
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
             .expect("a named template should apply for a renderer-less glb add");
-        let expected = concinnity_templates::by_name(name).unwrap().assets().len();
+        let expected = concinnity_world::template::by_name(name)
+            .unwrap()
+            .assets()
+            .len();
         assert_eq!(scaffold.len(), expected, "expected the template's entries");
         assert!(!scaffold.is_empty());
     }
@@ -1403,7 +1406,7 @@ mod tests {
     #[test]
     fn every_template_entry_validates_as_a_real_asset() {
         let _guard = crate::test_support::lock();
-        for t in concinnity_templates::TEMPLATES {
+        for t in concinnity_world::template::TEMPLATES {
             let entries = crate::authoring::template_spec::world_template_entries(t);
             assert!(!entries.is_empty(), "template '{}' is empty", t.name);
             for entry in entries {
@@ -1858,7 +1861,7 @@ mod tests {
         let dir = text_test_dir(line!());
         let world = dir.join("world.jsonl");
 
-        let name = concinnity_templates::TEMPLATES[0].name;
+        let name = concinnity_world::template::TEMPLATES[0].name;
         let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);

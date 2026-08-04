@@ -18,7 +18,7 @@ use crate::assets::{DebugHud, Sprite, StatHud, TextInput, TextLabel, Window, Win
 use crate::ecs::FontHandle;
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use concinnity_templates::{AssetSpec, asset};
+use concinnity_world::spec::{AssetSpec, asset};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport (`hud::layout`).
