@@ -53,3 +53,41 @@ impl Default for SpotLight {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_spot_points_down_with_a_soft_edged_cone() {
+        let l = SpotLight::default();
+        assert_eq!(l.position, [0.0, 4.0, 0.0]);
+        assert_eq!(l.direction, [0.0, -1.0, 0.0]);
+        // The inner cone is narrower than the outer one, so the falloff band
+        // exists and the edge is not a hard circle.
+        assert!(l.inner_angle < l.outer_angle);
+        assert_eq!(l.intensity, 20.0);
+        assert_eq!(l.range, 10.0);
+        assert!(l.cast_shadows);
+    }
+
+    #[test]
+    fn an_authored_spot_parses_and_round_trips_through_postcard() {
+        let l: SpotLight = serde_json::from_str(
+            r#"{"position":[2,3,-1],"direction":[0,-1,0.5],"color":[1,0.9,0.7],
+                "intensity":45,"range":18,"inner_angle":10,"outer_angle":25,
+                "cast_shadows":false}"#,
+        )
+        .unwrap();
+        assert!(!l.cast_shadows);
+
+        let bytes = postcard::to_allocvec(&l).unwrap();
+        let back: SpotLight = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.position, [2.0, 3.0, -1.0]);
+        assert_eq!(back.direction, [0.0, -1.0, 0.5]);
+        assert_eq!(back.color, [1.0, 0.9, 0.7]);
+        assert_eq!(back.intensity, 45.0);
+        assert_eq!(back.range, 18.0);
+        assert_eq!((back.inner_angle, back.outer_angle), (10.0, 25.0));
+    }
+}

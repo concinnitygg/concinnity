@@ -228,39 +228,82 @@ mod tests {
     // deterministic stand-in first, so they stay correct regardless of the order
     // the test harness runs them in (installs are idempotent, last-writer-wins).
     use super::*;
+    use crate::test_support::{install_resolvers, len_handle_resolver, len_name_resolver};
     use crate::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
-
-    // A name resolves to its byte length: a simple, order-independent mapping.
-    fn len_resolver(name: &str) -> u32 {
-        name.len() as u32
-    }
 
     struct Clip;
 
     #[test]
+    fn a_slot_reads_back_the_function_pointer_it_was_given() {
+        // The slots hold their function pointer as a `usize` and transmute it
+        // back, the one piece of unsafe here. Exercising a fresh slot rather
+        // than the process-global statics is the only way to see the unset
+        // state, which a test cannot restore once something has installed.
+        let name_slot = NameResolverSlot::new();
+        assert_eq!(name_slot.resolve("floor"), None);
+        name_slot.set(len_name_resolver);
+        assert_eq!(name_slot.resolve("floor"), Some(5));
+
+        let handle_slot = HandleResolverSlot::new();
+        assert_eq!(handle_slot.resolve("floor"), None);
+        handle_slot.set(len_handle_resolver);
+        assert_eq!(handle_slot.resolve("floor"), Some(5));
+        // A handle resolver may also answer "no such resource of this kind",
+        // which the name interner slot has no way to express.
+        assert_eq!(handle_slot.resolve("unknown_x"), None);
+    }
+
+    #[test]
     fn installed_resolver_is_used() {
-        set_name_resolver(len_resolver);
+        set_name_resolver(len_name_resolver);
         assert_eq!(resolve_name("abcd"), Some(4));
     }
 
     #[test]
     fn asset_id_resolves_a_name_through_the_seam() {
-        set_name_resolver(len_resolver);
+        set_name_resolver(len_name_resolver);
         let id: AssetId = serde_json::from_str("\"floor\"").unwrap();
         assert_eq!(id, AssetId(5));
     }
 
     #[test]
     fn asset_ref_resolves_a_name_through_the_seam() {
-        set_name_resolver(len_resolver);
+        set_name_resolver(len_name_resolver);
         let r: AssetRef<Clip> = serde_json::from_str("\"wall\"").unwrap();
         assert_eq!(r.id(), Some(AssetId(4)));
         assert!(r.is_resolved());
     }
 
     #[test]
+    fn every_handle_seam_resolves_through_its_own_slot() {
+        // One slot per kind: a name is a position in that kind's declaration-
+        // ordered table, so the kinds never share an answer by accident.
+        install_resolvers();
+        set_texture_handle_resolver(len_handle_resolver);
+        set_audio_clip_handle_resolver(len_handle_resolver);
+        set_font_handle_resolver(len_handle_resolver);
+        set_mesh_handle_resolver(len_handle_resolver);
+        set_material_handle_resolver(len_handle_resolver);
+        set_skinned_mesh_handle_resolver(len_handle_resolver);
+        set_shader_handle_resolver(len_handle_resolver);
+
+        assert_eq!(resolve_texture_handle("floor"), Some(5));
+        assert_eq!(resolve_audio_clip_handle("floor"), Some(5));
+        assert_eq!(resolve_font_handle("floor"), Some(5));
+        assert_eq!(resolve_mesh_handle("floor"), Some(5));
+        assert_eq!(resolve_material_handle("floor"), Some(5));
+        assert_eq!(resolve_skinned_mesh_handle("floor"), Some(5));
+        assert_eq!(resolve_shader_handle("floor"), Some(5));
+
+        // A handle is not assignable on demand: a name the build declares no
+        // resource of that kind for has none, even with a resolver installed.
+        assert_eq!(resolve_texture_handle("unknown_x"), None);
+        assert_eq!(resolve_shader_handle("unknown_x"), None);
+    }
+
+    #[test]
     fn opt_helpers_resolve_a_name_and_pass_through_an_id() {
-        set_name_resolver(len_resolver);
+        set_name_resolver(len_name_resolver);
 
         #[derive(serde::Deserialize)]
         struct Bare {

@@ -67,3 +67,44 @@ impl Default for GlassPanel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_panel_is_a_visible_half_transparent_unit_square() {
+        let g = GlassPanel::default();
+        assert_eq!(g.centre, [0.0, 1.0, 0.0]);
+        assert_eq!(g.normal, [0.0, 0.0, 1.0]);
+        assert_eq!(g.half_size, [1.0, 1.0]);
+        assert_eq!(g.opacity, 0.5);
+        assert_eq!(g.refraction_strength, 0.04);
+        assert_eq!(g.fresnel_power, 4.0);
+        assert!(g.visible);
+        // The default tint is a faint cool cast, not neutral white.
+        assert_eq!(g.tint, [0.7, 0.85, 0.95]);
+    }
+
+    #[test]
+    fn an_authored_panel_parses_and_round_trips_through_postcard() {
+        let g: GlassPanel = serde_json::from_str(
+            r#"{"centre":[2,1,-3],"normal":[1,0,0],"half_size":[0.6,1.2],
+                "tint":[1,1,1],"opacity":0.2,"refraction_strength":0.1,"visible":false}"#,
+        )
+        .unwrap();
+        assert_eq!(g.normal, [1.0, 0.0, 0.0]);
+        assert!(!g.visible);
+
+        let bytes = postcard::to_allocvec(&g).unwrap();
+        let back: GlassPanel = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.centre, [2.0, 1.0, -3.0]);
+        assert_eq!(back.half_size, [0.6, 1.2]);
+        assert_eq!(back.tint, [1.0, 1.0, 1.0]);
+        assert_eq!(back.opacity, 0.2);
+        assert_eq!(back.refraction_strength, 0.1);
+        // Fresnel was not authored, so it keeps the schema default.
+        assert_eq!(back.fresnel_power, 4.0);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

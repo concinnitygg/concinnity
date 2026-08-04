@@ -31,3 +31,33 @@ pub struct Scene {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub camera_shot: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scene_with_no_shot_leaves_the_camera_where_it_is() {
+        let s = Scene::default();
+        assert!(s.camera_shot.is_none());
+        assert_eq!(s.asset_id, AssetId::default());
+        assert!(
+            serde_json::from_str::<Scene>("{}")
+                .unwrap()
+                .camera_shot
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_named_shot_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let s: Scene = serde_json::from_str(r#"{"camera_shot":"establishing"}"#).unwrap();
+        assert_eq!(s.camera_shot, Some(AssetId(12)));
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Scene = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.camera_shot, Some(AssetId(12)));
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

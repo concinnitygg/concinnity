@@ -81,3 +81,44 @@ impl Default for Slider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_slider_matches_the_settings_row_it_sits_in() {
+        let s = Slider::default();
+        assert!(s.setting.is_empty());
+        assert!(s.label.is_empty());
+        assert_eq!((s.width, s.height), (360.0, 48.0));
+        assert_eq!(s.text_scale, 1.0);
+        // The handle is opaque against a dimmer track so the value reads at a
+        // glance.
+        assert_eq!(s.track_color[3], 1.0);
+        assert_eq!(s.handle_color, [1.0, 0.85, 0.3, 1.0]);
+    }
+
+    #[test]
+    fn an_authored_slider_parses_and_round_trips_through_postcard() {
+        let s: Slider = serde_json::from_str(
+            r#"{"setting":"master_volume","label":"Volume","x":40,"y":200,"width":420,
+                "height":40,"font":"body","font_px":32,"text_color":[1,1,1],
+                "value_color":[0.7,0.7,0.7],"text_scale":1.1,
+                "track_color":[0,0,0,1],"handle_color":[1,1,1,1]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.setting, "master_volume");
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Slider = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.label, "Volume");
+        assert_eq!((back.x, back.y), (40.0, 200.0));
+        assert_eq!((back.width, back.height), (420.0, 40.0));
+        assert_eq!(back.font, "body");
+        assert_eq!(back.font_px, 32.0);
+        assert_eq!(back.value_color, [0.7, 0.7, 0.7]);
+        assert_eq!(back.text_scale, 1.1);
+        assert_eq!(back.track_color, [0.0, 0.0, 0.0, 1.0]);
+    }
+}

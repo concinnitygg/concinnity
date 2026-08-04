@@ -38,3 +38,32 @@ impl Default for CubemapTexture {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_cubemap_bakes_at_the_default_face_size() {
+        let c = CubemapTexture::default();
+        assert!(c.source.is_empty());
+        assert_eq!(c.face_size, 256);
+        assert_eq!(c.asset_id, AssetId::default());
+        assert!(c.locator.is_none());
+    }
+
+    #[test]
+    fn an_authored_face_size_parses_and_round_trips_through_postcard() {
+        let c: CubemapTexture =
+            serde_json::from_str(r#"{"source":"sky.hdr","face_size":1024}"#).unwrap();
+        assert_eq!(c.source, "sky.hdr");
+        assert_eq!(c.face_size, 1024);
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: CubemapTexture = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.face_size, 1024);
+        // Identity and payload location are injected, never carried on the wire.
+        assert_eq!(back.asset_id, AssetId::default());
+        assert!(back.locator.is_none());
+    }
+}

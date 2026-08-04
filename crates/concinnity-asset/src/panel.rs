@@ -63,3 +63,43 @@ impl Default for Panel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_panel_is_a_rounded_near_opaque_dark_container() {
+        let p = Panel::default();
+        assert_eq!((p.width, p.height), (400.0, 300.0));
+        assert_eq!(p.corner_radius, 8.0);
+        assert_eq!(p.padding, 16.0);
+        assert_eq!(p.title_scale, 1.0);
+        assert!(p.title.is_empty());
+        assert!(p.title_font.is_empty());
+        // Near-opaque rather than fully so, so the world reads faintly behind it.
+        assert_eq!(p.color[3], 0.96);
+    }
+
+    #[test]
+    fn an_authored_panel_parses_and_round_trips_through_postcard() {
+        let p: Panel = serde_json::from_str(
+            r#"{"x":20,"y":30,"width":520,"height":360,"color":[0,0,0,1],
+                "corner_radius":0,"title":"Outliner","title_font":"body",
+                "title_color":[1,1,1],"title_scale":1.2,"padding":8}"#,
+        )
+        .unwrap();
+        assert_eq!(p.title, "Outliner");
+        assert_eq!(p.corner_radius, 0.0);
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: Panel = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!((back.x, back.y), (20.0, 30.0));
+        assert_eq!((back.width, back.height), (520.0, 360.0));
+        assert_eq!(back.color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(back.title_font, "body");
+        assert_eq!(back.title_color, [1.0, 1.0, 1.0]);
+        assert_eq!(back.title_scale, 1.2);
+        assert_eq!(back.padding, 8.0);
+    }
+}

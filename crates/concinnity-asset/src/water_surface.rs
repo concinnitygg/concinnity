@@ -116,3 +116,69 @@ impl Default for WaterSurface {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_wave_travels_along_positive_x() {
+        let w = WaterWave::default();
+        assert_eq!(w.amplitude, 0.15);
+        assert_eq!(w.wavelength, 4.0);
+        assert_eq!(w.speed, 1.0);
+        assert_eq!(w.direction, [1.0, 0.0]);
+        assert_eq!(w.steepness, 0.4);
+    }
+
+    #[test]
+    fn a_blank_surface_already_has_one_wave_so_it_is_not_a_flat_plane() {
+        let s = WaterSurface::default();
+        assert_eq!(s.waves.len(), 1);
+        assert_eq!(s.waves[0].amplitude, WaterWave::default().amplitude);
+        assert_eq!(s.extent, [10.0, 10.0]);
+        assert_eq!(s.subdivisions, 64);
+        // Deep water is darker and bluer than shallow: the depth gradient is
+        // what reads as water rather than a tinted mirror.
+        assert!(s.deep_colour[2] > s.deep_colour[0]);
+        assert!(s.shallow_colour[1] > s.deep_colour[1]);
+        assert_eq!(s.depth_falloff_metres, 4.0);
+        assert_eq!(s.foam_width_metres, 0.3);
+        assert_eq!(s.foam_intensity, 0.8);
+        assert_eq!(s.fresnel_power, 5.0);
+        assert_eq!(s.roughness, 0.05);
+        assert_eq!(s.refraction_strength, 0.15);
+        assert!(s.visible);
+    }
+
+    #[test]
+    fn a_multi_wave_surface_parses_and_round_trips_through_postcard() {
+        let s: WaterSurface = serde_json::from_str(
+            r#"{"centre":[0,0.2,-5],"extent":[40,25],"subdivisions":128,
+                "waves":[{"amplitude":0.4,"wavelength":12,"direction":[0.7,0.7]},
+                         {"amplitude":0.05,"wavelength":1.5,"speed":2.5,"steepness":0.1}],
+                "deep_colour":[0,0.02,0.1],"shallow_colour":[0.1,0.4,0.45],
+                "depth_falloff_metres":8,"foam_width_metres":0.6,"foam_intensity":1.2,
+                "fresnel_power":4,"roughness":0.02,"refraction_strength":0.3,
+                "visible":false}"#,
+        )
+        .unwrap();
+        assert_eq!(s.waves.len(), 2);
+        // A wave that mentions only some fields keeps the wave defaults.
+        assert_eq!(s.waves[0].speed, 1.0);
+        assert_eq!(s.waves[0].steepness, 0.4);
+        assert_eq!(s.waves[1].direction, [1.0, 0.0]);
+        assert!(!s.visible);
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: WaterSurface = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.centre, [0.0, 0.2, -5.0]);
+        assert_eq!(back.extent, [40.0, 25.0]);
+        assert_eq!(back.subdivisions, 128);
+        assert_eq!(back.waves[1].speed, 2.5);
+        assert_eq!(back.depth_falloff_metres, 8.0);
+        assert_eq!(back.foam_intensity, 1.2);
+        assert_eq!(back.refraction_strength, 0.3);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

@@ -48,3 +48,40 @@ impl Default for PropBody {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_body_falls_under_full_gravity_without_bouncing() {
+        let b = PropBody::default();
+        assert_eq!(b.gravity_scale, 1.0);
+        assert_eq!(b.friction, 0.5);
+        assert_eq!(b.restitution, 0.0);
+        assert_eq!(b.linear_damping, 0.05);
+        // Zero mass means "derive it from the collider", not "massless".
+        assert_eq!(b.mass, 0.0);
+        assert!(b.prop_name.is_none());
+    }
+
+    #[test]
+    fn a_bouncy_floating_body_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let b: PropBody = serde_json::from_str(
+            r#"{"prop_name":"ball","mass":2.5,"friction":0.1,"restitution":0.9,
+                "gravity_scale":0,"linear_damping":0.2}"#,
+        )
+        .unwrap();
+        assert_eq!(b.prop_name, Some(AssetId(4)));
+        assert_eq!(b.gravity_scale, 0.0);
+
+        let bytes = postcard::to_allocvec(&b).unwrap();
+        let back: PropBody = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.prop_name, Some(AssetId(4)));
+        assert_eq!(back.mass, 2.5);
+        assert_eq!(back.friction, 0.1);
+        assert_eq!(back.restitution, 0.9);
+        assert_eq!(back.linear_damping, 0.2);
+    }
+}

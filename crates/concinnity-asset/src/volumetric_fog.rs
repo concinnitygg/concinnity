@@ -52,3 +52,43 @@ impl Default for VolumetricFog {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declaring_fog_turns_it_on_at_a_thin_forward_scattering_density() {
+        // The asset exists to add fog, so `enabled` starts true: `false` is the
+        // way to keep a declared fog around while switching it off.
+        let f = VolumetricFog::default();
+        assert!(f.enabled);
+        assert_eq!(f.density, 0.05);
+        assert_eq!(f.height_falloff, 0.2);
+        assert_eq!(f.height_reference, 0.0);
+        assert_eq!(f.max_distance, 200.0);
+        // Positive g scatters forward, so the sun haloes rather than backlights.
+        assert!(f.phase_g > 0.0);
+        assert_eq!(f.ambient, 0.15);
+    }
+
+    #[test]
+    fn an_authored_fog_parses_and_round_trips_through_postcard() {
+        let f: VolumetricFog = serde_json::from_str(
+            r#"{"enabled":false,"color":[0.5,0.5,0.6],"density":0.2,"height_falloff":0.05,
+                "height_reference":12,"max_distance":80,"phase_g":-0.3,"ambient":0.4}"#,
+        )
+        .unwrap();
+        assert!(!f.enabled);
+        assert!(f.phase_g < 0.0);
+
+        let bytes = postcard::to_allocvec(&f).unwrap();
+        let back: VolumetricFog = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.color, [0.5, 0.5, 0.6]);
+        assert_eq!(back.density, 0.2);
+        assert_eq!(back.height_falloff, 0.05);
+        assert_eq!(back.height_reference, 12.0);
+        assert_eq!(back.max_distance, 80.0);
+        assert_eq!(back.ambient, 0.4);
+    }
+}

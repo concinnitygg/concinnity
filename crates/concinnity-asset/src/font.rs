@@ -42,3 +42,31 @@ impl Default for Font {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_font_rasterises_at_a_readable_body_size() {
+        let f = Font::default();
+        assert!(f.path.is_empty());
+        assert_eq!(f.size_px, 20);
+        assert_eq!(f.asset_id, AssetId::default());
+        assert!(f.locator.is_none());
+    }
+
+    #[test]
+    fn an_authored_atlas_size_parses_and_round_trips_through_postcard() {
+        let f: Font = serde_json::from_str(r#"{"path":"fonts/body.ttf","size_px":48}"#).unwrap();
+        assert_eq!(f.path, "fonts/body.ttf");
+        assert_eq!(f.size_px, 48);
+
+        let bytes = postcard::to_allocvec(&f).unwrap();
+        let back: Font = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.path, "fonts/body.ttf");
+        assert_eq!(back.size_px, 48);
+        // The glyph atlas rides the blob, so the locator is injected at load.
+        assert!(back.locator.is_none());
+    }
+}

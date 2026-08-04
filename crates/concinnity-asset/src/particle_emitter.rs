@@ -87,3 +87,52 @@ impl Default for ParticleEmitter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_emitter_sprays_upward_and_fades_out() {
+        let e = ParticleEmitter::default();
+        assert_eq!(e.direction, [0.0, 1.0, 0.0]);
+        assert_eq!(e.gravity, [0.0, -9.8, 0.0]);
+        assert_eq!(e.spread_deg, 15.0);
+        assert!(e.speed_min <= e.speed_max);
+        assert!(e.lifetime_min <= e.lifetime_max);
+        // Particles shrink and fade over their life rather than popping out.
+        assert!(e.size_end < e.size_start);
+        assert_eq!(e.color_start[3], 1.0);
+        assert_eq!(e.color_end[3], 0.0);
+        assert_eq!(e.spawn_rate, 32.0);
+        assert_eq!(e.max_particles, 256);
+        assert!(e.visible);
+        assert!(e.texture.is_none());
+    }
+
+    #[test]
+    fn an_authored_emitter_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let e: ParticleEmitter = serde_json::from_str(
+            r#"{"texture":"tex_spark","position":[0,1,0],"direction":[0,0,1],"spread_deg":45,
+                "speed_min":2,"speed_max":6,"lifetime_min":0.5,"lifetime_max":1.5,
+                "gravity":[0,0,0],"spawn_rate":120,"max_particles":2048,
+                "size_start":0.05,"size_end":0.2,"color_start":[1,0.6,0.2,1],
+                "color_end":[1,0,0,0],"visible":false}"#,
+        )
+        .unwrap();
+        assert_eq!(e.texture, Some(TextureHandle(9)));
+        assert!(!e.visible);
+        // A spark grows as it cools, so size_end above size_start is allowed.
+        assert!(e.size_end > e.size_start);
+
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: ParticleEmitter = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.texture, Some(TextureHandle(9)));
+        assert_eq!(back.direction, [0.0, 0.0, 1.0]);
+        assert_eq!(back.gravity, [0.0, 0.0, 0.0]);
+        assert_eq!(back.max_particles, 2048);
+        assert_eq!(back.color_start, [1.0, 0.6, 0.2, 1.0]);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

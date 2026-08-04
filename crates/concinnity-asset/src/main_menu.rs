@@ -185,3 +185,82 @@ impl Default for MainMenu {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_menu_can_resume_configure_and_quit() {
+        // The engine never injects a MainMenu, so a world that declares one with
+        // no items still gets a usable pause menu out of the three defaults.
+        let m = MainMenu::default();
+        let actions: Vec<&str> = m.items.iter().map(|i| i.action.as_str()).collect();
+        assert_eq!(actions, ["return", "settings", "quit"]);
+        assert_eq!(m.items[0].label, "Return");
+        assert_eq!(m.toggle_key, "Escape");
+        assert_eq!(m.settings_profile, SettingsProfile::Full);
+        // A pause menu is opened by its key, not shown at startup.
+        assert!(!m.initial);
+        assert!(m.centered);
+        assert!(m.cursor);
+    }
+
+    #[test]
+    fn an_authored_item_list_replaces_the_defaults_wholesale() {
+        let m: MainMenu = serde_json::from_str(
+            r#"{"title":"Ash","initial":true,"items":[{"label":"Play","action":"start"}],
+                "settings_profile":"minimal","toggle_key":"Tab"}"#,
+        )
+        .unwrap();
+        assert_eq!(m.items.len(), 1);
+        assert_eq!(m.items[0].label, "Play");
+        assert_eq!(m.items[0].action, "start");
+        assert_eq!(m.title, "Ash");
+        assert!(m.initial);
+        assert_eq!(m.settings_profile, SettingsProfile::Minimal);
+        assert_eq!(m.toggle_key, "Tab");
+        // Layout the args did not mention keeps the schema defaults.
+        assert_eq!((m.x, m.y), (640.0, 300.0));
+        assert_eq!(m.button_width, 360.0);
+    }
+
+    #[test]
+    fn a_blank_item_carries_neither_label_nor_action() {
+        let item = MainMenuItem::default();
+        assert!(item.label.is_empty());
+        assert!(item.action.is_empty());
+    }
+
+    #[test]
+    fn settings_profile_names_parse_in_lowercase() {
+        assert_eq!(SettingsProfile::default(), SettingsProfile::Full);
+        assert_eq!(
+            serde_json::from_str::<SettingsProfile>(r#""full""#).unwrap(),
+            SettingsProfile::Full
+        );
+        assert_eq!(
+            serde_json::to_string(&SettingsProfile::Minimal).unwrap(),
+            r#""minimal""#
+        );
+    }
+
+    #[test]
+    fn an_authored_menu_round_trips_through_postcard() {
+        let m: MainMenu = serde_json::from_str(
+            r#"{"items":[{"label":"Play","action":"start"},{"label":"Quit","action":"quit"}],
+                "dim":[0,0,0,0.7],"font":"body","font_px":32,"hover_scale":1.2,
+                "settings_back_action":"pause"}"#,
+        )
+        .unwrap();
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        let back: MainMenu = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.items.len(), 2);
+        assert_eq!(back.items[1].action, "quit");
+        assert_eq!(back.dim, [0.0, 0.0, 0.0, 0.7]);
+        assert_eq!(back.font, "body");
+        assert_eq!(back.font_px, 32.0);
+        assert_eq!(back.hover_scale, 1.2);
+        assert_eq!(back.settings_back_action, "pause");
+    }
+}

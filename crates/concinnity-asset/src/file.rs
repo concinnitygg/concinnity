@@ -55,3 +55,85 @@ pub struct FileArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<FileKind>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kind_is_reachable_from_an_extension() {
+        // The inference table is the only way a kind is assigned when the args
+        // omit one, so a kind missing from it can never be produced.
+        let all = [
+            ("obj", FileKind::Obj),
+            ("png", FileKind::Png),
+            ("jpg", FileKind::Jpg),
+            ("jpeg", FileKind::Jpeg),
+            ("bmp", FileKind::Bmp),
+            ("tga", FileKind::Tga),
+            ("gif", FileKind::Gif),
+            ("ttf", FileKind::Ttf),
+            ("otf", FileKind::Otf),
+            ("txt", FileKind::Txt),
+            ("md", FileKind::Md),
+            ("mtl", FileKind::Mtl),
+        ];
+        for (ext, kind) in all {
+            assert_eq!(FileKind::from_ext(ext).as_ref(), Some(&kind), "{ext}");
+            // Extensions are matched case-insensitively.
+            assert_eq!(
+                FileKind::from_ext(&ext.to_uppercase()).as_ref(),
+                Some(&kind),
+                "{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_extension_has_no_kind() {
+        assert_eq!(FileKind::from_ext("wav"), None);
+        assert_eq!(FileKind::from_ext(""), None);
+    }
+
+    #[test]
+    fn only_obj_builds_to_a_mesh_payload() {
+        assert!(FileKind::Obj.is_mesh());
+        for kind in [FileKind::Png, FileKind::Ttf, FileKind::Mtl, FileKind::Md] {
+            assert!(!kind.is_mesh(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn args_default_to_an_empty_path_and_inferred_kind() {
+        let args = FileArgs::default();
+        assert!(args.path.is_empty());
+        assert_eq!(args.kind, None);
+    }
+
+    #[test]
+    fn an_absent_kind_is_omitted_from_the_serialized_args() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();
+        assert_eq!(args.path, "assets/board.obj");
+        assert_eq!(args.kind, None);
+        // `cn add` writes normalized args back, so an inferred kind stays absent
+        // rather than being frozen into the world file.
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"assets/board.obj"}"#
+        );
+    }
+
+    #[test]
+    fn an_explicit_kind_round_trips_through_its_lowercase_name() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"font.dat","kind":"ttf"}"#).unwrap();
+        assert_eq!(args.kind, Some(FileKind::Ttf));
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"font.dat","kind":"ttf"}"#
+        );
+        let bytes = postcard::to_allocvec(&args).unwrap();
+        let back: FileArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.kind, Some(FileKind::Ttf));
+        assert_eq!(back.path, "font.dat");
+    }
+}

@@ -32,3 +32,34 @@ pub struct LightRig {
     /// `preset` is set.
     pub lights: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_rig_groups_nothing() {
+        let r = LightRig::default();
+        assert!(r.preset.is_empty());
+        assert!(r.lights.is_empty());
+    }
+
+    #[test]
+    fn an_inline_rig_lists_the_lights_it_groups() {
+        let r: LightRig = serde_json::from_str(r#"{"lights":["sun","fill"]}"#).unwrap();
+        assert_eq!(r.lights, ["sun", "fill"]);
+        assert!(r.preset.is_empty());
+    }
+
+    #[test]
+    fn a_preset_rig_leaves_the_light_list_empty() {
+        let r: LightRig = serde_json::from_str(r#"{"preset":"rig_outdoor_sun_fill"}"#).unwrap();
+        assert_eq!(r.preset, "rig_outdoor_sun_fill");
+        assert!(r.lights.is_empty());
+
+        let bytes = postcard::to_allocvec(&r).unwrap();
+        let back: LightRig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.preset, "rig_outdoor_sun_fill");
+        assert!(back.lights.is_empty());
+    }
+}

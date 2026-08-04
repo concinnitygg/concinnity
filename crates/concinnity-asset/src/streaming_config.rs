@@ -82,3 +82,51 @@ impl StreamingConfig {
         (self.mesh_cap as usize).max(1)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_stream_a_few_resources_per_frame() {
+        let c = StreamingConfig::default();
+        assert_eq!(c.budget(), 4);
+        assert_eq!(c.cap(), 96);
+        assert_eq!(c.mesh_budget(), 4);
+        assert_eq!(c.mesh_cap(), 4096);
+        // Byte budgets are opt-in; zero leaves the count budgets in charge.
+        assert_eq!(c.texture_budget_mb, 0);
+        assert_eq!(c.mesh_budget_mb, 0);
+    }
+
+    #[test]
+    fn a_zero_budget_or_cap_is_floored_at_one() {
+        // A zero would stall streaming outright, so every accessor keeps at
+        // least one slot rather than trusting the authored number.
+        let c: StreamingConfig = serde_json::from_str(
+            r#"{"texture_budget":0,"texture_cap":0,"mesh_budget":0,"mesh_cap":0}"#,
+        )
+        .unwrap();
+        assert_eq!(c.budget(), 1);
+        assert_eq!(c.cap(), 1);
+        assert_eq!(c.mesh_budget(), 1);
+        assert_eq!(c.mesh_cap(), 1);
+    }
+
+    #[test]
+    fn authored_values_pass_through_and_round_trip_through_postcard() {
+        let c: StreamingConfig = serde_json::from_str(
+            r#"{"texture_budget":8,"texture_cap":256,"mesh_budget":2,"mesh_cap":512,
+                "texture_budget_mb":1024,"mesh_budget_mb":256}"#,
+        )
+        .unwrap();
+        assert_eq!((c.budget(), c.cap()), (8, 256));
+        assert_eq!((c.mesh_budget(), c.mesh_cap()), (2, 512));
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: StreamingConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.texture_budget_mb, 1024);
+        assert_eq!(back.mesh_budget_mb, 256);
+        assert_eq!(back.cap(), 256);
+    }
+}

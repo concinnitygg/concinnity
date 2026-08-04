@@ -163,3 +163,106 @@ impl Default for Camera3DArgs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_camera_is_navigable_as_a_free_fly_inspector() {
+        // The `cn add foo.glb` scaffold declares only a Camera3D, so the default
+        // controller has to be the one that can fly around and look at it.
+        let args = Camera3DArgs::default();
+        let c = args.controller.expect("default inspector controller");
+        assert!(c.free_fly);
+        assert_eq!(c.move_speed, 1.0);
+        assert_eq!(c.sprint_multiplier, 3.0);
+        assert!(c.follow.is_none());
+        assert_eq!(args.position, [0.0, 1.7, 0.0]);
+        assert_eq!((args.near, args.far), (0.05, 200.0));
+    }
+
+    #[test]
+    fn default_bounds_do_not_constrain_the_camera() {
+        let c = CameraController::default();
+        assert!(c.bounds_min.iter().all(|&v| v <= -1.0e9));
+        assert!(c.bounds_max.iter().all(|&v| v >= 1.0e9));
+    }
+
+    #[test]
+    fn an_omitted_controller_still_gets_the_inspector() {
+        // `#[serde(default)]` on the struct would make an absent field `None`,
+        // so the field carries its own default fn.
+        let args: Camera3DArgs = serde_json::from_str(r#"{"fov_y_degrees":60}"#).unwrap();
+        assert_eq!(args.fov_y_degrees, 60.0);
+        assert!(args.controller.expect("inspector controller").free_fly);
+    }
+
+    #[test]
+    fn an_explicit_null_controller_leaves_the_camera_undriven() {
+        let args: Camera3DArgs = serde_json::from_str(r#"{"controller":null}"#).unwrap();
+        assert!(args.controller.is_none());
+    }
+
+    #[test]
+    fn a_ground_walker_turns_free_fly_off() {
+        let args: Camera3DArgs =
+            serde_json::from_str(r#"{"controller":{"free_fly":false,"player_radius":0.4}}"#)
+                .unwrap();
+        let c = args.controller.expect("controller");
+        assert!(!c.free_fly);
+        assert_eq!(c.player_radius, 0.4);
+        // Fields the args did not mention keep the schema defaults.
+        assert_eq!(c.mouse_sensitivity, 0.0015);
+    }
+
+    #[test]
+    fn a_follow_controller_drives_from_root_motion_unless_told_otherwise() {
+        crate::test_support::install_resolvers();
+        let f = FollowController::default();
+        assert_eq!(f.drive, FollowDrive::RootMotion);
+        assert_eq!(f.speed_parameter, "speed");
+        assert_eq!((f.distance, f.height), (4.0, 1.5));
+        assert_eq!(f.jump_height, 0.0);
+
+        let args: Camera3DArgs = serde_json::from_str(
+            r#"{"controller":{"follow":{"target":"hero","drive":"direct","jump_height":1.2}}}"#,
+        )
+        .unwrap();
+        let f = args
+            .controller
+            .expect("controller")
+            .follow
+            .expect("follow controller");
+        assert_eq!(f.target, Some(SkinnedMeshHandle(4)));
+        assert_eq!(f.drive, FollowDrive::Direct);
+        assert_eq!(f.jump_height, 1.2);
+    }
+
+    #[test]
+    fn drive_names_parse_in_snake_case() {
+        let d = |s: &str| serde_json::from_str::<FollowDrive>(s).unwrap();
+        assert_eq!(d(r#""root_motion""#), FollowDrive::RootMotion);
+        assert_eq!(d(r#""direct""#), FollowDrive::Direct);
+        assert_eq!(
+            serde_json::to_string(&FollowDrive::RootMotion).unwrap(),
+            r#""root_motion""#
+        );
+    }
+
+    #[test]
+    fn an_authored_camera_round_trips_through_postcard() {
+        let args: Camera3DArgs = serde_json::from_str(
+            r#"{"fov_y_degrees":60,"position":[1,2,3],"yaw":0.5,"pitch":-0.2,
+                "controller":{"free_fly":false,"follow":{"distance":6.0}}}"#,
+        )
+        .unwrap();
+        let bytes = postcard::to_allocvec(&args).unwrap();
+        let back: Camera3DArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.position, [1.0, 2.0, 3.0]);
+        assert_eq!((back.yaw, back.pitch), (0.5, -0.2));
+        let c = back.controller.expect("controller");
+        assert!(!c.free_fly);
+        assert_eq!(c.follow.expect("follow controller").distance, 6.0);
+    }
+}

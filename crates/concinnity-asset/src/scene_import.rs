@@ -55,3 +55,36 @@ impl Default for SceneImport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_import_emits_a_camera_so_the_scene_is_viewable_immediately() {
+        // `cn add foo.glb` writes one SceneImport line, so the expansion has to
+        // produce something navigable without any further authoring.
+        let s = SceneImport::default();
+        assert!(s.emit_camera);
+        assert_eq!(s.texture_max_size, 512);
+        assert_eq!(s.emissive_map_strength, 3.0);
+        assert!(s.source.is_empty());
+    }
+
+    #[test]
+    fn an_authored_import_parses_and_round_trips_through_postcard() {
+        let s: SceneImport = serde_json::from_str(
+            r#"{"source":"bistro.fbx","texture_max_size":2048,
+                "emissive_map_strength":1.0,"emit_camera":false}"#,
+        )
+        .unwrap();
+        assert_eq!(s.source, "bistro.fbx");
+        assert!(!s.emit_camera);
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: SceneImport = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.texture_max_size, 2048);
+        assert_eq!(back.emissive_map_strength, 1.0);
+        assert!(!back.emit_camera);
+    }
+}

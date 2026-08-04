@@ -55,3 +55,37 @@ impl Default for CameraShot {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_the_camera_they_configure() {
+        // A shot overwrites a Camera3D's framing, so an unset field has to mean
+        // the same thing on both.
+        let s = CameraShot::default();
+        assert!(s.preset.is_empty());
+        assert_eq!(s.fov_y_degrees, 75.0);
+        assert_eq!((s.near, s.far), (0.05, 200.0));
+        assert_eq!(s.position, [0.0, 0.0, 0.0]);
+        assert_eq!((s.yaw, s.pitch), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_named_preset_parses_and_round_trips_through_postcard() {
+        let s: CameraShot = serde_json::from_str(
+            r#"{"preset":"establishing","fov_y_degrees":40,"position":[0,3,8],"yaw":1.5}"#,
+        )
+        .unwrap();
+        assert_eq!(s.preset, "establishing");
+        assert_eq!(s.fov_y_degrees, 40.0);
+        assert_eq!(s.position, [0.0, 3.0, 8.0]);
+        assert_eq!(s.yaw, 1.5);
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: CameraShot = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.preset, "establishing");
+        assert_eq!(back.far, 200.0);
+    }
+}

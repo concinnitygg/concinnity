@@ -85,3 +85,50 @@ impl Default for Screen {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_screen_captures_input_and_pauses_the_world() {
+        // An overlay is modal by default: the world underneath neither ticks nor
+        // sees the input the screen is consuming.
+        let s = Screen::default();
+        assert_eq!(s.input, ScreenInput::Capture);
+        assert!(s.pauses_world);
+        assert!(!s.initial);
+        assert_eq!(s.fade_in_secs, 0.0);
+        assert_eq!(s.layer, 0);
+        assert!(s.toggle_key.is_empty());
+        assert!(s.focus.is_none());
+        assert_eq!(ScreenInput::default(), ScreenInput::Capture);
+    }
+
+    #[test]
+    fn a_passthrough_hud_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let s: Screen = serde_json::from_str(
+            r#"{"initial":true,"fade_in_secs":0.5,"toggle_key":"Tab","input":"passthrough",
+                "pauses_world":false,"focus":"first_button","layer":-1}"#,
+        )
+        .unwrap();
+        assert_eq!(s.input, ScreenInput::Passthrough);
+        assert!(!s.pauses_world);
+        assert!(s.initial);
+        assert_eq!(s.focus, Some(AssetId(12)));
+        assert_eq!(
+            serde_json::to_string(&ScreenInput::Passthrough).unwrap(),
+            r#""passthrough""#
+        );
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Screen = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.fade_in_secs, 0.5);
+        assert_eq!(back.toggle_key, "Tab");
+        assert_eq!(back.input, ScreenInput::Passthrough);
+        // A negative layer sits below the default overlays.
+        assert_eq!(back.layer, -1);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

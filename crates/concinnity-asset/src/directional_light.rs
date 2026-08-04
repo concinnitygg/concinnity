@@ -29,3 +29,33 @@ impl Default for DirectionalLight {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_sun_points_down_from_above() {
+        // The direction is toward the light, so a positive Y component is what
+        // makes the default read as an overhead sun rather than an uplight.
+        let l = DirectionalLight::default();
+        assert!(l.direction[1] > 0.0);
+        assert_eq!(l.color, [1.0, 1.0, 1.0]);
+        assert_eq!(l.intensity, 1.0);
+    }
+
+    #[test]
+    fn an_authored_sun_parses_and_round_trips_through_postcard() {
+        let l: DirectionalLight =
+            serde_json::from_str(r#"{"direction":[0,1,0],"color":[1,0.9,0.7],"intensity":3}"#)
+                .unwrap();
+        assert_eq!(l.direction, [0.0, 1.0, 0.0]);
+        assert_eq!(l.color, [1.0, 0.9, 0.7]);
+        assert_eq!(l.intensity, 3.0);
+
+        let bytes = postcard::to_allocvec(&l).unwrap();
+        let back: DirectionalLight = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.color, [1.0, 0.9, 0.7]);
+        assert_eq!(back.intensity, 3.0);
+    }
+}

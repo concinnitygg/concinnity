@@ -368,3 +368,168 @@ pub enum StoryPlayback {
     /// Resume the story from its auto-save.
     Continue,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn a_blank_story_has_no_nodes_and_types_at_the_default_speed() {
+        let s = Story::default();
+        assert!(s.nodes.is_empty());
+        assert!(s.title.is_empty());
+        assert_eq!(s.text_speed, 45.0);
+        // No save key means the story never touches persisted state.
+        assert!(s.save_key.is_empty());
+        assert!(s.scaffold.screen.is_none());
+        assert!(s.scaffold.options.is_empty());
+    }
+
+    #[test]
+    fn every_comparison_agrees_with_the_operator_it_names() {
+        for (lhs, rhs) in [(1, 2), (2, 2), (3, 2)] {
+            assert_eq!(CmpOp::Eq.eval(lhs, rhs), lhs == rhs);
+            assert_eq!(CmpOp::Ne.eval(lhs, rhs), lhs != rhs);
+            assert_eq!(CmpOp::Lt.eval(lhs, rhs), lhs < rhs);
+            assert_eq!(CmpOp::Le.eval(lhs, rhs), lhs <= rhs);
+            assert_eq!(CmpOp::Gt.eval(lhs, rhs), lhs > rhs);
+            assert_eq!(CmpOp::Ge.eval(lhs, rhs), lhs >= rhs);
+        }
+    }
+
+    #[test]
+    fn an_omitted_comparison_defaults_to_not_equal() {
+        // A gate written with only a name and a value reads as "flag is set",
+        // which is the common case in an imported markdown story.
+        assert_eq!(CmpOp::default(), CmpOp::Ne);
+        let g: StoryGate = serde_json::from_str(r#"{"name":"met_ana","target":3}"#).unwrap();
+        assert_eq!(g.op, CmpOp::Ne);
+        assert!(g.op.eval(1, 0));
+    }
+
+    #[test]
+    fn comparison_and_playback_names_parse_in_lowercase() {
+        let op = |s: &str| serde_json::from_str::<CmpOp>(s).unwrap();
+        assert_eq!(op(r#""eq""#), CmpOp::Eq);
+        assert_eq!(op(r#""ne""#), CmpOp::Ne);
+        assert_eq!(op(r#""lt""#), CmpOp::Lt);
+        assert_eq!(op(r#""le""#), CmpOp::Le);
+        assert_eq!(op(r#""gt""#), CmpOp::Gt);
+        assert_eq!(op(r#""ge""#), CmpOp::Ge);
+        assert_eq!(serde_json::to_string(&CmpOp::Ge).unwrap(), r#""ge""#);
+
+        assert_eq!(StoryPlayback::default(), StoryPlayback::Start);
+        assert_eq!(
+            serde_json::from_str::<StoryPlayback>(r#""continue""#).unwrap(),
+            StoryPlayback::Continue
+        );
+        assert_eq!(
+            serde_json::to_string(&StoryPlayback::Start).unwrap(),
+            r#""start""#
+        );
+    }
+
+    #[test]
+    fn a_compiled_graph_parses_its_pages_choices_and_audio() {
+        crate::test_support::install_resolvers();
+        let s: Story = serde_json::from_str(
+            r#"{"title":"Ash","text_speed":30.0,"save_key":"ash",
+                "nodes":[{"slug":"intro",
+                  "pages":[{"speaker":{"name":"Ana","color":[1,0,0]},"text":"Hello",
+                            "music":"theme","sounds":["door","",3],
+                            "stage":{"bg":{"texture":"bg_room","width":1280,"height":720}},
+                            "ops":[{"name":"visits","value":1,"add":true}],
+                            "gates":[{"name":"visits","op":"gt","value":2,"target":4}]}],
+                  "choices":[{"label":"Stay","target":1,
+                              "condition":{"name":"visits","op":"ge","value":1}}],
+                  "choice_sounds":["click"]}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(s.title, "Ash");
+        assert_eq!(s.text_speed, 30.0);
+        let node = &s.nodes[0];
+        assert_eq!(node.slug, "intro");
+        assert_eq!(node.choice_sounds, vec![AudioClipHandle(5)]);
+
+        let page = &node.pages[0];
+        assert_eq!(page.text, "Hello");
+        assert_eq!(page.speaker.as_ref().expect("speaker").name, "Ana");
+        assert_eq!(page.music, Some(AudioClipHandle(5)));
+        // Empty entries drop out of a sound list rather than becoming handle 0.
+        assert_eq!(page.sounds, vec![AudioClipHandle(4), AudioClipHandle(3)]);
+        assert_eq!(page.jump, None);
+        let bg = page.stage.bg.as_ref().expect("background image");
+        assert_eq!(bg.texture, TextureHandle(7));
+        assert_eq!((bg.width, bg.height), (1280.0, 720.0));
+        assert!(page.stage.left.is_none());
+        assert_eq!(page.ops[0].name, "visits");
+        assert!(page.ops[0].add);
+        assert_eq!(page.gates[0].op, CmpOp::Gt);
+        assert_eq!(page.gates[0].target, 4);
+
+        let choice = &node.choices[0];
+        assert_eq!(choice.label, "Stay");
+        assert_eq!(choice.target, 1);
+        assert_eq!(choice.condition.as_ref().expect("condition").op, CmpOp::Ge);
+    }
+
+    #[test]
+    fn a_graph_round_trips_through_postcard() {
+        // Stories ride the blob in the baked form, so the whole nested graph has
+        // to survive a format that carries no field names.
+        let mut s = Story {
+            title: alloc::string::String::from("Ash"),
+            ..Story::default()
+        };
+        s.nodes.push(StoryNode {
+            slug: alloc::string::String::from("intro"),
+            pages: vec![StoryPage {
+                text: alloc::string::String::from("Hello"),
+                jump: Some(2),
+                music: Some(AudioClipHandle(1)),
+                sounds: vec![AudioClipHandle(2)],
+                stage: StoryStage {
+                    center: Some(StoryImage {
+                        texture: TextureHandle(3),
+                        width: 512.0,
+                        ..StoryImage::default()
+                    }),
+                    ..StoryStage::default()
+                },
+                ..StoryPage::default()
+            }],
+            choice_gates: vec![StoryGate {
+                op: CmpOp::Le,
+                target: 7,
+                ..StoryGate::default()
+            }],
+            ..StoryNode::default()
+        });
+        s.scaffold.slot_labels.push(AssetId(9));
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Story = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.title, "Ash");
+        let page = &back.nodes[0].pages[0];
+        assert_eq!(page.jump, Some(2));
+        assert_eq!(page.music, Some(AudioClipHandle(1)));
+        assert_eq!(page.sounds, vec![AudioClipHandle(2)]);
+        assert_eq!(
+            page.stage.center.as_ref().expect("center image").texture,
+            TextureHandle(3)
+        );
+        assert_eq!(back.nodes[0].choice_gates[0].op, CmpOp::Le);
+        assert_eq!(back.scaffold.slot_labels, vec![AssetId(9)]);
+    }
+
+    #[test]
+    fn a_reload_carries_the_replacement_graph() {
+        let reload = StoryReload {
+            story: Story::default(),
+        };
+        assert!(reload.story.nodes.is_empty());
+        assert!(alloc::format!("{reload:?}").contains("StoryReload"));
+    }
+}

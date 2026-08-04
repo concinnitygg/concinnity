@@ -147,3 +147,92 @@ impl SdfVolume {
         1.0 / self.max_gradient.max(f32::EPSILON)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn a_blank_volume_is_a_visible_unit_box_that_receives_shadows() {
+        let v = SdfVolume::default();
+        assert_eq!(v.centre, [0.0, 0.0, 0.0]);
+        assert_eq!(v.extent, [1.0, 1.0, 1.0]);
+        assert_eq!(v.max_steps, 64);
+        assert_eq!(v.max_distance, 30.0);
+        assert_eq!(v.params, [0.0; SDF_PARAMS_LEN]);
+        assert!(v.visible);
+        assert!(v.receive_shadows);
+        // Raymarched surfaces do not write the shadow map by default.
+        assert!(!v.cast_shadows);
+        assert!(!v.volumetric);
+        assert!(v.locator.is_none());
+    }
+
+    #[test]
+    fn a_one_lipschitz_field_cone_marches_at_full_ratio() {
+        assert_eq!(SdfVolume::default().cone_ratio(), 1.0);
+    }
+
+    #[test]
+    fn a_steeper_gradient_shortens_the_step_proportionally() {
+        let v = SdfVolume {
+            max_gradient: 4.0,
+            ..SdfVolume::default()
+        };
+        assert_eq!(v.cone_ratio(), 0.25);
+    }
+
+    #[test]
+    fn a_zero_or_negative_gradient_cannot_divide_by_zero() {
+        // An authored 0 would otherwise make the step ratio infinite and hang
+        // the march, so the divisor is floored at epsilon.
+        for max_gradient in [0.0, -1.0] {
+            let v = SdfVolume {
+                max_gradient,
+                ..SdfVolume::default()
+            };
+            assert!(v.cone_ratio().is_finite(), "{max_gradient}");
+            assert_eq!(v.cone_ratio(), 1.0 / f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn per_backend_shader_sources_parse_and_round_trip_through_postcard() {
+        let v: SdfVolume = serde_json::from_str(
+            r#"{"centre":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
+                "fragment_shaders":{"metal":"blob.metal","hlsl":"blob.hlsl"},
+                "cast_shadows":true,"visible":false}"#,
+        )
+        .unwrap();
+        assert_eq!(v.cone_ratio(), 0.5);
+        assert!(v.cast_shadows);
+        assert!(!v.visible);
+        let per_backend = v.fragment_shaders.as_ref().expect("per-backend sources");
+        assert_eq!(per_backend["metal"], "blob.metal");
+        assert_eq!(per_backend["hlsl"], "blob.hlsl");
+        // The single-source field stays empty when the map is used.
+        assert!(v.fragment_shader.is_empty());
+
+        let bytes = postcard::to_allocvec(&v).unwrap();
+        let back: SdfVolume = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.extent, [3.0, 3.0, 3.0]);
+        assert_eq!(
+            back.fragment_shaders.expect("per-backend sources")["metal"],
+            "blob.metal"
+        );
+        // Identity and payload location are injected at load, never authored.
+        assert_eq!(back.asset_id, AssetId::default());
+        assert!(back.locator.is_none());
+    }
+
+    #[test]
+    fn a_single_source_volume_leaves_the_per_backend_map_absent() {
+        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.metal"}"#).unwrap();
+        assert_eq!(v.fragment_shader, "blob.metal".to_string());
+        assert!(v.fragment_shaders.is_none());
+        // `params` is a fixed-width uniform block, so a short array is a length
+        // mismatch rather than a partial fill.
+        assert!(serde_json::from_str::<SdfVolume>(r#"{"params":[1.5]}"#).is_err());
+    }
+}

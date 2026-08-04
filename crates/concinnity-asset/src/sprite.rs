@@ -119,3 +119,61 @@ impl Default for Sprite {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_sprite_is_a_visible_untinted_square_with_no_border() {
+        let s = Sprite::default();
+        assert_eq!((s.width, s.height), (100.0, 100.0));
+        assert_eq!(s.tint, [1.0, 1.0, 1.0, 1.0]);
+        assert!(s.visible);
+        assert!(!s.follow_cursor);
+        assert_eq!(s.fit, SpriteFit::Fit);
+        assert_eq!(s.corner_radius, 0.0);
+        // Zero width is what suppresses the border, so its colour is irrelevant.
+        assert_eq!(s.border_width, 0.0);
+        assert!(s.texture.is_none());
+        assert!(s.screen.is_none());
+        assert_eq!(SpriteFit::default(), SpriteFit::Fit);
+    }
+
+    #[test]
+    fn fit_names_parse_in_lowercase() {
+        let f = |s: &str| serde_json::from_str::<SpriteFit>(s).unwrap();
+        assert_eq!(f(r#""fit""#), SpriteFit::Fit);
+        assert_eq!(f(r#""cover""#), SpriteFit::Cover);
+        assert_eq!(f(r#""bottom""#), SpriteFit::Bottom);
+        assert_eq!(
+            serde_json::to_string(&SpriteFit::Bottom).unwrap(),
+            r#""bottom""#
+        );
+    }
+
+    #[test]
+    fn a_cursor_sprite_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let s: Sprite = serde_json::from_str(
+            r#"{"x":10,"y":20,"width":32,"height":32,"texture":"tex_cursor",
+                "tint":[1,1,1,0.8],"follow_cursor":true,"visible":false,"screen":"menu",
+                "fit":"cover","corner_radius":4,"border_width":2,"border_color":[1,0,0,1]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.texture, Some(TextureHandle(10)));
+        assert_eq!(s.screen, Some(AssetId(4)));
+        assert!(s.follow_cursor);
+        assert!(!s.visible);
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Sprite = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!((back.x, back.y), (10.0, 20.0));
+        assert_eq!(back.tint, [1.0, 1.0, 1.0, 0.8]);
+        assert_eq!(back.fit, SpriteFit::Cover);
+        assert_eq!(back.corner_radius, 4.0);
+        assert_eq!(back.border_width, 2.0);
+        assert_eq!(back.border_color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

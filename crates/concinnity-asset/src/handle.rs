@@ -632,6 +632,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use alloc::vec;
 
     #[test]
@@ -658,11 +659,7 @@ mod tests {
         assert_eq!(table[MeshHandle(2).index()], "c");
     }
 
-    // A name resolves to its byte length: a deterministic, order-independent
-    // stand-in for the build's real declaration-ordered handle map.
-    fn len_texture_resolver(name: &str) -> Option<u32> {
-        Some(name.len() as u32)
-    }
+    use crate::test_support::{NoneDeserializer, install_resolvers, len_handle_resolver};
 
     #[derive(serde::Deserialize)]
     struct Holder {
@@ -680,7 +677,7 @@ mod tests {
 
     #[test]
     fn de_opt_texture_handle_resolves_a_name_through_the_seam() {
-        crate::set_texture_handle_resolver(len_texture_resolver);
+        install_resolvers();
         let h: Holder = serde_json::from_str("{\"tex\":\"floor\"}").unwrap();
         assert_eq!(h.tex, Some(TextureHandle(5)));
     }
@@ -702,13 +699,7 @@ mod tests {
         assert!(serde_json::from_str::<Holder>("{}").unwrap().tex.is_none());
     }
 
-    // A name resolves to its byte length, standing in for the build's real
-    // declaration-ordered audio-clip handle map.
-    fn len_audio_resolver(name: &str) -> Option<u32> {
-        Some(name.len() as u32)
-    }
-
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize)]
     struct AudioHolder {
         #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
         clip: Option<AudioClipHandle>,
@@ -718,7 +709,7 @@ mod tests {
 
     #[test]
     fn de_opt_audio_clip_handle_reads_integers_and_resolves_names() {
-        crate::set_audio_clip_handle_resolver(len_audio_resolver);
+        install_resolvers();
         // Already-resolved integer passes through; a name resolves via the seam.
         let h: AudioHolder = serde_json::from_str("{\"clip\":7}").unwrap();
         assert_eq!(h.clip, Some(AudioClipHandle(7)));
@@ -741,7 +732,7 @@ mod tests {
 
     #[test]
     fn de_audio_clip_handle_vec_resolves_mixed_and_drops_empties() {
-        crate::set_audio_clip_handle_resolver(len_audio_resolver);
+        install_resolvers();
         // A mix of integers and names; empty entries drop out.
         let h: AudioHolder = serde_json::from_str("{\"sounds\":[3,\"door\",\"\"]}").unwrap();
         assert_eq!(h.sounds, vec![AudioClipHandle(3), AudioClipHandle(4)]);
@@ -782,6 +773,8 @@ mod tests {
             clip: Option<AudioClipHandle>,
             #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
             sounds: Vec<AudioClipHandle>,
+            #[serde(default, deserialize_with = "de_opt_shader_handle")]
+            shader: Option<ShaderHandle>,
         }
         let holder = BakedHolder {
             tex: Some(TextureHandle(3)),
@@ -792,6 +785,7 @@ mod tests {
             font: None,
             clip: Some(AudioClipHandle(4)),
             sounds: alloc::vec![AudioClipHandle(5), AudioClipHandle(6)],
+            shader: Some(ShaderHandle(8)),
         };
         let bytes = postcard::to_allocvec(&holder).unwrap();
         let back: BakedHolder = postcard::from_bytes(&bytes).unwrap();
@@ -803,6 +797,7 @@ mod tests {
         assert_eq!(back.font, holder.font);
         assert_eq!(back.clip, holder.clip);
         assert_eq!(back.sounds, holder.sounds);
+        assert_eq!(back.shader, holder.shader);
     }
 
     #[test]
@@ -810,7 +805,7 @@ mod tests {
         // The correlation-reference seam (Animation/AnimGraph/FollowController
         // `target`): an already-resolved integer passes through, a name resolves
         // through the installed skinned-mesh resolver, empty/null/missing are None.
-        crate::set_skinned_mesh_handle_resolver(len_texture_resolver);
+        install_resolvers();
         let h: TargetHolder = serde_json::from_str("{\"target\":3}").unwrap();
         assert_eq!(h.target, Some(SkinnedMeshHandle(3)));
         let h: TargetHolder = serde_json::from_str("{\"target\":\"hero\"}").unwrap();
@@ -827,5 +822,171 @@ mod tests {
                 .target
                 .is_none()
         );
+    }
+
+    // Every optional-handle helper accepts the same set of input forms. One
+    // generated case set per kind keeps them from drifting apart as kinds are
+    // added, and pins the diagnostic each one produces for a wrong-typed field.
+    macro_rules! opt_handle_cases {
+        ($name:ident, $helper:literal, $helper_fn:path, $handle:ident, $expected:literal) => {
+            #[test]
+            fn $name() {
+                install_resolvers();
+
+                #[derive(Debug, serde::Deserialize)]
+                struct Holder {
+                    #[serde(default, deserialize_with = $helper)]
+                    r: Option<$handle>,
+                }
+                let parse = |s: &str| serde_json::from_str::<Holder>(s).unwrap().r;
+
+                // The compiled-args / runtime form: an already-resolved integer.
+                assert_eq!(parse(r#"{"r":6}"#), Some($handle(6)));
+                // A signed integer takes the same path, narrowed to handle width.
+                assert_eq!(parse(r#"{"r":-1}"#), Some($handle(u32::MAX)));
+                // The authoring form: a name resolved through the installed seam.
+                assert_eq!(parse(r#"{"r":"floor"}"#), Some($handle(5)));
+                // A name the build declares no resource of this kind for falls
+                // back to the interner, so single-asset validation still parses.
+                assert_eq!(parse(r#"{"r":"unknown_x"}"#), Some($handle(9)));
+                // An owned string, the form the serde_json::Value bridge hands over.
+                assert_eq!(
+                    serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}))
+                        .unwrap()
+                        .r,
+                    Some($handle(4))
+                );
+                // Empty, null, and missing are all absent.
+                assert_eq!(parse(r#"{"r":""}"#), None);
+                assert_eq!(parse(r#"{"r":null}"#), None);
+                assert_eq!(parse("{}"), None);
+                // As is a `None` reported by an option-aware format.
+                assert_eq!($helper_fn(NoneDeserializer).unwrap(), None);
+                // A wrong-typed field names what the field accepts.
+                let err = serde_json::from_str::<Holder>(r#"{"r":true}"#)
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains($expected), "{err}");
+            }
+        };
+    }
+
+    opt_handle_cases!(
+        opt_texture_handle_accepts_every_form,
+        "de_opt_texture_handle",
+        de_opt_texture_handle,
+        TextureHandle,
+        "a texture handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_shader_handle_accepts_every_form,
+        "de_opt_shader_handle",
+        de_opt_shader_handle,
+        ShaderHandle,
+        "a shader handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_material_handle_accepts_every_form,
+        "de_opt_material_handle",
+        de_opt_material_handle,
+        MaterialHandle,
+        "a material handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_mesh_handle_accepts_every_form,
+        "de_opt_mesh_handle",
+        de_opt_mesh_handle,
+        MeshHandle,
+        "a mesh handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_skinned_mesh_handle_accepts_every_form,
+        "de_opt_skinned_mesh_handle",
+        de_opt_skinned_mesh_handle,
+        SkinnedMeshHandle,
+        "a skinned-mesh handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_font_handle_accepts_every_form,
+        "de_opt_font_handle",
+        de_opt_font_handle,
+        FontHandle,
+        "a font handle integer, reference name string, or null"
+    );
+    opt_handle_cases!(
+        opt_audio_clip_handle_accepts_every_form,
+        "de_opt_audio_clip_handle",
+        de_opt_audio_clip_handle,
+        AudioClipHandle,
+        "an audio-clip handle integer, reference name string, or null"
+    );
+
+    #[derive(Debug, serde::Deserialize)]
+    struct StageHolder {
+        #[serde(deserialize_with = "de_texture_handle")]
+        stage: TextureHandle,
+    }
+
+    #[test]
+    fn required_texture_handle_accepts_integers_and_names() {
+        install_resolvers();
+        let parse = |s: &str| serde_json::from_str::<StageHolder>(s).unwrap().stage;
+
+        assert_eq!(parse(r#"{"stage":6}"#), TextureHandle(6));
+        assert_eq!(parse(r#"{"stage":-1}"#), TextureHandle(u32::MAX));
+        assert_eq!(parse(r#"{"stage":"floor"}"#), TextureHandle(5));
+        // A name with no declared texture falls back to the interner.
+        assert_eq!(parse(r#"{"stage":"unknown_x"}"#), TextureHandle(9));
+        assert_eq!(
+            serde_json::from_value::<StageHolder>(serde_json::json!({"stage": "wall"}))
+                .unwrap()
+                .stage,
+            TextureHandle(4)
+        );
+    }
+
+    #[test]
+    fn required_texture_handle_rejects_a_missing_or_wrong_typed_field() {
+        // Unlike the optional helper there is no `None` to fall back to, so an
+        // absent or wrong-typed reference is an error naming what it accepts.
+        let err = serde_json::from_str::<StageHolder>("{}")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing field `stage`"), "{err}");
+        let err = serde_json::from_str::<StageHolder>(r#"{"stage":true}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a texture handle integer or reference name string"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn audio_clip_handle_vec_rejects_a_non_list() {
+        let err = serde_json::from_str::<AudioHolder>(r#"{"sounds":5}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a list of audio-clip handle integers or reference name strings"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn audio_clip_handle_vec_resolves_owned_strings() {
+        install_resolvers();
+        // The serde_json::Value bridge hands each element over as an owned string.
+        let h: AudioHolder =
+            serde_json::from_value(serde_json::json!({"sounds": ["door", "unknown_x"]})).unwrap();
+        assert_eq!(h.sounds, vec![AudioClipHandle(4), AudioClipHandle(9)]);
+    }
+
+    #[test]
+    fn handles_default_to_zero_and_order_by_index() {
+        // The derived ordering is the index ordering the resource tables use.
+        assert_eq!(TextureHandle::default(), TextureHandle(0));
+        assert!(MeshHandle(1) < MeshHandle(2));
+        assert_eq!(len_handle_resolver("unknown_floor"), None);
     }
 }

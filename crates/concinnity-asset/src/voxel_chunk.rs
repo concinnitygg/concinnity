@@ -65,3 +65,42 @@ impl Default for VoxelChunk {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_chunk_is_empty_with_metre_sized_blocks() {
+        let c = VoxelChunk::default();
+        assert_eq!(c.dim, [0, 0, 0]);
+        assert_eq!(c.block_size, 1.0);
+        assert!(c.blocks.is_empty());
+        assert!(c.palette.is_empty());
+        assert_eq!(c.lod_levels, 1);
+        assert!(c.lod_distances.is_empty());
+        assert!(c.locator.is_none());
+    }
+
+    #[test]
+    fn an_authored_chunk_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let c: VoxelChunk = serde_json::from_str(
+            r#"{"palette":["air","stone"],"dim":[2,1,2],"block_size":0.5,
+                "blocks":[0,1,1,0],"lod_levels":2,"lod_distances":[16]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.palette, [AssetId(3), AssetId(5)]);
+        // The block list indexes the palette, one entry per cell in `dim`.
+        assert_eq!(c.blocks.len() as u32, c.dim[0] * c.dim[1] * c.dim[2]);
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: VoxelChunk = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.dim, [2, 1, 2]);
+        assert_eq!(back.block_size, 0.5);
+        assert_eq!(back.blocks, [0, 1, 1, 0]);
+        assert_eq!(back.lod_levels, 2);
+        assert_eq!(back.lod_distances, [16.0]);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

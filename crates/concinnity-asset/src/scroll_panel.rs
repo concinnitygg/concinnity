@@ -102,3 +102,66 @@ pub struct ScrollGroup {
     /// when collapsed and `"- Advanced"` when expanded.
     pub title: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_row_belongs_to_no_group() {
+        let r = ScrollRow::default();
+        assert!(r.elements.is_empty());
+        assert_eq!((r.base_y, r.height), (0.0, 0.0));
+        // -1 is the ungrouped marker; 0 would put every row in group 0.
+        assert_eq!(r.group, -1);
+    }
+
+    #[test]
+    fn a_blank_group_starts_expanded_with_no_header() {
+        let g = ScrollGroup::default();
+        assert!(!g.collapsed);
+        assert!(g.header.is_none());
+        assert!(g.title.is_empty());
+    }
+
+    #[test]
+    fn a_blank_panel_has_no_rows_and_no_scrollbar() {
+        let p = ScrollPanel::default();
+        assert!(p.rows.is_empty());
+        assert!(p.groups.is_empty());
+        assert!(p.screen.is_none());
+        assert!(p.thumb.is_none());
+        assert!(p.track.is_none());
+        assert_eq!((p.width, p.height), (0.0, 0.0));
+        assert_eq!((p.track_w, p.track_h), (0.0, 0.0));
+    }
+
+    #[test]
+    fn an_authored_panel_parses_its_rows_groups_and_scrollbar() {
+        crate::test_support::install_resolvers();
+        let p: ScrollPanel = serde_json::from_str(
+            r#"{"screen":"settings","x":20,"y":40,"width":600,"height":400,
+                "rows":[{"elements":["row_a","row_b"],"base_y":10,"height":48,"group":0}],
+                "groups":[{"collapsed":true,"header":"adv_header","title":"Advanced"}],
+                "thumb":"bar","track":"bar_bg","track_x":600,"track_y":40,
+                "track_w":8,"track_h":400}"#,
+        )
+        .unwrap();
+        assert_eq!(p.screen, Some(AssetId(8)));
+        assert_eq!(p.rows[0].elements, [AssetId(5), AssetId(5)]);
+        assert_eq!(p.rows[0].group, 0);
+        assert!(p.groups[0].collapsed);
+        assert_eq!(p.groups[0].header, Some(AssetId(10)));
+        assert_eq!(p.groups[0].title, "Advanced");
+        assert_eq!(p.thumb, Some(AssetId(3)));
+        assert_eq!(p.track, Some(AssetId(6)));
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: ScrollPanel = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.rows[0].base_y, 10.0);
+        assert_eq!(back.rows[0].height, 48.0);
+        assert_eq!(back.groups[0].title, "Advanced");
+        assert_eq!((back.track_x, back.track_y), (600.0, 40.0));
+        assert_eq!((back.track_w, back.track_h), (8.0, 400.0));
+    }
+}

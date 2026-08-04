@@ -85,3 +85,52 @@ impl Default for InstancedProp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_instance_is_an_untransformed_copy() {
+        let t = InstanceTransform::default();
+        assert_eq!(t.position, [0.0, 0.0, 0.0]);
+        assert_eq!(t.rotation_deg, [0.0, 0.0, 0.0]);
+        // Unit scale, not zero: an omitted scale must not collapse the copy.
+        assert_eq!(t.scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn a_blank_prop_draws_nothing_and_never_culls() {
+        let p = InstancedProp::default();
+        assert!(p.instances.is_empty());
+        assert!(p.mesh.is_none());
+        assert!(p.material.is_none());
+        assert!(p.texture.is_none());
+        // Zero means "no distance cull", not "cull everything".
+        assert_eq!(p.cull_distance, 0.0);
+    }
+
+    #[test]
+    fn an_authored_instance_list_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let p: InstancedProp = serde_json::from_str(
+            r#"{"mesh":"tree_mesh","material":"bark","texture":"bark_tex","cull_distance":120,
+                "instances":[{"position":[1,0,2]},{"position":[3,0,4],"scale":[2,2,2]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.mesh, Some(MeshHandle(9)));
+        assert_eq!(p.material, Some(MaterialHandle(4)));
+        assert_eq!(p.texture, Some(TextureHandle(8)));
+        assert_eq!(p.instances.len(), 2);
+        // A copy that mentions only its position keeps unit scale.
+        assert_eq!(p.instances[0].scale, [1.0, 1.0, 1.0]);
+        assert_eq!(p.instances[1].scale, [2.0, 2.0, 2.0]);
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: InstancedProp = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.instances.len(), 2);
+        assert_eq!(back.instances[1].position, [3.0, 0.0, 4.0]);
+        assert_eq!(back.cull_distance, 120.0);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

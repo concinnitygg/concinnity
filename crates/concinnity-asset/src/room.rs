@@ -57,3 +57,54 @@ impl Default for RoomArgs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_room_is_an_untextured_box_at_the_default_dimensions() {
+        let r = RoomArgs::default();
+        assert_eq!(r.half_width, 8.0);
+        assert_eq!(r.half_depth, 10.0);
+        assert_eq!(r.ceiling_height, 3.5);
+        // `size` overrides the three dimensions above when set.
+        assert_eq!(r.size, None);
+        assert!(r.texture.is_none());
+        assert!(r.wall_texture.is_none());
+        assert!(r.floor_texture.is_none());
+        assert!(r.ceiling_texture.is_none());
+        assert_eq!(r.lod_levels, 1);
+        assert!(r.lod_distances.is_empty());
+    }
+
+    #[test]
+    fn each_surface_takes_its_own_texture_and_falls_back_to_the_shared_one() {
+        crate::test_support::install_resolvers();
+        let r: RoomArgs = serde_json::from_str(
+            r#"{"texture":"tex_base","wall_texture":"tex_brick","floor_texture":"tex_stone"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.texture, Some(TextureHandle(8)));
+        assert_eq!(r.wall_texture, Some(TextureHandle(9)));
+        assert_eq!(r.floor_texture, Some(TextureHandle(9)));
+        // The ceiling was not named, so it falls back to the shared texture.
+        assert_eq!(r.ceiling_texture, None);
+    }
+
+    #[test]
+    fn an_authored_room_round_trips_through_postcard() {
+        let r: RoomArgs =
+            serde_json::from_str(r#"{"size":[20,4,30],"lod_levels":2,"lod_distances":[25]}"#)
+                .unwrap();
+        assert_eq!(r.size, Some([20.0, 4.0, 30.0]));
+
+        let bytes = postcard::to_allocvec(&r).unwrap();
+        let back: RoomArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.size, Some([20.0, 4.0, 30.0]));
+        assert_eq!(back.lod_levels, 2);
+        assert_eq!(back.lod_distances, [25.0]);
+        // The half-extent fields keep their defaults; `size` takes precedence.
+        assert_eq!(back.half_width, 8.0);
+    }
+}

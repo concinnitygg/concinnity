@@ -64,3 +64,41 @@ impl Default for Decal {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_decal_is_a_visible_untinted_ground_stamp() {
+        let d = Decal::default();
+        assert_eq!(d.rotation_deg, [0.0, 0.0, 0.0]);
+        assert_eq!(d.size, [1.0, 1.0, 1.0]);
+        // An identity tint leaves the sampled texture alone; alpha 1 keeps it
+        // fully blended.
+        assert_eq!(d.tint, [1.0, 1.0, 1.0, 1.0]);
+        assert!(d.visible);
+        assert!(d.texture.is_none());
+    }
+
+    #[test]
+    fn a_wall_stamp_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let d: Decal = serde_json::from_str(
+            r#"{"texture":"tex_bullet","position":[3,1.6,-2],"rotation_deg":[0,0,90],
+                "size":[0.4,0.2,0.4],"tint":[1,1,1,0.5],"visible":false}"#,
+        )
+        .unwrap();
+        assert_eq!(d.texture, Some(TextureHandle(10)));
+        assert_eq!(d.rotation_deg, [0.0, 0.0, 90.0]);
+        assert!(!d.visible);
+
+        let bytes = postcard::to_allocvec(&d).unwrap();
+        let back: Decal = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.texture, Some(TextureHandle(10)));
+        assert_eq!(back.position, [3.0, 1.6, -2.0]);
+        assert_eq!(back.size, [0.4, 0.2, 0.4]);
+        assert_eq!(back.tint, [1.0, 1.0, 1.0, 0.5]);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

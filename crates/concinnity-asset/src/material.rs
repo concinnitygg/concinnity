@@ -147,3 +147,72 @@ impl Default for Material {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_material_is_an_opaque_untextured_dielectric() {
+        let m = Material::default();
+        assert_eq!(m.roughness, 0.8);
+        assert_eq!(m.metallic, 0.0);
+        assert_eq!(m.tint, [1.0, 1.0, 1.0]);
+        assert_eq!(m.emissive_factor, [0.0, 0.0, 0.0]);
+        assert_eq!(m.opacity, 1.0);
+        assert!(!m.transparent);
+        assert!(!m.see_through);
+        // Zero alpha cutoff means "no cutout", not "discard everything".
+        assert_eq!(m.alpha_cutoff, 0.0);
+        assert_eq!(m.macro_variation, 0.0);
+        assert_eq!(m.terrain_blend, 0.0);
+        assert_eq!(m.secondary_blend_sharpness, 0.5);
+        for map in [&m.albedo, &m.normal_map, &m.emissive_map, &m.orm_map] {
+            assert!(map.is_none());
+        }
+        // No shader means the engine's own main-pass program draws it.
+        assert!(m.shader.is_none());
+    }
+
+    #[test]
+    fn every_texture_slot_resolves_through_its_own_reference() {
+        crate::test_support::install_resolvers();
+        let m: Material = serde_json::from_str(
+            r#"{"albedo":"tex_a","normal_map":"tex_nm","emissive_map":"tex_em",
+                "orm_map":"tex_orm","albedo_secondary":"tex_b","normal_secondary":"tex_nb",
+                "shader":"water_shader"}"#,
+        )
+        .unwrap();
+        assert_eq!(m.albedo, Some(TextureHandle(5)));
+        assert_eq!(m.normal_map, Some(TextureHandle(6)));
+        assert_eq!(m.emissive_map, Some(TextureHandle(6)));
+        assert_eq!(m.orm_map, Some(TextureHandle(7)));
+        assert_eq!(m.albedo_secondary, Some(TextureHandle(5)));
+        assert_eq!(m.normal_secondary, Some(TextureHandle(6)));
+        assert_eq!(m.shader, Some(ShaderHandle(12)));
+    }
+
+    #[test]
+    fn a_glass_material_round_trips_through_postcard() {
+        let m: Material = serde_json::from_str(
+            r#"{"roughness":0.05,"metallic":1,"tint":[0.8,0.9,1],"emissive_factor":[2,2,2],
+                "alpha_cutoff":0.5,"opacity":0.3,"transparent":true,"see_through":true,
+                "macro_variation":0.4,"terrain_blend":0.6,"secondary_blend_sharpness":0.9}"#,
+        )
+        .unwrap();
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        let back: Material = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.roughness, 0.05);
+        assert_eq!(back.metallic, 1.0);
+        assert_eq!(back.tint, [0.8, 0.9, 1.0]);
+        assert_eq!(back.emissive_factor, [2.0, 2.0, 2.0]);
+        assert_eq!(back.alpha_cutoff, 0.5);
+        assert_eq!(back.opacity, 0.3);
+        assert!(back.transparent);
+        assert!(back.see_through);
+        assert_eq!(back.macro_variation, 0.4);
+        assert_eq!(back.terrain_blend, 0.6);
+        assert_eq!(back.secondary_blend_sharpness, 0.9);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

@@ -189,3 +189,105 @@ impl Default for CharacterCapsule {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn a_vertex_with_only_a_position_binds_fully_to_its_first_joint() {
+        // Importers emit position-only vertices for unweighted geometry; the
+        // defaults have to make that render white and rigid rather than black
+        // and collapsed to the origin.
+        let v: SkinnedVertexData = serde_json::from_str(r#"{"pos":[1,2,3]}"#).unwrap();
+        assert_eq!(v.pos, [1.0, 2.0, 3.0]);
+        assert_eq!(v.color, [1.0, 1.0, 1.0]);
+        assert_eq!(v.uv, [0.0, 0.0]);
+        assert_eq!(v.joints, [0, 0, 0, 0]);
+        assert_eq!(v.weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_weighted_vertex_keeps_its_authored_joints_and_weights() {
+        let v: SkinnedVertexData = serde_json::from_str(
+            r#"{"pos":[0,0,0],"color":[0.5,0.5,0.5],"uv":[0.25,0.75],
+                "joints":[3,4,0,0],"weights":[0.6,0.4,0,0]}"#,
+        )
+        .unwrap();
+        assert_eq!(v.color, [0.5, 0.5, 0.5]);
+        assert_eq!(v.uv, [0.25, 0.75]);
+        assert_eq!(v.joints, [3, 4, 0, 0]);
+        assert_eq!(v.weights, [0.6, 0.4, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_blank_joint_is_a_root_at_the_bind_pose_origin() {
+        let j = JointDef::default();
+        assert!(j.name.is_empty());
+        // -1 is the root marker; 0 would make every joint a child of joint 0.
+        assert_eq!(j.parent, -1);
+        assert_eq!(j.translation, [0.0, 0.0, 0.0]);
+        assert_eq!(j.scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn a_blank_morph_delta_moves_nothing() {
+        let d = MorphDelta::default();
+        assert_eq!(
+            d,
+            MorphDelta {
+                position: [0.0; 3],
+                normal: [0.0; 3],
+            }
+        );
+    }
+
+    #[test]
+    fn a_blank_mesh_has_no_geometry_and_no_capsule() {
+        let m = SkinnedMesh::default();
+        assert!(m.vertices.is_empty());
+        assert!(m.indices.is_empty());
+        assert!(m.morph_target_names.is_empty());
+        assert!(m.capsule.is_none());
+        assert!(m.locator.is_none());
+        assert_eq!(m.scale, [0.0, 0.0, 0.0]);
+        let c = CharacterCapsule::default();
+        assert_eq!((c.half_height, c.radius), (0.5, 0.3));
+    }
+
+    #[test]
+    fn an_imported_mesh_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let m: SkinnedMesh = serde_json::from_str(
+            r#"{"source":"hero.glb","skin_index":1,"material":"skin_mat","texture":"skin_tex",
+                "vertices":[{"pos":[0,0,0]}],"indices":[0],
+                "morph_target_names":["smile"],"morph_deltas":[{"position":[0,0.1,0]}],
+                "position":[1,0,2],"scale":[1,1,1],"lod_levels":2,"lod_distances":[10],
+                "max_instances":4,"capsule":{"half_height":0.9,"radius":0.35}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.material, Some(MaterialHandle(8)));
+        assert_eq!(m.texture, Some(TextureHandle(8)));
+        assert_eq!(m.morph_target_names, ["smile"]);
+
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        let back: SkinnedMesh = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.source, "hero.glb");
+        assert_eq!(back.skin_index, 1);
+        assert_eq!(back.vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            back.morph_deltas,
+            vec![MorphDelta {
+                position: [0.0, 0.1, 0.0],
+                normal: [0.0; 3],
+            }]
+        );
+        assert_eq!(back.lod_distances, [10.0]);
+        assert_eq!(back.max_instances, 4);
+        assert_eq!(back.capsule.expect("capsule").half_height, 0.9);
+        // Identity and payload location are injected at load, never authored.
+        assert_eq!(back.asset_id, AssetId::default());
+        assert!(back.locator.is_none());
+    }
+}

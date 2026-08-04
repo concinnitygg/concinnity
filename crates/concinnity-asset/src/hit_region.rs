@@ -97,3 +97,51 @@ impl Default for HitRegion {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_region_is_an_enabled_button_sized_rectangle() {
+        let h = HitRegion::default();
+        assert_eq!((h.x, h.y), (0.0, 0.0));
+        assert_eq!((h.width, h.height), (100.0, 40.0));
+        assert!(!h.disabled);
+        assert!(!h.follow_label);
+        assert_eq!(h.fit, SpriteFit::Fit);
+        assert!(h.action.is_empty());
+        // Hover styling is opt-in: unset means "do not restyle on hover".
+        assert_eq!(h.hover_color, None);
+        assert_eq!(h.hover_scale, None);
+        assert!(h.label.is_none());
+        assert!(h.drag_handle.is_none());
+        assert!(h.screen.is_none());
+    }
+
+    #[test]
+    fn an_authored_region_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let h: HitRegion = serde_json::from_str(
+            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":"start",
+                "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
+                "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
+        )
+        .unwrap();
+        assert_eq!(h.label, Some(AssetId(10)));
+        assert_eq!(h.drag_handle, Some(AssetId(4)));
+        assert_eq!(h.screen, Some(AssetId(4)));
+        assert_eq!(h.action, "start");
+        assert_eq!(h.hover_scale, Some(1.1));
+        assert_eq!(h.fit, SpriteFit::Cover);
+        assert!(h.disabled);
+        assert!(h.follow_label);
+
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        let back: HitRegion = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.hover_color, Some([1.0, 0.85, 0.3]));
+        assert_eq!((back.width, back.height), (200.0, 48.0));
+        assert_eq!(back.label, Some(AssetId(10)));
+        assert_eq!(back.fit, SpriteFit::Cover);
+    }
+}

@@ -22,6 +22,8 @@ mod id;
 mod locator;
 mod reference;
 mod resolver;
+#[cfg(test)]
+mod test_support;
 
 pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,

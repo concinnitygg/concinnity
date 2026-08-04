@@ -357,3 +357,142 @@ impl Default for PostProcessConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_leave_the_expensive_effects_off() {
+        // Bloom and FXAA are cheap enough to ship on; everything that costs a
+        // full-screen pass is opt-in so a blank world runs on any hardware.
+        let c = PostProcessConfig::default();
+        assert_eq!(c.aa_mode, AaMode::Fxaa);
+        assert_eq!(c.bloom_intensity, 0.6);
+        assert!(!c.ssao);
+        assert!(!c.ssr);
+        assert!(!c.ray_traced_reflections);
+        assert!(!c.auto_exposure);
+        assert!(!c.temporal_upscaling);
+        assert!(!c.hdr_display);
+        assert!(!c.occlusion_two_pass);
+        assert_eq!(c.indirect_lighting, IndirectLighting::Ibl);
+        assert_eq!(c.ssgi_rays, DEFAULT_SSGI_RAYS);
+        assert_eq!(c.ssgi_steps, DEFAULT_SSGI_STEPS);
+    }
+
+    #[test]
+    fn every_enum_default_matches_the_config_default() {
+        let c = PostProcessConfig::default();
+        assert_eq!(c.upscale_quality, UpscaleQuality::Quality);
+        assert_eq!(c.upscale_backend, UpscalerBackend::Auto);
+        assert_eq!(c.ssgi_resolution, SsgiResolution::Half);
+        assert_eq!(c.reflection_blur_resolution, ReflectionBlurResolution::Half);
+        assert_eq!(AaMode::default(), AaMode::Fxaa);
+        assert_eq!(IndirectLighting::default(), IndirectLighting::Ibl);
+    }
+
+    #[test]
+    fn upscale_quality_scales_the_render_resolution_down() {
+        // Ordered coarsest-last: each tier renders strictly fewer pixels.
+        assert_eq!(UpscaleQuality::Quality.scale(), 2.0 / 3.0);
+        assert_eq!(UpscaleQuality::Balanced.scale(), 0.587);
+        assert_eq!(UpscaleQuality::Performance.scale(), 0.5);
+        assert_eq!(UpscaleQuality::UltraPerformance.scale(), 1.0 / 3.0);
+        let tiers = [
+            UpscaleQuality::Quality,
+            UpscaleQuality::Balanced,
+            UpscaleQuality::Performance,
+            UpscaleQuality::UltraPerformance,
+        ];
+        assert!(tiers.windows(2).all(|w| w[0].scale() > w[1].scale()));
+    }
+
+    #[test]
+    fn fxaa_runs_for_every_mode_but_off_and_taa_only_for_taa() {
+        assert!(!AaMode::Off.fxaa_enabled());
+        assert!(AaMode::Fxaa.fxaa_enabled());
+        // Taa keeps the FXAA pass: the temporal resolve does not replace it.
+        assert!(AaMode::Taa.fxaa_enabled());
+
+        assert!(!AaMode::Off.taa_enabled());
+        assert!(!AaMode::Fxaa.taa_enabled());
+        assert!(AaMode::Taa.taa_enabled());
+
+        // The shader-side flag is the enabled bit as a float.
+        assert_eq!(AaMode::Off.fxaa_flag(), 0.0);
+        assert_eq!(AaMode::Fxaa.fxaa_flag(), 1.0);
+        assert_eq!(AaMode::Taa.fxaa_flag(), 1.0);
+    }
+
+    #[test]
+    fn half_and_quarter_resolutions_divide_the_target() {
+        assert_eq!(SsgiResolution::Full.scale_divisor(), 1);
+        assert_eq!(SsgiResolution::Half.scale_divisor(), 2);
+        assert_eq!(SsgiResolution::Quarter.scale_divisor(), 4);
+        assert_eq!(ReflectionBlurResolution::Full.scale_divisor(), 1);
+        assert_eq!(ReflectionBlurResolution::Half.scale_divisor(), 2);
+        assert_eq!(ReflectionBlurResolution::Quarter.scale_divisor(), 4);
+    }
+
+    #[test]
+    fn enum_names_parse_in_snake_case() {
+        let aa = |s: &str| serde_json::from_str::<AaMode>(s).unwrap();
+        assert_eq!(aa(r#""off""#), AaMode::Off);
+        assert_eq!(aa(r#""fxaa""#), AaMode::Fxaa);
+        assert_eq!(aa(r#""taa""#), AaMode::Taa);
+
+        let q = |s: &str| serde_json::from_str::<UpscaleQuality>(s).unwrap();
+        assert_eq!(q(r#""balanced""#), UpscaleQuality::Balanced);
+        assert_eq!(
+            q(r#""ultra_performance""#),
+            UpscaleQuality::UltraPerformance
+        );
+        assert_eq!(
+            serde_json::to_string(&UpscaleQuality::UltraPerformance).unwrap(),
+            r#""ultra_performance""#
+        );
+
+        let b = |s: &str| serde_json::from_str::<UpscalerBackend>(s).unwrap();
+        assert_eq!(b(r#""auto""#), UpscalerBackend::Auto);
+        assert_eq!(b(r#""fsr3""#), UpscalerBackend::Fsr3);
+        assert_eq!(b(r#""dlss""#), UpscalerBackend::Dlss);
+        assert_eq!(b(r#""xess""#), UpscalerBackend::Xess);
+
+        assert_eq!(
+            serde_json::from_str::<IndirectLighting>(r#""ssgi""#).unwrap(),
+            IndirectLighting::Ssgi
+        );
+        assert_eq!(
+            serde_json::from_str::<SsgiResolution>(r#""quarter""#).unwrap(),
+            SsgiResolution::Quarter
+        );
+        assert_eq!(
+            serde_json::from_str::<ReflectionBlurResolution>(r#""full""#).unwrap(),
+            ReflectionBlurResolution::Full
+        );
+    }
+
+    #[test]
+    fn an_authored_stack_round_trips_through_postcard() {
+        let c: PostProcessConfig = serde_json::from_str(
+            r#"{"aa_mode":"taa","ssao":true,"ssr":true,"indirect_lighting":"ssgi",
+                "ssgi_resolution":"quarter","temporal_upscaling":true,
+                "upscale_quality":"performance","upscale_backend":"dlss",
+                "auto_exposure":true,"hdr_display":true,"hdr_pq":true}"#,
+        )
+        .unwrap();
+        assert!(c.aa_mode.taa_enabled());
+        assert_eq!(c.ssgi_resolution.scale_divisor(), 4);
+        // Fields the args did not mention keep the schema defaults.
+        assert_eq!(c.bloom_intensity, 0.6);
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: PostProcessConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.aa_mode, AaMode::Taa);
+        assert_eq!(back.upscale_backend, UpscalerBackend::Dlss);
+        assert_eq!(back.upscale_quality, UpscaleQuality::Performance);
+        assert_eq!(back.indirect_lighting, IndirectLighting::Ssgi);
+        assert!(back.hdr_pq);
+    }
+}

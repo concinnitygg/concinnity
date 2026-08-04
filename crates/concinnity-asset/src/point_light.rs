@@ -32,3 +32,32 @@ impl Default for PointLight {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_lamp_hangs_above_head_height_with_a_room_sized_reach() {
+        let l = PointLight::default();
+        assert_eq!(l.position, [0.0, 2.5, 0.0]);
+        assert_eq!(l.color, [1.0, 1.0, 1.0]);
+        assert_eq!(l.intensity, 8.0);
+        assert_eq!(l.range, 6.0);
+    }
+
+    #[test]
+    fn an_authored_lamp_parses_and_round_trips_through_postcard() {
+        let l: PointLight = serde_json::from_str(
+            r#"{"position":[2,2.5,-3],"color":[1,0.8,0.5],"intensity":12,"range":9}"#,
+        )
+        .unwrap();
+        assert_eq!(l.position, [2.0, 2.5, -3.0]);
+        assert_eq!(l.color, [1.0, 0.8, 0.5]);
+
+        let bytes = postcard::to_allocvec(&l).unwrap();
+        let back: PointLight = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.intensity, 12.0);
+        assert_eq!(back.range, 9.0);
+    }
+}

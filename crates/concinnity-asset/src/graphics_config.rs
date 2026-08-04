@@ -98,3 +98,64 @@ impl Default for GraphicsConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_run_uncapped_with_hybrid_cascaded_shadows() {
+        let g = GraphicsConfig::default();
+        // No frame ceiling and no fps cap: `cn run` renders until it is closed.
+        assert_eq!(g.max_frames, None);
+        assert_eq!(g.fps_cap, 0);
+        assert!(!g.vsync);
+        assert_eq!(g.frames_in_flight, 2);
+        assert_eq!(g.shadow_update, ShadowUpdate::Hybrid);
+        assert_eq!(g.shadow_map_size, 2048);
+        assert_eq!(g.shadow_cascades, 4);
+        assert_eq!(g.shadow_distance, 80);
+        assert_eq!(g.anisotropy, 8);
+        assert_eq!(ShadowUpdate::default(), ShadowUpdate::Hybrid);
+    }
+
+    #[test]
+    fn shadow_update_names_parse_in_snake_case() {
+        assert_eq!(
+            serde_json::from_str::<ShadowUpdate>(r#""every_frame""#).unwrap(),
+            ShadowUpdate::EveryFrame
+        );
+        assert_eq!(
+            serde_json::from_str::<ShadowUpdate>(r#""hybrid""#).unwrap(),
+            ShadowUpdate::Hybrid
+        );
+        assert_eq!(
+            serde_json::to_string(&ShadowUpdate::EveryFrame).unwrap(),
+            r#""every_frame""#
+        );
+    }
+
+    #[test]
+    fn an_authored_config_parses_and_round_trips_through_postcard() {
+        let g: GraphicsConfig = serde_json::from_str(
+            r#"{"max_frames":120,"vsync":true,"fps_cap":60,"clear_color":[0,0,0,1],
+                "shadow_update":"every_frame","shadow_map_size":4096,"shadow_cascades":2,
+                "anisotropy":16}"#,
+        )
+        .unwrap();
+        assert_eq!(g.max_frames, Some(120));
+        assert!(g.vsync);
+        assert_eq!(g.shadow_update, ShadowUpdate::EveryFrame);
+
+        let bytes = postcard::to_allocvec(&g).unwrap();
+        let back: GraphicsConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.max_frames, Some(120));
+        assert_eq!(back.fps_cap, 60);
+        assert_eq!(back.clear_color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(back.shadow_map_size, 4096);
+        assert_eq!(back.shadow_cascades, 2);
+        assert_eq!(back.anisotropy, 16);
+        // Rotation speed was not authored, so it keeps the schema default.
+        assert_eq!(back.rotation_speed, 1.0);
+    }
+}

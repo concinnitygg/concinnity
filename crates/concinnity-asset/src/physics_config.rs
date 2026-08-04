@@ -44,3 +44,41 @@ pub struct PhysicsConfig {
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub terrain_mesh: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_config_is_a_flat_floor_at_the_origin() {
+        let p = PhysicsConfig::default();
+        assert_eq!(p.floor_y, 0.0);
+        assert_eq!(p.terrain_amplitude, 0.0);
+        assert_eq!(p.terrain_subdivisions, 0);
+        assert_eq!(p.terrain_offset_y, 0.0);
+        // No mesh named means the generated terrain values are what is used.
+        assert!(p.terrain_mesh.is_none());
+    }
+
+    #[test]
+    fn a_named_terrain_mesh_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let p: PhysicsConfig = serde_json::from_str(
+            r#"{"floor_y":-1.5,"terrain_half_width":128,"terrain_half_depth":128,
+                "terrain_subdivisions":64,"terrain_amplitude":12,"terrain_offset_y":2,
+                "terrain_mesh":"ground"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.terrain_mesh, Some(AssetId(6)));
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.floor_y, -1.5);
+        assert_eq!(back.terrain_half_width, 128.0);
+        assert_eq!(back.terrain_half_depth, 128.0);
+        assert_eq!(back.terrain_subdivisions, 64);
+        assert_eq!(back.terrain_amplitude, 12.0);
+        assert_eq!(back.terrain_offset_y, 2.0);
+        assert_eq!(back.terrain_mesh, Some(AssetId(6)));
+    }
+}

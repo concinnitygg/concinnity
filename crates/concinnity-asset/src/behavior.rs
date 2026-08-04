@@ -420,6 +420,66 @@ mod tests {
         serde_json::from_str(json).expect("behavior parses")
     }
 
+    // Destructuring helpers, each `None` for any other kind. The parse tests
+    // read as assertions on the parts rather than nested pattern matches.
+    fn as_if(node: &Node) -> Option<(&Expr, &[Node], &[Node])> {
+        match node {
+            Node::If {
+                cond,
+                then,
+                otherwise,
+            } => Some((cond, then, otherwise)),
+            _ => None,
+        }
+    }
+
+    fn as_spawn(node: &Node) -> Option<(Option<&str>, [f32; 3])> {
+        match node {
+            Node::Spawn { bind, scale, .. } => Some((bind.as_deref(), *scale)),
+            _ => None,
+        }
+    }
+
+    fn as_set(node: &Node) -> Option<(&str, &Expr, bool)> {
+        match node {
+            Node::Set { var, value, add } => Some((var, value, *add)),
+            _ => None,
+        }
+    }
+
+    fn as_despawn(node: &Node) -> Option<&Expr> {
+        match node {
+            Node::Despawn { target } => Some(target),
+            _ => None,
+        }
+    }
+
+    fn as_lt(expr: &Expr) -> Option<(&Expr, &Expr)> {
+        match expr {
+            Expr::Lt(lhs, rhs) => Some((lhs, rhs)),
+            _ => None,
+        }
+    }
+
+    fn as_distance(expr: &Expr) -> Option<(&Expr, &Expr)> {
+        match expr {
+            Expr::Distance(a, b) => Some((a, b)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_destructuring_helpers_only_match_their_own_kind() {
+        let b = parse(r#"{"do":[{"save":null}]}"#);
+        let save = &b.body[0];
+        assert!(as_if(save).is_none());
+        assert!(as_spawn(save).is_none());
+        assert!(as_set(save).is_none());
+        assert!(as_despawn(save).is_none());
+        assert!(as_lt(&Expr::Bool(true)).is_none());
+        assert!(as_distance(&Expr::Bool(true)).is_none());
+    }
+
     #[test]
     fn defaults_are_world_scoped_and_empty() {
         let b = Behavior::default();
@@ -467,35 +527,22 @@ mod tests {
         let b = parse(
             r#"{"do":[{"if":{"cond":{"lt":[{"distance":["self",{"bind":"t"}]},{"float":20.0}]}}}]}"#,
         );
-        let Node::If {
-            cond,
-            then,
-            otherwise,
-        } = &b.body[0]
-        else {
-            panic!("expected an if node");
-        };
+        let (cond, then, otherwise) = as_if(&b.body[0]).expect("an if node");
         assert!(then.is_empty());
         assert!(otherwise.is_empty());
-        let Expr::Lt(lhs, rhs) = cond else {
-            panic!("expected a less-than comparison");
-        };
-        assert_eq!(**rhs, Expr::Float(20.0));
-        let Expr::Distance(a, b) = &**lhs else {
-            panic!("expected a distance expression");
-        };
-        assert_eq!(**a, Expr::SelfEntity);
-        assert_eq!(**b, Expr::Bind(String::from("t")));
+        let (lhs, rhs) = as_lt(cond).expect("a less-than comparison");
+        assert_eq!(*rhs, Expr::Float(20.0));
+        let (a, b) = as_distance(lhs).expect("a distance expression");
+        assert_eq!(*a, Expr::SelfEntity);
+        assert_eq!(*b, Expr::Bind(String::from("t")));
     }
 
     #[test]
     fn spawn_binds_the_new_entity() {
         let b = parse(r#"{"do":[{"spawn":{"bind":"made"}}]}"#);
-        let Node::Spawn { bind, scale, .. } = &b.body[0] else {
-            panic!("expected a spawn node");
-        };
-        assert_eq!(bind.as_deref(), Some("made"));
-        assert_eq!(*scale, [1.0, 1.0, 1.0]);
+        let (bind, scale) = as_spawn(&b.body[0]).expect("a spawn node");
+        assert_eq!(bind, Some("made"));
+        assert_eq!(scale, [1.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -515,12 +562,37 @@ mod tests {
         let encoded = serde_json::to_string(&b).expect("behavior encodes");
         let again: Behavior = serde_json::from_str(&encoded).expect("behavior re-parses");
         assert_eq!(again.on, b.on);
-        let Node::Set { var, value, add } = &again.body[0] else {
-            panic!("expected a set node");
-        };
+        let (var, value, add) = as_set(&again.body[0]).expect("a set node");
         assert_eq!(var, "visits");
         assert_eq!(*value, Expr::Int(1));
         assert!(add);
+    }
+
+    #[test]
+    fn a_blank_expression_is_false() {
+        // Lets a node's expression field carry `#[serde(default)]` without the
+        // omission reading as "fires".
+        assert_eq!(Expr::default(), Expr::Bool(false));
+    }
+
+    #[test]
+    fn a_scene_node_fades_unless_told_to_cut() {
+        crate::test_support::install_resolvers();
+        let b = parse(r#"{"do":[{"scene":{"scene":"hub"}},{"scene":{"transition":"Cut"}}]}"#);
+        assert!(matches!(
+            (&b.body[0], &b.body[1]),
+            (
+                Node::Scene { transition: a, .. },
+                Node::Scene { transition: c, .. },
+            ) if a == "FadeBlack" && c == "Cut"
+        ));
+    }
+
+    #[test]
+    fn a_sound_node_plays_at_unit_gain_unless_told_otherwise() {
+        let b = parse(r#"{"do":[{"sound":{}}]}"#);
+        assert!(matches!(b.body[0], Node::Sound { volume, .. } if volume == 1.0));
+        assert!(b.plays_sound());
     }
 
     #[test]
@@ -529,6 +601,7 @@ mod tests {
         let bytes = postcard::to_allocvec(&b).expect("behavior encodes");
         let again: Behavior = postcard::from_bytes(&bytes).expect("behavior decodes");
         assert_eq!(again.on, BehaviorSource::Tick);
-        assert!(matches!(again.body[0], Node::Despawn { .. }));
+        let target = as_despawn(&again.body[0]).expect("a despawn node");
+        assert_eq!(*target, Expr::SelfEntity);
     }
 }

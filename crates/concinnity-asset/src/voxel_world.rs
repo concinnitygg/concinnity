@@ -130,3 +130,90 @@ impl VoxelWorld {
         (self.load_budget as usize).max(1)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_stream_a_small_radius_with_impostors_off() {
+        let w = VoxelWorld::default();
+        assert_eq!(w.chunk_blocks(), [16, 24, 16]);
+        assert_eq!(w.block_size(), 1.0);
+        assert_eq!(w.chunk_world_size(), (16.0, 16.0));
+        assert_eq!(w.view_radius(), 5);
+        assert_eq!(w.load_budget(), 3);
+        assert_eq!(w.impostor_step(), 4);
+        // An impostor radius inside the view radius means nothing to impostor.
+        assert!(!w.impostors_enabled());
+        assert_eq!(w.impostor_radius(), w.view_radius());
+        assert!(w.palette.is_empty());
+        assert_eq!(w.material, None);
+    }
+
+    #[test]
+    fn a_degenerate_chunk_size_is_floored_to_something_meshable() {
+        // A zero dimension or block size would produce an empty or infinitely
+        // dense chunk, so both are clamped before the mesher sees them.
+        let w: VoxelWorld =
+            serde_json::from_str(r#"{"chunk_blocks":[0,0,0],"block_size":0.0}"#).unwrap();
+        assert_eq!(w.chunk_blocks(), [1, 1, 1]);
+        assert_eq!(w.block_size(), 0.01);
+        assert_eq!(w.chunk_world_size(), (0.01, 0.01));
+    }
+
+    #[test]
+    fn chunk_world_size_is_the_horizontal_footprint() {
+        // Height is not part of the footprint: chunks tile in X and Z only.
+        let w: VoxelWorld =
+            serde_json::from_str(r#"{"chunk_blocks":[8,64,4],"block_size":0.5}"#).unwrap();
+        assert_eq!(w.chunk_world_size(), (4.0, 2.0));
+    }
+
+    #[test]
+    fn radii_are_clamped_to_what_the_streamer_can_hold() {
+        let w: VoxelWorld =
+            serde_json::from_str(r#"{"view_radius":999,"impostor_radius":999}"#).unwrap();
+        assert_eq!(w.view_radius(), 32);
+        assert_eq!(w.impostor_radius(), 96);
+        assert!(w.impostors_enabled());
+    }
+
+    #[test]
+    fn an_impostor_radius_never_falls_inside_the_view_radius() {
+        // Impostors stand in for chunks beyond the meshed ones, so a smaller
+        // authored radius is raised rather than leaving a hole.
+        let w: VoxelWorld =
+            serde_json::from_str(r#"{"view_radius":10,"impostor_radius":2}"#).unwrap();
+        assert_eq!(w.impostor_radius(), 10);
+        assert!(!w.impostors_enabled());
+    }
+
+    #[test]
+    fn a_zero_impostor_step_or_load_budget_cannot_wedge_streaming() {
+        let w: VoxelWorld = serde_json::from_str(r#"{"impostor_step":0,"load_budget":0}"#).unwrap();
+        assert_eq!(w.impostor_step(), 1);
+        assert_eq!(w.load_budget(), 1);
+        let w: VoxelWorld = serde_json::from_str(r#"{"impostor_step":999}"#).unwrap();
+        assert_eq!(w.impostor_step(), 64);
+    }
+
+    #[test]
+    fn an_authored_world_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let w: VoxelWorld = serde_json::from_str(
+            r#"{"seed":42,"palette":["stone","dirt"],"material":"voxel_mat",
+                "view_radius":8,"impostor_radius":24}"#,
+        )
+        .unwrap();
+        assert_eq!(w.palette, [AssetId(5), AssetId(4)]);
+        assert_eq!(w.material, Some(MaterialHandle(9)));
+
+        let bytes = postcard::to_allocvec(&w).unwrap();
+        let back: VoxelWorld = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.seed, 42);
+        assert_eq!(back.palette, [AssetId(5), AssetId(4)]);
+        assert_eq!(back.material, Some(MaterialHandle(9)));
+        assert!(back.impostors_enabled());
+    }
+}

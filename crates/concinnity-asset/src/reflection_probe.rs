@@ -43,3 +43,28 @@ impl Default for ReflectionProbe {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_probe_captures_from_eye_height_over_a_room_sized_box() {
+        let p = ReflectionProbe::default();
+        assert_eq!(p.position, [0.0, 1.7, 0.0]);
+        // The parallax box is wider than it is tall, matching a room rather than
+        // a cube, so floor reflections land where the geometry actually is.
+        assert_eq!(p.half_extents, [10.0, 5.0, 10.0]);
+    }
+
+    #[test]
+    fn an_authored_probe_parses_and_round_trips_through_postcard() {
+        let p: ReflectionProbe =
+            serde_json::from_str(r#"{"position":[4,2,-6],"half_extents":[6,3,8]}"#).unwrap();
+        assert_eq!(p.position, [4.0, 2.0, -6.0]);
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: ReflectionProbe = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.half_extents, [6.0, 3.0, 8.0]);
+    }
+}

@@ -63,3 +63,41 @@ impl Default for AudioCue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_cue_is_a_one_shot_sound_at_unit_gain() {
+        let c = AudioCue::default();
+        assert_eq!(c.kind, CueKind::Sound);
+        assert_eq!(c.volume, 1.0);
+        assert!(c.clip.is_none());
+        assert!(c.screen.is_none());
+        assert_eq!(CueKind::default(), CueKind::Sound);
+    }
+
+    #[test]
+    fn a_music_cue_parses_its_clip_and_screen_by_name() {
+        crate::test_support::install_resolvers();
+        let c: AudioCue =
+            serde_json::from_str(r#"{"clip":"theme","screen":"menu","kind":"music","volume":0.4}"#)
+                .unwrap();
+        assert_eq!(c.clip, Some(AudioClipHandle(5)));
+        assert_eq!(c.screen, Some(AssetId(4)));
+        assert_eq!(c.kind, CueKind::Music);
+        assert_eq!(c.volume, 0.4);
+        assert_eq!(
+            serde_json::to_string(&CueKind::Music).unwrap(),
+            r#""music""#
+        );
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: AudioCue = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.clip, Some(AudioClipHandle(5)));
+        assert_eq!(back.screen, Some(AssetId(4)));
+        assert_eq!(back.kind, CueKind::Music);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

@@ -44,3 +44,46 @@ pub struct Model {
     /// Ordered list of sub-meshes that make up this model.
     pub meshes: Vec<SubMeshRef>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_model_has_no_sub_meshes() {
+        let m = Model::default();
+        assert!(m.meshes.is_empty());
+        assert_eq!(m.asset_id, AssetId::default());
+    }
+
+    #[test]
+    fn a_sub_mesh_may_declare_geometry_without_a_material() {
+        crate::test_support::install_resolvers();
+        let s: SubMeshRef = serde_json::from_str(r#"{"mesh":"body"}"#).unwrap();
+        assert_eq!(s.mesh, Some(MeshHandle(4)));
+        // No material means the sub-mesh inherits whatever the prop supplies.
+        assert_eq!(s.material, None);
+        let s: SubMeshRef = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.mesh, None);
+        assert_eq!(s.material, None);
+    }
+
+    #[test]
+    fn an_imported_model_keeps_its_sub_mesh_order_through_postcard() {
+        crate::test_support::install_resolvers();
+        let m: Model = serde_json::from_str(
+            r#"{"meshes":[{"mesh":"body","material":"skin"},
+                         {"mesh":"trim","material":"metal"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(m.meshes.len(), 2);
+
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        let back: Model = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.meshes[0].mesh, Some(MeshHandle(4)));
+        assert_eq!(back.meshes[0].material, Some(MaterialHandle(4)));
+        assert_eq!(back.meshes[1].mesh, Some(MeshHandle(4)));
+        assert_eq!(back.meshes[1].material, Some(MaterialHandle(5)));
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

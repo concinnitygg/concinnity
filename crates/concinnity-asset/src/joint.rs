@@ -136,3 +136,83 @@ impl Joint {
         JointKind::from_str_norm(&self.kind).unwrap_or(JointKind::Fixed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_kind_accepts_its_aliases_and_round_trips_through_its_canonical_name() {
+        let cases = [
+            (JointKind::Fixed, "fixed", ["fixed", "weld", "WELD"]),
+            (
+                JointKind::Revolute,
+                "revolute",
+                ["revolute", "hinge", "Hinge"],
+            ),
+            (
+                JointKind::Spherical,
+                "spherical",
+                ["spherical", "ball", "socket"],
+            ),
+            (
+                JointKind::Prismatic,
+                "prismatic",
+                ["prismatic", "slider", "piston"],
+            ),
+        ];
+        for (kind, canonical, aliases) in cases {
+            assert_eq!(kind.as_str(), canonical);
+            for alias in aliases {
+                assert_eq!(JointKind::from_str_norm(alias), Some(kind), "{alias}");
+            }
+            assert_eq!(JointKind::from_str_norm(kind.as_str()), Some(kind));
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_kind_has_no_parse() {
+        assert_eq!(JointKind::from_str_norm("bendy"), None);
+        assert_eq!(JointKind::from_str_norm(""), None);
+    }
+
+    #[test]
+    fn a_blank_joint_welds_two_unset_bodies() {
+        let j = Joint::default();
+        assert_eq!(j.kind, "fixed");
+        assert_eq!(j.parsed_kind(), JointKind::Fixed);
+        assert_eq!(j.body_a, None);
+        assert_eq!(j.body_b, None);
+        assert_eq!(j.axis, [0.0, 1.0, 0.0]);
+        assert!(!j.limits_enabled);
+    }
+
+    #[test]
+    fn a_typo_in_kind_degrades_to_a_weld() {
+        // Cross-reference validation reports the bad kind; the accessor must not
+        // panic in the meantime.
+        let j: Joint = serde_json::from_str(r#"{"kind":"hindge"}"#).unwrap();
+        assert_eq!(j.parsed_kind(), JointKind::Fixed);
+    }
+
+    #[test]
+    fn an_authored_hinge_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let j: Joint = serde_json::from_str(
+            r#"{"kind":"hinge","body_a":"door","body_b":"frame","axis":[0,1,0],
+                "limits_enabled":true,"limits":[-90,0],"motor_max_force":12.5}"#,
+        )
+        .unwrap();
+        assert_eq!(j.parsed_kind(), JointKind::Revolute);
+        assert_eq!(j.body_a, Some(crate::AssetId(4)));
+        assert_eq!(j.body_b, Some(crate::AssetId(5)));
+
+        let bytes = postcard::to_allocvec(&j).unwrap();
+        let back: Joint = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.parsed_kind(), JointKind::Revolute);
+        assert_eq!(back.limits, [-90.0, 0.0]);
+        assert_eq!(back.motor_max_force, 12.5);
+        // `asset_id` is injected, never authored, so it does not ride the wire.
+        assert_eq!(back.asset_id, crate::AssetId::default());
+    }
+}

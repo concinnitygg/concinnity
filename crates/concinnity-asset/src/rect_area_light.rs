@@ -49,3 +49,39 @@ impl Default for RectAreaLight {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_panel_is_a_ceiling_light_facing_down() {
+        let l = RectAreaLight::default();
+        assert_eq!(l.centre, [0.0, 3.0, 0.0]);
+        assert_eq!(l.normal, [0.0, -1.0, 0.0]);
+        assert_eq!(l.half_size, [1.0, 1.0]);
+        assert_eq!(l.intensity, 12.0);
+        assert_eq!(l.range, 18.0);
+        // One-sided: the back of the panel emits nothing.
+        assert!(!l.two_sided);
+    }
+
+    #[test]
+    fn an_authored_panel_parses_and_round_trips_through_postcard() {
+        let l: RectAreaLight = serde_json::from_str(
+            r#"{"centre":[0,1.5,-4],"normal":[0,0,1],"half_size":[2,0.5],
+                "color":[1,0.95,0.9],"intensity":30,"range":25,"two_sided":true}"#,
+        )
+        .unwrap();
+        assert!(l.two_sided);
+        assert_eq!(l.normal, [0.0, 0.0, 1.0]);
+
+        let bytes = postcard::to_allocvec(&l).unwrap();
+        let back: RectAreaLight = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.centre, [0.0, 1.5, -4.0]);
+        assert_eq!(back.half_size, [2.0, 0.5]);
+        assert_eq!(back.color, [1.0, 0.95, 0.9]);
+        assert_eq!(back.intensity, 30.0);
+        assert_eq!(back.range, 25.0);
+    }
+}

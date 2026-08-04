@@ -119,3 +119,76 @@ impl Default for TextInput {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_field_is_visible_empty_and_unfocused() {
+        let t = TextInput::default();
+        assert!(t.content.is_empty());
+        assert!(t.placeholder.is_empty());
+        assert_eq!((t.width, t.height), (240.0, 40.0));
+        assert_eq!(t.scale, 1.0);
+        assert_eq!(t.corner_radius, 4.0);
+        assert_eq!(t.padding, 8.0);
+        // Zero means "no length limit", not "accepts nothing".
+        assert_eq!(t.max_len, 0);
+        assert!(t.visible);
+        assert_eq!(t.fit, SpriteFit::Fit);
+        // Edit state is runtime-only.
+        assert!(!t.focused);
+        assert!(t.ghost.is_empty());
+        assert_eq!(t.caret, 0);
+        assert!(t.font.is_none());
+        assert!(t.screen.is_none());
+    }
+
+    #[test]
+    fn edit_state_is_runtime_only_and_never_rides_the_wire() {
+        crate::test_support::install_resolvers();
+        let t: TextInput = serde_json::from_str(
+            r#"{"font":"body","content":"hello","placeholder":"name","max_len":32,
+                "screen":"menu","focused":true,"caret":5,"ghost":"world"}"#,
+        )
+        .unwrap();
+        assert_eq!(t.font, Some(FontHandle(4)));
+        assert_eq!(t.content, "hello");
+        assert_eq!(t.screen, Some(AssetId(4)));
+        // Focus, caret, and the completion ghost are skipped on the way in.
+        assert!(!t.focused);
+        assert_eq!(t.caret, 0);
+        assert!(t.ghost.is_empty());
+
+        let bytes = postcard::to_allocvec(&t).unwrap();
+        let back: TextInput = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.content, "hello");
+        assert_eq!(back.placeholder, "name");
+        assert_eq!(back.max_len, 32);
+        assert_eq!(back.font, Some(FontHandle(4)));
+        assert!(!back.focused);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+
+    #[test]
+    fn an_authored_style_parses_and_round_trips_through_postcard() {
+        let t: TextInput = serde_json::from_str(
+            r#"{"x":12,"y":24,"width":300,"height":36,"scale":1.5,"text_color":[1,1,1],
+                "placeholder_color":[0.4,0.4,0.4],"background":[0,0,0,1],
+                "caret_color":[1,0,0],"corner_radius":0,"padding":4,"visible":false,
+                "fit":"bottom"}"#,
+        )
+        .unwrap();
+        let bytes = postcard::to_allocvec(&t).unwrap();
+        let back: TextInput = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!((back.x, back.y), (12.0, 24.0));
+        assert_eq!(back.scale, 1.5);
+        assert_eq!(back.placeholder_color, [0.4, 0.4, 0.4]);
+        assert_eq!(back.background, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(back.caret_color, [1.0, 0.0, 0.0]);
+        assert_eq!(back.padding, 4.0);
+        assert!(!back.visible);
+        assert_eq!(back.fit, SpriteFit::Bottom);
+    }
+}

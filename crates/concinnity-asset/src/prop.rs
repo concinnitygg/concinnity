@@ -152,3 +152,84 @@ impl Default for Prop {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_collider_is_a_unit_cuboid() {
+        let c = PropCollider::default();
+        assert_eq!(c.shape, "cuboid");
+        assert_eq!(c.half_extents, [0.5, 0.5, 0.5]);
+        assert_eq!(c.radius, 0.5);
+        assert_eq!(c.half_height, 0.5);
+    }
+
+    #[test]
+    fn a_blank_prop_is_an_unscaled_non_interactive_placement() {
+        let p = Prop::default();
+        assert_eq!(p.position, [0.0, 0.0, 0.0]);
+        assert_eq!(p.rotation_deg, [0.0, 0.0, 0.0]);
+        assert_eq!(p.scale, [1.0, 1.0, 1.0]);
+        // No collider means the prop is decoration: physics ignores it.
+        assert!(p.collider.is_none());
+        assert!(!p.interactable);
+        assert!(!p.pickup);
+        assert!(!p.is_held);
+        assert_eq!(p.cull_distance, 0.0);
+        assert!(p.prefab.is_empty());
+        assert!(p.model.is_none());
+        assert!(p.mesh.is_none());
+        assert!(p.material.is_none());
+        assert!(p.texture.is_none());
+        assert!(p.parent.is_none());
+        assert!(p.scene.is_none());
+    }
+
+    #[test]
+    fn every_reference_resolves_through_its_own_seam() {
+        crate::test_support::install_resolvers();
+        let p: Prop = serde_json::from_str(
+            r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","texture":"tex_wood",
+                "parent":"shelf","scene":"vault"}"#,
+        )
+        .unwrap();
+        // A Model is still an interned name; the resource kinds are handles.
+        assert_eq!(p.model, Some(AssetId(11)));
+        assert_eq!(p.mesh, Some(MeshHandle(10)));
+        assert_eq!(p.material, Some(MaterialHandle(4)));
+        assert_eq!(p.texture, Some(TextureHandle(8)));
+        assert_eq!(p.parent, Some(AssetId(5)));
+        assert_eq!(p.scene, Some(AssetId(5)));
+    }
+
+    #[test]
+    fn a_pickup_with_a_ball_collider_round_trips_through_postcard() {
+        let p: Prop = serde_json::from_str(
+            r#"{"position":[1,2,3],"rotation_deg":[0,90,0],"scale":[2,2,2],
+                "collider":{"shape":"ball","radius":0.25},
+                "interactable":true,"pickup":true,"prefab":"lantern","cull_distance":60}"#,
+        )
+        .unwrap();
+        let collider = p.collider.as_ref().expect("collider");
+        assert_eq!(collider.shape, "ball");
+        assert_eq!(collider.radius, 0.25);
+        // Unmentioned collider dimensions keep the schema defaults.
+        assert_eq!(collider.half_height, 0.5);
+
+        let bytes = postcard::to_allocvec(&p).unwrap();
+        let back: Prop = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.position, [1.0, 2.0, 3.0]);
+        assert_eq!(back.rotation_deg, [0.0, 90.0, 0.0]);
+        assert_eq!(back.scale, [2.0, 2.0, 2.0]);
+        assert_eq!(back.collider.expect("collider").shape, "ball");
+        assert!(back.interactable);
+        assert!(back.pickup);
+        assert_eq!(back.prefab, "lantern");
+        assert_eq!(back.cull_distance, 60.0);
+        // Held state is runtime-only, so it never rides the wire.
+        assert!(!back.is_held);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

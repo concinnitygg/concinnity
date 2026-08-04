@@ -185,3 +185,162 @@ impl LayoutContainer {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    // A label 10 wide and 20 tall per unit of its id, with no padding, so a
+    // placement's x/y is the box corner and widths stay easy to add up.
+    fn box_of(id: AssetId) -> Option<LabelBox> {
+        Some(LabelBox {
+            w: 10.0 * id.0 as f32,
+            h: 20.0,
+            pad: 0.0,
+            top_inset: 0.0,
+        })
+    }
+
+    fn row(justify: Justify, cols: &[u32]) -> LayoutRow {
+        LayoutRow {
+            cols: cols.iter().copied().map(AssetId).collect(),
+            justify,
+        }
+    }
+
+    fn container(rows: Vec<LayoutRow>) -> LayoutContainer {
+        LayoutContainer {
+            x: 0.0,
+            y: 0.0,
+            col_gap: 2.0,
+            row_gap: 4.0,
+            rows,
+            ..LayoutContainer::default()
+        }
+    }
+
+    #[test]
+    fn defaults_place_an_empty_container_in_the_top_left() {
+        let c = LayoutContainer::default();
+        assert_eq!((c.x, c.y), (10.0, 10.0));
+        assert_eq!((c.col_gap, c.row_gap), (6.0, 6.0));
+        assert!(c.visible);
+        assert!(c.rows.is_empty());
+        assert!(c.layout(box_of).is_empty());
+        assert_eq!(LayoutRow::default().justify, Justify::Left);
+        assert_eq!(Justify::default(), Justify::Left);
+    }
+
+    #[test]
+    fn a_row_lays_its_labels_out_edge_to_edge_with_the_column_gap() {
+        let c = container(vec![row(Justify::Left, &[1, 2])]);
+        let out = c.layout(box_of);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].x, out[0].y), (0.0, 0.0));
+        // Second box starts after the first box's width plus the gap.
+        assert_eq!(out[1].x, 12.0);
+    }
+
+    #[test]
+    fn rows_stack_by_the_tallest_box_plus_the_row_gap() {
+        let c = container(vec![row(Justify::Left, &[1]), row(Justify::Left, &[1])]);
+        let out = c.layout(box_of);
+        assert_eq!(out[0].y, 0.0);
+        assert_eq!(out[1].y, 24.0);
+    }
+
+    #[test]
+    fn a_narrow_row_justifies_within_the_widest_row() {
+        // Wide row is 10 + 2 + 20 = 32; narrow row is 10, so 22 of slack.
+        let rows = |j| vec![row(Justify::Left, &[1, 2]), row(j, &[1])];
+        let x_of_narrow = |j| container(rows(j)).layout(box_of)[2].x;
+        assert_eq!(x_of_narrow(Justify::Left), 0.0);
+        assert_eq!(x_of_narrow(Justify::Center), 11.0);
+        assert_eq!(x_of_narrow(Justify::Right), 22.0);
+        // A single-label row has nothing to spread between, so it packs left.
+        assert_eq!(x_of_narrow(Justify::SpaceBetween), 0.0);
+    }
+
+    #[test]
+    fn space_between_spreads_the_slack_across_the_gaps() {
+        let c = container(vec![
+            row(Justify::Left, &[4]),
+            row(Justify::SpaceBetween, &[1, 1, 1]),
+        ]);
+        // Wide row is 40; the three narrow boxes are 30 + 2 gaps = 34, so 6 of
+        // slack split over 2 gaps: each gap grows from 2 to 5.
+        let out = c.layout(box_of);
+        assert_eq!(out[1].x, 0.0);
+        assert_eq!(out[2].x, 15.0);
+        assert_eq!(out[3].x, 30.0);
+    }
+
+    #[test]
+    fn a_label_that_cannot_be_measured_is_dropped_and_reserves_no_space() {
+        // An unknown label, an unloaded font, or a hidden label measures to None.
+        let c = container(vec![row(Justify::Left, &[1, 2, 3])]);
+        let out = c.layout(|id| if id.0 == 2 { None } else { box_of(id) });
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, AssetId(1));
+        assert_eq!(out[1].id, AssetId(3));
+        // Box 3 follows box 1 directly, as though box 2 was never declared.
+        assert_eq!(out[1].x, 12.0);
+    }
+
+    #[test]
+    fn an_empty_row_still_advances_the_cursor_by_the_row_gap() {
+        let c = container(vec![row(Justify::Left, &[]), row(Justify::Left, &[1])]);
+        let out = c.layout(box_of);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].y, 4.0);
+    }
+
+    #[test]
+    fn padding_insets_the_text_origin_from_the_box_corner() {
+        // The box hugs the visible glyphs, which sit below the text origin, so
+        // the vertical inset is its own number rather than the padding.
+        let c = container(vec![row(Justify::Left, &[1])]);
+        let out = c.layout(|id| {
+            Some(LabelBox {
+                pad: 3.0,
+                top_inset: 7.0,
+                ..box_of(id).unwrap()
+            })
+        });
+        assert_eq!((out[0].x, out[0].y), (3.0, 7.0));
+    }
+
+    #[test]
+    fn rows_parse_from_authored_args_and_round_trip_through_postcard() {
+        crate::test_support::install_resolvers();
+        let c: LayoutContainer = serde_json::from_str(
+            r#"{"x":10,"y":10,"col_gap":6,"row_gap":6,
+                "rows":[{"cols":["fps_chip","ev_chip"],"justify":"space-between"},
+                        {"cols":["passes_chip"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.rows.len(), 2);
+        assert_eq!(c.rows[0].justify, Justify::SpaceBetween);
+        assert_eq!(c.rows[1].justify, Justify::Left);
+        assert_eq!(c.rows[0].cols, [AssetId(8), AssetId(7)]);
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: LayoutContainer = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.rows[0].justify, Justify::SpaceBetween);
+        assert_eq!(back.rows[1].cols, [AssetId(11)]);
+    }
+
+    #[test]
+    fn justify_names_parse_in_kebab_case() {
+        let j = |s: &str| serde_json::from_str::<Justify>(s).unwrap();
+        assert_eq!(j(r#""left""#), Justify::Left);
+        assert_eq!(j(r#""center""#), Justify::Center);
+        assert_eq!(j(r#""right""#), Justify::Right);
+        assert_eq!(j(r#""space-between""#), Justify::SpaceBetween);
+        assert_eq!(
+            serde_json::to_string(&Justify::SpaceBetween).unwrap(),
+            r#""space-between""#
+        );
+    }
+}

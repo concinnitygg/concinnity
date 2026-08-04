@@ -79,3 +79,41 @@ impl Default for OptionSelect {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_row_is_a_settings_sized_control_bound_to_nothing() {
+        let o = OptionSelect::default();
+        assert!(o.setting.is_empty());
+        assert!(o.label.is_empty());
+        assert_eq!((o.width, o.height), (360.0, 48.0));
+        assert_eq!(o.stepper_width, 40.0);
+        assert_eq!(o.text_scale, 1.0);
+        assert_eq!(o.hover_scale, 1.08);
+        assert_eq!(o.hover_color, [1.0, 0.85, 0.3]);
+    }
+
+    #[test]
+    fn an_authored_row_parses_and_round_trips_through_postcard() {
+        let o: OptionSelect = serde_json::from_str(
+            r#"{"setting":"quality","label":"Quality","x":40,"y":120,"font":"body",
+                "font_px":32,"value_color":[1,1,1],"stepper_width":56}"#,
+        )
+        .unwrap();
+        assert_eq!(o.setting, "quality");
+        assert_eq!((o.x, o.y), (40.0, 120.0));
+
+        let bytes = postcard::to_allocvec(&o).unwrap();
+        let back: OptionSelect = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.label, "Quality");
+        assert_eq!(back.font, "body");
+        assert_eq!(back.font_px, 32.0);
+        assert_eq!(back.value_color, [1.0, 1.0, 1.0]);
+        assert_eq!(back.stepper_width, 56.0);
+        // Unmentioned styling keeps the schema defaults.
+        assert_eq!(back.text_color, [0.85, 0.85, 0.85]);
+    }
+}

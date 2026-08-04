@@ -58,3 +58,37 @@ pub struct LoadingOverlay {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub label: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_overlay_claims_no_pieces() {
+        let o = LoadingOverlay::default();
+        assert!(o.screen.is_none());
+        assert!(o.backdrop.is_none());
+        assert!(o.track.is_none());
+        assert!(o.fill.is_none());
+        assert!(o.label.is_none());
+    }
+
+    #[test]
+    fn each_piece_binds_its_own_asset_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let o: LoadingOverlay = serde_json::from_str(
+            r#"{"screen":"load","backdrop":"dim","track":"bar_bg","fill":"bar","label":"pct"}"#,
+        )
+        .unwrap();
+        assert_eq!(o.screen, Some(AssetId(4)));
+        assert_eq!(o.backdrop, Some(AssetId(3)));
+        assert_eq!(o.track, Some(AssetId(6)));
+        assert_eq!(o.fill, Some(AssetId(3)));
+        assert_eq!(o.label, Some(AssetId(3)));
+
+        let bytes = postcard::to_allocvec(&o).unwrap();
+        let back: LoadingOverlay = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.track, Some(AssetId(6)));
+        assert_eq!(back.screen, Some(AssetId(4)));
+    }
+}

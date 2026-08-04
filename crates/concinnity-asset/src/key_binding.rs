@@ -38,3 +38,31 @@ pub struct KeyBinding {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub screen: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_binding_with_no_screen_is_global() {
+        let b = KeyBinding::default();
+        assert!(b.key.is_empty());
+        assert!(b.action.is_empty());
+        assert!(b.screen.is_none());
+    }
+
+    #[test]
+    fn a_screen_scoped_binding_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let b: KeyBinding =
+            serde_json::from_str(r#"{"key":"Escape","action":"back","screen":"menu"}"#).unwrap();
+        assert_eq!(b.key, "Escape");
+        assert_eq!(b.action, "back");
+        assert_eq!(b.screen, Some(AssetId(4)));
+
+        let bytes = postcard::to_allocvec(&b).unwrap();
+        let back: KeyBinding = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.key, "Escape");
+        assert_eq!(back.screen, Some(AssetId(4)));
+    }
+}

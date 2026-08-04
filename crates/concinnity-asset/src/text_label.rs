@@ -125,3 +125,71 @@ impl Default for TextLabel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_label_draws_white_left_aligned_text_with_no_background() {
+        let l = TextLabel::default();
+        assert!(l.content.is_empty());
+        assert_eq!((l.x, l.y), (10.0, 10.0));
+        assert_eq!(l.color, [1.0, 1.0, 1.0]);
+        assert_eq!(l.scale, 1.0);
+        assert!(!l.centered);
+        assert_eq!(l.align, TextAlign::Left);
+        assert_eq!(l.fit, SpriteFit::Fit);
+        // A fully transparent background is what suppresses the chip box.
+        assert_eq!(l.background, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(l.padding, 0.0);
+        // Zero means unbounded: no wrapping and no line cap.
+        assert_eq!(l.wrap_width, 0.0);
+        assert_eq!(l.max_lines, 0);
+        assert!(l.visible);
+        assert!(l.font.is_none());
+        assert!(l.screen.is_none());
+        assert_eq!(TextAlign::default(), TextAlign::Left);
+    }
+
+    #[test]
+    fn alignment_names_parse_in_lowercase() {
+        let a = |s: &str| serde_json::from_str::<TextAlign>(s).unwrap();
+        assert_eq!(a(r#""left""#), TextAlign::Left);
+        assert_eq!(a(r#""center""#), TextAlign::Center);
+        assert_eq!(a(r#""right""#), TextAlign::Right);
+        assert_eq!(
+            serde_json::to_string(&TextAlign::Center).unwrap(),
+            r#""center""#
+        );
+    }
+
+    #[test]
+    fn a_wrapped_chip_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let l: TextLabel = serde_json::from_str(
+            r#"{"font":"body","content":"Hello there","x":20,"y":40,"color":[1,0.9,0.5],
+                "scale":1.25,"centered":true,"align":"right","fit":"cover",
+                "background":[0,0,0,0.6],"padding":6,"wrap_width":320,"max_lines":3,
+                "visible":false,"screen":"menu"}"#,
+        )
+        .unwrap();
+        assert_eq!(l.font, Some(FontHandle(4)));
+        assert_eq!(l.screen, Some(AssetId(4)));
+        assert_eq!(l.align, TextAlign::Right);
+        assert!(l.centered);
+        assert!(!l.visible);
+
+        let bytes = postcard::to_allocvec(&l).unwrap();
+        let back: TextLabel = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.content, "Hello there");
+        assert_eq!(back.color, [1.0, 0.9, 0.5]);
+        assert_eq!(back.scale, 1.25);
+        assert_eq!(back.fit, SpriteFit::Cover);
+        assert_eq!(back.background, [0.0, 0.0, 0.0, 0.6]);
+        assert_eq!(back.padding, 6.0);
+        assert_eq!(back.wrap_width, 320.0);
+        assert_eq!(back.max_lines, 3);
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

@@ -58,3 +58,41 @@ pub struct StatHud {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub edr_label: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_hud_claims_no_labels() {
+        // Each chip is opt-in, so an unset slot suppresses that readout instead
+        // of drawing it somewhere arbitrary.
+        let h = StatHud::default();
+        assert!(h.fps_label.is_none());
+        assert!(h.vram_label.is_none());
+        assert!(h.ram_label.is_none());
+        assert!(h.ev_label.is_none());
+        assert!(h.edr_label.is_none());
+    }
+
+    #[test]
+    fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let h: StatHud = serde_json::from_str(
+            r#"{"fps_label":"fps_chip","vram_label":"vram","ram_label":"","ev_label":3,
+                "edr_label":"edr_chip"}"#,
+        )
+        .unwrap();
+        assert_eq!(h.fps_label, Some(AssetId(8)));
+        assert_eq!(h.vram_label, Some(AssetId(4)));
+        assert_eq!(h.ram_label, None);
+        assert_eq!(h.ev_label, Some(AssetId(3)));
+        assert_eq!(h.edr_label, Some(AssetId(8)));
+
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        let back: StatHud = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.fps_label, Some(AssetId(8)));
+        assert_eq!(back.ram_label, None);
+        assert_eq!(back.ev_label, Some(AssetId(3)));
+    }
+}

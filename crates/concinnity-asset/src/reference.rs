@@ -224,10 +224,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // These tests stay resolver-independent (integer paths + constructors), so
-    // they don't depend on the process-global resolver another test may install.
-    // Name -> id resolution is exercised in the `resolver` tests.
+    // The resolver seam is process-global, so tests that need one install the
+    // shared stand-in rather than their own; the rest use integer paths and
+    // constructors, which do not consult it at all.
     use super::*;
+    use alloc::string::ToString;
 
     struct Texture;
 
@@ -259,7 +260,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&r).unwrap(), "\"floor\"");
     }
 
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize)]
     struct Holder {
         #[serde(default, deserialize_with = "de_opt_asset_ref_typed")]
         r: Option<AssetRef<Texture>>,
@@ -294,5 +295,136 @@ mod tests {
     fn is_send_and_sync_regardless_of_target() {
         fn assert_send_sync<U: Send + Sync>() {}
         assert_send_sync::<AssetRef<Texture>>();
+    }
+
+    #[test]
+    fn a_blank_reference_is_unresolved_and_nameless() {
+        let r = AssetRef::<Texture>::default();
+        assert_eq!(r.name(), "");
+        assert_eq!(r.id(), None);
+        assert!(!r.is_resolved());
+    }
+
+    #[test]
+    fn clone_and_equality_compare_name_and_id() {
+        // No `T: Trait` bounds: the target tag is phantom, so a marker type with
+        // no impls of its own still clones and compares.
+        let named = AssetRef::<Texture>::by_name("floor");
+        assert_eq!(named.clone(), named);
+        assert_ne!(named, AssetRef::<Texture>::by_name("wall"));
+        assert_ne!(named, AssetRef::<Texture>::resolved(AssetId(5)));
+        let resolved = AssetRef::<Texture>::resolved(AssetId(5));
+        assert_eq!(resolved.clone(), resolved);
+    }
+
+    #[test]
+    fn debug_shows_the_name_and_id() {
+        let r = AssetRef::<Texture>::resolved(AssetId(5));
+        let shown = alloc::format!("{r:?}");
+        assert!(shown.contains("AssetRef"), "{shown}");
+        assert!(shown.contains("id: Some(AssetId(5))"), "{shown}");
+    }
+
+    #[test]
+    fn deserializes_a_name_through_the_seam() {
+        crate::test_support::install_resolvers();
+        let r: AssetRef<Texture> = serde_json::from_str("\"floor\"").unwrap();
+        assert_eq!(r.id(), Some(AssetId(5)));
+        // An owned string, the form the serde_json::Value bridge hands over.
+        let r: AssetRef<Texture> = serde_json::from_value(serde_json::json!("wall")).unwrap();
+        assert_eq!(r.id(), Some(AssetId(4)));
+    }
+
+    #[test]
+    fn deserializes_a_signed_integer_narrowed_to_id_width() {
+        let r: AssetRef<Texture> = serde_json::from_str("-1").unwrap();
+        assert_eq!(r.id(), Some(AssetId(u32::MAX)));
+    }
+
+    #[test]
+    fn a_wrong_typed_reference_names_what_it_accepts() {
+        let err = serde_json::from_str::<AssetRef<Texture>>("true")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset reference name string or a resolved id integer"),
+            "{err}"
+        );
+        let err = serde_json::from_str::<Holder>("{\"r\":true}")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset reference name string, id integer, or null"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn round_trips_through_postcard_as_a_resolved_id() {
+        // The baked blob form is not self-describing, so both the plain and the
+        // optional path read the resolved id straight through.
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Baked {
+            plain: AssetRef<Texture>,
+            #[serde(default, deserialize_with = "de_opt_asset_ref_typed")]
+            opt: Option<AssetRef<Texture>>,
+        }
+        let baked = Baked {
+            plain: AssetRef::resolved(AssetId(7)),
+            opt: Some(AssetRef::resolved(AssetId(9))),
+        };
+        let bytes = postcard::to_allocvec(&baked).unwrap();
+        let back: Baked = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.plain.id(), Some(AssetId(7)));
+        assert_eq!(back.opt.unwrap().id(), Some(AssetId(9)));
+    }
+
+    #[test]
+    fn a_truncated_baked_reference_is_an_error_not_a_panic() {
+        // The baked path reads the resolved id straight through, so a blob cut
+        // short has to surface as a decode error rather than a partial value.
+        assert!(postcard::from_bytes::<AssetRef<Texture>>(&[]).is_err());
+    }
+
+    #[test]
+    fn opt_ref_accepts_names_signed_integers_and_a_reported_none() {
+        crate::test_support::install_resolvers();
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":\"floor\"}")
+                .unwrap()
+                .r
+                .unwrap()
+                .id(),
+            Some(AssetId(5))
+        );
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":-1}")
+                .unwrap()
+                .r
+                .unwrap()
+                .id(),
+            Some(AssetId(u32::MAX))
+        );
+        // An owned string, empty or not, through the serde_json::Value bridge.
+        assert_eq!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}))
+                .unwrap()
+                .r
+                .unwrap()
+                .id(),
+            Some(AssetId(4))
+        );
+        assert!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": ""}))
+                .unwrap()
+                .r
+                .is_none()
+        );
+        // A `None` reported by an option-aware format, rather than a null unit.
+        assert!(
+            de_opt_asset_ref_typed::<_, Texture>(crate::test_support::NoneDeserializer)
+                .unwrap()
+                .is_none()
+        );
     }
 }

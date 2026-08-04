@@ -74,3 +74,42 @@ impl Default for ApplicationArgs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_name_an_unversioned_unlimited_application() {
+        let a = ApplicationArgs::default();
+        assert_eq!(a.name, "Concinnity");
+        assert_eq!(a.version, "0.1.0");
+        assert!(a.id.is_empty());
+        assert!(a.author.is_empty());
+        assert!(a.icon.is_empty());
+        // Zero is "no budget declared", not "no memory and no threads".
+        assert_eq!(a.limits.max_memory_mb, 0);
+        assert_eq!(a.limits.job_threads, 0);
+    }
+
+    #[test]
+    fn export_metadata_parses_and_round_trips_through_postcard() {
+        let a: ApplicationArgs = serde_json::from_str(
+            r#"{"name":"Ash","id":"com.example.ash","version":"1.2.0","author":"Grant",
+                "icon":"icon.png","limits":{"max_memory_mb":2048,"job_threads":8}}"#,
+        )
+        .unwrap();
+        assert_eq!(a.id, "com.example.ash");
+        assert_eq!(a.limits.job_threads, 8);
+
+        // Only the budgets ship in the blob, but the whole struct is what the
+        // export step reads back, so it has to survive the baked format.
+        let bytes = postcard::to_allocvec(&a).unwrap();
+        let back: ApplicationArgs = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.name, "Ash");
+        assert_eq!(back.version, "1.2.0");
+        assert_eq!(back.author, "Grant");
+        assert_eq!(back.icon, "icon.png");
+        assert_eq!(back.limits.max_memory_mb, 2048);
+    }
+}

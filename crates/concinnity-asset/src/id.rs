@@ -158,6 +158,14 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_baked_id_is_an_error_not_a_panic() {
+        // A blob whose defs table is cut short must surface as a decode error:
+        // the baked path reads the id straight through with no visitor to
+        // fall back on.
+        assert!(postcard::from_bytes::<AssetId>(&[]).is_err());
+    }
+
+    #[test]
     fn opt_ref_treats_empty_null_and_missing_as_none() {
         #[derive(serde::Deserialize)]
         struct Holder {
@@ -211,5 +219,88 @@ mod tests {
     #[test]
     fn default_is_zero() {
         assert_eq!(AssetId::default(), AssetId(0));
+    }
+
+    #[test]
+    fn deserializes_a_name_through_the_seam() {
+        crate::test_support::install_resolvers();
+        assert_eq!(
+            serde_json::from_str::<AssetId>("\"floor\"").unwrap(),
+            AssetId(5)
+        );
+        // An owned string, the form the serde_json::Value bridge hands over.
+        assert_eq!(
+            serde_json::from_value::<AssetId>(serde_json::json!("wall")).unwrap(),
+            AssetId(4)
+        );
+    }
+
+    #[test]
+    fn deserializes_a_signed_integer_narrowed_to_id_width() {
+        assert_eq!(
+            serde_json::from_str::<AssetId>("-1").unwrap(),
+            AssetId(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_id_names_what_it_accepts() {
+        let err = serde_json::from_str::<AssetId>("true")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset id integer or a name string"),
+            "{err}"
+        );
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Holder {
+        #[serde(default, deserialize_with = "de_opt_asset_ref")]
+        r: Option<AssetId>,
+    }
+
+    #[test]
+    fn opt_ref_accepts_names_signed_integers_and_a_reported_none() {
+        crate::test_support::install_resolvers();
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":\"floor\"}")
+                .unwrap()
+                .r,
+            Some(AssetId(5))
+        );
+        assert_eq!(
+            serde_json::from_str::<Holder>("{\"r\":-1}").unwrap().r,
+            Some(AssetId(u32::MAX))
+        );
+        // An owned string, empty or not, through the serde_json::Value bridge.
+        assert_eq!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}))
+                .unwrap()
+                .r,
+            Some(AssetId(4))
+        );
+        assert_eq!(
+            serde_json::from_value::<Holder>(serde_json::json!({"r": ""}))
+                .unwrap()
+                .r,
+            None
+        );
+        // A `None` reported by an option-aware format, rather than a null unit.
+        assert_eq!(
+            de_opt_asset_ref(crate::test_support::NoneDeserializer).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_opt_ref_names_what_it_accepts() {
+        let err = serde_json::from_str::<Holder>("{\"r\":true}")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("an asset reference name string, id integer, or null"),
+            "{err}"
+        );
     }
 }

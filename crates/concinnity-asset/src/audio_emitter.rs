@@ -40,3 +40,38 @@ impl Default for AudioEmitter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_emitter_loops_at_the_origin() {
+        // A positional emitter is normally ambience, so it loops by default.
+        let e = AudioEmitter::default();
+        assert!(e.looping);
+        assert_eq!(e.volume, 1.0);
+        assert_eq!(e.position, [0.0, 0.0, 0.0]);
+        assert!(e.clip.is_none());
+        assert!(e.prop.is_none());
+    }
+
+    #[test]
+    fn an_emitter_attached_to_a_prop_parses_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let e: AudioEmitter = serde_json::from_str(
+            r#"{"clip":"hum","prop":"lamp","position":[1,2,3],"volume":0.5,"looping":false}"#,
+        )
+        .unwrap();
+        assert_eq!(e.clip, Some(AudioClipHandle(3)));
+        assert_eq!(e.prop, Some(AssetId(4)));
+        assert_eq!(e.position, [1.0, 2.0, 3.0]);
+        assert!(!e.looping);
+
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: AudioEmitter = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.clip, Some(AudioClipHandle(3)));
+        assert_eq!(back.prop, Some(AssetId(4)));
+        assert_eq!(back.volume, 0.5);
+    }
+}

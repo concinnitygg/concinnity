@@ -56,3 +56,36 @@ impl Default for EngineDefaults {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_injected_default_is_on_until_opted_out_of() {
+        // This asset exists only to turn injection off, so declaring it without
+        // saying which one must change nothing.
+        let d = EngineDefaults::default();
+        assert!(d.hud);
+        assert!(d.debug_hud);
+        assert!(d.sky);
+        assert!(d.story_pause_menu);
+        assert!(d.loading_overlay);
+
+        let declared: EngineDefaults = serde_json::from_str("{}").unwrap();
+        assert!(declared.hud && declared.debug_hud && declared.sky);
+        assert!(declared.story_pause_menu && declared.loading_overlay);
+    }
+
+    #[test]
+    fn opting_out_of_one_default_leaves_the_rest_alone() {
+        let d: EngineDefaults = serde_json::from_str(r#"{"sky":false}"#).unwrap();
+        assert!(!d.sky);
+        assert!(d.hud && d.debug_hud && d.story_pause_menu && d.loading_overlay);
+
+        let bytes = postcard::to_allocvec(&d).unwrap();
+        let back: EngineDefaults = postcard::from_bytes(&bytes).unwrap();
+        assert!(!back.sky);
+        assert!(back.hud);
+    }
+}

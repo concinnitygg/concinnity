@@ -90,3 +90,53 @@ impl Default for EnvironmentMap {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_size_the_prefilter_for_a_sharp_skybox() {
+        // Mip 0 is sampled directly by the skybox branch, so the prefilter face
+        // has to be far larger than the irradiance one, which only ever feeds
+        // the diffuse convolution.
+        let e = EnvironmentMap::default();
+        assert_eq!(e.prefilter_face_size, 512);
+        assert_eq!(e.irradiance_face_size, 8);
+        assert!(e.prefilter_face_size > e.irradiance_face_size);
+        assert_eq!(e.prefilter_samples, 1024);
+        // The clamp defaults on: an unbounded HDR sun aliases into hard squares
+        // in the coarse reflection mips.
+        assert_eq!(e.prefilter_clamp, 12.0);
+        assert!(e.source.is_empty());
+        assert!(e.generator.is_empty());
+        assert!(e.locator.is_none());
+    }
+
+    #[test]
+    fn an_authored_bake_parses_and_round_trips_through_postcard() {
+        let e: EnvironmentMap = serde_json::from_str(
+            r#"{"source":"sky.hdr","prefilter_face_size":1024,"irradiance_face_size":16,
+                "prefilter_samples":512,"prefilter_clamp":0}"#,
+        )
+        .unwrap();
+        assert_eq!(e.source, "sky.hdr");
+        assert_eq!(e.prefilter_face_size, 1024);
+        // A zero clamp turns the cap off rather than blacking out the sky.
+        assert_eq!(e.prefilter_clamp, 0.0);
+
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: EnvironmentMap = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.irradiance_face_size, 16);
+        assert_eq!(back.prefilter_samples, 512);
+        assert_eq!(back.asset_id, AssetId::default());
+        assert!(back.locator.is_none());
+    }
+
+    #[test]
+    fn a_generated_environment_names_its_generator_instead_of_a_source() {
+        let e: EnvironmentMap = serde_json::from_str(r#"{"generator":"gradient_sky"}"#).unwrap();
+        assert_eq!(e.generator, "gradient_sky");
+        assert!(e.source.is_empty());
+    }
+}

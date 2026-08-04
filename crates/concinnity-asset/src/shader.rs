@@ -265,4 +265,78 @@ mod tests {
         assert!(s.stage(ShaderKind::Fragment).is_some());
         assert!(s.stage(ShaderKind::VertexInstanced).is_none());
     }
+
+    #[test]
+    fn the_instanced_vertex_stage_compiles_as_a_vertex_stage() {
+        assert_eq!(ShaderKind::Vertex.compile_kind(), "vertex");
+        assert_eq!(ShaderKind::VertexInstanced.compile_kind(), "vertex");
+        assert_eq!(ShaderKind::Fragment.compile_kind(), "fragment");
+        assert_eq!(ShaderKind::default(), ShaderKind::Vertex);
+    }
+
+    #[test]
+    fn stage_kinds_parse_from_their_authored_spellings() {
+        let kind = |s: &str| serde_json::from_str::<ShaderKind>(s).unwrap();
+        assert_eq!(kind(r#""vertex""#), ShaderKind::Vertex);
+        assert_eq!(kind(r#""fragment""#), ShaderKind::Fragment);
+        assert_eq!(kind(r#""vertex_instanced""#), ShaderKind::VertexInstanced);
+        // The unseparated spelling is accepted as an alias.
+        assert_eq!(kind(r#""vertexinstanced""#), ShaderKind::VertexInstanced);
+        assert_eq!(
+            serde_json::to_string(&ShaderKind::VertexInstanced).unwrap(),
+            r#""vertex_instanced""#
+        );
+    }
+
+    #[test]
+    fn per_platform_collects_the_declared_source_paths() {
+        let stage = StageSource::per_platform([
+            ("metal", "my.metal"),
+            ("hlsl", "my_vert.hlsl"),
+            ("glsl", "my.vert"),
+        ]);
+        assert!(stage.source.is_empty());
+        let sources = stage.sources.expect("per-platform sources");
+        assert_eq!(sources.len(), 3);
+        assert_eq!(sources["metal"], "my.metal");
+        assert_eq!(sources["glsl"], "my.vert");
+    }
+
+    #[test]
+    fn a_shader_parses_from_authored_args() {
+        let s: Shader = serde_json::from_str(
+            r#"{"vertex":{"sources":{"metal":"my.metal"}},"fragment":{"source":"my.metal"}}"#,
+        )
+        .unwrap();
+        assert_eq!(s.fragment.source, "my.metal");
+        assert_eq!(
+            s.vertex.sources.as_ref().expect("per-platform")["metal"],
+            "my.metal"
+        );
+        // A world with no instanced props declares no instanced vertex stage.
+        assert!(s.vertex_instanced.is_none());
+        // The identity and payload locator are injected, never authored.
+        assert_eq!(s.asset_id, AssetId::default());
+        assert!(s.locator.is_none());
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: Shader = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.fragment.source, "my.metal");
+    }
+
+    #[test]
+    fn an_empty_payload_has_no_stages() {
+        let payload = ShaderPayload::default();
+        assert!(payload.stages.is_empty());
+        assert_eq!(payload.stage(ShaderKind::Vertex), None);
+        assert_eq!(
+            ShaderPayload::decode(&payload.encode().unwrap()),
+            Ok(payload)
+        );
+    }
+
+    #[test]
+    fn decoding_garbage_is_an_error_not_a_panic() {
+        assert!(ShaderPayload::decode(&[0xff, 0xff, 0xff]).is_err());
+    }
 }

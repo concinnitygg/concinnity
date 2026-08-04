@@ -127,3 +127,33 @@ impl Default for StoryImport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_import_scaffolds_a_title_screen_at_the_story_default_speed() {
+        let s = StoryImport::default();
+        assert!(s.title_screen);
+        // The same speed a Story defaults to, so the import adds no drift.
+        assert_eq!(s.text_speed, 45.0);
+        assert!(s.source.is_empty());
+    }
+
+    #[test]
+    fn an_authored_import_parses_and_round_trips_through_postcard() {
+        let s: StoryImport = serde_json::from_str(
+            r#"{"source":"stories/ash.md","title_screen":false,"text_speed":80}"#,
+        )
+        .unwrap();
+        assert_eq!(s.source, "stories/ash.md");
+        assert!(!s.title_screen);
+
+        let bytes = postcard::to_allocvec(&s).unwrap();
+        let back: StoryImport = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.source, "stories/ash.md");
+        assert_eq!(back.text_speed, 80.0);
+        assert!(!back.title_screen);
+    }
+}

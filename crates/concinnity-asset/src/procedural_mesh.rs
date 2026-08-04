@@ -122,3 +122,74 @@ impl Default for ProceduralMesh {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_generator_specific_field_starts_unset() {
+        // The generator decides which fields it reads, so an unset field has to
+        // mean "this generator's own default", not a shared number.
+        let m = ProceduralMesh::default();
+        assert!(m.generator.is_empty());
+        assert_eq!(m.half_extents, None);
+        assert_eq!(m.radius, None);
+        assert_eq!(m.height, None);
+        assert_eq!(m.segments, None);
+        assert_eq!(m.rings, None);
+        assert_eq!(m.subdivisions, None);
+        assert_eq!(m.amplitude, None);
+        assert_eq!(m.source, None);
+        assert_eq!(m.elevation_min, None);
+        assert_eq!(m.elevation_max, None);
+        assert_eq!(m.size, None);
+        assert_eq!(m.profile, None);
+        assert_eq!(m.corner_radius, None);
+        assert_eq!(m.corner_segments, None);
+        // The room dimensions are shared, so they carry real defaults.
+        assert_eq!(m.half_width, 8.0);
+        assert_eq!(m.half_depth, 10.0);
+        assert_eq!(m.ceiling_height, 3.5);
+        assert_eq!(m.lod_levels, 1);
+        assert!(m.lod_distances.is_empty());
+        assert!(m.locator.is_none());
+    }
+
+    #[test]
+    fn a_heightfield_reads_its_own_fields_and_leaves_the_rest_unset() {
+        let m: ProceduralMesh = serde_json::from_str(
+            r#"{"generator":"heightfield","source":"terrain.png","subdivisions":128,
+                "elevation_min":-4,"elevation_max":40,"lod_levels":3,"lod_distances":[20,80]}"#,
+        )
+        .unwrap();
+        assert_eq!(m.generator, "heightfield");
+        assert_eq!(m.source.as_deref(), Some("terrain.png"));
+        assert_eq!(m.subdivisions, Some(128));
+        assert_eq!(m.elevation_min, Some(-4.0));
+        assert_eq!(m.elevation_max, Some(40.0));
+        assert_eq!(m.radius, None);
+        assert_eq!(m.rings, None);
+    }
+
+    #[test]
+    fn an_extruded_profile_round_trips_through_postcard() {
+        let m: ProceduralMesh = serde_json::from_str(
+            r#"{"generator":"extrude","profile":[[0,0],[1,0],[1,1]],"height":2.5,
+                "corner_radius":0.1,"corner_segments":4,"half_extents":[1,2,3],
+                "radius":0.5,"segments":32,"rings":16,"amplitude":3,"size":100}"#,
+        )
+        .unwrap();
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        let back: ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(
+            back.profile.as_deref(),
+            Some(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]][..])
+        );
+        assert_eq!(back.corner_segments, Some(4));
+        assert_eq!(back.half_extents, Some([1.0, 2.0, 3.0]));
+        assert_eq!(back.size, Some(100.0));
+        assert_eq!(back.asset_id, AssetId::default());
+    }
+}

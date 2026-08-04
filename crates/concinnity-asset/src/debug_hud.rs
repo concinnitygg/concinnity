@@ -53,3 +53,38 @@ pub struct DebugHud {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub sys_label: Option<AssetId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_hud_claims_no_labels() {
+        // Every chip is opt-in: an unset slot means that readout is suppressed
+        // rather than drawn somewhere arbitrary.
+        let h = DebugHud::default();
+        assert!(h.passes_label.is_none());
+        assert!(h.mouse_label.is_none());
+        assert!(h.camera_label.is_none());
+        assert!(h.sys_label.is_none());
+    }
+
+    #[test]
+    fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
+        crate::test_support::install_resolvers();
+        let h: DebugHud = serde_json::from_str(
+            r#"{"passes_label":"passes_chip","mouse_label":"","camera_label":"cam","sys_label":6}"#,
+        )
+        .unwrap();
+        assert_eq!(h.passes_label, Some(AssetId(11)));
+        assert_eq!(h.mouse_label, None);
+        assert_eq!(h.camera_label, Some(AssetId(3)));
+        assert_eq!(h.sys_label, Some(AssetId(6)));
+
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        let back: DebugHud = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.passes_label, Some(AssetId(11)));
+        assert_eq!(back.mouse_label, None);
+        assert_eq!(back.sys_label, Some(AssetId(6)));
+    }
+}
