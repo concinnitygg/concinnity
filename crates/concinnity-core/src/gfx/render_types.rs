@@ -1041,11 +1041,12 @@ impl DrawObject {
 // cull kernel can read object bounds straight from this buffer without a
 // layout change.
 //
-// Layout (176 bytes) must stay in sync with the `GpuObjectData` struct in
-// every backend's bindless static shader: `main.metal` (Metal), the inline
-// `StructuredBuffer<GpuObjectData>` HLSL in `directx/pipeline.rs`, and the
-// inline `std430` SSBO GLSL in `vulkan/pipeline.rs`. The `gpu_object_data_*`
-// layout test below pins the offsets all three rely on.
+// Layout (176 bytes) must stay in sync with the shader-side record, declared
+// once per language in concinnity-device: `vulkan/shaders/object_common.glsl`,
+// `directx/shaders/object_common.hlsl` and `metal/shaders/object_common.msl`,
+// each spliced into its backend's passes at an `{OBJECT_DATA}` marker. The
+// `gpu_object_data_*` layout test below pins the offsets all three rely on, and
+// `object_data_layout` in concinnity-device pins the fragments to them.
 //
 // `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
 // are indices into each backend's single handle-indexed texture pool: albedo,

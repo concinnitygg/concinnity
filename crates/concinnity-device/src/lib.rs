@@ -62,5 +62,11 @@ pub(crate) mod shader_cache;
 #[cfg(any(backend_dx, backend_vk))]
 pub mod precompile;
 
+// Cross-backend drift guard for the shared `GpuObjectData` shader fragments.
+// Test-only and backend-agnostic on purpose: the fragments are checked as text,
+// so one build validates all three languages.
+#[cfg(test)]
+mod object_data_layout;
+
 mod factory;
 pub use factory::{init_backend, probe_gpu_profile};

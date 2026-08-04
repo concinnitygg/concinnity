@@ -45,6 +45,33 @@ pub(super) fn ns_str(s: &str) -> Retained<NSString> {
 // off the same `name`, so an unregistered shader is never loaded from disk
 // either. Locked by `unknown_name_panics` /
 // `unknown_name_panics_even_with_hot_reload`.
+// The shared bindless per-object record, substituted into every pass that
+// strides the per-frame object buffer at its `{OBJECT_DATA}` marker. Sole MSL
+// declaration of `GpuObjectData`: the main pass, G-buffer prepass, shadow pass
+// and cull kernel all read the same buffer, so a per-shader copy is a silent
+// layout-drift hazard. `newLibraryWithSource` resolves no include paths, hence
+// the marker; the build script's precompile substitutes the same fragment
+// before handing each shader to `xcrun metal`.
+const OBJECT_COMMON_MSL: &str = include_str!("shaders/object_common.msl");
+
+// Resolve the shared fragment the same disk-first way as its consumer, so a
+// hot-reload edit to the record reaches every pass that strides the buffer.
+fn object_common(hot_reload: bool) -> std::borrow::Cow<'static, str> {
+    if hot_reload {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/metal/shaders/object_common.msl"
+        );
+        match std::fs::read_to_string(path) {
+            Ok(s) => return std::borrow::Cow::Owned(s),
+            Err(e) => {
+                tracing::debug!("hot-reload: falling back to embedded object_common.msl ({e})");
+            }
+        }
+    }
+    std::borrow::Cow::Borrowed(OBJECT_COMMON_MSL)
+}
+
 pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
     let embedded: &'static str = match name {
         "auto_exposure.metal" => include_str!("shaders/auto_exposure.metal"),
@@ -79,7 +106,7 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
              metal/pipeline.rs -- every shipped shader must be registered."
         ),
     };
-    if hot_reload {
+    let src = if hot_reload {
         let path = format!("{}/src/metal/shaders/{}", env!("CARGO_MANIFEST_DIR"), name);
         match std::fs::read_to_string(&path) {
             Ok(s) => std::borrow::Cow::Owned(s),
@@ -94,7 +121,11 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         }
     } else {
         std::borrow::Cow::Borrowed(embedded)
+    };
+    if src.contains("{OBJECT_DATA}") {
+        return std::borrow::Cow::Owned(src.replace("{OBJECT_DATA}", &object_common(hot_reload)));
     }
+    src
 }
 
 // Produce the MTLLibrary for a built-in renderer shader. The fast path loads
@@ -326,6 +357,32 @@ mod shader_source_tests {
             concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT,
             "main.metal REFL_RESOLVE_CUT must equal REFLECTION_ROUGHNESS_CUT"
         );
+    }
+
+    // Every pass that strides the per-frame object buffer resolves its marker
+    // to the shared record, in both hot-reload modes -- the embedded fragment
+    // and the disk read must agree, since a `cn debug` session compiles from
+    // source while a shipped binary loads the build-time metallib.
+    #[test]
+    fn object_data_shaders_splice_the_shared_record() {
+        for name in [
+            "main.metal",
+            "shadow.metal",
+            "cull.metal",
+            "gbuffer_prepass.metal",
+        ] {
+            for hot_reload in [false, true] {
+                let src = shader_source(hot_reload, name);
+                assert!(
+                    src.contains("struct GpuObjectData"),
+                    "{name}: object record missing (hot_reload = {hot_reload})"
+                );
+                assert!(
+                    !src.contains("{OBJECT_DATA}"),
+                    "{name}: left the OBJECT_DATA marker (hot_reload = {hot_reload})"
+                );
+            }
+        }
     }
 
     #[test]

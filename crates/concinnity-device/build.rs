@@ -26,6 +26,12 @@ const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[
     "raymarch_volumetric_template.metal",
 ];
 
+// Shared declarations spliced into the shaders that carry the marker, matching
+// what `metal::pipeline::shader_source` substitutes when the same shader
+// compiles from source. The `.msl` extension keeps a fragment out of the
+// `.metal` precompile scan: it is not a standalone library.
+const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_common.msl")];
+
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
@@ -33,6 +39,10 @@ fn main() {
     if backend == Backend::Metal {
         let shaders_dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/metal/shaders");
-        precompile_metal_shaders(&shaders_dir, SOURCE_ONLY_METAL_SHADERS);
+        precompile_metal_shaders(
+            &shaders_dir,
+            SOURCE_ONLY_METAL_SHADERS,
+            METAL_SHADER_FRAGMENTS,
+        );
     }
 }

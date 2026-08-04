@@ -161,35 +161,12 @@ struct ModelUniforms {
     float4x4 model;
 };
 
-// Per-object record for the bindless static main pass, bound at buffer(9) and
-// indexed by the object id delivered through [[base_instance]]. Replaces the
-// per-draw ModelUniforms + MaterialUniforms + texture binds, so each static
-// draw call carries no state of its own. Layout (176 bytes) must match the
-// Rust GpuObjectData in gfx/render_types.rs. The bb_min/bb_max/cull_distance
-// fields are unused here, carried for the compute cull kernel.
-struct GpuObjectData {
-    float4x4      model;
-    packed_float3 tint;
-    float         roughness;
-    packed_float3 emissive;
-    float         metallic;
-    uint          albedo_index;
-    uint          normal_index;
-    float         macro_variation;
-    float         terrain_blend;
-    packed_float3 bb_min;
-    float         cull_distance;
-    packed_float3 bb_max;
-    float         secondary_blend_sharpness;
-    uint          albedo_secondary_index;
-    uint          normal_secondary_index;
-    uint          emissive_map_index;
-    uint          orm_map_index;
-    float         alpha_cutoff;
-    float         _pad0;
-    float         _pad1;
-    float         _pad2;
-};
+// Bound at buffer(9) and indexed by the object id delivered through
+// [[base_instance]]. Replaces the per-draw ModelUniforms + MaterialUniforms +
+// texture binds, so each static draw call carries no state of its own. The
+// bb_min/bb_max/cull_distance fields are unused here, carried for the compute
+// cull kernel.
+{OBJECT_DATA}
 
 struct MaterialUniforms {
     float  roughness;

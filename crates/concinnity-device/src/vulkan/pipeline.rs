@@ -30,6 +30,13 @@ use super::builtins;
 // `probe_uniforms::MAX_PROBES`. Applied by `builtins::GlslProgram::source`.
 pub(in crate::vulkan) const PROBE_COMMON_GLSL: &str = include_str!("shaders/probe_common.glsl");
 
+// The shared bindless per-object record, substituted into every pass that
+// strides the per-frame object SSBO at its `{OBJECT_DATA}` marker. Sole GLSL
+// declaration of `GpuObjectData`: the main pass, G-buffer prepass, shadow pass
+// and cull kernel all read the same buffer, so a per-shader copy is a silent
+// layout-drift hazard. Applied by `builtins::GlslProgram::source`.
+pub(in crate::vulkan) const OBJECT_COMMON_GLSL: &str = include_str!("shaders/object_common.glsl");
+
 //  Shader compilation
 
 pub(super) fn is_spirv(bytes: &[u8]) -> bool {

@@ -1,29 +1,8 @@
 #pragma pack_matrix(column_major)
 
-struct GpuObjectData
-{
-    row_major float4x4 model;
-    float3 tint;
-    float roughness;
-    float3 emissive;
-    float metallic;
-    uint albedo_index;
-    uint normal_index;
-    float macro_variation;
-    float terrain_blend;
-    float3 bb_min;
-    float cull_distance;
-    float3 bb_max;
-    float secondary_blend_sharpness;
-    uint albedo_secondary_index;
-    uint normal_secondary_index;
-    uint emissive_map_index;
-    uint orm_map_index;
-    float alpha_cutoff;
-    float _pad0;
-    float _pad1;
-    float _pad2;
-};
+// Only the cull-bounds fields are read here, but the full record is shared so
+// `objects[i]` strides identically to the passes the survivors feed.
+{OBJECT_DATA}
 
 struct GpuDrawArgs
 {

@@ -3,8 +3,8 @@
 // The declarative table of every built-in GLSL program the Vulkan backend
 // compiles at runtime. Each program is declared exactly once: its source file,
 // shader kind, target (default vs ray-query), and how the compile source is
-// assembled (injected defines, probe_common / {MAX_PROBES} / {POOL_SIZE}
-// substitution). Renderer init and hot-reload compile through
+// assembled (injected defines, probe_common / object_common / {MAX_PROBES} /
+// {POOL_SIZE} substitution). Renderer init and hot-reload compile through
 // `GlslProgram::compile`, and the export-time precompile iterates `ALL` to
 // populate a bundle's shader cache from the very same declarations, so the two
 // can never drift.
@@ -14,7 +14,8 @@
 // enumerated ahead of a world; they compile at init through the same cache.
 
 use super::pipeline::{
-    PROBE_COMMON_GLSL, compile_glsl, compile_glsl_rt, inject_define, shader_source,
+    OBJECT_COMMON_GLSL, PROBE_COMMON_GLSL, compile_glsl, compile_glsl_rt, inject_define,
+    shader_source,
 };
 
 // Size of the bindless texture pool for a world with `texture_count` entries
@@ -39,6 +40,8 @@ pub(crate) struct Assembly {
     pub probe_desc_set: Option<&'static str>,
     // Substitute `{POOL_SIZE}` from `Ctx::pool_size`.
     pub pool_size: bool,
+    // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
+    pub object_data: bool,
 }
 
 const PLAIN: Assembly = Assembly {
@@ -46,6 +49,7 @@ const PLAIN: Assembly = Assembly {
     define: None,
     probe_desc_set: None,
     pool_size: false,
+    object_data: false,
 };
 const MSAA: Assembly = Assembly {
     msaa: true,
@@ -124,6 +128,11 @@ impl GlslProgram {
         }
         if self.assembly.pool_size {
             src = src.replace("{POOL_SIZE}", &ctx.pool_size.to_string());
+        }
+        if self.assembly.object_data {
+            let object_common =
+                shader_source(ctx.hot_reload, "object_common.glsl", OBJECT_COMMON_GLSL);
+            src = src.replace("{OBJECT_DATA}", &object_common);
         }
         src
     }
@@ -223,16 +232,23 @@ pub(super) static MAIN_FRAG: GlslProgram = glsl(
     Fragment,
     "frag.glsl",
 );
-pub(super) static MAIN_BINDLESS_VERT: GlslProgram = glsl(
-    "main_bindless.vert",
-    include_str!("shaders/main_bindless.vert"),
-    Vertex,
-    "vert_bindless.glsl",
-);
+pub(super) static MAIN_BINDLESS_VERT: GlslProgram = GlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..glsl(
+        "main_bindless.vert",
+        include_str!("shaders/main_bindless.vert"),
+        Vertex,
+        "vert_bindless.glsl",
+    )
+};
 pub(super) static MAIN_BINDLESS_FRAG: GlslProgram = GlslProgram {
     assembly: Assembly {
         probe_desc_set: Some("0"),
         pool_size: true,
+        object_data: true,
         ..PLAIN
     },
     ..glsl(
@@ -254,12 +270,18 @@ pub(super) static SHADOW_VERT: GlslProgram = glsl(
     Vertex,
     "shadow_vert.glsl",
 );
-pub(super) static SHADOW_BINDLESS_VERT: GlslProgram = glsl(
-    "shadow_bindless.vert",
-    include_str!("shaders/shadow_bindless.vert"),
-    Vertex,
-    "shadow_bindless.vert",
-);
+pub(super) static SHADOW_BINDLESS_VERT: GlslProgram = GlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..glsl(
+        "shadow_bindless.vert",
+        include_str!("shaders/shadow_bindless.vert"),
+        Vertex,
+        "shadow_bindless.vert",
+    )
+};
 pub(super) static SKINNED_VERT: GlslProgram = glsl(
     "skinned.vert",
     include_str!("shaders/skinned.vert"),
@@ -273,11 +295,17 @@ pub(super) static SKINNED_SHADOW_VERT: GlslProgram = glsl(
     "skinned_shadow_vert.glsl",
 );
 
-pub(super) static CULL: GlslProgram =
-    glsl("cull.comp", CULL_COMPUTE_GLSL, Compute, "cull_compute.glsl");
+pub(super) static CULL: GlslProgram = GlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..glsl("cull.comp", CULL_COMPUTE_GLSL, Compute, "cull_compute.glsl")
+};
 pub(super) static CULL_PHASE2: GlslProgram = GlslProgram {
     assembly: Assembly {
         define: Some("#define CULL_PHASE2 1\n"),
+        object_data: true,
         ..PLAIN
     },
     ..glsl(
@@ -290,6 +318,7 @@ pub(super) static CULL_PHASE2: GlslProgram = GlslProgram {
 pub(super) static CULL_SHADOW: GlslProgram = GlslProgram {
     assembly: Assembly {
         define: Some("#define SHADOW_CULL 1\n"),
+        object_data: true,
         ..PLAIN
     },
     ..glsl(
@@ -349,12 +378,18 @@ pub(super) static GBUFFER_PREPASS_FRAG: GlslProgram = glsl(
     Fragment,
     "gbuffer_prepass.frag",
 );
-pub(super) static GBUFFER_BINDLESS_VERT: GlslProgram = glsl(
-    "gbuffer_bindless.vert",
-    include_str!("shaders/gbuffer_bindless.vert"),
-    Vertex,
-    "gbuffer_bindless.vert",
-);
+pub(super) static GBUFFER_BINDLESS_VERT: GlslProgram = GlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..glsl(
+        "gbuffer_bindless.vert",
+        include_str!("shaders/gbuffer_bindless.vert"),
+        Vertex,
+        "gbuffer_bindless.vert",
+    )
+};
 pub(super) static GBUFFER_BINDLESS_FRAG: GlslProgram = glsl(
     "gbuffer_bindless.frag",
     include_str!("shaders/gbuffer_bindless.frag"),
@@ -619,6 +654,7 @@ pub(super) static GLASS_RT_FRAG_TEXTURED: GlslProgram = GlslProgram {
         define: Some("#define RT_TEXTURED 1\n"),
         probe_desc_set: Some("2"),
         pool_size: true,
+        ..PLAIN
     },
     ..glsl(
         "glass_rt.frag",
@@ -858,17 +894,42 @@ mod tests {
             pool_size: 5,
             probe_count: 5,
         };
-        for p in [&MAIN_BINDLESS_FRAG, &SSR_RESOLVE_FRAG, &GLASS_RT_FRAG] {
+        for p in ALL {
             let src = p.source(&ctx);
             for marker in [
                 "{PROBE_COMMON}",
                 "{MAX_PROBES}",
                 "{PROBE_DESC_SET}",
                 "{POOL_SIZE}",
+                "{OBJECT_DATA}",
             ] {
                 assert!(!src.contains(marker), "{} left {}", p.label, marker);
             }
         }
+    }
+
+    // Every program that strides the per-frame object SSBO gets the shared
+    // record spliced in, and no other program carries a stray declaration: the
+    // whole point of the fragment is that `GpuObjectData` exists exactly once.
+    #[test]
+    fn object_data_programs_splice_the_shared_record() {
+        let ctx = Ctx {
+            hot_reload: false,
+            msaa: false,
+            pool_size: 4,
+            probe_count: 4,
+        };
+        let mut spliced = 0usize;
+        for p in ALL {
+            let declares = p.source(&ctx).contains("struct GpuObjectData");
+            assert_eq!(
+                declares, p.assembly.object_data,
+                "{}: declares GpuObjectData = {declares}, object_data = {}",
+                p.label, p.assembly.object_data
+            );
+            spliced += usize::from(declares);
+        }
+        assert_eq!(spliced, 7, "object-data program count changed");
     }
 
     // Every probe program sizes its cube array from the context, so the GLSL

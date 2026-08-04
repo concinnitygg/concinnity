@@ -10,33 +10,9 @@
 // plus camera), and the skinned tail binds the previous-frame deformed buffer to
 // slot 1 (so per-vertex skin deformation produces a correct motion vector).
 //
-// Layout (176 bytes) must match the Rust GpuObjectData in gfx::render_types and
-// the shadow bindless VS's struct. The VS reads `model` + `roughness`; the full
-// layout is required so `objects[object_id]` strides correctly.
-struct GpuObjectData
-{
-    float4x4 model;
-    float3 tint;
-    float roughness;
-    float3 emissive;
-    float metallic;
-    uint albedo_index;
-    uint normal_index;
-    float macro_variation;
-    float terrain_blend;
-    float3 bb_min;
-    float cull_distance;
-    float3 bb_max;
-    float secondary_blend_sharpness;
-    uint albedo_secondary_index;
-    uint normal_secondary_index;
-    uint emissive_map_index;
-    uint orm_map_index;
-    float alpha_cutoff;
-    float _pad0;
-    float _pad1;
-    float _pad2;
-};
+// The VS reads `model` + `roughness`; the full record is required so
+// `objects[object_id]` strides correctly.
+{OBJECT_DATA}
 
 cbuffer ObjId : register(b0)
 {

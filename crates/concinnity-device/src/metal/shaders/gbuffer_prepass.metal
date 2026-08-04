@@ -186,32 +186,10 @@ fragment GbFragOut gbuffer_prepass_fragment(
 // skin deformation produces the motion vector. The math is byte-identical to
 // gbuffer_prepass_vertex / _skinned above; only the data source differs.
 
-// Mirrors gfx::render_types::GpuObjectData (176 bytes). Only `model` (offset 0)
-// and `roughness` (offset 76) are read here, but the full layout must match so
-// the [[base_instance]] index lines up with the cull / main buffers.
-struct GpuObjectData {
-    float4x4      model;
-    packed_float3 tint;
-    float         roughness;
-    packed_float3 emissive;
-    float         metallic;
-    uint          albedo_index;
-    uint          normal_index;
-    float         macro_variation;
-    float         terrain_blend;
-    packed_float3 bb_min;
-    float         cull_distance;
-    packed_float3 bb_max;
-    float         secondary_blend_sharpness;
-    uint          albedo_secondary_index;
-    uint          normal_secondary_index;
-    uint          emissive_map_index;
-    uint          orm_map_index;
-    float         alpha_cutoff;
-    float         _pad0;
-    float         _pad1;
-    float         _pad2;
-};
+// Only `model` (offset 0) and `roughness` (offset 76) are read here, but the
+// full record is shared so the [[base_instance]] index lines up with the cull /
+// main buffers.
+{OBJECT_DATA}
 
 // buffer(1) = current vertex stream (static VB or current deformed); buffer(2) =
 // previous vertex stream (static VB for the prefix, previous-frame deformed for

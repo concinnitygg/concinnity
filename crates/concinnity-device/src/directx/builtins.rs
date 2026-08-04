@@ -3,8 +3,9 @@
 // The declarative table of every built-in HLSL program the DirectX backend
 // compiles at runtime. Each program is declared exactly once: its source file,
 // entry point, target profile, compiler, and how the compile source is
-// assembled from the file (defines, prelude, probe_common injection). Renderer
-// init and hot-reload compile through `HlslProgram::compile`, and the
+// assembled from the file (defines, prelude, probe_common / object_common
+// injection). Renderer init and hot-reload compile through
+// `HlslProgram::compile`, and the
 // export-time precompile iterates `ALL` to populate a bundle's shader cache
 // from the very same declarations, so the two can never drift.
 //
@@ -20,6 +21,13 @@ use super::pipeline::{reflection_cut_prelude, shader_source};
 // prepended to every shader that samples the probe cube array.
 const PROBE_COMMON_HLSL: &str = include_str!("shaders/probe_common.hlsl");
 
+// The shared bindless per-object record, substituted into every pass that
+// strides the per-frame object StructuredBuffer at its `{OBJECT_DATA}` marker.
+// Sole HLSL declaration of `GpuObjectData`: the main pass, G-buffer prepass,
+// shadow pass and cull kernel all read the same buffer, so a per-shader copy is
+// a silent layout-drift hazard.
+const OBJECT_COMMON_HLSL: &str = include_str!("shaders/object_common.hlsl");
+
 // Remap probe_common's register bindings for passes whose root signature
 // places the probe cube array / sampler elsewhere than the forward pass.
 const RT_PROBE_DEFINES: &str =
@@ -34,33 +42,35 @@ pub(crate) enum Compiler {
 }
 
 // How a program's compile source is assembled from its shader file. Prefixes
-// are prepended in declaration order; `probe_common` slots in front of the
-// body with a separating newline.
-pub(crate) enum Assembly {
-    Plain,
-    // `#define USE_MSAA {0|1}` from `Ctx::msaa`.
-    Msaa,
-    // Reflection roughness-cut prelude (see `reflection_cut_prelude`).
-    Cut,
-    // Cut prelude + probe_common + body.
-    CutProbe,
-    // MSAA define + probe_common + body (glass).
-    MsaaProbe,
-    // Cut prelude + register remap defines + probe_common + body (RT reflections).
-    CutProbeRegisters(&'static str),
-    // MSAA define + register remap defines + probe_common + body (RT glass).
-    MsaaProbeRegisters(&'static str),
+// are prepended in the order below; `probe_common` slots in front of the body
+// with a separating newline. The body's markers are substituted afterwards.
+pub(crate) struct Assembly {
+    // Prepend `#define USE_MSAA {0|1}` from `Ctx::msaa`.
+    pub msaa: bool,
+    // Prepend the reflection roughness-cut prelude (see `reflection_cut_prelude`).
+    pub cut: bool,
+    // Prepend probe_common.hlsl.
+    pub probe: bool,
+    // Register remap defines emitted ahead of probe_common, for passes whose
+    // root signature places the cube array / sampler elsewhere than the forward
+    // pass. Empty keeps probe_common's defaults.
+    pub probe_registers: &'static str,
+    // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
+    pub object_data: bool,
 }
+
+const PLAIN: Assembly = Assembly {
+    msaa: false,
+    cut: false,
+    probe: false,
+    probe_registers: "",
+    object_data: false,
+};
 
 impl Assembly {
     // MSAA values this assembly can produce, for the export-time enumeration.
     fn msaa_variants(&self) -> &'static [bool] {
-        match self {
-            Assembly::Msaa | Assembly::MsaaProbe | Assembly::MsaaProbeRegisters(_) => {
-                &[false, true]
-            }
-            _ => &[false],
-        }
+        if self.msaa { &[false, true] } else { &[false] }
     }
 }
 
@@ -97,31 +107,30 @@ impl HlslProgram {
 
     // Assemble the exact source text this program compiles under `ctx`.
     pub fn source(&self, ctx: &Ctx) -> String {
-        let body = self.body(ctx.hot_reload);
-        let probe = |hot: bool| shader_source(hot, "probe_common.hlsl", PROBE_COMMON_HLSL);
-        match &self.assembly {
-            Assembly::Plain => body.into_owned(),
-            Assembly::Msaa => format!("{}{body}", msaa_define(ctx.msaa)),
-            Assembly::Cut => format!("{}{body}", reflection_cut_prelude()),
-            Assembly::CutProbe => format!(
-                "{}{}\n{body}",
-                reflection_cut_prelude(),
-                probe(ctx.hot_reload)
-            ),
-            Assembly::MsaaProbe => {
-                format!("{}{}\n{body}", msaa_define(ctx.msaa), probe(ctx.hot_reload))
-            }
-            Assembly::CutProbeRegisters(defines) => format!(
-                "{}{defines}{}\n{body}",
-                reflection_cut_prelude(),
-                probe(ctx.hot_reload)
-            ),
-            Assembly::MsaaProbeRegisters(defines) => format!(
-                "{}{defines}{}\n{body}",
-                msaa_define(ctx.msaa),
-                probe(ctx.hot_reload)
-            ),
+        let assembly = &self.assembly;
+        let mut src = String::new();
+        if assembly.cut {
+            src.push_str(&reflection_cut_prelude());
         }
+        if assembly.msaa {
+            src.push_str(msaa_define(ctx.msaa));
+        }
+        if assembly.probe {
+            src.push_str(assembly.probe_registers);
+            src.push_str(&shader_source(
+                ctx.hot_reload,
+                "probe_common.hlsl",
+                PROBE_COMMON_HLSL,
+            ));
+            src.push('\n');
+        }
+        src.push_str(&self.body(ctx.hot_reload));
+        if assembly.object_data {
+            let object_common =
+                shader_source(ctx.hot_reload, "object_common.hlsl", OBJECT_COMMON_HLSL);
+            src = src.replace("{OBJECT_DATA}", &object_common);
+        }
+        src
     }
 
     pub fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
@@ -200,7 +209,7 @@ const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static s
         entry: "main",
         target,
         compiler: Compiler::Fxc,
-        assembly: Assembly::Plain,
+        assembly: PLAIN,
     }
 }
 
@@ -229,7 +238,7 @@ pub(super) static MAIN_VERT: HlslProgram = HlslProgram {
     entry: "vertex_main",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::Plain,
+    assembly: PLAIN,
 };
 pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     file: "main_vert.hlsl",
@@ -237,30 +246,47 @@ pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     entry: "vertex_main_instanced",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::Plain,
+    assembly: PLAIN,
 };
 pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_HLSL, "ps_5_1");
 pub(super) static SHADOW_VERT: HlslProgram =
     fxc_main("shadow_vert.hlsl", SHADOW_VERT_HLSL, "vs_5_1");
 
-pub(super) static MAIN_BINDLESS_VERT: HlslProgram = fxc_main(
-    "main_bindless_vert.hlsl",
-    include_str!("shaders/main_bindless_vert.hlsl"),
-    "vs_5_1",
-);
+pub(super) static MAIN_BINDLESS_VERT: HlslProgram = HlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..fxc_main(
+        "main_bindless_vert.hlsl",
+        include_str!("shaders/main_bindless_vert.hlsl"),
+        "vs_5_1",
+    )
+};
 pub(super) static MAIN_BINDLESS_FRAG: HlslProgram = HlslProgram {
     file: "main_bindless_frag.hlsl",
     embedded: include_str!("shaders/main_bindless_frag.hlsl"),
     entry: "main",
     target: "ps_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::CutProbe,
+    assembly: Assembly {
+        cut: true,
+        probe: true,
+        object_data: true,
+        ..PLAIN
+    },
 };
-pub(super) static SHADOW_BINDLESS_VERT: HlslProgram = fxc_main(
-    "shadow_bindless_vert.hlsl",
-    include_str!("shaders/shadow_bindless_vert.hlsl"),
-    "vs_5_1",
-);
+pub(super) static SHADOW_BINDLESS_VERT: HlslProgram = HlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..fxc_main(
+        "shadow_bindless_vert.hlsl",
+        include_str!("shaders/shadow_bindless_vert.hlsl"),
+        "vs_5_1",
+    )
+};
 pub(super) static SKINNED_VERT: HlslProgram = fxc_main(
     "skinned_vert.hlsl",
     include_str!("shaders/skinned_vert.hlsl"),
@@ -272,15 +298,20 @@ pub(super) static SKINNED_SHADOW_VERT: HlslProgram = fxc_main(
     "vs_5_1",
 );
 
-pub(super) static CULL: HlslProgram = fxc_main("cull.hlsl", CULL_HLSL, "cs_5_1");
-pub(super) static CULL_PHASE2: HlslProgram = HlslProgram {
-    entry: "main_phase2",
-    ..fxc_main("cull.hlsl", CULL_HLSL, "cs_5_1")
-};
-pub(super) static CULL_SHADOW: HlslProgram = HlslProgram {
-    entry: "main_shadow",
-    ..fxc_main("cull.hlsl", CULL_HLSL, "cs_5_1")
-};
+const fn fxc_cull(entry: &'static str) -> HlslProgram {
+    HlslProgram {
+        entry,
+        assembly: Assembly {
+            object_data: true,
+            ..PLAIN
+        },
+        ..fxc_main("cull.hlsl", CULL_HLSL, "cs_5_1")
+    }
+}
+
+pub(super) static CULL: HlslProgram = fxc_cull("main");
+pub(super) static CULL_PHASE2: HlslProgram = fxc_cull("main_phase2");
+pub(super) static CULL_SHADOW: HlslProgram = fxc_cull("main_shadow");
 
 pub(super) static LIGHT_CULL: HlslProgram = fxc_main(
     "light_cull.hlsl",
@@ -311,7 +342,10 @@ pub(super) static HIZ_DOWNSAMPLE: HlslProgram = HlslProgram {
 };
 
 pub(super) static FOG_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly::Msaa,
+    assembly: Assembly {
+        msaa: true,
+        ..PLAIN
+    },
     ..fxc_main(
         "fog_vert.hlsl",
         include_str!("shaders/fog_vert.hlsl"),
@@ -319,7 +353,10 @@ pub(super) static FOG_VERT: HlslProgram = HlslProgram {
     )
 };
 pub(super) static FOG_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly::Msaa,
+    assembly: Assembly {
+        msaa: true,
+        ..PLAIN
+    },
     ..fxc_main(
         "fog_frag.hlsl",
         include_str!("shaders/fog_frag.hlsl"),
@@ -333,7 +370,10 @@ pub(super) static FOG_FROXEL: HlslProgram = fxc_main(
 );
 
 pub(super) static DECAL_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly::Msaa,
+    assembly: Assembly {
+        msaa: true,
+        ..PLAIN
+    },
     ..fxc_main(
         "decal_vert.hlsl",
         include_str!("shaders/decal_vert.hlsl"),
@@ -341,7 +381,10 @@ pub(super) static DECAL_VERT: HlslProgram = HlslProgram {
     )
 };
 pub(super) static DECAL_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly::Msaa,
+    assembly: Assembly {
+        msaa: true,
+        ..PLAIN
+    },
     ..fxc_main(
         "decal_frag.hlsl",
         include_str!("shaders/decal_frag.hlsl"),
@@ -355,7 +398,10 @@ pub(super) static LINE_VERT: HlslProgram = fxc_main(
     "vs_5_1",
 );
 pub(super) static LINE_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly::Msaa,
+    assembly: Assembly {
+        msaa: true,
+        ..PLAIN
+    },
     ..fxc_main(
         "line_frag.hlsl",
         include_str!("shaders/line_frag.hlsl"),
@@ -385,7 +431,11 @@ const GLASS_DECL: HlslProgram = HlslProgram {
     entry: "vs_main",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::MsaaProbe,
+    assembly: Assembly {
+        msaa: true,
+        probe: true,
+        ..PLAIN
+    },
 };
 pub(super) static GLASS_VERT: HlslProgram = GLASS_DECL;
 pub(super) static GLASS_FRAG: HlslProgram = HlslProgram {
@@ -414,11 +464,17 @@ pub(super) static GBUFFER_PREPASS_FRAG: HlslProgram = fxc_main(
     GBUFFER_PREPASS_FRAG_HLSL,
     "ps_5_1",
 );
-pub(super) static GBUFFER_BINDLESS_VERT: HlslProgram = fxc_main(
-    "gbuffer_bindless_vert.hlsl",
-    include_str!("shaders/gbuffer_bindless_vert.hlsl"),
-    "vs_5_1",
-);
+pub(super) static GBUFFER_BINDLESS_VERT: HlslProgram = HlslProgram {
+    assembly: Assembly {
+        object_data: true,
+        ..PLAIN
+    },
+    ..fxc_main(
+        "gbuffer_bindless_vert.hlsl",
+        include_str!("shaders/gbuffer_bindless_vert.hlsl"),
+        "vs_5_1",
+    )
+};
 pub(super) static GBUFFER_BINDLESS_FRAG: HlslProgram = fxc_main(
     "gbuffer_bindless_frag.hlsl",
     include_str!("shaders/gbuffer_bindless_frag.hlsl"),
@@ -468,7 +524,11 @@ pub(super) static SSR_RESOLVE_FRAG: HlslProgram = HlslProgram {
     entry: "main",
     target: "ps_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::CutProbe,
+    assembly: Assembly {
+        cut: true,
+        probe: true,
+        ..PLAIN
+    },
 };
 
 pub(super) static BLOOM_PREFILTER: HlslProgram = fxc_main(
@@ -499,7 +559,7 @@ const REFLECTION_COMPOSITE_DECL: HlslProgram = HlslProgram {
     entry: "vs_main",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: Assembly::Cut,
+    assembly: Assembly { cut: true, ..PLAIN },
 };
 pub(super) static REFLECTION_COMPOSITE_VERT: HlslProgram = REFLECTION_COMPOSITE_DECL;
 pub(super) static REFLECTION_BLUR_FRAG: HlslProgram = HlslProgram {
@@ -521,7 +581,12 @@ const RT_REFLECTIONS_DECL: HlslProgram = HlslProgram {
     entry: "rt_fullscreen_vert",
     target: "vs_6_5",
     compiler: Compiler::Dxc,
-    assembly: Assembly::CutProbeRegisters(RT_PROBE_DEFINES),
+    assembly: Assembly {
+        cut: true,
+        probe: true,
+        probe_registers: RT_PROBE_DEFINES,
+        ..PLAIN
+    },
 };
 pub(super) static RT_FULLSCREEN_VERT: HlslProgram = RT_REFLECTIONS_DECL;
 pub(super) static RT_REFLECTIONS_FRAG: HlslProgram = HlslProgram {
@@ -541,7 +606,12 @@ const GLASS_RT_DECL: HlslProgram = HlslProgram {
     entry: "vs_main",
     target: "vs_6_5",
     compiler: Compiler::Dxc,
-    assembly: Assembly::MsaaProbeRegisters(GLASS_RT_PROBE_DEFINES),
+    assembly: Assembly {
+        msaa: true,
+        probe: true,
+        probe_registers: GLASS_RT_PROBE_DEFINES,
+        ..PLAIN
+    },
 };
 pub(super) static GLASS_RT_VERT: HlslProgram = GLASS_RT_DECL;
 pub(super) static GLASS_RT_FRAG: HlslProgram = HlslProgram {
@@ -561,7 +631,7 @@ pub(super) static RT_SKIN: HlslProgram = HlslProgram {
     entry: "rt_skin",
     target: "cs_6_5",
     compiler: Compiler::Dxc,
-    assembly: Assembly::Plain,
+    assembly: PLAIN,
 };
 
 // Every declared program, iterated by the export-time precompile.
@@ -686,19 +756,43 @@ mod tests {
         assert!(rt.ends_with(RT_REFLECTIONS_HLSL));
     }
 
-    // Every program's assembled source must embed its body verbatim, so a
-    // shader edit is always visible to the cache key.
+    // Every program's assembled source must embed its body, so a shader edit is
+    // always visible to the cache key. A body carrying the `{OBJECT_DATA}`
+    // marker is split by the substitution, so both halves are checked.
     #[test]
     fn every_program_source_contains_its_embedded_body() {
         for p in ALL {
             let src = p.source(&Ctx::plain(false));
+            for part in p.embedded.split("{OBJECT_DATA}") {
+                assert!(src.contains(part), "{} {} lost its body", p.entry, p.target);
+            }
+        }
+    }
+
+    // Every program that strides the per-frame object StructuredBuffer gets the
+    // shared record spliced in, and no other program carries a stray
+    // declaration: the whole point of the fragment is that `GpuObjectData`
+    // exists exactly once.
+    #[test]
+    fn object_data_programs_splice_the_shared_record() {
+        let mut spliced = 0usize;
+        for p in ALL {
+            let src = p.source(&Ctx::plain(false));
+            let declares = src.contains("struct GpuObjectData");
+            assert_eq!(
+                declares, p.assembly.object_data,
+                "{} {}: declares GpuObjectData = {declares}, object_data = {}",
+                p.entry, p.target, p.assembly.object_data
+            );
             assert!(
-                src.contains(p.embedded),
-                "{} {} lost its body",
+                !src.contains("{OBJECT_DATA}"),
+                "{} {} left {{OBJECT_DATA}}",
                 p.entry,
                 p.target
             );
+            spliced += usize::from(declares);
         }
+        assert_eq!(spliced, 7, "object-data program count changed");
     }
 
     // The sky shell's half-extent tracks the camera far plane, so its corners

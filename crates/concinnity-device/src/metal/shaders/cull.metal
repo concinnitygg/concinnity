@@ -2,31 +2,9 @@
 #include <metal_command_buffer>
 using namespace metal;
 
-// Mirrors gfx::render_types::GpuObjectData; only the cull-bounds fields are
-// read here, but the full layout must match so indexing lines up.
-struct GpuObjectData {
-    float4x4      model;
-    packed_float3 tint;
-    float         roughness;
-    packed_float3 emissive;
-    float         metallic;
-    uint          albedo_index;
-    uint          normal_index;
-    float         macro_variation;
-    float         terrain_blend;
-    packed_float3 bb_min;
-    float         cull_distance;
-    packed_float3 bb_max;
-    float         secondary_blend_sharpness;
-    uint          albedo_secondary_index;
-    uint          normal_secondary_index;
-    uint          emissive_map_index;
-    uint          orm_map_index;
-    float         alpha_cutoff;
-    float         _pad0;
-    float         _pad1;
-    float         _pad2;
-};
+// Only the cull-bounds fields are read here, but the full record is shared so
+// indexing strides identically to the passes the survivors feed.
+{OBJECT_DATA}
 
 // Mirrors gfx::render_types::GpuDrawArgs.
 struct GpuDrawArgs {
