@@ -69,7 +69,7 @@ impl ProbeUniforms {
 }
 
 // Maximum reflection probes a frame can bind. The shader's `MAX_PROBES` constant
-// (default.metal) and the `BindlessTextures.probes` cube array must match this.
+// (main.metal) and the `BindlessTextures.probes` cube array must match this.
 pub const MAX_PROBES: usize = 8;
 
 // Auto-seed must never request more probes than a frame can bind, or
@@ -497,7 +497,7 @@ pub struct RaymarchShadowCascade {
 pub const MAX_MORPH_TARGETS: usize = 64;
 
 // Per-draw morph parameters for the legacy skinned vertex shader. Matches the
-// MSL `VsMorphParams` in default.metal: four uints then the weight array.
+// MSL `VsMorphParams` in main.metal: four uints then the weight array.
 // 272 bytes.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        // MSL `ViewUniforms` in default.metal: two float4x4, elapsed +
+        // MSL `ViewUniforms` in main.metal: two float4x4, elapsed +
         // reflections_enabled scalars, packed_float3 cam_pos +
         // prefilter_mip_count + shade_mode. MSL rounds the struct up to a
         // float4x4 multiple (160): `_end_pad` matches.
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn probe_uniforms_layout_matches_msl() {
-        // MSL `ProbeUniforms` in default.metal: three float4 (16-aligned each).
+        // MSL `ProbeUniforms` in main.metal: three float4 (16-aligned each).
         assert_eq!(size_of::<ProbeUniforms>(), 48);
         assert_eq!(offset_of!(ProbeUniforms, box_min), 0);
         assert_eq!(offset_of!(ProbeUniforms, box_max), 16);
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn model_uniforms_layout_matches_msl() {
-        // MSL `ModelUniforms` in default.metal / shadow_map.metal: one float4x4.
+        // MSL `ModelUniforms` in main.metal / shadow.metal: one float4x4.
         assert_eq!(size_of::<ModelUniforms>(), 64);
         assert_eq!(offset_of!(ModelUniforms, model), 0);
     }
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn vs_morph_params_layout_matches_msl() {
-        // MSL `VsMorphParams` in default.metal: four uints then float[64].
+        // MSL `VsMorphParams` in main.metal: four uints then float[64].
         assert_eq!(size_of::<VsMorphParams>(), 272);
         assert_eq!(offset_of!(VsMorphParams, vertex_base), 0);
         assert_eq!(offset_of!(VsMorphParams, vertex_count), 4);

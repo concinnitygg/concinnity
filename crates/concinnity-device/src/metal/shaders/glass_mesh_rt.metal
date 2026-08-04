@@ -110,7 +110,7 @@ static float3 decode_normal_map(float2 encoded) {
 }
 
 // The bindless texture pool, bound at buffer(10) by the textured variant.
-constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match default.metal
+constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match main.metal
 
 struct BindlessTextures {
     array<texture2d<float>, BINDLESS_TEXTURE_COUNT> tex_pool [[id(0)]];

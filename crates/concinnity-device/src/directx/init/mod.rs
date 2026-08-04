@@ -155,7 +155,6 @@ impl DxContext {
         let &ShaderBytes {
             vert: vert_bytes,
             frag: frag_bytes,
-            main_is_engine_default,
             shadow: shadow_bytes,
             vert_instanced: vert_instanced_bytes,
             // The world default program is never deferred (bucket 0 always
@@ -164,18 +163,6 @@ impl DxContext {
         } = world_shaders
             .first()
             .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
-        // The bindless main pass engages only when the main-shader override is
-        // empty (it then uses the embedded bindless pipeline plus the embedded
-        // default for any legacy / streamed fallback). The engine's built-in
-        // default compiles to non-empty DXBC, which would otherwise pin every
-        // built-in world to the legacy per-draw path, so treat it as no override.
-        // An authored shader keeps its bytes and the legacy path.
-        const NO_OVERRIDE: &[u8] = &[];
-        let (vert_bytes, frag_bytes) = if main_is_engine_default {
-            (NO_OVERRIDE, NO_OVERRIDE)
-        } else {
-            (vert_bytes, frag_bytes)
-        };
         let (title, width, height) = (window.title.as_str(), window.width, window.height);
         // Record this (main) thread so the `RenderBackend` mutation entry
         // points can `debug_assert_main_thread` against it; the Send invariant

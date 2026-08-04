@@ -113,9 +113,9 @@ static float3 decode_normal_map(float2 encoded) {
 
 // The bindless texture pool, bound at buffer(10) by the textured glass RT
 // variant (buffer(7) is the ProbeSet, where the main pass keeps its pool, so the
-// pool moves to a free slot here). Identical layout to default.metal /
+// pool moves to a free slot here). Identical layout to main.metal /
 // rt_reflections.metal `BindlessTextures`; only `tex_pool` is read here.
-constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match default.metal
+constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match main.metal
 
 struct BindlessTextures {
     array<texture2d<float>, BINDLESS_TEXTURE_COUNT> tex_pool [[id(0)]];

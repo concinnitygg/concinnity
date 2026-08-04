@@ -12,15 +12,6 @@
 use crate::ecs::Component;
 use crate::world::WorldJsonlAsset;
 
-// One input a `compile_payload` reads. `Path` is a file on disk, hashed by
-// contents; `Builtin` is an engine-shipped shader whose source is embedded in
-// the binary rather than living at a path, hashed by that embedded source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceInput {
-    Path(String),
-    Builtin(String),
-}
-
 // The on-disk inputs an asset's `compile_payload` reads, and how they relate to
 // the payload cache's generic walk of the args JSON.
 //
@@ -38,7 +29,7 @@ pub enum SourceInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceFiles {
     Extra(Vec<String>),
-    Only(Vec<SourceInput>),
+    Only(Vec<String>),
 }
 
 // Build-time context handed to each `BuildAsset` impl.

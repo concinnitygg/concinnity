@@ -90,7 +90,7 @@ vertex GbVtxOut gbuffer_prepass_vertex(
     out.view_normal = (v.view * float4(world_n, 0.0)).xyz;
     out.view_depth  = -view_pos.z;
     // Skybox sentinel: pin the rasterised depth to the far plane so the sky
-    // never occludes scene geometry, matching vertex_main in default.metal.
+    // never occludes scene geometry, matching vertex_main in main.metal.
     if (in.color.b > 1.5) {
         out.position.z = out.position.w * (1.0 - 1e-6);
     }

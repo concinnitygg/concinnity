@@ -24,7 +24,7 @@ using namespace metal::raytracing;
 // sun term is masked where the reflected surface is occluded - cast shadows
 // appear inside the reflection.
 
-constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match default.metal
+constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match main.metal
 
 struct RtVtxOut {
     float4 position [[position]];
@@ -82,7 +82,7 @@ struct RtGeomEntry {
     uint     _pad2;
 };
 
-// buffer(7): the bindless texture pool, identical layout to default.metal's
+// buffer(7): the bindless texture pool, identical layout to main.metal's
 // `BindlessTextures` (only `tex_pool` is read here). Bound only by the textured
 // variant; the flat variant does not declare it.
 struct BindlessTextures {
@@ -101,7 +101,7 @@ constant float RT_F0        = 0.04;  // dielectric base reflectance for the Fres
 constant float VERTEX_FLOATS = 14.0; // floats per Vertex (stride 56 bytes)
 
 // Reflection-probe set, bound at buffer(8). Layout mirrors `ProbeSet` /
-// `ProbeUniforms` in default.metal (and metal::uniforms). A reflection ray that
+// `ProbeUniforms` in main.metal (and metal::uniforms). A reflection ray that
 // misses the scene falls back to the local scene-captured probe (box-projected)
 // instead of the foreign sky cube, the same source the forward IBL specular term
 // uses. `count` is 0 in worlds with no baked probe, where the miss keeps the sky.
@@ -130,7 +130,7 @@ static_assert(sizeof(ProbeSet) == 400,
 
 // Box-parallax sample of one probe cube: intersect the world-space reflection ray
 // with the probe's influence box and re-anchor the sample at that hit relative to
-// the capture point, so a static cube tracks the camera. Mirrors default.metal's
+// the capture point, so a static cube tracks the camera. Mirrors main.metal's
 // `sample_probe_radiance`; the `dist > 0` guard keeps a blended secondary box the
 // surface has already left from sampling backward.
 static float3 sample_probe_radiance(
@@ -162,7 +162,7 @@ static float3 sample_probe_radiance(
 // probe's weight is `smoothstep(-margin, margin, sd)` of its signed box distance, so
 // overlapping boxes cross-fade smoothly (no pop at a 3-way overlap line) and a single
 // covering box reduces to one sample. Falls back to the nearest by capture distance
-// where no box covers. Matches default.metal's `probe_set_specular`.
+// where no box covers. Matches main.metal's `probe_set_specular`.
 static float3 probe_set_specular(
     constant ProbeSet                    &set,
     array<texturecube<float>, MAX_PROBES> probes,

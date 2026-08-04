@@ -3,12 +3,12 @@
 // Renders scene depth from the directional light's perspective into one slice
 // of a Depth32Float texture array, one slice per cascade. No fragment function
 // is needed - depth writes are automatic. The resulting cascades are sampled
-// with PCF in default.metal.
+// with PCF in main.metal.
 //
 // Buffer bindings:
 //   buffer(0) -- ShadowUniforms: float4x4 light_vps[NUM_SHADOW_CASCADES],
 //                                float4    cascade_splits
-//   buffer(1) -- per-vertex data (same layout as default.metal, stride 56 bytes)
+//   buffer(1) -- per-vertex data (same layout as main.metal, stride 56 bytes)
 //   buffer(2) -- ModelUniforms: float4x4 model
 //   buffer(7) -- ShadowPassPush: uint cascade_idx (which cascade VP to use this pass)
 
@@ -91,7 +91,7 @@ vertex float4 shadow_vertex_bindless(
 }
 
 // Skinned sibling of shadow_vertex_main. Blends the same four joint matrices
-// (from buffer(8)) as default.metal's vertex_main_skinned so a skinned mesh
+// (from buffer(8)) as main.metal's vertex_main_skinned so a skinned mesh
 // casts a shadow that matches its deformed silhouette.
 struct SkinnedShadowVertex {
     float3  pos     [[attribute(0)]];

@@ -55,7 +55,7 @@ struct GlassParams {
 };
 
 // Reflection-probe set, bound at buffer(7) + texture(3..3+MAX_PROBES). Mirrors
-// `ProbeSet` / `ProbeUniforms` in default.metal / rt_reflections.metal (and
+// `ProbeSet` / `ProbeUniforms` in main.metal / rt_reflections.metal (and
 // metal::uniforms). Lets glass sample the LOCAL box-projected scene capture
 // instead of only the foreign sky cube - the same source the forward IBL
 // specular term and the RT-miss fallback use. `count` is 0 in worlds with no
@@ -85,7 +85,7 @@ static_assert(sizeof(ProbeSet) == 400,
 // Box-parallax sample of one probe cube: intersect the world-space reflection
 // ray with the probe's influence box and re-anchor the sample at that hit
 // relative to the capture point, so a static cube tracks the camera. Mirrors
-// default.metal / rt_reflections.metal `sample_probe_radiance`.
+// main.metal / rt_reflections.metal `sample_probe_radiance`.
 static float3 sample_probe_radiance(
     texturecube<float>      probe_cube,
     constant ProbeUniforms &probe,
@@ -113,7 +113,7 @@ static float3 sample_probe_radiance(
 // every probe whose influence box covers `world_pos` (partition of unity) and
 // returns the weight-normalised sum of their box-projected samples; falls back
 // to the nearest probe by capture distance where no box covers. Mirrors
-// default.metal / rt_reflections.metal `probe_set_specular`.
+// main.metal / rt_reflections.metal `probe_set_specular`.
 static float3 probe_set_specular(
     constant ProbeSet                    &set,
     array<texturecube<float>, MAX_PROBES> probes,

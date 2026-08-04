@@ -1042,7 +1042,7 @@ impl DrawObject {
 // layout change.
 //
 // Layout (176 bytes) must stay in sync with the `GpuObjectData` struct in
-// every backend's bindless static shader: `default.metal` (Metal), the inline
+// every backend's bindless static shader: `main.metal` (Metal), the inline
 // `StructuredBuffer<GpuObjectData>` HLSL in `directx/pipeline.rs`, and the
 // inline `std430` SSBO GLSL in `vulkan/pipeline.rs`. The `gpu_object_data_*`
 // layout test below pins the offsets all three rely on.
@@ -1288,7 +1288,7 @@ pub fn pack_skinned_record(
 // (mirrors `DrawObject::cullable()`: non-cullable objects always draw).
 //
 // Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in every
-// backend's cull kernel: `default.metal` / the Metal `build_cull_pipeline`
+// backend's cull kernel: `main.metal` / the Metal `build_cull_pipeline`
 // MSL, the inline cull HLSL in `directx/pipeline.rs`, and the inline cull
 // GLSL in `vulkan/pipeline.rs`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -1600,7 +1600,7 @@ mod tests {
 
     #[test]
     fn gpu_object_data_layout_matches_msl() {
-        // The MSL `GpuObjectData` in default.metal lays the struct out with
+        // The MSL `GpuObjectData` in main.metal lays the struct out with
         // float4x4's 16-byte alignment; the offsets below must match it
         // exactly or the bindless static pass reads garbage.
         assert_eq!(size_of::<GpuObjectData>(), 176);
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn material_uniforms_layout_matches_msl() {
-        // The MSL `MaterialUniforms` in default.metal declares
+        // The MSL `MaterialUniforms` in main.metal declares
         // `tint` and `emissive` as packed_float3 (align 4), so the offsets line
         // up with this tightly-packed Rust struct. A plain float3 there would
         // 16-align `tint` and shift every following field.
@@ -1680,7 +1680,7 @@ mod tests {
     fn directional_light_data_layout_matches_msl() {
         // MSL `DirectionalLightData` uses packed_float3 for `direction` and
         // `color` so the 32-byte stride matches; a plain float3 would read the
-        // colour channel as zeros (see the comment in default.metal).
+        // colour channel as zeros (see the comment in main.metal).
         assert_eq!(size_of::<DirectionalLightData>(), 32);
         assert_eq!(offset_of!(DirectionalLightData, direction), 0);
         assert_eq!(offset_of!(DirectionalLightData, intensity), 12);
@@ -1700,7 +1700,7 @@ mod tests {
 
     #[test]
     fn light_uniforms_layout_matches_msl() {
-        // MSL `LightUniforms` in default.metal (and `RaymarchLights` in
+        // MSL `LightUniforms` in main.metal (and `RaymarchLights` in
         // raymarch_helpers.metal, which is bound from this same Rust struct):
         // DirectionalLightData[4] then PointLightData[8] then two ints, then
         // ambient_intensity + num_local_lights in the trailing 16-byte block.
@@ -1717,7 +1717,7 @@ mod tests {
 
     #[test]
     fn gpu_light_layout_matches_msl() {
-        // MSL `GpuLight` in default.metal uses packed_float3 for `position`,
+        // MSL `GpuLight` in main.metal uses packed_float3 for `position`,
         // `color`, and `direction` so the 64-byte stride matches; a plain float3
         // would promote to a 16-byte lane and shift every following field.
         assert_eq!(size_of::<GpuLight>(), 64);
@@ -1759,7 +1759,7 @@ mod tests {
 
     #[test]
     fn area_light_data_layout_matches_msl() {
-        // MSL `AreaLightData` in default.metal: packed_float3 right + two_sided
+        // MSL `AreaLightData` in main.metal: packed_float3 right + two_sided
         // filling one 16-byte lane, then packed_float3 up + pad filling the next.
         assert_eq!(size_of::<AreaLightData>(), 32);
         assert_eq!(offset_of!(AreaLightData, right), 0);
@@ -1771,7 +1771,7 @@ mod tests {
 
     #[test]
     fn spot_shadow_data_layout_matches_msl() {
-        // MSL `SpotShadowData` in default.metal: a float4x4 (16-aligned, 64 B)
+        // MSL `SpotShadowData` in main.metal: a float4x4 (16-aligned, 64 B)
         // then three scalars sharing the fifth 16-byte lane. The Rust
         // `[[f32; 4]; 4]` is only 4-aligned, so the trailing pad is what holds
         // the struct at the 80 bytes MSL / HLSL / std430 all round to.
@@ -1785,7 +1785,7 @@ mod tests {
 
     #[test]
     fn shadow_uniforms_layout_matches_msl() {
-        // MSL `ShadowUniforms` in default.metal / shadow_map.metal (and
+        // MSL `ShadowUniforms` in main.metal / shadow.metal (and
         // `RaymarchShadowUniforms` in raymarch_helpers.metal, bound from this
         // same struct): NUM_SHADOW_CASCADES float4x4s, then the splits, then the
         // active-cascade count. The MSL declares the splits as `float4`
@@ -1802,7 +1802,7 @@ mod tests {
 
     #[test]
     fn shadow_pass_push_layout_matches_msl() {
-        // MSL `ShadowPassPush` in shadow_map.metal: a uint + three pad uints.
+        // MSL `ShadowPassPush` in shadow.metal: a uint + three pad uints.
         assert_eq!(size_of::<ShadowPassPush>(), 16);
         assert_eq!(offset_of!(ShadowPassPush, cascade_idx), 0);
         assert_eq!(offset_of!(ShadowPassPush, _pad), 4);

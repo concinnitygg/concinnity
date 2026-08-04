@@ -6,7 +6,7 @@
 //
 //   * Bindless static path: GPU-driven, issued through `cull_icb` in a single
 //     executeCommandsInBuffer. Used when the world's fragment shader provides
-//     `fragment_main_bindless` (default.metal) and the static draw list is
+//     `fragment_main_bindless` (main.metal) and the static draw list is
 //     non-empty -- `object_buffer` / `bindless_tex_args` are `Some` in that
 //     case.
 //   * Legacy static path: per-draw bindings, walks the `visible` list. Used

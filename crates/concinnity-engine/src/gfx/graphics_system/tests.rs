@@ -702,7 +702,7 @@ fn auto_preset_resolves_ceiling_from_gpu_tier() {
 }
 
 #[test]
-fn missing_shader_fails_init() {
+fn a_world_without_a_shader_renders_with_the_engine_program() {
     let (state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
@@ -711,9 +711,12 @@ fn missing_shader_fails_init() {
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
-    assert!(gs.failed, "no Shader: init must fail");
-    assert!(!backend_parked(&world));
-    assert!(lock(&state).init.is_none(), "backend never constructed");
+    assert!(!gs.failed, "no Shader is the common case, not a failure");
+    let s = lock(&state);
+    let init = s.init.as_ref().expect("backend constructed");
+    // One bucket carrying no bytes: every backend reads that as "use the
+    // engine's own main-pass program".
+    assert_eq!(init.shader_stage_lens, vec![(0, 0)]);
 }
 
 #[test]

@@ -26,23 +26,17 @@ pub struct ShaderStages {
     pub vert: Vec<u8>,
     pub frag: Vec<u8>,
     pub vert_instanced: Vec<u8>,
-    // The bucket declares the engine's built-in default sources; carried through
-    // so a warmed bucket reaches the backend with the same information the
-    // init-time path hands it.
-    pub is_engine_default: bool,
 }
 
 // One deferred bucket as init recorded it.
 pub struct DeferredBucket {
     pub bucket: u32,
     pub source: ShaderPayloadSource,
-    pub is_engine_default: bool,
 }
 
 struct Entry {
     bucket: u32,
     source: ShaderPayloadSource,
-    is_engine_default: bool,
     // Set while the owning scene is unpinned.
     blocked: bool,
     resident: bool,
@@ -62,7 +56,6 @@ impl ShaderWarmup {
                 .map(|d| Entry {
                     bucket: d.bucket,
                     source: d.source,
-                    is_engine_default: d.is_engine_default,
                     blocked: true,
                     resident: false,
                 })
@@ -110,7 +103,6 @@ impl ShaderWarmup {
             vert: stage(ShaderKind::Vertex),
             frag: stage(ShaderKind::Fragment),
             vert_instanced: stage(ShaderKind::VertexInstanced),
-            is_engine_default: entry.is_engine_default,
         })
     }
 
@@ -138,11 +130,7 @@ mod tests {
     }
 
     fn deferred(bucket: u32, source: ShaderPayloadSource) -> DeferredBucket {
-        DeferredBucket {
-            bucket,
-            source,
-            is_engine_default: false,
-        }
+        DeferredBucket { bucket, source }
     }
 
     fn warmup() -> ShaderWarmup {

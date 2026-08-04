@@ -109,7 +109,7 @@ mod tests {
             type_name: "VertexStage",
             origin: AssetOrigin::External,
             payload: crate::ecs::AssetPayload::Compiled,
-            default_args: Some(serde_json::json!({ "source": "default.metal" })),
+            default_args: Some(serde_json::json!({ "source": "user.metal" })),
         }
     }
 
@@ -117,7 +117,7 @@ mod tests {
     fn resolve_args_none_uses_default() {
         let reg = shader_reg();
         let result = resolve_args(&reg, &None);
-        assert_eq!(result["source"], "default.metal");
+        assert_eq!(result["source"], "user.metal");
     }
 
     #[test]
@@ -125,7 +125,7 @@ mod tests {
         let reg = shader_reg();
         let supplied = Some(serde_json::json!({}));
         let result = resolve_args(&reg, &supplied);
-        assert_eq!(result["source"], "default.metal");
+        assert_eq!(result["source"], "user.metal");
     }
 
     #[test]

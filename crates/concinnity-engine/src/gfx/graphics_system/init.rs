@@ -88,24 +88,17 @@ struct TextureTableDecode {
 
 // The world's decoded shaders from `decode_shaders`: each stage's compiled
 // payload bytes (the main vertex + fragment, an engine-internal empty shadow
-// slice, and the optional instanced-vertex stage), whether the main stage is the
-// engine's built-in default, the payload locators kept for the blob-release
-// step, and the dev-only source map the hot-reload watcher subscribes to.
+// slice, and the optional instanced-vertex stage), the payload locators kept
+// for the blob-release step, and the dev-only source map the hot-reload watcher
+// subscribes to.
 #[derive(Default)]
 struct DecodedShaderBytes {
     vert: Vec<u8>,
     frag: Vec<u8>,
     vert_instanced: Vec<u8>,
-    // This Shader declares the engine's built-in default sources rather than an
-    // authored program. Carried per entry because a material-referenced Shader
-    // can name the built-in too, and a backend whose built-in default has more
-    // than one form (DirectX ships a per-draw and a bindless variant) needs to
-    // know which program the world actually asked for.
-    is_engine_default: bool,
     // The payload was left undecoded because a scene other than the start scene
     // owns this bucket. Recorded explicitly rather than inferred from empty stage
-    // bytes: a backend whose built-in default ships no compiled payload sees
-    // empty bytes for an engine-default program too.
+    // bytes: a stage the cook compiled nothing for reads as empty too.
     deferred: bool,
 }
 
@@ -1390,8 +1383,11 @@ impl GraphicsSystem {
     // world default pipeline. Under `cn debug` also records the default
     // shader's resolved on-disk stage source paths so the asset hot-reload
     // watcher can recompile + rebuild its pipelines on a shader save. Returns
-    // None (self.failed set) if no Shader exists or any payload is missing or
-    // unreadable.
+    // None (self.failed set) if any payload is missing or unreadable.
+    //
+    // A world that declares no Shader is the common case: it gets a single
+    // bucket carrying no bytes, which every backend reads as "use the engine's
+    // own main-pass program".
     fn decode_shaders(
         &mut self,
         ctx: &mut PipelineContext,
@@ -1399,9 +1395,12 @@ impl GraphicsSystem {
     ) -> Option<DecodedShaders> {
         let world_shaders = ctx.drain::<Shader>();
         if world_shaders.is_empty() {
-            tracing::error!("GraphicsSystem: no Shader found -- add one to world.jsonl");
-            self.failed = true;
-            return None;
+            return Some(DecodedShaders {
+                locators: Vec::new(),
+                shaders: vec![DecodedShaderBytes::default()],
+                source_map: super::hot_reload_sources::ShaderStageSourceMap::new(),
+                shadow_bytes: Vec::new(),
+            });
         }
 
         // Buckets a non-start scene exclusively owns skip their decode and
@@ -1422,26 +1421,9 @@ impl GraphicsSystem {
         let blob_disk_backed = ctx.blob.disk_backed();
         let mut deferred_sources = Vec::new();
 
-        // Whether a Shader declares the engine's built-in default sources rather
-        // than an authored program. Reported to the backend, which decides what it
-        // means: the built-in compiles to non-empty bytes on some toolchains and
-        // to nothing on others, so the byte length alone does not distinguish the
-        // two.
-        let is_builtin_main = |src: Option<String>| {
-            matches!(
-                src.as_deref(),
-                Some("default_vert.hlsl") | Some("default_frag.hlsl") | Some("default.metal")
-            )
-        };
-        let declares_engine_default = |shader: &Shader| {
-            is_builtin_main(shader.vertex.current_platform_source())
-                && is_builtin_main(shader.fragment.current_platform_source())
-        };
-
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
         for (bucket, shader) in world_shaders.iter().enumerate() {
-            let is_engine_default = declares_engine_default(shader);
             let locator = match &shader.locator {
                 Some(l) => l.clone(),
                 None => {
@@ -1456,11 +1438,9 @@ impl GraphicsSystem {
                         deferred_sources.push(crate::gfx::streaming::shader::DeferredBucket {
                             bucket: bucket as u32,
                             source,
-                            is_engine_default,
                         });
                         locators.push(locator);
                         shaders.push(DecodedShaderBytes {
-                            is_engine_default,
                             deferred: true,
                             ..Default::default()
                         });
@@ -1507,7 +1487,6 @@ impl GraphicsSystem {
                 vert: stage_bytes(ShaderKind::Vertex),
                 frag: stage_bytes(ShaderKind::Fragment),
                 vert_instanced: stage_bytes(ShaderKind::VertexInstanced),
-                is_engine_default,
                 deferred: false,
             });
         }
@@ -1529,7 +1508,7 @@ impl GraphicsSystem {
         // non-platform-compatible extension) carry no file to watch and are
         // skipped; the inline GLSL path keeps rendering at whatever was baked
         // in. Material-referenced shaders past entry 0 reload via `cn build`.
-        let default_shader = &world_shaders[0];
+        let world_default = &world_shaders[0];
         let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
         if crate::app::dev_flags::enabled() {
             let mut capture = |stage_opt: Option<&StageSource>, kind: ShaderKind| {
@@ -1539,15 +1518,6 @@ impl GraphicsSystem {
                 let Some(raw) = stage.current_platform_source() else {
                     return;
                 };
-                // Engine-bundled built-ins are served from `include_str!`-baked
-                // source by `concinnity_cook::shader::compile_shader`, not from
-                // disk, and a separate watcher in `crate::metal::hot_reload`
-                // already covers them via `src/metal/shaders/`. Skip them
-                // here so the asset watcher does not redundantly subscribe to
-                // a path it cannot meaningfully reload.
-                if crate::build::shader::builtin_shader_source(&raw).is_some() {
-                    return;
-                }
                 let resolved = super::hot_reload_sources::resolve_runtime_source_path(&raw);
                 shader_stage_source_map.entries.push(
                     super::hot_reload_sources::ShaderStageSourceEntry {
@@ -1556,16 +1526,16 @@ impl GraphicsSystem {
                     },
                 );
             };
-            capture(Some(&default_shader.vertex), ShaderKind::Vertex);
-            capture(Some(&default_shader.fragment), ShaderKind::Fragment);
+            capture(Some(&world_default.vertex), ShaderKind::Vertex);
+            capture(Some(&world_default.fragment), ShaderKind::Fragment);
             capture(
-                default_shader.vertex_instanced.as_ref(),
+                world_default.vertex_instanced.as_ref(),
                 ShaderKind::VertexInstanced,
             );
         }
 
         // The shadow shader is engine-internal now (compiled from
-        // `shadow_map.metal`), so there is no per-world shadow payload. The
+        // `shadow.metal`), so there is no per-world shadow payload. The
         // DX / Vulkan constructors still take a shadow byte slice pending their
         // own internal-shadow migration; Metal ignores it.
         let shadow_bytes: Vec<u8> = Vec::new();
@@ -2732,7 +2702,6 @@ impl GraphicsSystem {
                 .map(|s| ShaderBytes {
                     vert: &s.vert,
                     frag: &s.frag,
-                    main_is_engine_default: s.is_engine_default,
                     shadow: &shadow_bytes,
                     vert_instanced: &s.vert_instanced,
                     deferred: s.deferred,

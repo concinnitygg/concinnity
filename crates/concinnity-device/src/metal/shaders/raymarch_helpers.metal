@@ -298,7 +298,7 @@ inline float3 shadeAmbient(SdfSurface s, float3 normal) {
 }
 
 // CSM cascade-shadow PCF - mirrors `shadow_factor_cascaded` in
-// `src/build/shaders/default.metal`. Identical math so raymarched
+// `metal/shaders/main.metal`. Identical math so raymarched
 // surfaces receive shadows that match rasterised geometry exactly.
 
 inline float raymarchHashRotation(float2 p) {
@@ -361,7 +361,7 @@ inline float sampleSunShadow(
     return sum / SAMPLES;
 }
 
-// IBL - mirrors the ambient term in `default.metal::shade_surface`.
+// IBL - mirrors the ambient term in `main.metal::shade_surface`.
 // Karis split-sum approximation for specular reflection; irradiance cube
 // for diffuse. The same `env_brdf_approx` fit + Fresnel Schlick the Main
 // pass uses, so raymarched surfaces light up identically under the same

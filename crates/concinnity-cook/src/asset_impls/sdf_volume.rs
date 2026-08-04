@@ -106,23 +106,18 @@ impl crate::asset::BuildAsset for SdfVolume {
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> crate::asset::SourceFiles {
-        use crate::asset::{SourceFiles, SourceInput};
+        use crate::asset::SourceFiles;
         let Some(raw) = current_platform_source_arg(args) else {
             return SourceFiles::Only(Vec::new());
         };
-        SourceFiles::Only(
-            resolve_source_path(&raw, ctx)
-                .map(SourceInput::Path)
-                .into_iter()
-                .collect(),
-        )
+        SourceFiles::Only(resolve_source_path(&raw, ctx).into_iter().collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset::{BuildAsset, SourceFiles, SourceInput};
+    use crate::asset::{BuildAsset, SourceFiles};
 
     // A `.metal` source is the one the macOS build selects; on the other
     // backends the same shape resolves through their own extension.
@@ -233,7 +228,7 @@ mod tests {
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(
             SdfVolume::source_files(&args(&raw), &ctx(None)),
-            SourceFiles::Only(vec![SourceInput::Path(raw)])
+            SourceFiles::Only(vec![raw])
         );
         // Nothing declared and nothing resolvable both report an empty set.
         assert_eq!(

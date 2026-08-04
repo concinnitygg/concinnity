@@ -55,8 +55,8 @@ fn record_if_overridden(
 }
 
 // Dispatch a companion lookup for one asset by its normalized type name.
-fn companions_for_type(asset_type: &str, world: &[serde_json::Value]) -> Vec<CompanionSpec> {
-    companions_for(&type_norm_str(asset_type), world)
+fn companions_for_type(asset_type: &str) -> Vec<CompanionSpec> {
+    companions_for(&type_norm_str(asset_type))
 }
 
 // Pixel size of the auto-injected default font. Deliberately larger than a
@@ -135,7 +135,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
             let Some(t) = value.get("type").and_then(|s| s.as_str()) else {
                 continue;
             };
-            candidates.extend(companions_for_type(t, assets));
+            candidates.extend(companions_for_type(t));
         }
 
         // Apply: skip a spec whose asset_type already exists in the
@@ -331,35 +331,6 @@ mod tests {
         inject(&mut assets);
         let label = assets.iter().find(|v| type_norm(v) == "textlabel").unwrap();
         assert_eq!(label["args"]["font"].as_str().unwrap(), "myfont");
-    }
-
-    #[test]
-    fn graphics_config_injects_default_shader() {
-        // TextLabel injects a GraphicsConfig, which in turn injects the
-        // default Shader with its vertex + fragment stages.
-        let mut assets =
-            vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
-        inject(&mut assets);
-        let shader = assets
-            .iter()
-            .find(|v| type_norm(v) == "shader")
-            .expect("default Shader injected");
-        assert!(shader["args"]["vertex"].is_object());
-        assert!(shader["args"]["fragment"].is_object());
-    }
-
-    #[test]
-    fn does_not_inject_a_shader_when_one_declared() {
-        let mut assets = vec![
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
-            serde_json::json!({
-                "name":"custom","type":"Shader",
-                "args":{"vertex":{"source":"custom.metal"},"fragment":{"source":"custom.metal"}}
-            }),
-        ];
-        inject(&mut assets);
-        let shader_count = assets.iter().filter(|v| type_norm(v) == "shader").count();
-        assert_eq!(shader_count, 1);
     }
 
     #[test]

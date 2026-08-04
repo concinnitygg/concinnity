@@ -130,9 +130,7 @@ fn reflect_stage(
         // A fragment pipeline needs a vertex function for its `[[stage_in]]` to
         // link; pair with the engine's built-in `vertex_main`, exactly what the
         // fragment runs against at draw time.
-        let builtin_src = crate::build::shader::builtin_shader_source("default.metal")
-            .ok_or("built-in default.metal source unavailable")?;
-        let builtin_lib = compile_library(device, builtin_src)?;
+        let builtin_lib = super::pipeline::shader_library(device, false, "main.metal")?;
         let vert_fn = function(&builtin_lib, "vertex_main")?;
         desc.setVertexFunction(Some(&vert_fn));
         desc.setFragmentFunction(Some(&entry_fn));

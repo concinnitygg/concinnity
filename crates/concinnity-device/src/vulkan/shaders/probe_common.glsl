@@ -1,7 +1,7 @@
 // probe_common.glsl
 //
 // Shared reflection-probe sampling for the Vulkan forward shader (later: the SSR
-// / RT / glass paths). Mirrors directx/shaders/probe_common.hlsl + default.metal's
+// / RT / glass paths). Mirrors directx/shaders/probe_common.hlsl + main.metal's
 // sample_probe_radiance + probe_set_specular (reflection_probes.md sections 4 + 6):
 // a box-parallax cube sample blended across every probe whose influence box covers
 // the surface (partition of unity), falling back to the nearest probe by capture

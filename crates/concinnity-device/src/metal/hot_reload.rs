@@ -341,7 +341,7 @@ impl MtlContext {
         );
 
         // Shadow pass shaders are engine-internal (compiled from
-        // `shadow_map.metal`), so they rebuild here alongside the other
+        // `shadow.metal`), so they rebuild here alongside the other
         // built-ins rather than in `update_world_shader_pipelines`. The static
         // shadow pipeline shares the 56-byte static layout; the skinned one
         // rides the 80-byte skinned layout.
@@ -360,7 +360,7 @@ impl MtlContext {
 
         // GPU-driven cascaded-shadow pipelines: the frustum-only
         // shadow cull kernel (from cull.metal) + the depth-only bindless shadow
-        // render pipeline (from shadow_map.metal). Both engine-internal, so they
+        // render pipeline (from shadow.metal). Both engine-internal, so they
         // rebuild here. Gated on the live shadow-bindless path.
         let shadow_cull = rebuild_if_live!(
             self.cull.shadow_pipeline.is_some(),
@@ -541,12 +541,18 @@ impl MtlContext {
                     .to_string()
             })?;
             // `has_clusters = true` forces the build path (the builder
-            // short-circuits on `empty bytes || !has_clusters`).
-            let ps =
-                build_instanced_pipeline(&self.device, &vert_desc, inst_bytes, frag_bytes, true)?
-                    .ok_or_else(|| {
-                    "build_instanced_pipeline returned None on a forced rebuild".to_string()
-                })?;
+            // short-circuits on `!has_clusters`).
+            let ps = build_instanced_pipeline(
+                &self.device,
+                &vert_desc,
+                inst_bytes,
+                frag_bytes,
+                true,
+                true,
+            )?
+            .ok_or_else(|| {
+                "build_instanced_pipeline returned None on a forced rebuild".to_string()
+            })?;
             Some(ps)
         } else {
             None
@@ -569,6 +575,7 @@ impl MtlContext {
                 vdesc,
                 vert_bytes,
                 frag_bytes,
+                true,
             )?)
         } else {
             None

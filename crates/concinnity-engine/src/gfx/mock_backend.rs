@@ -53,6 +53,10 @@ pub(crate) struct InitSnapshot {
     pub fog: bool,
     pub taa_enabled: bool,
     pub ssao_on: bool,
+    // Per shader bucket, the compiled (vertex, fragment) byte counts. A bucket
+    // of (0, 0) is a world that declared no Shader for it, which every backend
+    // reads as "use the engine's own main-pass program".
+    pub shader_stage_lens: Vec<(usize, usize)>,
 }
 
 // One recorded backend call with the parameters tests assert on.
@@ -214,6 +218,11 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
     let mut s = state.lock().unwrap();
     s.next_slot = init.scene.draw_objects.len();
     s.init = Some(InitSnapshot {
+        shader_stage_lens: init
+            .shaders
+            .iter()
+            .map(|sh| (sh.vert.len(), sh.frag.len()))
+            .collect(),
         window_width: init.window.width,
         window_height: init.window.height,
         window_title: init.window.title.clone(),

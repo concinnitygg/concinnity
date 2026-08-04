@@ -81,10 +81,8 @@ impl Ctx {
 }
 
 pub(crate) struct HlslProgram {
-    // File name under `src/directx/shaders/` for the `cn debug` disk-first
-    // resolve; None for sources embedded from outside that directory (the
-    // cook-owned BUILTIN_* defaults), which always compile the embedded text.
-    pub file: Option<&'static str>,
+    // File name under `src/directx/shaders/` for the `cn debug` disk-first resolve.
+    pub file: &'static str,
     pub embedded: &'static str,
     pub entry: &'static str,
     pub target: &'static str,
@@ -94,10 +92,7 @@ pub(crate) struct HlslProgram {
 
 impl HlslProgram {
     fn body(&self, hot_reload: bool) -> Cow<'static, str> {
-        match self.file {
-            Some(name) => shader_source(hot_reload, name, self.embedded),
-            None => Cow::Borrowed(self.embedded),
-        }
+        shader_source(hot_reload, self.file, self.embedded)
     }
 
     // Assemble the exact source text this program compiles under `ctx`.
@@ -181,11 +176,9 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
 }
 
 // Embedded sources shared by several programs.
-const MAIN_VERT_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_VERT_HLSL;
-const MAIN_FRAG_HLSL: &str = concinnity_core::build::shader::BUILTIN_DEFAULT_FRAG_HLSL;
-const MAIN_VERT_INSTANCED_HLSL: &str =
-    concinnity_core::build::shader::BUILTIN_DEFAULT_VERT_INSTANCED_HLSL;
-const SHADOW_VERT_HLSL: &str = concinnity_core::build::shader::BUILTIN_SHADOW_MAP_VERT_HLSL;
+const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
+const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
+const SHADOW_VERT_HLSL: &str = include_str!("shaders/shadow_vert.hlsl");
 const COMPOSITE_VERT_HLSL: &str = include_str!("shaders/composite_vert.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
 const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
@@ -196,13 +189,13 @@ const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
 const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
 const RT_REFLECTIONS_HLSL: &str = include_str!("shaders/rt_reflections.hlsl");
 const GBUFFER_PREPASS_FRAG_HLSL: &str = include_str!("shaders/gbuffer_prepass_frag.hlsl");
-const GBUFFER_PREPASS_VERT_SKINNED_HLSL: &str =
-    include_str!("shaders/gbuffer_prepass_vert_skinned.hlsl");
+const GBUFFER_PREPASS_SKINNED_VERT_HLSL: &str =
+    include_str!("shaders/gbuffer_prepass_skinned_vert.hlsl");
 
 // Declaration shorthand: FXC, single `main` entry, no assembly.
 const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static str) -> HlslProgram {
     HlslProgram {
-        file: Some(file),
+        file,
         embedded,
         entry: "main",
         target,
@@ -229,40 +222,26 @@ pub(super) static TEXT_FRAG: HlslProgram = fxc_main(
     "ps_5_1",
 );
 
-// The cook-owned built-in defaults (no disk-first resolve: their sources are
-// not under src/directx/shaders/).
+// The main geometry pass. Both vertex entry points share main_vert.hlsl.
 pub(super) static MAIN_VERT: HlslProgram = HlslProgram {
-    file: None,
+    file: "main_vert.hlsl",
     embedded: MAIN_VERT_HLSL,
-    entry: "main",
+    entry: "vertex_main",
     target: "vs_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly::Plain,
-};
-pub(super) static MAIN_FRAG: HlslProgram = HlslProgram {
-    file: None,
-    embedded: MAIN_FRAG_HLSL,
-    entry: "main",
-    target: "ps_5_1",
     compiler: Compiler::Fxc,
     assembly: Assembly::Plain,
 };
 pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
-    file: None,
-    embedded: MAIN_VERT_INSTANCED_HLSL,
-    entry: "main",
+    file: "main_vert.hlsl",
+    embedded: MAIN_VERT_HLSL,
+    entry: "vertex_main_instanced",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
     assembly: Assembly::Plain,
 };
-pub(super) static SHADOW_VERT: HlslProgram = HlslProgram {
-    file: None,
-    embedded: SHADOW_VERT_HLSL,
-    entry: "main",
-    target: "vs_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly::Plain,
-};
+pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_HLSL, "ps_5_1");
+pub(super) static SHADOW_VERT: HlslProgram =
+    fxc_main("shadow_vert.hlsl", SHADOW_VERT_HLSL, "vs_5_1");
 
 pub(super) static MAIN_BINDLESS_VERT: HlslProgram = fxc_main(
     "main_bindless_vert.hlsl",
@@ -270,7 +249,7 @@ pub(super) static MAIN_BINDLESS_VERT: HlslProgram = fxc_main(
     "vs_5_1",
 );
 pub(super) static MAIN_BINDLESS_FRAG: HlslProgram = HlslProgram {
-    file: Some("main_bindless_frag.hlsl"),
+    file: "main_bindless_frag.hlsl",
     embedded: include_str!("shaders/main_bindless_frag.hlsl"),
     entry: "main",
     target: "ps_5_1",
@@ -401,7 +380,7 @@ pub(super) static PARTICLE_FRAG: HlslProgram = fxc_main(
 );
 
 const GLASS_DECL: HlslProgram = HlslProgram {
-    file: Some("glass.hlsl"),
+    file: "glass.hlsl",
     embedded: GLASS_HLSL,
     entry: "vs_main",
     target: "vs_5_1",
@@ -421,13 +400,13 @@ pub(super) static GBUFFER_PREPASS_VERT: HlslProgram = fxc_main(
     "vs_5_1",
 );
 pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: HlslProgram = fxc_main(
-    "gbuffer_prepass_vert_instanced.hlsl",
-    include_str!("shaders/gbuffer_prepass_vert_instanced.hlsl"),
+    "gbuffer_prepass_instanced_vert.hlsl",
+    include_str!("shaders/gbuffer_prepass_instanced_vert.hlsl"),
     "vs_5_1",
 );
 pub(super) static GBUFFER_PREPASS_VERT_SKINNED: HlslProgram = fxc_main(
-    "gbuffer_prepass_vert_skinned.hlsl",
-    GBUFFER_PREPASS_VERT_SKINNED_HLSL,
+    "gbuffer_prepass_skinned_vert.hlsl",
+    GBUFFER_PREPASS_SKINNED_VERT_HLSL,
     "vs_5_1",
 );
 pub(super) static GBUFFER_PREPASS_FRAG: HlslProgram = fxc_main(
@@ -484,7 +463,7 @@ pub(super) static SSR_FULLSCREEN_VERT: HlslProgram = fxc_main(
     "vs_5_1",
 );
 pub(super) static SSR_RESOLVE_FRAG: HlslProgram = HlslProgram {
-    file: Some("ssr_resolve_frag.hlsl"),
+    file: "ssr_resolve_frag.hlsl",
     embedded: include_str!("shaders/ssr_resolve_frag.hlsl"),
     entry: "main",
     target: "ps_5_1",
@@ -515,7 +494,7 @@ pub(super) static TAA_FRAG: HlslProgram = fxc_main(
 );
 
 const REFLECTION_COMPOSITE_DECL: HlslProgram = HlslProgram {
-    file: Some("reflection_composite.hlsl"),
+    file: "reflection_composite.hlsl",
     embedded: REFLECTION_COMPOSITE_HLSL,
     entry: "vs_main",
     target: "vs_5_1",
@@ -537,7 +516,7 @@ pub(super) static REFLECTION_COMPOSITE_FRAG: HlslProgram = HlslProgram {
 // SM 6.5 programs (DXC): hardware ray-traced reflections, RT glass, and the
 // RT skinned-vertex refit kernel.
 const RT_REFLECTIONS_DECL: HlslProgram = HlslProgram {
-    file: Some("rt_reflections.hlsl"),
+    file: "rt_reflections.hlsl",
     embedded: RT_REFLECTIONS_HLSL,
     entry: "rt_fullscreen_vert",
     target: "vs_6_5",
@@ -557,7 +536,7 @@ pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: HlslProgram = HlslProgram {
 };
 
 const GLASS_RT_DECL: HlslProgram = HlslProgram {
-    file: Some("glass_rt.hlsl"),
+    file: "glass_rt.hlsl",
     embedded: GLASS_RT_HLSL,
     entry: "vs_main",
     target: "vs_6_5",
@@ -577,7 +556,7 @@ pub(super) static GLASS_RT_FRAG_TEXTURED: HlslProgram = HlslProgram {
 };
 
 pub(super) static RT_SKIN: HlslProgram = HlslProgram {
-    file: Some("rt_skin.hlsl"),
+    file: "rt_skin.hlsl",
     embedded: include_str!("shaders/rt_skin.hlsl"),
     entry: "rt_skin",
     target: "cs_6_5",

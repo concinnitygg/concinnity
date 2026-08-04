@@ -3,7 +3,7 @@
 use crate::asset::BuildCtx;
 use concinnity_core::assets::shader::platform_key;
 use concinnity_core::assets::{Shader, ShaderKind, ShaderPayload};
-use concinnity_world::source_args::{declares_only_builtin_sources, resolve_source_from_args};
+use concinnity_world::source_args::resolve_source_from_args;
 
 // Resolve a raw per-platform source string to the on-disk path the build will
 // read. A bare filename is looked up recursively under `.concinnity/assets/`
@@ -70,17 +70,10 @@ fn compile_stage(
     // Vulkan backend ships inline GLSL for every required stage and
     // compiles it whenever the payload carries no bytes for that stage.
     if resolved.is_none() && platform_key() == "glsl" {
-        // The bundled default shader declares only metal/hlsl built-ins and
-        // renders via the backend's inline GLSL by design, so stay quiet for
-        // it. Only a custom stage that forgot its glsl variant (some
-        // non-built-in source) is worth flagging -- it won't render as
-        // authored on Vulkan.
-        if !declares_only_builtin_sources(stage_args) {
-            tracing::warn!(
-                "Asset '{}': no shader source for platform \"glsl\", falling back to built-in GLSL",
-                ctx.name
-            );
-        }
+        tracing::warn!(
+            "Asset '{}': no shader source for platform \"glsl\", falling back to built-in GLSL",
+            ctx.name
+        );
         return Ok(None);
     }
 
@@ -146,7 +139,7 @@ impl crate::asset::BuildAsset for Shader {
         args: &serde_json::Value,
         ctx: &crate::asset::BuildCtx<'_>,
     ) -> crate::asset::SourceFiles {
-        use crate::asset::{SourceFiles, SourceInput};
+        use crate::asset::SourceFiles;
         let mut inputs = Vec::new();
         for (field, _) in STAGES {
             let Some(stage_args) = args.get(field) else {
@@ -155,16 +148,9 @@ impl crate::asset::BuildAsset for Shader {
             let Some(raw) = resolve_source_from_args(stage_args) else {
                 continue;
             };
-            // A built-in has no filesystem path; its embedded source is hashed
-            // so editing a shipped shader and rebuilding the binary busts the
-            // entry.
-            if concinnity_core::build::shader::builtin_shader_source(&raw).is_some() {
-                inputs.push(SourceInput::Builtin(raw));
-                continue;
-            }
             let path = resolve_source_path_for(&raw, ctx);
             if std::path::Path::new(&path).exists() {
-                inputs.push(SourceInput::Path(path));
+                inputs.push(path);
             }
         }
         SourceFiles::Only(inputs)
@@ -174,7 +160,7 @@ impl crate::asset::BuildAsset for Shader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset::{BuildAsset, SourceFiles, SourceInput};
+    use crate::asset::{BuildAsset, SourceFiles};
 
     fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
         BuildCtx {
@@ -253,19 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn source_files_reports_each_stage_and_builtins_by_embedded_source() {
-        // Built-ins have no filesystem path, so they are reported by name and
-        // hashed from the source embedded in the binary; one entry per stage.
-        assert_eq!(
-            Shader::source_files(&args("default.metal", "default.metal"), &ctx(None)),
-            SourceFiles::Only(vec![
-                SourceInput::Builtin("default.metal".to_string()),
-                SourceInput::Builtin("default.metal".to_string()),
-            ])
-        );
-    }
-
-    #[test]
     fn source_files_reports_a_user_shader_only_once_it_exists_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("user.metal");
@@ -278,7 +251,7 @@ mod tests {
         std::fs::write(&path, "// msl").unwrap();
         assert_eq!(
             Shader::source_files(&args(&raw, &raw), &ctx(None)),
-            SourceFiles::Only(vec![SourceInput::Path(raw.clone()), SourceInput::Path(raw)])
+            SourceFiles::Only(vec![raw.clone(), raw])
         );
         // A shader declaring no stage sources for this backend hashes nothing.
         assert_eq!(

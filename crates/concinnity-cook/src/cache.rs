@@ -13,7 +13,7 @@
 // error all fall back to a normal compile, so the cache can never break or
 // corrupt a build.
 
-use crate::asset::{BuildCtx, CacheInputs, SourceFiles, SourceInput};
+use crate::asset::{BuildCtx, CacheInputs, SourceFiles};
 use crate::file_stamp::FileStamp;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -113,32 +113,15 @@ pub fn payload_key(
             }
             files
         }
-        SourceFiles::Only(inputs) => inputs.iter().filter_map(hash_source_input).collect(),
+        SourceFiles::Only(paths) => paths
+            .iter()
+            .filter_map(|p| file_content_hash(p).map(|h| (p.clone(), h)))
+            .collect(),
     };
     let target = inputs
         .target_dependent
         .then(|| concinnity_core::build::Platform::current().key());
     key_from_parts(discriminant, args, &files, target)
-}
-
-// Hash one declared input into the (key, content-hash) pair `key_from_parts`
-// consumes. Mirrors how `referenced_files` treats each kind, so an asset that
-// reports its inputs explicitly hashes them the same way the generic walk
-// would have.
-fn hash_source_input(input: &SourceInput) -> Option<(String, [u8; 32])> {
-    match input {
-        SourceInput::Path(path) => file_content_hash(path).map(|h| (path.clone(), h)),
-        SourceInput::Builtin(name) => {
-            let src = concinnity_core::build::shader::builtin_shader_source(name)?;
-            let bare = Path::new(name)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(name);
-            let mut h = Sha256::new();
-            h.update(src.as_bytes());
-            Some((format!("builtin:{bare}"), h.finalize().into()))
-        }
-    }
 }
 
 // Bump when the SceneImport expansion output shape changes (a new generated
@@ -239,22 +222,12 @@ fn key_from_parts(
 // under `.concinnity/assets/`, a relative or absolute path is used directly,
 // and `artifacts_dir` is consulted when set. Strings that do not resolve to a
 // file (asset names, generator keywords, colors) contribute nothing.
-//
-// A string that names a built-in shader is a special case: the source is
-// embedded in the binary rather than living at a filesystem path, and built-ins
-// always win over a disk copy at compile time (see shader::read_shader_source).
-// Such a string is hashed from its embedded source under a `builtin:` key so
-// that editing a shipped shader and rebuilding the binary busts the cache.
 fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(String, [u8; 32])> {
     let mut strings = Vec::new();
     collect_strings(args, &mut strings);
 
     let mut out = Vec::new();
     for s in strings {
-        if let Some(hashed) = hash_source_input(&SourceInput::Builtin(s.clone())) {
-            out.push(hashed);
-            continue;
-        }
         let Some(path) = resolve_source(&s, ctx) else {
             continue;
         };
@@ -472,51 +445,6 @@ mod tests {
         assert!(referenced_files(&json!({"generator": "box"}), &ctx()).is_empty());
     }
 
-    #[test]
-    fn builtin_shader_content_is_folded_into_key() {
-        use concinnity_core::build::shader::builtin_shader_source;
-
-        // A built-in shader referenced by bare filename has no filesystem path,
-        // but its embedded source must still contribute to the key.
-        let args = json!({ "sources": { "metal": "default.metal" } });
-        let files = referenced_files(&args, &ctx());
-
-        let src = builtin_shader_source("default.metal").expect("default.metal is built in");
-        let mut h = Sha256::new();
-        h.update(src.as_bytes());
-        let expected: [u8; 32] = h.finalize().into();
-        assert_eq!(
-            files,
-            vec![("builtin:default.metal".to_string(), expected)],
-            "a built-in shader reference must contribute its embedded source hash",
-        );
-
-        // The key is a function of that hash, so any edit to the shader source
-        // changes the key. A perturbed hash stands in for an edited shader.
-        let real_key = key_from_parts(5, &args, &files, None);
-        let edited = vec![("builtin:default.metal".to_string(), [0u8; 32])];
-        assert_ne!(
-            real_key,
-            key_from_parts(5, &args, &edited, None),
-            "editing a built-in shader source must change the key",
-        );
-    }
-
-    // An asset reporting `Only` must hash a built-in exactly as the generic
-    // walk would, so editing a shipped shader still busts its entry.
-    #[test]
-    fn only_inputs_hash_a_builtin_like_the_generic_walk() {
-        let name = "default.metal";
-        let walked = referenced_files(&json!(name), &ctx());
-        let reported = hash_source_input(&SourceInput::Builtin(name.to_string()))
-            .expect("default.metal is built in");
-        assert_eq!(walked, vec![reported]);
-        assert!(
-            hash_source_input(&SourceInput::Builtin("not_a_builtin.metal".into())).is_none(),
-            "an unregistered name contributes nothing"
-        );
-    }
-
     // `Only` replaces the generic args walk rather than adding to it: a path
     // sitting in the args that the asset does not report is not hashed. This
     // is what keeps an edit to the unused backend's shader from invalidating
@@ -534,7 +462,7 @@ mod tests {
         }});
         let only = |inputs: &CacheInputs| payload_key(9, &args, &ctx(), inputs);
         let reported = CacheInputs {
-            sources: SourceFiles::Only(vec![SourceInput::Path(used.to_str().unwrap().to_string())]),
+            sources: SourceFiles::Only(vec![used.to_str().unwrap().to_string()]),
             target_dependent: false,
         };
 
@@ -556,16 +484,6 @@ mod tests {
         // The same args under the generic walk do pick the unused file up:
         // `Only` is what narrows the input set, not the args themselves.
         assert_eq!(referenced_files(&args, &ctx()).len(), 2);
-    }
-
-    #[test]
-    fn builtin_shader_directory_prefix_resolves_to_bare_key() {
-        // Built-ins match by bare filename, so a leading directory must not
-        // produce a distinct key entry.
-        let bare = referenced_files(&json!("default.metal"), &ctx());
-        let prefixed = referenced_files(&json!("default_shader/default.metal"), &ctx());
-        assert_eq!(bare, prefixed);
-        assert_eq!(bare.len(), 1);
     }
 
     #[test]

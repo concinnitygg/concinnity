@@ -75,32 +75,34 @@ impl StageSource {
     }
 }
 
-/// Declares a complete shader program: the vertex and fragment stages every
-/// rendered world needs, plus the optional GPU-instanced vertex stage.
+/// Declares a custom shader program: the vertex and fragment stages, plus the
+/// optional GPU-instanced vertex stage.
 ///
-/// **A rendering world needs at least one Shader.** When a world declares
-/// none, the bundled default set is injected automatically. The shadow pass is
-/// engine-internal (no Shader stage of its own); enable or size it with
-/// `shadow_map_size` in [GraphicsConfig](#graphicsconfig).
-///
-/// **Bundled sources:**
-///
-/// - `"default.metal"` / `"default_vert.hlsl"` / `"default_frag.hlsl"`: standard diffuse/specular lighting.
+/// **A Shader is entirely optional.** The engine ships its own main-pass
+/// program and uses it for every draw a Shader does not claim, so a world that
+/// wants standard lighting declares no Shader at all. Declare one only to
+/// replace that program with your own. The shadow pass is engine-internal (no
+/// Shader stage of its own); enable or size it with `shadow_map_size` in
+/// [GraphicsConfig](#graphicsconfig).
 ///
 /// The engine-internal shadow map covers a ±20 m world-space region centred at
 /// the origin with 80 m depth. For larger scenes, increase `shadow_map_size` in
 /// [GraphicsConfig](#graphicsconfig) to maintain resolution.
 ///
 /// ```jsonl
-/// // Multi-platform standard scene:
+/// // Multi-platform:
 /// {"name":"scene_shader","type":"Shader","args":{
-///   "vertex":{"sources":{"metal":"default.metal","hlsl":"default_vert.hlsl"}},
-///   "fragment":{"sources":{"metal":"default.metal","hlsl":"default_frag.hlsl"}}}}
+///   "vertex":{"sources":{"metal":"my.metal","hlsl":"my_vert.hlsl","glsl":"my.vert"}},
+///   "fragment":{"sources":{"metal":"my.metal","hlsl":"my_frag.hlsl","glsl":"my.frag"}}}}
 ///
 /// // Single-platform (macOS only):
 /// {"name":"scene_shader","type":"Shader","args":{
 ///   "vertex":{"source":"my.metal"},"fragment":{"source":"my.metal"}}}
 /// ```
+///
+/// A stage that resolves no source for the running backend falls back to the
+/// engine's own program for that stage, so a Shader may cover only the
+/// platforms it has sources for.
 ///
 /// # More than one Shader
 ///
@@ -110,7 +112,7 @@ impl StageSource {
 ///
 /// ```jsonl
 /// {"name":"scene_shader","type":"Shader","args":{
-///   "vertex":{"source":"default.metal"},"fragment":{"source":"default.metal"}}}
+///   "vertex":{"source":"scene.metal"},"fragment":{"source":"scene.metal"}}}
 /// {"name":"water_shader","type":"Shader","args":{
 ///   "vertex":{"source":"water.metal"},"fragment":{"source":"water.metal"}}}
 /// {"name":"pond_mat","type":"Material","args":{"shader":"water_shader"}}
@@ -129,7 +131,7 @@ impl StageSource {
 ///   A Material naming a Shader cannot be used by an
 ///   [InstancedProp](#instancedprop), a [SkinnedMesh](#skinnedmesh), or a
 ///   [VoxelWorld](#voxelworld); give those a Material without one.
-/// - **At most 8 Shaders**, the default included.
+/// - **At most 8 Shaders**, the world default included.
 ///
 /// Planar reflections are the one case with no build-time signal: a surface
 /// reflected in a mirror is drawn with the world default Shader regardless of
@@ -138,10 +140,6 @@ impl StageSource {
 /// A non-default Shader's stages must be written against the engine's **bindless**
 /// binding layout, not the per-draw one: the material, transform, and texture
 /// indices come from the per-frame object buffer rather than per-draw constants.
-/// A Shader that names the engine's own built-in sources (`default.metal`, or
-/// `default_vert.hlsl` + `default_frag.hlsl`) is understood as "render this
-/// material with the engine default program" and is wired to the engine's
-/// bindless program, whichever backend is in use.
 ///
 /// A Shader referenced only by materials belonging to one [Scene](#scene) is
 /// owned by that scene: its pipeline is built when the scene loads (behind the
@@ -185,7 +183,7 @@ impl StageSource {
 ///     float4x4 light_vp;
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Shader {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
@@ -210,24 +208,6 @@ impl Shader {
             ShaderKind::Vertex => Some(&self.vertex),
             ShaderKind::Fragment => Some(&self.fragment),
             ShaderKind::VertexInstanced => self.vertex_instanced.as_ref(),
-        }
-    }
-}
-
-impl Default for Shader {
-    fn default() -> Self {
-        Self {
-            asset_id: AssetId::default(),
-            vertex: StageSource::per_platform([
-                ("metal", "default.metal"),
-                ("hlsl", "default_vert.hlsl"),
-            ]),
-            fragment: StageSource::per_platform([
-                ("metal", "default.metal"),
-                ("hlsl", "default_frag.hlsl"),
-            ]),
-            vertex_instanced: None,
-            locator: None,
         }
     }
 }
@@ -276,23 +256,6 @@ mod tests {
         assert_eq!(decoded.stage(ShaderKind::Vertex), Some(&[1u8, 2, 3][..]));
         assert_eq!(decoded.stage(ShaderKind::Fragment), Some(&[4u8, 5][..]));
         assert_eq!(decoded.stage(ShaderKind::VertexInstanced), None);
-    }
-
-    #[test]
-    fn default_declares_the_bundled_set() {
-        let s = Shader::default();
-        let vert = s.vertex.sources.as_ref().expect("vertex sources");
-        assert_eq!(vert.get("metal").map(String::as_str), Some("default.metal"));
-        assert_eq!(
-            vert.get("hlsl").map(String::as_str),
-            Some("default_vert.hlsl")
-        );
-        let frag = s.fragment.sources.as_ref().expect("fragment sources");
-        assert_eq!(
-            frag.get("hlsl").map(String::as_str),
-            Some("default_frag.hlsl")
-        );
-        assert!(s.vertex_instanced.is_none());
     }
 
     #[test]

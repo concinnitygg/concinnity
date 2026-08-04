@@ -1419,7 +1419,6 @@ mod tests {
             shaders: vec![ShaderBytes {
                 vert: &[],
                 frag: &[],
-                main_is_engine_default: false,
                 shadow: &[],
                 vert_instanced: &[],
                 deferred: false,

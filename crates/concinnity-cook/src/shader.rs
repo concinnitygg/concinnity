@@ -7,17 +7,10 @@
 // runs on build hosts that have none of them. The concrete compilers live in
 // concinnity-shader and are installed here by the binary before a build.
 //
-// Built-in shader sources are embedded into the binary at compile time so the
-// runtime never depends on `assets/` for them. Any caller-supplied source path
-// whose bare filename matches a built-in name resolves to the embedded bytes.
-// Source is handed to the toolchain in memory; no shader source file is written
-// to disk.
-//
-// The built-in source table (`builtin_shader_source` and the embedded const
-// strings) stays in concinnity-core; this crate's compile path resolves bare
-// built-in filenames through `concinnity_core::build::shader::builtin_shader_source`.
-
-use concinnity_core::build::shader::builtin_shader_source;
+// Every source this crate compiles is world-authored: the engine's own pipeline
+// shaders are compiled by the backend, not cooked into a world. Source is read
+// from disk and handed to the toolchain in memory; no shader source file is
+// written back out.
 
 #[derive(Debug, Clone, Default)]
 pub struct ShaderCompileArgs {
@@ -146,14 +139,9 @@ pub fn set_shader_build_validator(validator: Box<dyn ShaderBuildValidator>) {
 }
 
 // Run the registered validator against a just-compiled `.metal` source. A no-op
-// when no validator is registered or when the source is an engine built-in
-// (built-ins are correct by construction and covered by the `*_layout_matches_msl`
-// unit tests; only user-authored sources are checked). A validation error is
-// surfaced as an `InvalidData` build error so `cn build` fails.
+// when no validator is registered. A validation error is surfaced as an
+// `InvalidData` build error so `cn build` fails.
 fn validate_compiled_metal(source: &str, args: &ShaderCompileArgs) -> Result<(), std::io::Error> {
-    if builtin_shader_source(&args.source_path).is_some() {
-        return Ok(());
-    }
     let Some(validator) = SHADER_BUILD_VALIDATOR.get() else {
         return Ok(());
     };
@@ -206,20 +194,14 @@ fn compile_with(
     }
 }
 
-// Resolve a shader source path to its text. A bare filename matching an
-// engine-shipped shader resolves to the source embedded at compile time;
-// built-ins always win, so a stale copy under assets/ can't shadow one. Any
-// other path is read from disk.
+// Resolve a shader source path to its text.
 fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
-    match builtin_shader_source(source_path) {
-        Some(src) => Ok(src.to_string()),
-        None => std::fs::read_to_string(source_path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("Failed to read shader source '{}': {}", source_path, e),
-            )
-        }),
-    }
+    std::fs::read_to_string(source_path).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("Failed to read shader source '{}': {}", source_path, e),
+        )
+    })
 }
 
 // A toolchain for tests whose worlds pull in a Shader but assert on the
@@ -303,9 +285,16 @@ mod dispatch_tests {
             .map(|b| String::from_utf8(b).expect("test toolchain emits utf8"))
     }
 
-    // A `.metal` source that is neither a built-in nor an on-disk file fails in
-    // `read_shader_source` before the toolchain is consulted, so no compiler
-    // runs. The read happens in the dispatch arm, ahead of the unwrap.
+    // Write a shader source into `dir` and return its path.
+    fn source_file(dir: &std::path::Path, name: &str, text: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("write source");
+        path.to_string_lossy().into_owned()
+    }
+
+    // A `.metal` source with no file on disk fails in `read_shader_source`
+    // before the toolchain is consulted, so no compiler runs. The read happens
+    // in the dispatch arm, ahead of the unwrap.
     #[test]
     fn missing_metal_source_fails_at_read_before_any_compile() {
         let err = routed("/no/such/user_frag.metal").unwrap_err();
@@ -316,12 +305,13 @@ mod dispatch_tests {
         );
     }
 
-    // A `.hlsl` source (here a built-in, so the read always succeeds) routes to
-    // the HLSL arm with its resolved text, on every backend.
+    // A `.hlsl` source routes to the HLSL arm with its text, on every backend.
     #[test]
-    fn a_builtin_hlsl_source_routes_to_the_hlsl_arm() {
+    fn an_hlsl_source_routes_to_the_hlsl_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = source_file(dir.path(), "user_frag.hlsl", "// hlsl");
         assert!(
-            routed("default_frag.hlsl").unwrap().starts_with("hlsl:"),
+            routed(&path).unwrap().starts_with("hlsl:"),
             "expected the hlsl arm"
         );
     }
@@ -349,20 +339,24 @@ mod dispatch_tests {
         );
     }
 
-    // A `.metal` source routes to the MSL arm carrying the resolved built-in
+    // A `.metal` source routes to the MSL arm carrying the resolved source
     // text, not the path.
     #[test]
-    fn a_builtin_metal_source_routes_to_the_metal_arm_with_its_text() {
-        let out = routed("default.metal").unwrap();
+    fn a_metal_source_routes_to_the_metal_arm_with_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = source_file(dir.path(), "user.metal", "vertex void main() {}");
+        let out = routed(&path).unwrap();
         assert!(out.starts_with("metal:"), "expected the metal arm: {out}");
-        assert!(out.contains("vertex"), "expected the embedded source text");
+        assert!(out.contains("vertex"), "expected the source text");
     }
 
     // With no toolchain installed, a source that resolves still fails -- and
     // says so as a wiring problem rather than a fault in the world.
     #[test]
     fn without_a_toolchain_a_resolvable_source_reports_the_missing_toolchain() {
-        let err = compile_with(None, &args("user", "default.metal")).unwrap_err();
+        let dir = tempfile::tempdir().unwrap();
+        let path = source_file(dir.path(), "user.metal", "// msl");
+        let err = compile_with(None, &args("user", &path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
         assert!(
             err.to_string()
@@ -378,16 +372,6 @@ mod dispatch_tests {
     fn without_a_toolchain_an_unreadable_source_still_fails_at_read() {
         let err = compile_with(None, &args("user", "/no/such/user_frag.metal")).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-    }
-
-    #[test]
-    fn a_builtin_source_resolves_to_its_embedded_text() {
-        // The built-in wins over the filesystem, so a bare built-in name
-        // resolves even though no such file exists in the working directory.
-        let src = read_shader_source("default.metal").expect("built-in resolves");
-        assert!(src.contains("vertex"), "unexpected built-in source");
-        // A path with directories still resolves by bare filename.
-        assert_eq!(read_shader_source("shaders/default.metal").unwrap(), src);
     }
 
     #[test]
@@ -488,7 +472,7 @@ mod hook_tests {
     }
 
     #[test]
-    fn validator_hook_dispatches_and_skips_builtins() {
+    fn validator_hook_dispatches_per_asset() {
         set_shader_build_validator(Box::new(SentinelValidator));
 
         // A user source for the sentinel asset surfaces the validator's error.
@@ -496,10 +480,6 @@ mod hook_tests {
             .expect_err("sentinel must fail");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("sentinel layout mismatch"));
-
-        // A built-in source is skipped even for the sentinel asset name.
-        validate_compiled_metal("frag source", &args(SENTINEL, "default.metal"))
-            .expect("built-ins are never validated");
 
         // Any other asset passes through cleanly.
         validate_compiled_metal("frag source", &args("ok_asset", "user_frag.metal"))

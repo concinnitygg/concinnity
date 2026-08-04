@@ -289,7 +289,7 @@ fn create_main_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
         // [9] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (matches
-        // default_frag.hlsl; t3 is the instanced/skinned VS matrix SRV in the
+        // main_frag.hlsl; t3 is the instanced/skinned VS matrix SRV in the
         // shared instanced root signature, so the lights sit at t7).
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
@@ -867,7 +867,7 @@ pub(in crate::directx) fn create_main_instanced_root_signature(
         },
         // [10] Root SRV: per-scene StructuredBuffer<GpuLight> at t7 (PS). The VS
         // matrix / joint SRV holds t3, so the local lights sit at t7 to match
-        // default_frag.hlsl and the static main root signature.
+        // main_frag.hlsl and the static main root signature.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -1240,11 +1240,8 @@ pub(in crate::directx) struct BindlessMainShaders {
 // `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
 // program) and names the bucket in error messages.
 //
-// A bucket whose Shader resolves to the engine's built-in default renders the
-// engine's own bindless program: the DXBC the cook produced for
-// `default_{vert,frag}.hlsl` is the LEGACY per-draw shader, which does not match
-// the bindless root signature, so the embedded bindless bytes are substituted --
-// the same substitution bucket 0 makes for a built-in world.
+// Empty `vert` bytes mean the world declared no Shader for this bucket, so the
+// engine's own bindless program renders it.
 pub(in crate::directx) fn build_bucket_pipeline(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
@@ -1254,7 +1251,7 @@ pub(in crate::directx) fn build_bucket_pipeline(
     msaa_samples: u32,
     engine_default: &BindlessMainShaders,
 ) -> Result<ID3D12PipelineState, String> {
-    let (vs, ps) = if shader.main_is_engine_default {
+    let (vs, ps) = if shader.vert.is_empty() {
         (engine_default.vs.as_slice(), engine_default.ps.as_slice())
     } else {
         (shader.vert, shader.frag)

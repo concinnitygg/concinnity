@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn morph_delta_layout_matches_msl() {
         // `MorphDelta` is read through a pointer by the deform passes
-        // (`MorphDelta` in rt_skin.metal, `VsMorphDelta` in default.metal),
+        // (`MorphDelta` in rt_skin.metal, `VsMorphDelta` in main.metal),
         // both declaring two packed_float3 fields at a 24-byte stride.
         use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<MorphDelta>(), 24);

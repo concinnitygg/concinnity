@@ -55,7 +55,7 @@
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
-- [Shader](Shader.md) - Declares a complete shader program: the vertex and fragment stages every rendered world needs, plus the optional GPU-instanced vertex stage.
+- [Shader](Shader.md) - Declares a custom shader program: the vertex and fragment stages, plus the optional GPU-instanced vertex stage.
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.

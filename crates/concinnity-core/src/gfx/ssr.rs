@@ -38,10 +38,10 @@ const THICKNESS_SCALE: f32 = 2.5;
 //   - the SSR resolve gate           (ssr.metal)
 //   - the RT-reflection resolve gate (rt_reflections.metal)
 //   - the roughness blur ramp        (reflection_composite.metal)
-//   - the forward double-count fade  (REFL_RESOLVE_CUT in default.metal)
+//   - the forward double-count fade  (REFL_RESOLVE_CUT in main.metal)
 // All four shaders are compiled offline, so each declares the literal itself
 // and a unit test locks every declaration to this value (the engine shaders in
-// reflection_shaders_lock_shared_roughness_cut, default.metal alongside this
+// reflection_shaders_lock_shared_roughness_cut, main.metal alongside this
 // module). As an MSL `constant` it folds at compile time: sharing it costs
 // nothing at runtime.
 pub const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;

@@ -1,7 +1,7 @@
 // probe_common.hlsl
 //
 // Shared reflection-probe sampling for the DirectX forward / SSR / RT / glass
-// shaders. Mirrors `default.metal`'s `sample_probe_radiance` + `probe_set_specular`
+// shaders. Mirrors `main.metal`'s `sample_probe_radiance` + `probe_set_specular`
 // (reflection_probes.md sections 4 + 6): a box-parallax cube sample blended across
 // every probe whose influence box covers the surface (partition of unity), falling
 // back to the nearest probe when outside all boxes.
@@ -29,7 +29,7 @@
 
 // Cross-fade width (fraction of the smallest box half-extent) over which a probe's
 // weight ramps from 0 (a margin outside its box) to 1 (on the box surface and in).
-// Must match `metal::uniforms` / `default.metal` PROBE_BLEND_MARGIN.
+// Must match `metal::uniforms` / `main.metal` PROBE_BLEND_MARGIN.
 static const float PROBE_BLEND_MARGIN = 0.2;
 
 // One probe's parallax box (matches `directx::probe_uniforms::ProbeUniforms`,

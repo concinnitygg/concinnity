@@ -285,7 +285,6 @@ impl StreamingState {
                     let shader = crate::gfx::backend_init::ShaderBytes {
                         vert: &stages.vert,
                         frag: &stages.frag,
-                        main_is_engine_default: stages.is_engine_default,
                         shadow: &[],
                         vert_instanced: &stages.vert_instanced,
                         // The payload is in hand; this install is what ends the

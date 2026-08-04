@@ -35,7 +35,7 @@ struct SsrParams {
 };
 
 // Reflection-probe set, bound at buffer(1). Layout mirrors `ProbeSet` /
-// `ProbeUniforms` in default.metal (and metal::uniforms): a missed reflection ray
+// `ProbeUniforms` in main.metal (and metal::uniforms): a missed reflection ray
 // falls back to the local scene-captured probe (box-projected) instead of the
 // foreign sky cube, the same source the forward IBL specular term uses. `count`
 // is 0 in worlds with no baked probe, where the resolve keeps the sky fallback.
@@ -64,7 +64,7 @@ static_assert(sizeof(ProbeSet) == 400,
 
 // Box-parallax sample of one probe cube: intersect the world-space reflection ray
 // with the probe's influence box and re-anchor the sample at that hit relative to
-// the capture point, so a static cube tracks the camera. Mirrors default.metal's
+// the capture point, so a static cube tracks the camera. Mirrors main.metal's
 // `sample_probe_radiance`; the `dist > 0` guard keeps a blended secondary box the
 // surface has already left from sampling backward.
 static float3 sample_probe_radiance(
@@ -96,7 +96,7 @@ static float3 sample_probe_radiance(
 // probe's weight is `smoothstep(-margin, margin, sd)` of its signed box distance, so
 // overlapping boxes cross-fade smoothly (no pop at a 3-way overlap line) and a single
 // covering box reduces to one sample. Falls back to the nearest by capture distance
-// where no box covers. Matches default.metal's `probe_set_specular`.
+// where no box covers. Matches main.metal's `probe_set_specular`.
 static float3 probe_set_specular(
     constant ProbeSet                    &set,
     array<texturecube<float>, MAX_PROBES> probes,

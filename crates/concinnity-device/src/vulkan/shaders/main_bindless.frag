@@ -268,11 +268,11 @@ float hash_rotation(vec2 p) {
 // 5x5 hash-rotated PCF of a single cascade via sampler2DArrayShadow. Returns
 // the shadow factor in [0, 1] (1.0 fully lit), or 1.0 when the fragment lies
 // outside this cascade's light frustum. Mirrors `sample_cascade_pcf` in
-// default.metal.
+// main.metal.
 // 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
 // lit), and 1.0 outside the cone's light frustum so an unshadowed region is
 // never darkened. A smaller kernel than the cascade PCF: a spot slice covers
-// far less world area per texel. Mirrors `sample_spot_shadow` in default.metal.
+// far less world area per texel. Mirrors `sample_spot_shadow` in main.metal.
 float sample_spot_shadow(int shadow_index, vec3 world_pos, vec3 normal, vec2 screen_xy) {
     SpotShadowData sd = spot_shadow_buf.spot_shadows[shadow_index];
     // Offsetting along the normal before projecting pushes the sample off
@@ -430,7 +430,7 @@ float sample_cascade_pcf(int cascade, vec3 world_pos, vec2 screen_xy) {
 // camera, so under a hard switch that boundary sweeps across the world as the
 // camera moves and the shadow edge appears to glide. Blending the factor over
 // the band turns the jump into a smooth, world-anchored transition. Mirrors
-// `shadow_factor_cascaded` in default.metal.
+// `shadow_factor_cascaded` in main.metal.
 float shadow_factor_cascaded(vec3 world_pos, float view_depth, vec2 screen_xy) {
     int cascade = 4;
     if      (view_depth < shadow_uni.cascade_splits[0]) cascade = 0;
@@ -619,7 +619,7 @@ void main() {
             vec2 t2 = textureLod(ltc_magnitude, lut_uv, 0.0).xy;
             // The table stores the inverse normalised so its middle entry is 1,
             // packed as (m00, m20, m02, m22). GLSL mat3 takes COLUMNS (as MSL
-            // does), so this matches default.metal rather than the HLSL form.
+            // does), so this matches main.metal rather than the HLSL form.
             mat3 m_inv = mat3(vec3(t1.x, 0.0, t1.y),
                               vec3(0.0,  1.0, 0.0),
                               vec3(t1.z, 0.0, t1.w));

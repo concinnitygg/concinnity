@@ -37,7 +37,7 @@ pub(super) const HDR_SAMPLE_COUNT: u32 = 4;
 // Size of the bindless texture pool the static main pass samples. The pool
 // holds every albedo texture followed by every normal map; `GpuObjectData`
 // carries pool indices into it. Must match `BINDLESS_TEXTURE_COUNT` in
-// `default.metal`. Worlds with more than this many textures fall back to
+// `main.metal`. Worlds with more than this many textures fall back to
 // clamped indices (logged once at init).
 pub(super) const BINDLESS_TEXTURE_COUNT: usize = 1024;
 
@@ -45,7 +45,7 @@ pub(super) const BINDLESS_TEXTURE_COUNT: usize = 1024;
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
 // shader unusable from an indirect command buffer on Apple GPUs, so the
 // texture pool + shadow/IBL maps travel in an argument buffer instead. Must
-// match the `[[buffer(7)]]` on `fragment_main_bindless` in `default.metal`.
+// match the `[[buffer(7)]]` on `fragment_main_bindless` in `main.metal`.
 pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
 
 // Stores the NSView* pointer set by cn_preview_start before world.start() is called.
@@ -147,7 +147,7 @@ pub struct MtlContext {
     // shaders keep the legacy per-draw CPU loop). See [`CullState`].
     pub(super) cull: CullState,
     // Encoder that packs the bindless pass's textures into a per-frame
-    // argument buffer (`BindlessTextures` in `default.metal`). `Some` only
+    // argument buffer (`BindlessTextures` in `main.metal`). `Some` only
     // when `bindless`; the argument buffer itself is rebuilt every frame so
     // streamed texture swaps are picked up and the GPU never reads a buffer
     // the CPU is mid-rewrite. (A main-pass resource, not part of `cull`.)

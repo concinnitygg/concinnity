@@ -330,7 +330,7 @@ float sampleSunShadow(float3 world_pos, float view_depth, float2 screen_xy,
   return result;
 }
 
-// IBL - mirrors the ambient term in src/build/shaders/default_frag.hlsl.
+// IBL - mirrors the ambient term in directx/shaders/main_frag.hlsl.
 
 float2 raymarchEnvBrdfApprox(float NdV, float rough) {
   const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);

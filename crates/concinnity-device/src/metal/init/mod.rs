@@ -64,7 +64,7 @@ impl MtlContext {
     //
     // Main-shader entry points must be named "vertex_main" and
     // "fragment_main"; the shadow pass is engine-internal (compiled from
-    // `shadow_map.metal`) and enabled whenever `shadows.map_size > 0`.
+    // `shadow.metal`) and enabled whenever `shadows.map_size > 0`.
     pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
@@ -236,6 +236,7 @@ impl MtlContext {
             world_shaders[0].vert_instanced,
             world_shaders[0].frag,
             !instanced_clusters.is_empty(),
+            hot_reload,
         )?;
 
         // Material-referenced shaders (ShaderHandle 1..) each get a bindless

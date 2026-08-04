@@ -121,7 +121,7 @@ pub(crate) struct MirrorCullSlot {
 pub(super) const CULL_ICB_BUFFER_INDEX: usize = 4;
 
 // The six texture-pool indices the Metal bindless fragment shader
-// (`fragment_main_bindless`, default.metal) reads for one surface. Albedo,
+// (`fragment_main_bindless`, main.metal) reads for one surface. Albedo,
 // normal, and every optional map share ONE handle-indexed pool (`tex_pool`,
 // [real textures..][flat-normal fallback]), which the shader indexes directly
 // (`tex_pool[obj.normal_index]`), so each index is the texture's own handle --

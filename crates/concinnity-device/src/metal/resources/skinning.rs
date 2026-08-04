@@ -17,7 +17,7 @@ use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::SkinnedDrawObject;
 use crate::metal::context::{HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region};
 use crate::metal::math::IDENTITY4;
-use crate::metal::pipeline::{load_library, ns_str, shader_library};
+use crate::metal::pipeline::{ns_str, shader_library, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
 
 // All skinned-mesh rendering state grouped into one feature unit: the main +
@@ -127,10 +127,11 @@ pub(crate) fn build_skinned_main_pipeline(
     vdesc: &MTLVertexDescriptor,
     vert_lib_bytes: &[u8],
     frag_lib_bytes: &[u8],
+    hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_library = load_library(device, vert_lib_bytes)
+    let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
         .map_err(|e| format!("skinned: failed to load vertex metallib: {}", e))?;
-    let frag_library = load_library(device, frag_lib_bytes)
+    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
         .map_err(|e| format!("skinned: failed to load fragment metallib: {}", e))?;
     let skinned_vert_fn = vert_library
         .newFunctionWithName(&ns_str("vertex_main_skinned"))
@@ -156,7 +157,7 @@ pub(crate) fn build_skinned_main_pipeline(
 }
 
 // Build the skinned shadow pipeline: depth-only, no fragment function, no
-// MSAA, compiled from the engine-internal `shadow_map.metal` source (entry
+// MSAA, compiled from the engine-internal `shadow.metal` source (entry
 // `shadow_vertex_main_skinned`). Mirrors
 // [`crate::metal::init::pipelines::build_shadow_pipeline`] but on the 80-byte
 // skinned vertex layout. Shared by [`MtlContext::upload_skinned`] and the
@@ -166,7 +167,7 @@ pub(crate) fn build_skinned_shadow_pipeline(
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_library = shader_library(device, hot_reload, "shadow_map.metal")?;
+    let shadow_library = shader_library(device, hot_reload, "shadow.metal")?;
     let shadow_fn = shadow_library
         .newFunctionWithName(&ns_str("shadow_vertex_main_skinned"))
         .ok_or("shadow_vertex_main_skinned not found in shadow library")?;
@@ -511,7 +512,7 @@ impl MtlContext {
     // (`vertex_main_skinned`) compiles from the same world vertex/fragment
     // metallibs as the static main pipeline; the skinned shadow shader
     // (`shadow_vertex_main_skinned`) compiles from the engine-internal
-    // `shadow_map.metal` source. With no skinned meshes this is never called
+    // `shadow.metal` source. With no skinned meshes this is never called
     // and every skinned pass is skipped.
     //
     // `_shadow_lib_bytes` is retained for the cross-backend `RenderBackend`
@@ -530,8 +531,13 @@ impl MtlContext {
         }
 
         let vdesc = make_skinned_vertex_descriptor();
-        let skinned_ps =
-            build_skinned_main_pipeline(&self.device, &vdesc, vert_lib_bytes, frag_lib_bytes)?;
+        let skinned_ps = build_skinned_main_pipeline(
+            &self.device,
+            &vdesc,
+            vert_lib_bytes,
+            frag_lib_bytes,
+            self.hot_reload,
+        )?;
 
         // Skinned shadow pipeline: built only when the static shadow pass is
         // active, so a skinned mesh casts a correctly deformed shadow.

@@ -336,7 +336,7 @@ float hash_rotation(float2 p)
 // 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
 // lit), and 1.0 outside the cone's light frustum so an unshadowed region is
 // never darkened. A smaller kernel than the cascade PCF: a spot slice covers
-// far less world area per texel. Mirrors `sample_spot_shadow` in default.metal.
+// far less world area per texel. Mirrors `sample_spot_shadow` in main.metal.
 float sample_spot_shadow(int shadow_index, float3 world_pos, float3 normal,
                          float2 screen_xy)
 {
@@ -376,7 +376,7 @@ float sample_spot_shadow(int shadow_index, float3 world_pos, float3 normal,
 
 // 5x5 hash-rotated PCF of a single cascade. Returns the shadow factor in
 // [0, 1] (1.0 fully lit), or 1.0 when the fragment lies outside this cascade's
-// light frustum. Mirrors `sample_cascade_pcf` in default.metal.
+// light frustum. Mirrors `sample_cascade_pcf` in main.metal.
 float sample_cascade_pcf(uint cascade, float3 world_pos, float2 screen_xy)
 {
     float4 lc = mul(light_vps[cascade], float4(world_pos, 1.0));
@@ -431,7 +431,7 @@ float sample_cascade_pcf(uint cascade, float3 world_pos, float2 screen_xy)
 // ahead of the camera, so under a hard switch that boundary sweeps across the
 // world as the camera moves and the shadow edge appears to glide. Blending the
 // factor over the band turns the jump into a smooth, world-anchored transition.
-// Mirrors `shadow_factor_cascaded` in default.metal.
+// Mirrors `shadow_factor_cascaded` in main.metal.
 float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_xy)
 {
     uint cascade = NUM_SHADOW_CASCADES;
@@ -603,7 +603,7 @@ float4 main(PsIn p) : SV_TARGET
             // The table stores the inverse normalised so its middle entry is 1,
             // packed as (m00, m20, m02, m22). HLSL's float3x3 constructor fills
             // ROWS (MSL/GLSL fill columns), so the component order differs from
-            // default.metal -- see area-lights-dx-vk.md trap 2.
+            // main.metal.
             float3x3 m_inv = float3x3(t1.x, 0.0, t1.z,
                                       0.0,  1.0, 0.0,
                                       t1.y, 0.0, t1.w);

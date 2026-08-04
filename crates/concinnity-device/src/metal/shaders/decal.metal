@@ -67,7 +67,7 @@ fragment float4 decal_fragment(
         discard_fragment();
     }
     // 1.0 is the cleared / "no geometry" sentinel - the main pass left this
-    // pixel empty (sky was painted by default.metal's skybox sentinel and
+    // pixel empty (sky was painted by main.metal's skybox sentinel and
     // writes ~far-plane depth instead). Nothing to project onto.
     float depth = scene_depth.read(pixel);
     if (depth >= 1.0) {
@@ -100,7 +100,7 @@ fragment float4 decal_fragment(
     // Sample the decal texture on local X-Z. UV is in [0, 1].
     float2 uv = local.xz + 0.5;
     // Metal samples with V=0 at the top of the texture, matching the rest of
-    // the engine's textures (default.metal flips V for the same reason).
+    // the engine's textures (main.metal flips V for the same reason).
     uv.y = 1.0 - uv.y;
     float4 tex = decal_tex.sample(samp, uv);
 

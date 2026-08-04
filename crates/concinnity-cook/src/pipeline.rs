@@ -4476,7 +4476,7 @@ mod tests {
     // to a sibling backend's shader leaves this backend's payload cached.
     #[test]
     fn cache_inputs_by_type_covers_the_overriding_wrappers() {
-        use crate::asset::{SourceFiles, SourceInput};
+        use crate::asset::SourceFiles;
         let dir = tempfile::tempdir().expect("tempdir");
         let shader = dir.path().join("blob.metal");
         std::fs::write(&shader, b"x").expect("write shader");
@@ -4488,10 +4488,7 @@ mod tests {
             "fragment_shaders": {"metal": path, "hlsl": path, "glsl": path}
         });
         let sdf = cache_inputs_by_type(ct("SdfVolume"), &sdf_args, &ctx());
-        assert_eq!(
-            sdf.sources,
-            SourceFiles::Only(vec![SourceInput::Path(path.to_string())])
-        );
+        assert_eq!(sdf.sources, SourceFiles::Only(vec![path.to_string()]));
         assert!(!sdf.target_dependent);
         assert_eq!(
             cache_inputs_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).sources,
@@ -4502,24 +4499,5 @@ mod tests {
         let no_source = cache_inputs_by_type(ct("Shader"), &serde_json::json!({}), &ctx());
         assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
         assert!(no_source.target_dependent);
-
-        // A built-in is reported by name rather than path (it has none), so
-        // editing a shipped shader still busts the entry. Only one arm runs
-        // per build; no built-in GLSL shaders ship today, so on Vulkan the
-        // stage resolves nothing and the empty case above already covers it.
-        let builtin = match concinnity_core::build::Platform::current().key() {
-            "metal" => Some("default.metal"),
-            "hlsl" => Some("default_frag.hlsl"),
-            _ => None,
-        };
-        if let Some(name) = builtin {
-            let args = serde_json::json!({
-                "vertex": { "sources": { "metal": name, "hlsl": name } }
-            });
-            assert_eq!(
-                cache_inputs_by_type(ct("Shader"), &args, &ctx()).sources,
-                SourceFiles::Only(vec![SourceInput::Builtin(name.to_string())])
-            );
-        }
     }
 }

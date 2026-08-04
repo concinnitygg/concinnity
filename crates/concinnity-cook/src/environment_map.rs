@@ -12,7 +12,7 @@
 //     as `env_brdf_approx`) for the specular ambient term.
 //
 // A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-// (`env_brdf_approx` in default.metal / default_frag.hlsl / FRAG_GLSL) replaces
+// (`env_brdf_approx` in main.metal / main_frag.hlsl / main.frag) replaces
 // it analytically. That keeps one binding slot free and dodges a build step.
 //
 // Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.

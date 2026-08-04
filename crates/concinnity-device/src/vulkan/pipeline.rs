@@ -586,7 +586,7 @@ pub(super) fn build_bucket_pipeline(
     shader: crate::gfx::backend_init::ShaderBytes<'_>,
     engine_default: &(Vec<u8>, Vec<u8>),
 ) -> Result<vk::Pipeline, String> {
-    let use_default = shader.main_is_engine_default || shader.vert.is_empty();
+    let use_default = shader.vert.is_empty();
     let (vert_spv, frag_spv) = if use_default {
         (engine_default.0.as_slice(), engine_default.1.as_slice())
     } else {

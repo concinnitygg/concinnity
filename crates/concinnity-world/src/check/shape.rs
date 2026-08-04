@@ -141,11 +141,12 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// A rendering world (one with a GraphicsConfig) needs a Window and a Shader.
+// A rendering world (one with a GraphicsConfig) needs a Window.
 // Filled by companion injection: any `renders`-flagged type pulls in the
-// GraphicsConfig marker, which pulls in a Window and, when the world declares
-// no Shader at all, the bundled default shader. This fires only when the
-// world declares an incomplete render stack of its own.
+// GraphicsConfig marker, which pulls in a Window. This fires only when the
+// world declares an incomplete render stack of its own. A Shader is not
+// required: a world that declares none renders through the engine's own
+// main-pass program.
 fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let has_graphics = assets
         .iter()
@@ -158,14 +159,6 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
         errors.push(
             "world renders (has a GraphicsConfig) but has no Window; declare one \
              or remove the GraphicsConfig"
-                .to_string(),
-        );
-    }
-    let has_shader = assets.iter().any(|a| norm(&a.asset_type) == "shader");
-    if !has_shader {
-        errors.push(
-            "world renders (has a GraphicsConfig) but has no Shader, add a \
-             Shader with `vertex` and `fragment` stage sources"
                 .to_string(),
         );
     }
@@ -376,11 +369,20 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_window_or_shader_reports_both() {
+    fn graphics_config_without_a_window_reports_it() {
         let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
-        assert!(errs.iter().any(|e| e.contains("no Shader")), "{errs:?}");
+    }
+
+    #[test]
+    fn graphics_config_without_a_shader_is_fine() {
+        // A world that declares no Shader renders with the engine's own program.
+        let assets = vec![
+            asset("gfx", "GraphicsConfig", serde_json::json!({})),
+            asset("win", "Window", serde_json::json!({})),
+        ];
+        assert!(errors_for(&assets).is_empty());
     }
 
     #[test]

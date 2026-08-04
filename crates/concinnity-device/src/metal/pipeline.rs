@@ -59,12 +59,13 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         "hiz_build.metal" => include_str!("shaders/hiz_build.metal"),
         "light_cull.metal" => include_str!("shaders/light_cull.metal"),
         "line.metal" => include_str!("shaders/line.metal"),
+        "main.metal" => include_str!("shaders/main.metal"),
         "particle.metal" => include_str!("shaders/particle.metal"),
         "post.metal" => include_str!("shaders/post.metal"),
         "reflection_composite.metal" => include_str!("shaders/reflection_composite.metal"),
         "rt_reflections.metal" => include_str!("shaders/rt_reflections.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
-        "shadow_map.metal" => include_str!("shaders/shadow_map.metal"),
+        "shadow.metal" => include_str!("shaders/shadow.metal"),
         "ssao.metal" => include_str!("shaders/ssao.metal"),
         "ssgi.metal" => include_str!("shaders/ssgi.metal"),
         "ssr.metal" => include_str!("shaders/ssr.metal"),
@@ -114,6 +115,20 @@ pub(super) fn shader_library(
     device
         .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
         .map_err(|e| format!("{name}: shader compile error: {e:?}"))
+}
+
+// The library a main-pass stage renders with: a world-authored Shader supplies
+// its own compiled metallib, and an empty slice means the world declared none,
+// so the engine's own `main.metal` program runs instead.
+pub(super) fn stage_library(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    hot_reload: bool,
+    bytes: &[u8],
+) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
+    if bytes.is_empty() {
+        return shader_library(device, hot_reload, "main.metal");
+    }
+    load_library(device, bytes)
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
@@ -236,7 +251,7 @@ mod shader_source_tests {
         // The SSR / RT / composite shaders each declare the roughness cut as a
         // literal (they are precompiled at build, so no runtime injection is
         // possible); this lock pins every declaration to the Rust source of
-        // truth, same as the existing default.metal REFL_RESOLVE_CUT lock.
+        // truth, same as the existing main.metal REFL_RESOLVE_CUT lock.
         let expected = format!(
             "constant float REFLECTION_ROUGHNESS_CUT = {:?};",
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
@@ -285,6 +300,32 @@ mod shader_source_tests {
         // succeeds and produces the same content (or a newer edit).
         let s = shader_source(true, "post.metal");
         assert!(s.contains("post_fragment_main"));
+    }
+
+    #[test]
+    fn main_metal_reflection_cut_matches_canonical() {
+        // main.metal is precompiled to a metallib at build time, so it keeps
+        // its own `constant float REFL_RESOLVE_CUT` instead of the
+        // runtime-injected shared constant the resolve shaders use. Lock it to
+        // the canonical value so the forward double-count fade can never drift
+        // from the SSR / RT resolve gates. Expects a clean `= <value>;` decl.
+        let src = shader_source(false, "main.metal");
+        let decl = src
+            .lines()
+            .find(|l| l.contains("constant float REFL_RESOLVE_CUT"))
+            .expect("REFL_RESOLVE_CUT declaration in main.metal");
+        let value: f32 = decl
+            .split(';')
+            .next()
+            .and_then(|head| head.split('=').nth(1))
+            .map(str::trim)
+            .and_then(|s| s.parse().ok())
+            .expect("parse REFL_RESOLVE_CUT value from main.metal");
+        assert_eq!(
+            value,
+            concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT,
+            "main.metal REFL_RESOLVE_CUT must equal REFLECTION_ROUGHNESS_CUT"
+        );
     }
 
     #[test]

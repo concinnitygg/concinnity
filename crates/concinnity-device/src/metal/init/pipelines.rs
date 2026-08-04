@@ -20,7 +20,7 @@ use objc2_metal::{
 use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT};
 use crate::metal::cull::build_cull_pipeline;
-use crate::metal::pipeline::{load_library, ns_str, shader_library};
+use crate::metal::pipeline::{load_library, ns_str, shader_library, stage_library};
 
 pub(crate) struct MainPipelineBundle {
     pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
@@ -96,9 +96,9 @@ pub(crate) fn build_main_pipeline(
     frag_lib_bytes: &[u8],
     hot_reload: bool,
 ) -> Result<MainPipelineBundle, String> {
-    let vert_library = load_library(device, vert_lib_bytes)
+    let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
         .map_err(|e| format!("failed to load vertex metallib: {}", e))?;
-    let frag_library = load_library(device, frag_lib_bytes)
+    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
         .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
 
     let vert_fn = vert_library
@@ -110,7 +110,7 @@ pub(crate) fn build_main_pipeline(
         .ok_or("fragment_main not found in metallib")?;
 
     // GPU-driven static pass: when the world's fragment shader provides a
-    // `fragment_main_bindless` entry point (default.metal does), the static
+    // `fragment_main_bindless` entry point (main.metal does), the static
     // main pass reads each object's model matrix, material, and texture
     // indices from one GpuObjectData buffer and a bindless texture pool --
     // every static draw call then carries no per-draw state. Shaders
@@ -268,12 +268,13 @@ pub(crate) fn build_instanced_pipeline(
     vert_instanced_lib_bytes: &[u8],
     frag_lib_bytes: &[u8],
     has_clusters: bool,
+    hot_reload: bool,
 ) -> Result<Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>, String> {
-    if vert_instanced_lib_bytes.is_empty() || !has_clusters {
+    if !has_clusters {
         return Ok(None);
     }
 
-    let inst_library = load_library(device, vert_instanced_lib_bytes)
+    let inst_library = stage_library(device, hot_reload, vert_instanced_lib_bytes)
         .map_err(|e| format!("failed to load instanced vertex metallib: {}", e))?;
     let inst_vert_fn = inst_library
         .newFunctionWithName(&ns_str("vertex_main_instanced"))
@@ -281,7 +282,7 @@ pub(crate) fn build_instanced_pipeline(
 
     // The instanced pipeline always pairs with the per-draw fragment_main
     // (bindless is static-only).
-    let frag_library = load_library(device, frag_lib_bytes)
+    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
         .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
     let frag_fn = frag_library
         .newFunctionWithName(&ns_str("fragment_main"))
@@ -307,7 +308,7 @@ pub(crate) fn build_instanced_pipeline(
 }
 
 // Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
-// engine-internal `shadow_map.metal` source (entry `shadow_vertex_main`). Shared
+// engine-internal `shadow.metal` source (entry `shadow_vertex_main`). Shared
 // by init (one-shot at startup) and the internal-shader hot-reload path
 // (`reload_shaders`, rebuild on `.metal` save) so the two stay consistent.
 pub(crate) fn build_shadow_pipeline(
@@ -315,7 +316,7 @@ pub(crate) fn build_shadow_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_lib = shader_library(device, hot_reload, "shadow_map.metal")?;
+    let shadow_lib = shader_library(device, hot_reload, "shadow.metal")?;
     let shadow_fn = shadow_lib
         .newFunctionWithName(&ns_str("shadow_vertex_main"))
         .ok_or("shadow_vertex_main not found in shadow library")?;
@@ -342,7 +343,7 @@ pub(crate) fn build_shadow_bindless_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_lib = shader_library(device, hot_reload, "shadow_map.metal")?;
+    let shadow_lib = shader_library(device, hot_reload, "shadow.metal")?;
     let shadow_fn = shadow_lib
         .newFunctionWithName(&ns_str("shadow_vertex_bindless"))
         .ok_or("shadow_vertex_bindless not found in shadow library")?;

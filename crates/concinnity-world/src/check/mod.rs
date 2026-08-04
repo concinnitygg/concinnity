@@ -141,13 +141,6 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_shader_is_an_error() {
-        let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
-        let errs = check_world(&assets).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("no Shader")));
-    }
-
-    #[test]
     fn graphics_config_with_full_render_stack_passes_graphics_rules() {
         let assets = vec![
             asset("gfx", "GraphicsConfig", serde_json::json!({})),
