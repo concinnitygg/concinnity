@@ -278,7 +278,11 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     use png::ColorType;
 
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    // Textures are RGBA8 downstream, so a 16-bit source is narrowed here.
+    // Without this its samples stay two bytes wide and the buffer this returns
+    // is twice the length every caller assumes, which reads as garbage.
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("failed to read PNG info: {}", e))?;
@@ -390,43 +394,9 @@ pub fn decode_glb_image_from_doc(
     source: &str,
     image_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let image = doc
-        .doc
-        .document
-        .images()
-        .nth(image_index as usize)
-        .ok_or_else(|| format!("'{}': image_index {} is out of range", source, image_index))?;
-
-    let (bytes, mime_type): (Vec<u8>, Option<String>) = match image.source() {
-        gltf::image::Source::View { view, mime_type } => {
-            let backing = doc.buffer_bytes(view.buffer()).ok_or_else(|| {
-                format!(
-                    "'{}': image {} references buffer data the container does not carry",
-                    source, image_index
-                )
-            })?;
-            let start = view.offset();
-            let end = start + view.length();
-            if end > backing.len() {
-                return Err(format!(
-                    "'{}': image {} bufferView [{}, {}) exceeds buffer size {}",
-                    source,
-                    image_index,
-                    start,
-                    end,
-                    backing.len()
-                ));
-            }
-            (backing[start..end].to_vec(), Some(mime_type.to_string()))
-        }
-        gltf::image::Source::Uri { uri, mime_type } => {
-            let bytes = doc
-                .external_bytes(uri)
-                .map_err(|e| format!("'{}': image {}: {}", source, image_index, e))?;
-            let mime = mime_type.map(str::to_string).or_else(|| mime_from_uri(uri));
-            (bytes, mime)
-        }
-    };
+    let (bytes, mime_type) = doc
+        .image_bytes(image_index)
+        .map_err(|e| format!("'{}': {}", source, e))?;
 
     match mime_type.as_deref() {
         Some("image/png") | None => decode_png_bytes(&bytes)
@@ -438,22 +408,6 @@ pub fn decode_glb_image_from_doc(
              image/jpeg are handled",
             source, image_index, other
         )),
-    }
-}
-
-// Infer an image MIME type from a URI's extension (or a data URI's header)
-// when the glTF omits `mimeType`, which is optional for URI-sourced images.
-fn mime_from_uri(uri: &str) -> Option<String> {
-    if let Some(rest) = uri.strip_prefix("data:") {
-        return rest.split(&[';', ','][..]).next().map(str::to_string);
-    }
-    let lower = uri.to_lowercase();
-    if lower.ends_with(".png") {
-        Some("image/png".to_string())
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        Some("image/jpeg".to_string())
-    } else {
-        None
     }
 }
 
@@ -994,6 +948,31 @@ mod tests {
     }
 
     #[test]
+    fn decode_source_narrows_a_sixteen_bit_png_to_rgba8() {
+        // A 16-bit source keeps two bytes per sample unless the decoder is told
+        // to narrow it, which would hand callers a buffer twice the length they
+        // size against width * height * 4.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, 2, 1);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Sixteen);
+            let mut writer = enc.write_header().expect("png header");
+            let samples: [u16; 8] = [0, 16384, 32768, 65535, 65535, 32768, 16384, 0];
+            let data: Vec<u8> = samples.iter().flat_map(|s| s.to_be_bytes()).collect();
+            writer.write_image_data(&data).expect("png data");
+            writer.finish().expect("png finish");
+        }
+        let src = write_file(&dir, "t.png", &out);
+        let (w, h, px) = decode_source(&src, 0).expect("decode");
+        assert_eq!((w, h), (2, 1));
+        // Two pixels of RGBA, one byte per channel rather than two.
+        assert_eq!(px.len(), 8);
+        assert_eq!(px, vec![0, 64, 128, 255, 255, 128, 64, 0]);
+    }
+
+    #[test]
     fn decode_source_rejects_garbage_png_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.png", b"definitely not a png");
@@ -1264,18 +1243,6 @@ mod tests {
         let doc = crate::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(err.contains("failed to decode JPEG"), "got: {err}");
-    }
-
-    #[test]
-    fn mime_from_uri_infers_a_type_from_the_extension_or_data_header() {
-        assert_eq!(mime_from_uri("albedo.PNG").as_deref(), Some("image/png"));
-        assert_eq!(mime_from_uri("albedo.jpg").as_deref(), Some("image/jpeg"));
-        assert_eq!(mime_from_uri("albedo.jpeg").as_deref(), Some("image/jpeg"));
-        assert_eq!(
-            mime_from_uri("data:image/png;base64,iVBOR").as_deref(),
-            Some("image/png")
-        );
-        assert_eq!(mime_from_uri("albedo.webp"), None);
     }
 
     // compile_texture_payload: file-backed branch and payload envelope

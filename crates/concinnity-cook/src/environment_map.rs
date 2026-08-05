@@ -40,7 +40,7 @@ use crate::hdr::{HdrImage, equirect_to_cube};
 use concinnity_core::assets::EnvironmentMap;
 use concinnity_core::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
-    compute_prefilter, max_mip_count, resolve_hdr_source, serialise_payload,
+    compute_prefilter, max_mip_count, resolve_source_path, serialise_payload,
 };
 
 // Validation + entry point
@@ -59,9 +59,10 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
             return Err("EnvironmentMap takes either `source` or `generator`, not both".into());
         }
         (false, true) => {
-            if !params.source.to_ascii_lowercase().ends_with(".hdr") {
+            if !is_supported_source(&params.source) {
                 return Err(format!(
-                    "EnvironmentMap source '{}' must be a Radiance .hdr file",
+                    "EnvironmentMap source '{}' must be a Radiance .hdr file or a \
+                     panorama-sphere .glb / .gltf",
                     params.source
                 ));
             }
@@ -98,6 +99,25 @@ pub fn validate_environment_map_args(args: &serde_json::Value) -> Result<(), Str
     resolve_args(args).map(|_| ())
 }
 
+// Source containers an equirectangular panorama can arrive in.
+fn is_supported_source(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    [".hdr", ".glb", ".gltf"].iter().any(|e| lower.ends_with(e))
+}
+
+// Load an equirectangular source from disk. A Radiance `.hdr` is already
+// linear radiance; a `.glb` carries a display-encoded panorama on a sphere,
+// which `crate::panorama` unwraps and linearises (see that module for the
+// range an LDR panorama implies for the baked lighting).
+fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
+    let lower = resolved.to_ascii_lowercase();
+    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+        crate::panorama::load_panorama_file(resolved)
+    } else {
+        crate::hdr::load_file(resolved)
+    }
+}
+
 pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let params = resolve_args(args)?;
     let prefilter_face = params.prefilter_face_size;
@@ -109,8 +129,8 @@ pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u
         // asset-search the build pipeline uses for shader sources: search
         // .concinnity/assets/ recursively, falling back to the raw path so an
         // absolute or relative path also works.
-        let resolved = resolve_hdr_source(&params.source);
-        crate::hdr::load_file(&resolved)?
+        let resolved = resolve_source_path(&params.source);
+        load_equirect_source(&resolved)?
     } else {
         match params.generator.as_str() {
             "sky" => generate_sky_equirect(),
@@ -179,8 +199,8 @@ pub fn decode_source(
     prefilter_samples: u32,
     prefilter_clamp: f32,
 ) -> Result<Vec<u8>, String> {
-    let resolved = resolve_hdr_source(source);
-    let hdr = crate::hdr::load_file(&resolved)?;
+    let resolved = resolve_source_path(source);
+    let hdr = load_equirect_source(&resolved)?;
     Ok(bake_payload(
         &hdr,
         prefilter_face,
@@ -268,10 +288,51 @@ mod tests {
     }
 
     #[test]
-    fn validate_environment_map_args_rejects_non_hdr() {
+    fn validate_environment_map_args_rejects_an_unsupported_container() {
         let args = serde_json::json!({ "source": "studio.png" });
         let err = validate_environment_map_args(&args).unwrap_err();
-        assert!(err.contains(".hdr"));
+        assert!(err.contains(".hdr"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_environment_map_args_accepts_a_panorama_container() {
+        for source in ["galaxy.glb", "galaxy.GLTF", "studio.hdr"] {
+            validate_environment_map_args(&serde_json::json!({ "source": source }))
+                .unwrap_or_else(|e| panic!("'{source}' should validate: {e}"));
+        }
+    }
+
+    #[test]
+    fn compile_environment_map_payload_bakes_a_panorama_glb() {
+        use crate::panorama::tests_support::panorama_glb_bytes;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sky.glb");
+        std::fs::write(&path, panorama_glb_bytes()).expect("write glb");
+
+        let args = serde_json::json!({
+            "source": path.to_str().unwrap(),
+            "prefilter_face_size": 16,
+            "irradiance_face_size": 8,
+            "prefilter_samples": 32,
+        });
+        let blob = compile_environment_map_payload(&args).expect("compile");
+        let view = deserialise(&blob).expect("deserialise");
+        assert_eq!(view.irradiance_face, 8);
+        assert_eq!(view.prefilter_face, 16);
+    }
+
+    #[test]
+    fn compile_environment_map_payload_rejects_a_scene_glb() {
+        use crate::panorama::tests_support::ordinary_scene_glb_bytes;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("scene.glb");
+        std::fs::write(&path, ordinary_scene_glb_bytes()).expect("write glb");
+
+        let args = serde_json::json!({ "source": path.to_str().unwrap() });
+        let err = compile_environment_map_payload(&args).unwrap_err();
+        assert!(err.contains("exactly one mesh"), "got: {err}");
     }
 
     #[test]

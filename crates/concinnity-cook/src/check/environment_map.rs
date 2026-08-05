@@ -13,12 +13,18 @@ mod tests {
     }
 
     #[test]
-    fn a_non_hdr_source_is_reported_against_the_asset_name() {
+    fn an_unsupported_source_container_is_reported_against_the_asset_name() {
         let err = check("ibl", &serde_json::json!({"source": "studio.png"})).unwrap_err();
         assert_eq!(
             err,
-            "Asset 'ibl': EnvironmentMap source 'studio.png' must be a Radiance .hdr file"
+            "Asset 'ibl': EnvironmentMap source 'studio.png' must be a Radiance .hdr \
+             file or a panorama-sphere .glb / .gltf"
         );
+    }
+
+    #[test]
+    fn a_panorama_glb_source_passes() {
+        check("ibl", &serde_json::json!({"source": "galaxy.glb"})).expect("should validate");
     }
 
     #[test]

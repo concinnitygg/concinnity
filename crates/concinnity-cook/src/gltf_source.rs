@@ -83,6 +83,66 @@ impl GltfDoc {
     pub fn external_bytes(&self, uri: &str) -> Result<Vec<u8>, String> {
         resolve_uri_bytes(uri, self.base_dir.as_deref())
     }
+
+    // Encoded bytes of one glTF image plus its MIME type, whether the image
+    // lives in a `bufferView`, in a file beside the source, or in a data URI.
+    // The bytes are still PNG / JPEG here; picking a decoder is the caller's
+    // job. Errors name the image index but not the container, so callers add
+    // their own source prefix.
+    pub fn image_bytes(&self, image_index: u32) -> Result<(Vec<u8>, Option<String>), String> {
+        let image = self
+            .doc
+            .document
+            .images()
+            .nth(image_index as usize)
+            .ok_or_else(|| format!("image_index {} is out of range", image_index))?;
+
+        match image.source() {
+            gltf::image::Source::View { view, mime_type } => {
+                let backing = self.buffer_bytes(view.buffer()).ok_or_else(|| {
+                    format!(
+                        "image {} references buffer data the container does not carry",
+                        image_index
+                    )
+                })?;
+                let start = view.offset();
+                let end = start + view.length();
+                if end > backing.len() {
+                    return Err(format!(
+                        "image {} bufferView [{}, {}) exceeds buffer size {}",
+                        image_index,
+                        start,
+                        end,
+                        backing.len()
+                    ));
+                }
+                Ok((backing[start..end].to_vec(), Some(mime_type.to_string())))
+            }
+            gltf::image::Source::Uri { uri, mime_type } => {
+                let bytes = self
+                    .external_bytes(uri)
+                    .map_err(|e| format!("image {}: {}", image_index, e))?;
+                let mime = mime_type.map(str::to_string).or_else(|| mime_from_uri(uri));
+                Ok((bytes, mime))
+            }
+        }
+    }
+}
+
+// Infer an image MIME type from a URI's extension (or a data URI's header)
+// when the glTF omits `mimeType`, which is optional for URI-sourced images.
+fn mime_from_uri(uri: &str) -> Option<String> {
+    if let Some(rest) = uri.strip_prefix("data:") {
+        return rest.split(&[';', ','][..]).next().map(str::to_string);
+    }
+    let lower = uri.to_lowercase();
+    if lower.ends_with(".png") {
+        Some("image/png".to_string())
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some("image/jpeg".to_string())
+    } else {
+        None
+    }
 }
 
 // External files a `.gltf` reads beyond itself: URI-referenced buffers and
@@ -359,6 +419,46 @@ mod tests {
             decode_base64("Zm 9").unwrap_err(),
             "invalid base64 character ' '"
         );
+    }
+
+    // image bytes
+
+    #[test]
+    fn mime_from_uri_infers_a_type_from_the_extension_or_data_header() {
+        assert_eq!(mime_from_uri("albedo.PNG").as_deref(), Some("image/png"));
+        assert_eq!(mime_from_uri("albedo.jpg").as_deref(), Some("image/jpeg"));
+        assert_eq!(mime_from_uri("albedo.jpeg").as_deref(), Some("image/jpeg"));
+        assert_eq!(
+            mime_from_uri("data:image/png;base64,iVBOR").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(mime_from_uri("albedo.webp"), None);
+    }
+
+    #[test]
+    fn image_bytes_reads_a_data_uri_image_and_infers_its_type() {
+        let mut json = crate::glb::test_fixtures::static_triangle_json();
+        json["images"] = serde_json::json!([{"uri": "data:image/png;base64,Zm9vYg=="}]);
+        let glb = crate::glb::test_fixtures::make_glb(
+            &json,
+            Some(&crate::glb::test_fixtures::static_triangle_bin()),
+        );
+        let doc = GltfDoc::from_slice(&glb, None, "t.glb").expect("parse");
+        let (bytes, mime) = doc.image_bytes(0).expect("image bytes");
+        assert_eq!(bytes, b"foob");
+        assert_eq!(mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn image_bytes_reports_an_index_past_the_end() {
+        let doc = GltfDoc::from_slice(
+            &crate::glb::test_fixtures::static_triangle_glb(),
+            None,
+            "t.glb",
+        )
+        .expect("parse");
+        let err = doc.image_bytes(0).unwrap_err();
+        assert_eq!(err, "image_index 0 is out of range");
     }
 
     // percent decoding

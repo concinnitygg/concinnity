@@ -58,6 +58,9 @@ pub mod import;
 pub mod ktx2;
 pub mod mesh_compile;
 pub mod mesh_reimport;
+// Recognises a `.glb` that packages an environment image as a sphere you stand
+// inside, so it imports as an EnvironmentMap instead of scene geometry.
+pub mod panorama;
 pub mod pipeline;
 pub mod resource_handles;
 pub mod root_motion;

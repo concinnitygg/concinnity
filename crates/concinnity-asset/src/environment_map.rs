@@ -3,17 +3,31 @@
 use crate::{AssetId, PayloadLocator};
 use alloc::string::String;
 
-/// A baked lighting environment built from a Radiance HDR equirectangular
-/// source (or a built-in generator). It provides the scene's ambient
-/// image-based lighting (soft diffuse fill plus glossy reflections that follow
-/// surface roughness) and the on-screen sky.
+/// A baked lighting environment built from an equirectangular source (or a
+/// built-in generator). It provides the scene's ambient image-based lighting
+/// (soft diffuse fill plus glossy reflections that follow surface roughness)
+/// and the on-screen sky.
+///
+/// **Source formats:** a Radiance `.hdr`, or a panorama-sphere `.glb` /
+/// `.gltf` -- the packaging where an environment image is painted on the
+/// emissive channel of a sphere you stand inside. `cn add` recognises the
+/// latter and produces an EnvironmentMap instead of scene geometry.
+///
+/// **Dynamic range:** a `.hdr` carries real radiance, so its sun can be
+/// thousands of times brighter than the sky and bakes into a bright key light
+/// with a hot specular highlight. A panorama inside a `.glb` is a display
+/// image whose brightest value is white; it is read literally, with the sRGB
+/// curve inverted and white landing at 1.0 radiance. That makes it an exact
+/// backdrop and a soft, low-contrast fill light, never a key light. Raise
+/// [PostProcessConfig](#postprocessconfig)'s `ambient_intensity` to lift the
+/// level rather than expecting the bake to invent range the file lacks.
 ///
 /// **`prefilter_face_size` note:** this controls both the reflection detail and
 /// the on-screen sky sharpness. 512 is the default balance: 256 visibly
-/// pixelates a 4K-source HDR sky, 1024 sharpens it further at 4× the size.
+/// pixelates a 4K-source sky, 1024 sharpens it further at 4× the size.
 ///
 /// **Built-in generators:** `sky` produces a procedural blue sky with a soft
-/// sun, useful when no HDR file is available.
+/// sun, useful when no source file is available.
 ///
 /// The sky mesh that displays the map (a skybox
 /// [ProceduralMesh](#proceduralmesh) plus its [Material](#material) and
@@ -25,6 +39,7 @@ use alloc::string::String;
 /// ```jsonl
 /// {"name":"env_studio","type":"EnvironmentMap","args":{"source":"assets/hdri/studio.hdr"}}
 /// {"name":"env_outdoor","type":"EnvironmentMap","args":{"source":"assets/hdri/sky.hdr","prefilter_face_size":512}}
+/// {"name":"env_galaxy","type":"EnvironmentMap","args":{"source":"assets/hdri/galaxy.glb"}}
 /// {"name":"env_proc","type":"EnvironmentMap","args":{"generator":"sky"}}
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -33,8 +48,9 @@ pub struct EnvironmentMap {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// Path to the source equirectangular HDR (`.hdr`) file, relative to the
-    /// project root. Mutually exclusive with `generator`.
+    /// Path to the source equirectangular panorama -- a Radiance `.hdr`, or a
+    /// panorama-sphere `.glb` / `.gltf` -- relative to the project root.
+    /// Mutually exclusive with `generator`.
     pub source: String,
     /// Built-in source name (e.g. "sky"). Mutually exclusive with `source`.
     pub generator: String,

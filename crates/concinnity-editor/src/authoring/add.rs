@@ -582,11 +582,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         // cubemaps that light the scene. Its presence also injects the skybox
         // mesh that displays it (see cook's `inject_sky`). Stem only, like
         // fonts and audio.
-        "hdr" => Ok(vec![validated_entry(
-            &stem,
-            "EnvironmentMap",
-            serde_json::json!({ "source": path_str }),
-        )?]),
+        "hdr" => Ok(vec![environment_map_entry(&stem, path_str)?]),
 
         // KTX2: a GPU-ready compressed texture. Becomes a Texture asset whose
         // source the build compiles into a block-compressed payload (BCn / Basis
@@ -631,7 +627,12 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
         // world.jsonl stays compact (see concinnity_core::build::import).
-        "glb" | "gltf" | "fbx" => Ok(vec![import_entry("SceneImport", &stem, path_str)?]),
+        //
+        // A `.glb` is checked for the panorama-sphere packaging first: those
+        // files carry an environment image, not geometry, and importing one as
+        // a mesh puts a ball in the scene where a sky belongs.
+        "glb" | "gltf" => Ok(vec![scene_or_panorama_entry(&stem, path_str)?]),
+        "fbx" => Ok(vec![import_entry("SceneImport", &stem, path_str)?]),
 
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -642,6 +643,29 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
             ),
         )),
     }
+}
+
+// A `.glb` / `.gltf` becomes an EnvironmentMap when it is a panorama sphere
+// (see `concinnity_cook::panorama`) and scene geometry otherwise. The choice
+// is logged because the same extension lands two different asset types.
+fn scene_or_panorama_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
+    if concinnity_cook::panorama::file_is_panorama_sphere(path_str) {
+        tracing::info!(
+            "'{}' is a panorama sphere: importing it as an EnvironmentMap (sky \
+             and image-based lighting) rather than scene geometry",
+            path_str
+        );
+        return environment_map_entry(stem, path_str);
+    }
+    import_entry("SceneImport", stem, path_str)
+}
+
+fn environment_map_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
+    validated_entry(
+        stem,
+        "EnvironmentMap",
+        serde_json::json!({ "source": path_str }),
+    )
 }
 
 // Build one Shader entry from a source file that must carry both stages.
@@ -2062,6 +2086,48 @@ mod tests {
     #[test]
     fn import_entry_rejects_an_unknown_type() {
         assert!(import_entry("NotARealAssetType", "x", "x.glb").is_err());
+    }
+
+    // scene / panorama split
+    //
+    // Which side of the split a file lands on is
+    // `concinnity_cook::panorama`'s call and is covered against real panorama
+    // and multi-mesh fixtures there; these pin what each answer produces here.
+
+    #[test]
+    fn a_glb_that_is_not_a_panorama_imports_as_geometry() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("scene.glb");
+        std::fs::write(&path, b"not a panorama").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["type"], "SceneImport");
+        assert_eq!(entries[0]["args"]["source"], path.to_str().unwrap());
+    }
+
+    #[test]
+    fn a_panorama_becomes_an_environment_map_naming_its_source() {
+        let entry = environment_map_entry("galaxy", "assets/hdri/galaxy.glb").unwrap();
+        assert_eq!(entry["name"], "galaxy");
+        assert_eq!(entry["type"], "EnvironmentMap");
+        assert_eq!(entry["args"]["source"], "assets/hdri/galaxy.glb");
+    }
+
+    #[test]
+    fn an_hdr_still_becomes_an_environment_map() {
+        let dir = text_test_dir(line!());
+        let path = dir.join("studio.hdr");
+        std::fs::write(&path, b"#?RADIANCE\n").unwrap();
+
+        let entries = entry_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(entries[0]["type"], "EnvironmentMap");
+    }
+
+    #[test]
+    fn an_fbx_never_takes_the_panorama_branch() {
+        let entries = entry_from_path("scenes/bistro.fbx").unwrap();
+        assert_eq!(entries[0]["type"], "SceneImport");
     }
 
     // ensure_world_file_exists

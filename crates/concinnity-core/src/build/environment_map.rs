@@ -60,22 +60,17 @@ pub fn max_mip_count(face_size: u32) -> u32 {
     mips
 }
 
-// Resolve an EnvironmentMap `source` string into the actual file path on
-// disk. The runtime hot-reload watcher needs the resolved path so it can
-// subscribe to the correct parent directory; bare filenames are otherwise
-// unfindable after the build pipeline runs. The decode itself (`decode_source`)
-// lives in the cook crate; only this path resolution stays here for the
-// dev-time watcher.
-pub fn resolve_source_path(source: &str) -> String {
-    resolve_hdr_source(source)
-}
-
-// Resolve an EnvironmentMap source string into a filesystem path. Bare
+// Resolve an EnvironmentMap `source` string into a filesystem path. Bare
 // filenames are searched under `.concinnity/assets/` (recursively) so worlds
-// can reference HDRIs by filename only, matching the lookup semantics of
+// can reference a panorama by filename only, matching the lookup semantics of
 // `Shader` stage source paths. Anything containing a directory separator is
 // returned unchanged, so absolute or relative paths still work.
-pub fn resolve_hdr_source(source: &str) -> String {
+//
+// The runtime hot-reload watcher needs the resolved path so it can subscribe
+// to the correct parent directory; bare filenames are otherwise unfindable
+// after the build pipeline runs. The decode itself (`decode_source`) lives in
+// the cook crate; only this path resolution stays here for the dev-time watcher.
+pub fn resolve_source_path(source: &str) -> String {
     let p = std::path::Path::new(source);
     let is_bare = p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true);
     if !is_bare {
