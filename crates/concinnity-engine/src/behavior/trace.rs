@@ -4,6 +4,8 @@
 // `ExecutionTrace` resource. Without a request the system does no recording
 // work, so a shipped runtime pays nothing.
 
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest};
 

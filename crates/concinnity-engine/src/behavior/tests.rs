@@ -509,6 +509,108 @@ fn a_query_intersects_every_declared_component() {
 }
 
 #[test]
+fn alive_follows_the_world_not_this_ticks_queries() {
+    // A variable can hold an entity long after the query that produced it stops
+    // matching, so `alive` has to ask the world whether the entity exists
+    // rather than whether anything this tick happens to name it.
+    let mut world = world_with(vec![Behavior {
+        on: BehaviorSource::Tick,
+        queries: vec![QueryDecl {
+            name: "props".into(),
+            has: vec!["Prop".into()],
+        }],
+        body: vec![
+            // An empty query yields nothing and skips this node, so the latched
+            // handle survives every tick after the entity stops matching.
+            Node::Set {
+                var: "target".into(),
+                value: Expr::First("props".into()),
+                add: false,
+            },
+            Node::If {
+                cond: Expr::Alive(Box::new(Expr::Var("target".into()))),
+                then: vec![set_var("still_here", 1, false)],
+                otherwise: vec![set_var("still_here", 0, false)],
+            },
+        ],
+        ..Default::default()
+    }]);
+    let entity = spawn_prop(&mut world, [0.0; 3]);
+    let mut sys = system(&mut world);
+
+    // The first tick only latches: a `set` lands after the body that recorded
+    // it, so `target` holds the entity from the second tick on.
+    tick(&mut sys, &mut world, 0.016);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "still_here"), 1, "a matched entity is alive");
+
+    world.components.remove_typed::<Prop>(entity);
+    world.components.remove_typed::<Transform>(entity);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(
+        var(&sys, "still_here"),
+        1,
+        "leaving every query and losing every component is not death",
+    );
+
+    world.components.despawn(entity);
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(var(&sys, "still_here"), 0, "a despawned entity is gone");
+}
+
+#[test]
+fn a_body_reads_positions_from_before_this_ticks_writes() {
+    // Effects land only once every body has run, so one behavior's move is
+    // invisible to another's read in the same tick no matter which order the
+    // two run in. Reads go straight to the world, and this is what makes that
+    // safe.
+    let mover = Behavior {
+        asset_id: AssetId(1),
+        on: BehaviorSource::Tick,
+        queries: vec![QueryDecl {
+            name: "props".into(),
+            has: vec!["Prop".into()],
+        }],
+        body: vec![Node::SetTransform {
+            entity: Expr::First("props".into()),
+            position: Some(Expr::Vec3([9.0, 0.0, 0.0])),
+            rotation_deg: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    let reader = Behavior {
+        asset_id: AssetId(2),
+        on: BehaviorSource::Tick,
+        queries: vec![QueryDecl {
+            name: "props".into(),
+            has: vec!["Prop".into()],
+        }],
+        body: vec![Node::Set {
+            var: "seen_x".into(),
+            value: Expr::Position(Box::new(Expr::First("props".into()))),
+            add: false,
+        }],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![mover, reader]);
+    let entity = spawn_prop(&mut world, [1.0, 0.0, 0.0]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+    assert_eq!(
+        var_val(&sys, "seen_x"),
+        Val::Vec3([1.0, 0.0, 0.0]),
+        "the reader saw the position from before the mover wrote",
+    );
+    assert_eq!(
+        world.ctx().get::<Transform>(entity).unwrap().position,
+        [9.0, 0.0, 0.0],
+        "the move still landed",
+    );
+}
+
+#[test]
 fn a_cooldown_rate_limits_firing() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,

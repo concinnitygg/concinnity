@@ -16,7 +16,6 @@
 // / AudioSystem so scene, story, and audio requests land the same tick too.
 // Clocks freeze while a menu is open, like the rest of the world clock.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -293,15 +292,37 @@ impl System for BehaviorSystem {
     }
 }
 
-// What the bodies read this tick, gathered before anything runs.
+// The entity sets a body iterates this tick, resolved before anything runs.
+//
+// Single-entity reads (a name, a position, a liveness test) are not here: no
+// body runs while the world is mutable, so they read the world directly and
+// cost one lookup each instead of a whole-world copy per tick.
 struct Snapshot {
-    by_name: BTreeMap<AssetId, Entity>,
-    transforms: BTreeMap<Entity, Transform>,
-    alive: BTreeSet<Entity>,
     // Per program, per declared query, in stable order.
     queries: Vec<Vec<Vec<Entity>>>,
     // Per program, the entities its scope matched, in stable order.
     scoped: Vec<Vec<Entity>>,
+}
+
+// What a body run reads that the tick, rather than the body, determines. The
+// per-tick half of `run::View`, which adds the per-instance half.
+struct TickView<'a, 'w> {
+    ctx: &'a PipelineContext<'w>,
+    snapshot: &'a Snapshot,
+    // Resolved once per tick rather than per name lookup.
+    names: Option<&'a crate::ecs::decompose::EntityByName>,
+    dt: f32,
+    elapsed: f32,
+    tracing: bool,
+}
+
+impl TickView<'_, '_> {
+    // A name index entry can outlive its entity, so each is confirmed.
+    fn named(&self, id: AssetId) -> Option<Entity> {
+        self.names
+            .and_then(|n| n.get(id))
+            .filter(|e| self.ctx.is_alive(*e))
+    }
 }
 
 impl BehaviorSystem {
@@ -327,21 +348,6 @@ impl BehaviorSystem {
     }
 
     fn gather(&self, ctx: &PipelineContext) -> Snapshot {
-        let transforms: BTreeMap<Entity, Transform> = ctx
-            .query_with_entity::<Transform>()
-            .map(|(e, t)| (e, *t))
-            .collect();
-        // A name index entry can outlive its entity, so each is confirmed.
-        let by_name: BTreeMap<AssetId, Entity> = ctx
-            .resource::<crate::ecs::decompose::EntityByName>()
-            .map(|n| {
-                n.0.iter()
-                    .filter(|(_, e)| ctx.is_alive(**e))
-                    .map(|(k, v)| (*k, *v))
-                    .collect()
-            })
-            .unwrap_or_default();
-
         let queries: Vec<Vec<Vec<Entity>>> = self
             .programs
             .iter()
@@ -357,27 +363,7 @@ impl BehaviorSystem {
             .iter()
             .map(|p| Self::entities_matching(ctx, &p.scope))
             .collect();
-
-        // Everything a body can name this tick came from one of these sets, so
-        // they define liveness for `alive`.
-        let mut alive: BTreeSet<Entity> = transforms.keys().copied().collect();
-        alive.extend(by_name.values().copied());
-        for per_query in &queries {
-            for entities in per_query {
-                alive.extend(entities.iter().copied());
-            }
-        }
-        for entities in &scoped {
-            alive.extend(entities.iter().copied());
-        }
-
-        Snapshot {
-            by_name,
-            transforms,
-            alive,
-            queries,
-            scoped,
-        }
+        Snapshot { queries, scoped }
     }
 
     // Create instances for newly matching entities and drop those whose entity
@@ -469,38 +455,48 @@ impl BehaviorSystem {
         self.crossings.clear();
         self.presses.clear();
 
-        // Delayed runs from earlier ticks: count down and execute those now
-        // due. Before the append below, so a fresh delay starts counting next
-        // tick.
+        // Read phase: every body runs against an unchanged world, so the
+        // borrow here is shared and the effects it produces are applied only
+        // after it ends.
         let mut effects: Vec<(usize, Option<Entity>, Vec<Effect>)> = Vec::new();
-        let mut idx = 0;
-        while idx < self.pending.len() {
-            self.pending[idx].2 -= dt;
-            if self.pending[idx].2 <= 0.0 {
-                let (i, entity, _) = self.pending.swap_remove(idx);
-                if let Some((produced, nodes)) =
-                    self.run_body(i, entity, &snapshot, dt, elapsed, tracing)
-                {
+        {
+            let reads = TickView {
+                ctx,
+                snapshot: &snapshot,
+                names: ctx.resource::<crate::ecs::decompose::EntityByName>(),
+                dt,
+                elapsed,
+                tracing,
+            };
+
+            // Delayed runs from earlier ticks: count down and execute those now
+            // due. Before the append below, so a fresh delay starts counting
+            // next tick.
+            let mut idx = 0;
+            while idx < self.pending.len() {
+                self.pending[idx].2 -= dt;
+                if self.pending[idx].2 <= 0.0 {
+                    let (i, entity, _) = self.pending.swap_remove(idx);
+                    if let Some((produced, nodes)) = self.run_body(&reads, i, entity) {
+                        effects.push((i, entity, produced));
+                        if tracing {
+                            fired.push((i, nodes));
+                        }
+                    }
+                } else {
+                    idx += 1;
+                }
+            }
+
+            for (i, entity) in runs {
+                let delay = self.programs[i].def.delay;
+                if delay > 0.0 {
+                    self.pending.push((i, entity, delay));
+                } else if let Some((produced, nodes)) = self.run_body(&reads, i, entity) {
                     effects.push((i, entity, produced));
                     if tracing {
                         fired.push((i, nodes));
                     }
-                }
-            } else {
-                idx += 1;
-            }
-        }
-
-        for (i, entity) in runs {
-            let delay = self.programs[i].def.delay;
-            if delay > 0.0 {
-                self.pending.push((i, entity, delay));
-            } else if let Some((produced, nodes)) =
-                self.run_body(i, entity, &snapshot, dt, elapsed, tracing)
-            {
-                effects.push((i, entity, produced));
-                if tracing {
-                    fired.push((i, nodes));
                 }
             }
         }
@@ -522,13 +518,10 @@ impl BehaviorSystem {
     }
 
     fn run_body(
-        &mut self,
+        &self,
+        reads: &TickView<'_, '_>,
         i: usize,
         entity: Option<Entity>,
-        snapshot: &Snapshot,
-        dt: f32,
-        elapsed: f32,
-        tracing: bool,
     ) -> Option<(Vec<Effect>, Vec<u32>)> {
         let locals = self.instances[i]
             .iter()
@@ -536,17 +529,17 @@ impl BehaviorSystem {
             .map(|inst| inst.locals.clone())?;
         let mut bindings: Vec<Option<Val>> = vec![None; self.programs[i].bindings];
         let mut out = Vec::new();
-        let mut nodes: Option<Vec<u32>> = tracing.then(Vec::new);
+        let mut nodes: Option<Vec<u32>> = reads.tracing.then(Vec::new);
         let mut view = View {
-            dt,
-            elapsed,
+            dt: reads.dt,
+            elapsed: reads.elapsed,
             vars: &self.vars,
             locals: &locals,
             bindings: &mut bindings,
-            queries: &snapshot.queries[i],
-            by_name: &snapshot.by_name,
-            transforms: &|e| snapshot.transforms.get(&e).copied(),
-            alive: &|e| snapshot.alive.contains(&e),
+            queries: &reads.snapshot.queries[i],
+            by_name: &|id| reads.named(id),
+            transforms: &|e| reads.ctx.get::<Transform>(e).copied(),
+            alive: &|e| reads.ctx.is_alive(e),
             self_entity: entity,
             trace: &mut nodes,
         };
