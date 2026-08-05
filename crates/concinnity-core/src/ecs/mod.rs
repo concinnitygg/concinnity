@@ -15,6 +15,7 @@
 pub mod asset_id;
 mod entity_index;
 mod frame;
+mod name_interner;
 mod payload_store;
 mod protocol;
 mod registry;

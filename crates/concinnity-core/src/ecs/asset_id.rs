@@ -13,33 +13,15 @@
 // runtime references are already integers, so the seam is never consulted.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Once;
+
+use crate::ecs::name_interner::NameInterner;
 
 // The asset identity + typed reference primitives, defined in the schema crate.
 pub use concinnity_asset::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
 
-// Maps asset name strings to dense ids. Build-time only.
-#[derive(Default)]
-struct Interner {
-    map: HashMap<String, u32>,
-    names: Vec<String>,
-}
-
-impl Interner {
-    fn intern(&mut self, name: &str) -> u32 {
-        if let Some(&id) = self.map.get(name) {
-            return id;
-        }
-        let id = self.names.len() as u32;
-        self.names.push(name.to_string());
-        self.map.insert(name.to_string(), id);
-        id
-    }
-}
-
 thread_local! {
-    static INTERNER: RefCell<Interner> = RefCell::new(Interner::default());
+    static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
 }
 
 // Install the schema crate's resolver seam so a name-string reference
@@ -65,7 +47,7 @@ pub fn intern(name: &str) -> AssetId {
 // are dense and declaration-ordered for that build.
 pub fn reset_interner() {
     ensure_name_resolver();
-    INTERNER.with(|i| *i.borrow_mut() = Interner::default());
+    INTERNER.with(|i| *i.borrow_mut() = NameInterner::default());
 }
 
 // Resolve an already-interned name to its id without inserting: `None` for a
@@ -74,7 +56,7 @@ pub fn reset_interner() {
 // `name_table`.
 pub fn lookup(name: &str) -> Option<AssetId> {
     ensure_name_resolver();
-    INTERNER.with(|i| i.borrow().map.get(name).map(|&id| AssetId(id)))
+    INTERNER.with(|i| i.borrow().lookup(name).map(AssetId))
 }
 
 // Snapshot every interned name on the current thread, indexed by `AssetId`.
@@ -82,7 +64,7 @@ pub fn lookup(name: &str) -> Option<AssetId> {
 // the declared name for that id. Used by the binary-only `crate::debug`
 // module to remap runtime `AssetId`s back to their declared names.
 pub fn name_table() -> Vec<String> {
-    INTERNER.with(|i| i.borrow().names.clone())
+    INTERNER.with(|i| i.borrow().names().map(str::to_string).collect())
 }
 
 // Install a recorded (id, name) table into an EMPTY interner, so a process
@@ -93,19 +75,7 @@ pub fn name_table() -> Vec<String> {
 // cook has primed it authoritatively.
 pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
     ensure_name_resolver();
-    INTERNER.with(|i| {
-        let mut interner = i.borrow_mut();
-        if !interner.names.is_empty() {
-            return false;
-        }
-        let len = pairs.iter().map(|(id, _)| id + 1).max().unwrap_or(0) as usize;
-        interner.names = vec![String::new(); len];
-        for (id, name) in pairs {
-            interner.names[*id as usize] = name.clone();
-            interner.map.insert(name.clone(), *id);
-        }
-        true
-    })
+    INTERNER.with(|i| i.borrow_mut().prime(pairs))
 }
 
 // Pre-intern a batch of names in order so identity ids are dense and follow
