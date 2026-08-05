@@ -34,12 +34,13 @@ pub(super) fn spawn_from_template(
     lifetime: Option<f32>,
     mut clone_slot: impl FnMut(usize, [[f32; 4]; 4]) -> Option<usize>,
 ) -> Option<Entity> {
-    let src_slots: Vec<u32> = ctx.get::<RenderHandle>(template).map(|h| h.draws.clone())?;
+    let src_slots: concinnity_memory::InlineVec<u32> =
+        ctx.get::<RenderHandle>(template).map(|h| h.draws.clone())?;
     if src_slots.is_empty() {
         return None;
     }
     let model = transform.model_matrix();
-    let mut draws: Vec<u32> = Vec::with_capacity(src_slots.len());
+    let mut draws = concinnity_memory::InlineVec::new();
     for src in src_slots {
         let new_slot = clone_slot(src as usize, model)?;
         draws.push(new_slot as u32);
@@ -230,7 +231,7 @@ mod tests {
                     cull_distance: 0.0,
                 },
             );
-            ctx.insert(template, RenderHandle { draws: vec![0] });
+            ctx.insert(template, RenderHandle { draws: [0].into() });
 
             // The backend starts with one live slot (the template's).
             let mut alloc = DrawSlotAllocator::with_len(1);
@@ -252,7 +253,7 @@ mod tests {
             // retire -> free does, then despawns the entity.
             let expired = tick_lifetimes(ctx, 1.0);
             assert_eq!(expired, vec![first], "the short-lived spawn expired");
-            let freed: Vec<u32> = ctx.get::<RenderHandle>(first).unwrap().draws.clone();
+            let freed: Vec<u32> = ctx.get::<RenderHandle>(first).unwrap().draws.to_vec();
             for slot in &freed {
                 alloc.free(*slot as usize);
             }
@@ -375,7 +376,7 @@ mod tests {
             ctx.insert_resource(EntityByName::default());
             let template = ctx.components.spawn();
             ctx.insert(template, Transform::default());
-            ctx.insert(template, RenderHandle { draws: vec![0] });
+            ctx.insert(template, RenderHandle { draws: [0].into() });
             let mut alloc = DrawSlotAllocator::with_len(1);
 
             let spawned = spawn_from_template(

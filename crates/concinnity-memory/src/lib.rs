@@ -4,14 +4,16 @@
 // and the allocators that hand memory out in bulk instead of one block at a
 // time.
 //
-// Four things live here, in three files that do not depend on each other:
+// Five things live here, in files that do not depend on each other:
 //
-//   counters  the global heap's live / peak / churn, sharded per thread and
-//             driven by `TrackingAlloc` (`tracking`)
-//   ledger    tagged byte accounting -- textures, meshes, audio, scratch --
-//             in host and device memory, against optional budgets
-//   arena     a bump allocator for per-frame working memory
-//   pool      fixed-capacity storage for a population that churns
+//   counters   the global heap's live / peak / churn, sharded per thread and
+//              driven by `TrackingAlloc` (`tracking`)
+//   ledger     tagged byte accounting -- textures, meshes, audio, scratch --
+//              in host and device memory, against optional budgets
+//   arena      a bump allocator for per-frame working memory
+//   pool       fixed-capacity storage for a population that churns
+//   inline_vec a sequence that keeps its first element inline, for the many
+//              per-entity collections that hold exactly one thing
 //
 // The counters measure the Rust heap, not "the engine". They see every
 // allocation the process makes through Rust -- engine, tools, and third-party
@@ -39,6 +41,7 @@ extern crate std;
 mod arena;
 mod counters;
 mod detail;
+mod inline_vec;
 mod ledger;
 mod pool;
 mod tag;
@@ -47,6 +50,7 @@ mod tracking;
 pub use arena::{Arena, ArenaVec};
 pub use counters::{Counters, MemStats};
 pub use detail::{CLASS_COUNT, SizeClass, SizeClasses, size_classes};
+pub use inline_vec::{InlineVec, IntoIter as InlineVecIntoIter};
 pub use ledger::{Ledger, LedgerSnapshot, TagUsage};
 pub use pool::{Pool, PoolHandle};
 pub use tag::{MemTag, Realm};

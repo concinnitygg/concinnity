@@ -54,7 +54,7 @@ fn despawn_collected(
     let entities = collect_subtree(ctx, root);
     for &entity in &entities {
         // Clone the slot list out so the immutable borrow ends before despawn.
-        let slots: Vec<u32> = ctx
+        let slots: concinnity_memory::InlineVec<u32> = ctx
             .get::<RenderHandle>(entity)
             .map(|h| h.draws.clone())
             .unwrap_or_default();
@@ -117,8 +117,8 @@ mod tests {
             let a = ctx.components.spawn();
             let b = ctx.components.spawn();
             let c = ctx.components.spawn();
-            ctx.insert(root, Children(vec![a, b]));
-            ctx.insert(a, Children(vec![c]));
+            ctx.insert(root, Children([a, b].into()));
+            ctx.insert(a, Children([c].into()));
 
             let mut got = collect_subtree(ctx, root);
             got.sort_by_key(|e| e.index());
@@ -150,15 +150,15 @@ mod tests {
             ctx.insert(
                 parent,
                 RenderHandle {
-                    draws: vec![10, 11],
+                    draws: [10, 11].into(),
                 },
             );
-            ctx.insert(parent, Children(vec![child]));
+            ctx.insert(parent, Children([child].into()));
             ctx.insert(child, Transform::default());
-            ctx.insert(child, RenderHandle { draws: vec![12] });
+            ctx.insert(child, RenderHandle { draws: [12].into() });
             ctx.insert(child, Parent(parent));
             ctx.insert(other, Transform::default());
-            ctx.insert(other, RenderHandle { draws: vec![99] });
+            ctx.insert(other, RenderHandle { draws: [99].into() });
 
             let mut retired: Vec<usize> = Vec::new();
             let removed = despawn_collected(ctx, parent, |slot| {

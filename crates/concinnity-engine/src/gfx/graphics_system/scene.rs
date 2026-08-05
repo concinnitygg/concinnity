@@ -96,16 +96,16 @@ mod tests {
         ctx.insert(
             a,
             RenderHandle {
-                draws: vec![10, 11],
+                draws: [10, 11].into(),
             },
         );
         ctx.insert(a, SceneMember(AssetId(7)));
         // Entity with no scene (always visible), one slot.
         let b = ctx.components.spawn();
-        ctx.insert(b, RenderHandle { draws: vec![20] });
+        ctx.insert(b, RenderHandle { draws: [20].into() });
         // Entity in scene 8, one slot.
         let c = ctx.components.spawn();
-        ctx.insert(c, RenderHandle { draws: vec![30] });
+        ctx.insert(c, RenderHandle { draws: [30].into() });
         ctx.insert(c, SceneMember(AssetId(8)));
 
         let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
@@ -133,9 +133,9 @@ mod tests {
         };
 
         let a = ctx.components.spawn();
-        ctx.insert(a, RenderHandle { draws: vec![10] });
+        ctx.insert(a, RenderHandle { draws: [10].into() });
         let b = ctx.components.spawn();
-        ctx.insert(b, RenderHandle { draws: vec![20] });
+        ctx.insert(b, RenderHandle { draws: [20].into() });
         ctx.insert(b, crate::assets::Hidden);
 
         let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
@@ -163,7 +163,7 @@ mod tests {
         let only_scene = ctx.components.spawn();
         ctx.insert(only_scene, SceneMember(AssetId(7)));
         let rendered = ctx.components.spawn();
-        ctx.insert(rendered, RenderHandle { draws: vec![5] });
+        ctx.insert(rendered, RenderHandle { draws: [5].into() });
 
         let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
         assert_eq!(draws, vec![vec![5usize]]);

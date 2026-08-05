@@ -2303,7 +2303,7 @@ impl GraphicsSystem {
         self.pick_candidates.clear();
         let want_pick = ctx.resource::<crate::ecs::PickIndex>().is_some();
         for (i, &entity) in prop_entities.iter().enumerate() {
-            let draws: Vec<u32> = prop_draw_indices[i]
+            let draws: concinnity_memory::InlineVec<u32> = prop_draw_indices[i]
                 .iter()
                 .map(|&slot| slot as u32)
                 .collect();

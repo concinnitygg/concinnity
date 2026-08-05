@@ -362,7 +362,7 @@ fn init_builds_draw_list_and_render_handles() {
     let ctx = world.ctx();
     let handles: Vec<Vec<u32>> = ctx
         .query::<RenderHandle>()
-        .map(|h| h.draws.clone())
+        .map(|h| h.draws.to_vec())
         .collect();
     assert_eq!(handles, vec![vec![0]]);
     let globals: Vec<[[f32; 4]; 4]> = ctx
@@ -1078,7 +1078,7 @@ fn spawn_request_clones_template_draw_slot() {
     let ctx = world.ctx();
     let mut handles: Vec<Vec<u32>> = ctx
         .query::<RenderHandle>()
-        .map(|h| h.draws.clone())
+        .map(|h| h.draws.to_vec())
         .collect();
     handles.sort();
     assert_eq!(handles, vec![vec![0], vec![1]], "spawned copy owns slot 1");

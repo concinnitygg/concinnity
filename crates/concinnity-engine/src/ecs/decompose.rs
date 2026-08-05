@@ -98,7 +98,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 
     // Parent edges resolve once every entity exists; children accumulate so each
     // parent gets a single Children component.
-    let mut children: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    let mut children: HashMap<Entity, concinnity_memory::InlineVec<Entity>> = HashMap::new();
     for (entity, prop) in &props {
         if let Some(parent_id) = prop.parent
             && let Some(&parent) = by_name.get(&parent_id)
@@ -206,7 +206,7 @@ mod tests {
         // The parent gained a Children list naming the child.
         let kids: Vec<_> = world
             .join2::<Children, ModelRenderer>()
-            .map(|(e, c, _)| (e, c.0.clone()))
+            .map(|(e, c, _)| (e, c.0.to_vec()))
             .collect();
         assert_eq!(kids, vec![(frame_e, vec![panel_e])]);
     }

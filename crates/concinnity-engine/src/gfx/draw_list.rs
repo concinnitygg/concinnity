@@ -357,7 +357,7 @@ pub(crate) fn reparent(
                     kids.0.push(child);
                 }
             }
-            None => ctx.insert(parent, Children(vec![child])),
+            None => ctx.insert(parent, Children(concinnity_memory::InlineVec::one(child))),
         }
     }
 
