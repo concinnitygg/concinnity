@@ -533,10 +533,10 @@ impl World {
         &mut self.systems
     }
 
-    // Re-serialize the world's components as blob defs. Systems are internal
-    // and never serialized, so they do not appear here.
-    pub fn component_tags(&self) -> Vec<u8> {
-        self.components.component_tags()
+    // How many components of each type the world holds, one entry per
+    // populated type. Systems are internal and never counted here.
+    pub fn component_census(&self) -> Vec<(u8, u32)> {
+        self.components.component_census()
     }
 
     pub fn start(&mut self) -> Result<(), CnResult> {
@@ -943,25 +943,29 @@ mod tests {
         assert_eq!(world.query::<TextLabel>().count(), 1, "others survive");
     }
 
-    // The component tag list carries one tag per stored component, so the debug
-    // server can report the world's makeup without reading their contents.
+    // The census carries one counted entry per populated component type, so the
+    // debug server can report the world's makeup without reading their contents
+    // and without a per-instance entry.
     #[test]
-    fn component_tags_report_one_tag_per_component() {
+    fn component_census_counts_one_entry_per_populated_type() {
         use crate::assets::TextLabel;
 
         let mut world = World::new_empty();
-        assert!(world.component_tags().is_empty());
+        assert!(world.component_census().is_empty());
 
         world.add_component(TextLabel::default());
         world.add_component(TextLabel::default());
         world.add_component(crate::assets::FpsCounter::default());
 
-        let tags = world.component_tags();
-        assert_eq!(tags.len(), 3, "one entry per component, not per type");
+        let census = world.component_census();
+        assert_eq!(census.len(), 2, "one entry per type, not per component");
+        let mut counts: Vec<u32> = census.iter().map(|&(_, n)| n).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![1, 2], "the two labels share one counted entry");
         assert_eq!(
-            tags.iter().collect::<std::collections::HashSet<_>>().len(),
-            2,
-            "the two labels share a tag, the counter has its own"
+            census.iter().map(|&(_, n)| n).sum::<u32>(),
+            3,
+            "every stored component is accounted for",
         );
     }
 

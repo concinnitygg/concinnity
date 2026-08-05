@@ -469,14 +469,18 @@ macro_rules! define_components {
                 &[]
             }
 
-            // The component tag of every stored component, one per instance.
-            // The debug WS snapshot reports these; nothing re-serializes stored
-            // components back to defs.
-            pub fn component_tags(&self) -> Vec<u8> {
+            // How many components of each type are stored: one `(tag, count)`
+            // entry per populated type, in tag order. The debug WS snapshot
+            // reports these; nothing re-serializes stored components back to
+            // defs. Counted rather than listed per instance, so the snapshot
+            // is sized by the number of component types rather than by the
+            // world.
+            pub fn component_census(&self) -> Vec<(u8, u32)> {
                 let mut out = Vec::new();
                 $(
-                    for _ in self.$variant.iter() {
-                        out.push(ComponentTag::$variant as u8);
+                    let count = self.$variant.len();
+                    if count > 0 {
+                        out.push((ComponentTag::$variant as u8, count as u32));
                     }
                 )+
                 out
@@ -604,9 +608,9 @@ mod tests {
     fn storage_push_dispatches_into_the_typed_column() {
         let mut storage = ComponentStorage::default();
         storage.push(crate::assets::Transform::default().into());
-        let tags = storage.component_tags();
+        let census = storage.component_census();
         // Transform's tag is its position in the component list.
-        assert_eq!(tags, vec![ComponentTag::Transform as u8]);
+        assert_eq!(census, vec![(ComponentTag::Transform as u8, 1)]);
     }
 
     #[test]

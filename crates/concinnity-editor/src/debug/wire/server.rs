@@ -352,11 +352,11 @@ impl DebugHook for DebugServer {
                 .map(|s| s.name().to_string())
                 .collect();
             state.assets = world
-                .component_tags()
+                .component_census()
                 .into_iter()
-                .map(|tag| AssetEntry {
-                    kind: "Component".to_string(),
-                    discriminant: tag,
+                .map(|(discriminant, count)| AssetEntry {
+                    discriminant,
+                    count,
                 })
                 .collect();
             // The AssetId -> name table is the build interner snapshot; it is

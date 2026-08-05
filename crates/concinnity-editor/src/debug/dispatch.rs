@@ -413,18 +413,18 @@ mod tests {
     }
 
     #[test]
-    fn assets_lists_kind_and_discriminant() {
+    fn assets_lists_discriminant_and_count() {
         let st = DebugState {
             frame: 1,
             assets: vec![AssetEntry {
-                kind: "Texture".into(),
                 discriminant: 5,
+                count: 12,
             }],
             ..Default::default()
         };
         let r = reply(r#"{"cmd":"assets"}"#, st);
-        assert_eq!(r["assets"][0]["kind"], "Texture");
         assert_eq!(r["assets"][0]["discriminant"], 5);
+        assert_eq!(r["assets"][0]["count"], 12);
     }
 
     #[test]

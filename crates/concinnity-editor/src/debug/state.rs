@@ -97,11 +97,12 @@ pub(crate) struct CameraSnapshot {
     pub(super) far: f32,
 }
 
-// A structural census entry. Per-asset names are not retained at runtime
-// (`BlobAssetDef::to_def` drops them), so this carries only kind + type
-// discriminant; the `names` table handles the id -> name remap separately.
+// A structural census entry: one component type and how many of it the world
+// holds. Per-component names are not retained at runtime (`BlobAssetDef::to_def`
+// drops them), so this carries only the type discriminant; the `names` table
+// handles the id -> name remap separately.
 #[derive(Clone, serde::Serialize)]
 pub(crate) struct AssetEntry {
-    pub(super) kind: String,
     pub(super) discriminant: u8,
+    pub(super) count: u32,
 }
