@@ -17,7 +17,9 @@ pub(super) struct View<'a> {
     pub(super) elapsed: f32,
     pub(super) vars: &'a [Val],
     pub(super) locals: &'a [Val],
-    pub(super) bindings: &'a mut Vec<Option<Val>>,
+    // Exactly as wide as the body's binding high-water mark, so a slot is
+    // always in range and the frame never grows mid-run.
+    pub(super) bindings: &'a mut [Option<Val>],
     pub(super) queries: &'a [Vec<Entity>],
     pub(super) by_name: &'a dyn Fn(AssetId) -> Option<Entity>,
     pub(super) transforms: &'a dyn Fn(Entity) -> Option<Transform>,
@@ -338,9 +340,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
 }
 
 fn set_binding(view: &mut View<'_>, slot: u16, value: Option<Val>) {
-    let slot = slot as usize;
-    if slot >= view.bindings.len() {
-        view.bindings.resize(slot + 1, None);
+    if let Some(slot) = view.bindings.get_mut(slot as usize) {
+        *slot = value;
     }
-    view.bindings[slot] = value;
 }

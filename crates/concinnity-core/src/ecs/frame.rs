@@ -66,6 +66,21 @@ impl<'a> FrameContext<'a> {
             None => FrameVec::Heap(items.collect()),
         }
     }
+
+    /// `len` copies of `value` in frame scratch, falling back to the heap if
+    /// the reserve is exhausted.
+    ///
+    /// The mutable counterpart to `collect`: a working frame a system fills in
+    /// as it runs, rather than a gathered set it reads back.
+    pub fn filled<T: Copy>(&self, len: usize, value: T) -> FrameVec<'a, T> {
+        match self.scratch.vec::<T>(len) {
+            Some(mut out) => {
+                out.extend(core::iter::repeat_n(value, len));
+                FrameVec::Scratch(out)
+            }
+            None => FrameVec::Heap(alloc::vec![value; len]),
+        }
+    }
 }
 
 /// A frame temporary: in the scratch arena when it fit, on the heap when it did
@@ -83,6 +98,15 @@ impl<T: Copy> core::ops::Deref for FrameVec<'_, T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
+        match self {
+            FrameVec::Scratch(v) => v,
+            FrameVec::Heap(v) => v,
+        }
+    }
+}
+
+impl<T: Copy> core::ops::DerefMut for FrameVec<'_, T> {
+    fn deref_mut(&mut self) -> &mut [T] {
         match self {
             FrameVec::Scratch(v) => v,
             FrameVec::Heap(v) => v,
@@ -144,6 +168,29 @@ mod tests {
         for (a, b) in (&from_scratch).into_iter().zip(&from_heap) {
             assert_eq!(a, b);
         }
+    }
+
+    #[test]
+    fn a_filled_frame_is_writable_in_place() {
+        let arena = Arena::with_capacity(4096);
+        let mut frame = FrameContext::new(&arena).filled(4, None::<u32>);
+        assert!(matches!(frame, FrameVec::Scratch(_)));
+        assert_eq!(&*frame, &[None, None, None, None]);
+
+        frame[2] = Some(9);
+        assert_eq!(&*frame, &[None, None, Some(9), None]);
+    }
+
+    // The heap arm has to be writable the same way, or a system that overflowed
+    // the reserve would silently stop recording.
+    #[test]
+    fn a_filled_frame_that_overflowed_is_still_writable() {
+        let arena = Arena::with_capacity(0);
+        let mut frame = FrameContext::new(&arena).filled(3, 0u32);
+        assert!(matches!(frame, FrameVec::Heap(_)));
+        frame[1] = 5;
+        assert_eq!(&*frame, &[0, 5, 0]);
+        assert_eq!(arena.overflows(), 1);
     }
 
     #[test]

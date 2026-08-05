@@ -308,6 +308,9 @@ struct Snapshot {
 // per-tick half of `run::View`, which adds the per-instance half.
 struct TickView<'a, 'w> {
     ctx: &'a PipelineContext<'w>,
+    // Copied out of the context so a body's working frame outlives the borrow
+    // the context itself is under.
+    frame: crate::ecs::FrameContext<'w>,
     snapshot: &'a Snapshot,
     // Resolved once per tick rather than per name lookup.
     names: Option<&'a crate::ecs::decompose::EntityByName>,
@@ -458,9 +461,14 @@ impl BehaviorSystem {
         // Read phase: every body runs against an unchanged world, so the
         // borrow here is shared and the effects it produces are applied only
         // after it ends.
-        let mut effects: Vec<(usize, Option<Entity>, Vec<Effect>)> = Vec::new();
+        //
+        // Every run appends into one buffer and records how much it added, so a
+        // body costs no allocation of its own however many instances fire.
+        let mut effects: Vec<Effect> = Vec::new();
+        let mut produced: Vec<(usize, Option<Entity>, usize)> = Vec::new();
         {
             let reads = TickView {
+                frame: ctx.frame,
                 ctx,
                 snapshot: &snapshot,
                 names: ctx.resource::<crate::ecs::decompose::EntityByName>(),
@@ -477,8 +485,8 @@ impl BehaviorSystem {
                 self.pending[idx].2 -= dt;
                 if self.pending[idx].2 <= 0.0 {
                     let (i, entity, _) = self.pending.swap_remove(idx);
-                    if let Some((produced, nodes)) = self.run_body(&reads, i, entity) {
-                        effects.push((i, entity, produced));
+                    if let Some((count, nodes)) = self.run_body(&reads, i, entity, &mut effects) {
+                        produced.push((i, entity, count));
                         if tracing {
                             fired.push((i, nodes));
                         }
@@ -492,8 +500,9 @@ impl BehaviorSystem {
                 let delay = self.programs[i].def.delay;
                 if delay > 0.0 {
                     self.pending.push((i, entity, delay));
-                } else if let Some((produced, nodes)) = self.run_body(&reads, i, entity) {
-                    effects.push((i, entity, produced));
+                } else if let Some((count, nodes)) = self.run_body(&reads, i, entity, &mut effects)
+                {
+                    produced.push((i, entity, count));
                     if tracing {
                         fired.push((i, nodes));
                     }
@@ -501,9 +510,12 @@ impl BehaviorSystem {
             }
         }
 
+        // Walking the buffer once hands each run exactly the effects it
+        // appended, in record order, without copying or reshuffling them.
         let mut save_requested = false;
-        for (i, entity, produced) in effects {
-            save_requested |= self.apply(ctx, i, entity, produced);
+        let mut recorded = effects.into_iter();
+        for (i, entity, count) in produced {
+            save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
         }
 
         // One write per tick, after every effect has landed, so the file holds
@@ -517,24 +529,29 @@ impl BehaviorSystem {
         }
     }
 
+    // Run one instance's body, appending its effects to `out`. Returns how many
+    // it appended, plus the nodes it executed when tracing.
     fn run_body(
         &self,
         reads: &TickView<'_, '_>,
         i: usize,
         entity: Option<Entity>,
-    ) -> Option<(Vec<Effect>, Vec<u32>)> {
+        out: &mut Vec<Effect>,
+    ) -> Option<(usize, Vec<u32>)> {
         let locals = self.instances[i]
             .iter()
             .find(|inst| inst.entity == entity)
-            .map(|inst| inst.locals.clone())?;
-        let mut bindings: Vec<Option<Val>> = vec![None; self.programs[i].bindings];
-        let mut out = Vec::new();
+            .map(|inst| inst.locals.as_slice())?;
+        // The compiled binding count is a high-water mark, so this frame is
+        // exactly as wide as the body can address.
+        let mut bindings = reads.frame.filled(self.programs[i].bindings, None);
         let mut nodes: Option<Vec<u32>> = reads.tracing.then(Vec::new);
+        let before = out.len();
         let mut view = View {
             dt: reads.dt,
             elapsed: reads.elapsed,
             vars: &self.vars,
-            locals: &locals,
+            locals,
             bindings: &mut bindings,
             queries: &reads.snapshot.queries[i],
             by_name: &|id| reads.named(id),
@@ -543,8 +560,8 @@ impl BehaviorSystem {
             self_entity: entity,
             trace: &mut nodes,
         };
-        run::exec(&self.programs[i].body, &mut view, &mut out);
-        Some((out, nodes.unwrap_or_default()))
+        run::exec(&self.programs[i].body, &mut view, out);
+        Some((out.len() - before, nodes.unwrap_or_default()))
     }
 
     // Land one body's effects. Returns whether a `save` was requested.
@@ -553,7 +570,7 @@ impl BehaviorSystem {
         ctx: &mut PipelineContext,
         i: usize,
         entity: Option<Entity>,
-        effects: Vec<Effect>,
+        effects: impl Iterator<Item = Effect>,
     ) -> bool {
         let mut save_requested = false;
         for effect in effects {

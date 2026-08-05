@@ -512,6 +512,67 @@ fn a_query_intersects_every_declared_component() {
 }
 
 #[test]
+fn each_run_gets_back_exactly_the_effects_it_produced() {
+    // Every run appends into one shared buffer and is handed back its own slice
+    // by count, so runs that produce different numbers of effects are what
+    // catches a mis-paired count: a slip would land one behavior's local write
+    // on the other's instance.
+    let mut world = world_with(vec![
+        Behavior {
+            asset_id: AssetId(1),
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            locals: vec![LocalDecl {
+                name: "one".into(),
+                value: Literal::Int(0),
+            }],
+            body: vec![Node::SetLocal {
+                local: "one".into(),
+                value: Expr::Int(1),
+                add: true,
+            }],
+            ..Default::default()
+        },
+        Behavior {
+            asset_id: AssetId(2),
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            locals: vec![LocalDecl {
+                name: "many".into(),
+                value: Literal::Int(0),
+            }],
+            body: vec![
+                Node::SetLocal {
+                    local: "many".into(),
+                    value: Expr::Int(10),
+                    add: true,
+                },
+                Node::SetLocal {
+                    local: "many".into(),
+                    value: Expr::Int(100),
+                    add: true,
+                },
+            ],
+            ..Default::default()
+        },
+    ]);
+    spawn_prop(&mut world, [0.0; 3]);
+    spawn_prop(&mut world, [1.0, 0.0, 0.0]);
+    let mut sys = system(&mut world);
+
+    tick(&mut sys, &mut world, 0.016);
+
+    let one: Vec<Val> = sys.instances[0].iter().map(|i| i.locals[0]).collect();
+    let many: Vec<Val> = sys.instances[1].iter().map(|i| i.locals[0]).collect();
+    assert_eq!(one, vec![Val::Int(1), Val::Int(1)], "one effect each");
+    assert_eq!(
+        many,
+        vec![Val::Int(110), Val::Int(110)],
+        "both effects each"
+    );
+}
+
+#[test]
 fn alive_follows_the_world_not_this_ticks_queries() {
     // A variable can hold an entity long after the query that produced it stops
     // matching, so `alive` has to ask the world whether the entity exists
