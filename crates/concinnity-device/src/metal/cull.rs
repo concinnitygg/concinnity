@@ -253,6 +253,9 @@ pub(super) fn metal_skinned_record(
 struct CullSceneBuffers<'a> {
     object_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
     draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    // The record set the two buffers hold. Drives the dispatch width, so the
+    // kernel never reads past a snapshot the live draw list has since outgrown.
+    counts: crate::metal::context::DrawRecordCounts,
 }
 
 // The camera the cull kernel tests records against: the frustum planes plus the
@@ -481,6 +484,7 @@ impl MtlContext {
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         frustum: &crate::gfx::frustum::Frustum,
         cam_pos: [f32; 3],
+        counts: crate::metal::context::DrawRecordCounts,
     ) -> Result<(), String> {
         let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
         else {
@@ -494,6 +498,7 @@ impl MtlContext {
             CullSceneBuffers {
                 object_buffer,
                 draw_args_buffer,
+                counts,
             },
             CullView { frustum, cam_pos },
             CullOutputTarget {
@@ -537,6 +542,7 @@ impl MtlContext {
             CullSceneBuffers {
                 object_buffer,
                 draw_args_buffer,
+                counts: self.draw_record_counts(),
             },
             CullView { frustum, cam_pos },
             CullOutputTarget {
@@ -570,6 +576,7 @@ impl MtlContext {
         let CullSceneBuffers {
             object_buffer,
             draw_args_buffer,
+            counts,
         } = scene;
         let CullView { frustum, cam_pos } = view;
         let CullOutputTarget {
@@ -590,7 +597,7 @@ impl MtlContext {
         };
         // Static objects + folded instances: the kernel tests one thread per
         // record and encodes survivors into the ICB.
-        let object_count = self.cull_count();
+        let object_count = counts.total;
         if object_count == 0 {
             return Ok(());
         }
@@ -627,7 +634,7 @@ impl MtlContext {
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
-            skinned_base: self.skinned_record_base() as u32,
+            skinned_base: counts.skinned_base as u32,
             // Main + mirror cull write at `tid` (cascade_base 0); the shadow cull
             // is the only path that offsets by cascade.
             cascade_base: 0,

@@ -53,14 +53,18 @@ pub(in crate::metal) struct MainPassCamera {
     pub cam_pos: [f32; 3],
 }
 
-// The GPU-driven per-frame buffers the bindless static path consumes. All three
-// are `Some` together exactly when the bindless cull path is active this frame;
-// the legacy per-draw path leaves them `None` and walks the CPU `visible` list.
+// The GPU-driven buffers the bindless static path consumes. All three are `Some`
+// together exactly when the bindless cull path is active; the legacy per-draw
+// path leaves them `None` and walks the CPU `visible` list. `counts` is the
+// record set those buffers were built for, which the indirect-draw ranges
+// address; it is the live draw list for a frame pass and an earlier snapshot for
+// the reflection-probe bake.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub counts: crate::metal::context::DrawRecordCounts,
 }
 
 // The scene draw inputs the main pass walks: the CPU visible set (legacy path),
@@ -372,6 +376,7 @@ impl MtlContext {
             object_buffer,
             bindless_tex_args,
             deformed_skinned,
+            counts,
         } = gpu;
         let (Some(obj_buf), Some(tex_args), false) = (
             object_buffer,
@@ -434,6 +439,7 @@ impl MtlContext {
             tex_args,
             &self.cull.icbs_2,
             deformed_skinned,
+            counts,
         );
 
         Ok(draw_calls)
@@ -447,13 +453,16 @@ impl MtlContext {
     // pass (`icb = cull_icb_2`) so both issue the bindless geometry identically.
     //
     // The ICB is split into two `executeCommandsInBuffer` ranges because Metal
-    // bakes the index buffer into each indirect command: records [0, base) are
+    // bakes the index buffer into each indirect command: the prefix records are
     // static + instances (static u32 index buffer, static vertex buffer already
-    // bound at binding 1 by `bind_main_pass_shared`); records [base, count) are
-    // the folded skinned tail, which the cull kernel encoded against the skinned
+    // bound at binding 1 by `bind_main_pass_shared`); the tail records are the
+    // folded skinned ones, which the cull kernel encoded against the skinned
     // u16 index buffer and which read the compute-deformed vertices, so this
     // rebinds the deformed buffer at binding 1 for that range (inherited by the
-    // ICB commands). Returns the number of indirect draws issued (1 or 2).
+    // ICB commands). Both ranges come from `counts`, the record set the caller's
+    // buffers were built and culled for, so a snapshot capture never addresses
+    // slots the live draw list grew after its ICB was sized. Returns the number
+    // of indirect draws issued (1 or 2).
     fn execute_bindless_static_icb(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -461,6 +470,7 @@ impl MtlContext {
         tex_args: &Retained<ProtocolObject<dyn MTLBuffer>>,
         icbs: &[Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        counts: crate::metal::context::DrawRecordCounts,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
         // Object records (binding 9) + bindless textures (binding 7) are shared
@@ -478,27 +488,22 @@ impl MtlContext {
         }
         self.use_bindless_textures(enc);
 
-        let base = self.skinned_record_base();
-        let total = self.cull_count();
         let mut draw_calls = 0u32;
 
-        // Static + instance range [0, base), once per shader bucket: bucket 0
-        // executes under the pipeline `bind_main_pass_shared` bound, each later
-        // bucket under its material shader's pipeline. The cull kernel wrote
-        // every record's command into exactly one bucket's ICB, so the ranges
-        // never double-draw. The static u32 index buffer is referenced only
-        // inside the indirect commands (not bound), so make it resident; the
-        // static vertex buffer is already bound at binding 1.
-        if base > 0 {
+        // Static + instance prefix, once per shader bucket: bucket 0 executes
+        // under the pipeline `bind_main_pass_shared` bound, each later bucket
+        // under its material shader's pipeline. The cull kernel wrote every
+        // record's command into exactly one bucket's ICB, so the ranges never
+        // double-draw. The static u32 index buffer is referenced only inside the
+        // indirect commands (not bound), so make it resident; the static vertex
+        // buffer is already bound at binding 1.
+        if let Some(prefix) = counts.prefix(0) {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = objc2_foundation::NSRange {
-                location: 0,
-                length: base,
-            };
+            let range = crate::metal::context::ns_range(prefix);
             for (b, icb) in icbs.iter().enumerate() {
                 if b > 0 {
                     // A bucket whose Shader is not resident yet (its scene has
@@ -509,8 +514,8 @@ impl MtlContext {
                     };
                     enc.setRenderPipelineState(pso);
                 }
-                // SAFETY: [0, base) spans the static + instance command slots
-                // (`ensure_icb_capacity` sized every ICB for `cull_count()` >= base).
+                // SAFETY: the prefix spans the static + instance command slots
+                // (`ensure_icb_capacity` sized every ICB for `counts.total`).
                 unsafe {
                     enc.executeCommandsInBuffer_withRange(icb, range);
                 }
@@ -525,14 +530,14 @@ impl MtlContext {
             }
         }
 
-        // Skinned tail [base, total): bind the deformed vertex buffer (inherited
-        // by the ICB commands) and make the skinned u16 index buffer resident
-        // (the cull kernel baked it into these commands). `deformed_skinned` is
-        // `Some` exactly when the fold is active (n_skinned > 0 => total > base).
-        // Skinned draws always render under the world default shader, so only
-        // bucket 0's ICB executes here.
-        if let (Some(deformed), Some(icb0)) = (deformed_skinned, icbs.first())
-            && total > base
+        // Skinned tail: bind the deformed vertex buffer (inherited by the ICB
+        // commands) and make the skinned u16 index buffer resident (the cull
+        // kernel baked it into these commands). `deformed_skinned` is `Some`
+        // exactly when the fold is active, which is also when the tail is
+        // non-empty. Skinned draws always render under the world default shader,
+        // so only bucket 0's ICB executes here.
+        if let (Some(deformed), Some(icb0), Some(tail)) =
+            (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
@@ -544,13 +549,9 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            let range = objc2_foundation::NSRange {
-                location: base,
-                length: total - base,
-            };
-            // SAFETY: [base, total) spans the folded skinned command slots.
+            // SAFETY: the tail spans the folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb0, range);
+                enc.executeCommandsInBuffer_withRange(icb0, crate::metal::context::ns_range(tail));
             }
             draw_calls += 1;
         }
@@ -703,6 +704,7 @@ impl MtlContext {
             object_buffer,
             bindless_tex_args,
             deformed_skinned,
+            counts,
         } = gpu;
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main static"));
         if !self.bind_main_pass_shared(enc, view_uniforms) {
@@ -735,6 +737,7 @@ impl MtlContext {
                 tex_args,
                 bucket_icbs,
                 deformed_skinned,
+                counts,
             );
         } else {
             // Legacy static pass: rebind model/material/textures per draw.

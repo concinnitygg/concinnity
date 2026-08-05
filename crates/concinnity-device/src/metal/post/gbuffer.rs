@@ -522,21 +522,17 @@ impl MtlContext {
             enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 2);
         }
 
-        let base = self.skinned_record_base();
-        let total = self.cull_count();
+        let counts = self.draw_record_counts();
         let mut draw_calls = 0u32;
 
-        // Static + instance + chunk prefix [0, base): static u32 IB resident.
-        if base > 0 {
+        // Static + instance + chunk prefix: static u32 IB resident.
+        if let Some(prefix) = counts.prefix(0) {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = objc2_foundation::NSRange {
-                location: 0,
-                length: base,
-            };
+            let range = crate::metal::context::ns_range(prefix);
             // The pre-pass writes normals/depth/velocity under its single
             // engine pipeline, so every bucket's ICB executes with the same
             // PSO; together the buckets cover the whole record range exactly
@@ -547,8 +543,8 @@ impl MtlContext {
                 if !self.world_shader_resident(b) {
                     continue;
                 }
-                // SAFETY: [0, base) spans the static + instance + chunk command
-                // slots; every reused main ICB is sized for cull_count() >= base.
+                // SAFETY: the prefix spans the static + instance + chunk command
+                // slots; every reused main ICB is sized for `counts.total`.
                 unsafe {
                     enc.executeCommandsInBuffer_withRange(icb, range);
                 }
@@ -556,14 +552,12 @@ impl MtlContext {
             }
         }
 
-        // Folded skinned tail [base, total): current deformed at stream 0,
-        // previous-frame deformed at stream 1. Until the deformed ring is primed
-        // (frame 0 / after a rebuild), or with velocity inactive / a single frame
-        // in flight, bind the CURRENT buffer as the previous one -> zero skinned
+        // Folded skinned tail: current deformed at stream 0, previous-frame
+        // deformed at stream 1. Until the deformed ring is primed (frame 0 /
+        // after a rebuild), or with velocity inactive / a single frame in
+        // flight, bind the CURRENT buffer as the previous one -> zero skinned
         // motion (no garbage motion vector from an unposed prior slot).
-        if let Some(deformed) = deformed_current
-            && total > base
-        {
+        if let (Some(deformed), Some(tail)) = (deformed_current, counts.skinned_tail(0)) {
             let prev = if velocity_active
                 && self.frames_in_flight >= 2
                 && self.skinned.deformed_primed.load(Ordering::Relaxed)
@@ -583,14 +577,13 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            let range = objc2_foundation::NSRange {
-                location: base,
-                length: total - base,
-            };
             // Skinned records are always bucket 0.
-            // SAFETY: [base, total) spans the folded skinned command slots.
+            // SAFETY: the tail spans the folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(&self.cull.icbs[0], range);
+                enc.executeCommandsInBuffer_withRange(
+                    &self.cull.icbs[0],
+                    crate::metal::context::ns_range(tail),
+                );
             }
             draw_calls += 1;
             // The current deformed slot now holds a valid pose, so next frame's

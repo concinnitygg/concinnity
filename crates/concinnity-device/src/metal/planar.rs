@@ -255,6 +255,7 @@ impl MtlContext {
                     object_buffer: params.object_buffer,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
+                    counts: self.draw_record_counts(),
                 },
                 icb_override,
             )?;

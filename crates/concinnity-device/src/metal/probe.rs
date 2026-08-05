@@ -114,6 +114,10 @@ pub(in crate::metal) struct RenderingBake {
     elapsed: f32,
     // Loop-invariant buffers + targets shared across the six faces (reserved ring slot).
     gpu: BakeGpu,
+    // The record set `gpu`'s object + draw-args buffers were built for. Runtime
+    // spawns grow the live draw list while the faces render, so every face culls
+    // and draws against this snapshot instead.
+    counts: crate::metal::context::DrawRecordCounts,
 }
 
 pub(in crate::metal) struct ConvertingBake {
@@ -374,7 +378,7 @@ impl MtlContext {
         let draw_args = self
             .build_draw_args_buffer(eye, slot)?
             .ok_or("probe: no draw args to bake")?;
-        self.ensure_icb_capacity(self.cull_count())?;
+        let counts = self.draw_record_counts();
         let tex_args = self
             .build_bindless_texture_args(slot)?
             .ok_or("probe: no bindless texture args")?;
@@ -425,6 +429,7 @@ impl MtlContext {
                 joint_bufs,
                 deformed,
             },
+            counts,
         });
         Ok(())
     }
@@ -436,26 +441,32 @@ impl MtlContext {
     // it: each face's cull (and the frame's own cull) waits for the prior read,
     // ordering the reuse correctly with no explicit barrier or `waitUntilCompleted`.
     fn probe_render_next_face(&mut self) -> Result<(), String> {
-        let Some(RenderingBake {
-            done,
-            cursor,
-            eye,
-            near,
-            far,
-            elapsed,
-            gpu,
-            ..
-        }) = &self.probe_rendering
-        else {
+        let Some(bake) = self.probe_rendering.as_ref() else {
             return Err("probe: render face with no capture in flight".into());
         };
-        let face = *cursor;
-        let (eye, near, far, elapsed) = (*eye, *near, *far, *elapsed);
+        let (face, eye, near, far, elapsed, counts) = (
+            bake.cursor,
+            bake.eye,
+            bake.near,
+            bake.far,
+            bake.elapsed,
+            bake.counts,
+        );
         let attach_done = face + 1 == PROBE_FACE_COUNT;
+
+        // The shared ICB is otherwise sized from the frame's live draw list, which
+        // this capture's snapshot does not follow; size it for the snapshot before
+        // the face's cull encodes into it.
+        self.ensure_icb_capacity(counts.total)?;
 
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
         let view = reflection_probe::face_view_matrix(eye, face);
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
+
+        let RenderingBake { done, gpu, .. } = self
+            .probe_rendering
+            .as_ref()
+            .expect("probe capture was just checked");
 
         // Cull command buffer: fills the shared ICB for this face's frustum.
         let cull_cb = self
@@ -471,7 +482,14 @@ impl MtlContext {
         {
             self.encode_main_skin(&cull_cb, def, &gpu.joint_bufs)?;
         }
-        self.encode_cull(&cull_cb, &gpu.object_buffer, &gpu.draw_args, &frustum, eye)?;
+        self.encode_cull(
+            &cull_cb,
+            &gpu.object_buffer,
+            &gpu.draw_args,
+            &frustum,
+            eye,
+            counts,
+        )?;
         cull_cb.commit();
 
         // Render command buffer: reads the ICB into this face. Instances fold into
@@ -505,6 +523,7 @@ impl MtlContext {
                 object_buffer: Some(&gpu.object_buffer),
                 bindless_tex_args: Some(&gpu.tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
+                counts,
             },
             // Probe cube bake reuses the main cull ICB (no per-face mirror cull).
             None,

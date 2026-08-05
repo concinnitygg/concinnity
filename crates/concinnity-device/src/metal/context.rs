@@ -727,7 +727,53 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
     );
 }
 
+// The cull-record set one GPU-driven encode covers: `total` command slots, of
+// which the folded skinned tail starts at `skinned_base`. Cull dispatches and
+// indirect-draw ranges take this instead of reading the live draw list, so an
+// encode whose object + draw-args buffers were snapshotted on an earlier frame
+// keeps addressing exactly the records those buffers hold. The reflection-probe
+// bake is the one such consumer: it builds its buffers once and renders the six
+// cube faces one per frame, while runtime spawns keep growing the live list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DrawRecordCounts {
+    pub total: usize,
+    pub skinned_base: usize,
+}
+
+impl DrawRecordCounts {
+    // Command slots holding the static objects + folded instances, which draw
+    // through the static index buffer. `block` is where the record set starts in
+    // the target ICB: 0 for the main ICB, the cascade's block for the shadow ICB.
+    // `None` when the set has no such records.
+    pub(super) fn prefix(&self, block: usize) -> Option<std::ops::Range<usize>> {
+        (self.skinned_base > 0).then(|| block..block + self.skinned_base)
+    }
+
+    // Command slots holding the folded skinned tail, which draws compute-deformed
+    // vertices through the skinned u16 index buffer. `None` when nothing is folded.
+    pub(super) fn skinned_tail(&self, block: usize) -> Option<std::ops::Range<usize>> {
+        (self.total > self.skinned_base).then(|| block + self.skinned_base..block + self.total)
+    }
+}
+
+// The `NSRange` an indirect-draw `executeCommandsInBuffer` takes for `r`.
+pub(super) fn ns_range(r: std::ops::Range<usize>) -> objc2_foundation::NSRange {
+    objc2_foundation::NSRange {
+        location: r.start,
+        length: r.end - r.start,
+    }
+}
+
 impl MtlContext {
+    // The record set the live draw list covers. Every frame-driven pass takes
+    // this; only the reflection-probe bake substitutes its own snapshot.
+    pub(super) fn draw_record_counts(&self) -> DrawRecordCounts {
+        DrawRecordCounts {
+            total: self.cull_count(),
+            skinned_base: self.skinned_record_base(),
+        }
+    }
+
     // Number of records the GPU-driven cull processes this frame: the static
     // draw objects, every folded instance, then every folded skinned object.
     // Metal has no separate `n_objects` field; `draw_objects.len()` is the
@@ -1443,4 +1489,69 @@ pub(super) fn zero_buffer_region(
         std::ptr::write_bytes(dst.add(offset), 0, len);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(total: usize, skinned_base: usize) -> DrawRecordCounts {
+        DrawRecordCounts {
+            total,
+            skinned_base,
+        }
+    }
+
+    #[test]
+    fn static_only_set_is_all_prefix() {
+        let c = counts(12, 12);
+        assert_eq!(c.prefix(0), Some(0..12));
+        assert_eq!(c.skinned_tail(0), None);
+    }
+
+    #[test]
+    fn folded_skinned_set_splits_at_the_base() {
+        let c = counts(12, 9);
+        assert_eq!(c.prefix(0), Some(0..9));
+        assert_eq!(c.skinned_tail(0), Some(9..12));
+    }
+
+    #[test]
+    fn skinned_only_set_has_no_prefix() {
+        let c = counts(4, 0);
+        assert_eq!(c.prefix(0), None);
+        assert_eq!(c.skinned_tail(0), Some(0..4));
+    }
+
+    #[test]
+    fn empty_set_yields_no_ranges() {
+        let c = counts(0, 0);
+        assert_eq!(c.prefix(0), None);
+        assert_eq!(c.skinned_tail(0), None);
+    }
+
+    #[test]
+    fn block_offsets_both_ranges_into_a_cascade() {
+        let c = counts(12, 9);
+        assert_eq!(c.prefix(24), Some(24..33));
+        assert_eq!(c.skinned_tail(24), Some(33..36));
+    }
+
+    #[test]
+    fn ranges_stay_inside_the_block_they_start() {
+        let c = counts(12, 9);
+        for cascade in 0..4 {
+            let block = cascade * c.total;
+            let tail = c.skinned_tail(block).expect("skinned tail");
+            assert_eq!(c.prefix(block).expect("prefix").start, block);
+            assert_eq!(tail.end, block + c.total);
+        }
+    }
+
+    #[test]
+    fn ns_range_carries_start_and_length() {
+        let r = ns_range(9..12);
+        assert_eq!(r.location, 9);
+        assert_eq!(r.length, 3);
+    }
 }

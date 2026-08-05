@@ -402,6 +402,7 @@ impl MtlContext {
                     draw_args_buffer,
                     params.frustum,
                     params.cam_pos,
+                    self.draw_record_counts(),
                 )?;
                 // GPU-driven cascaded shadow: fill the per-cascade
                 // shadow ICB in this same Cull command buffer (committed before
@@ -448,6 +449,7 @@ impl MtlContext {
                     object_buffer: params.object_buffer,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
+                    counts: self.draw_record_counts(),
                 },
             )?,
             PassId::Shadow => {
@@ -490,6 +492,7 @@ impl MtlContext {
                     object_buffer: params.object_buffer,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
+                    counts: self.draw_record_counts(),
                 },
                 params.world_hidden,
             )?,

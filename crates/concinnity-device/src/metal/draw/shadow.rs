@@ -265,37 +265,33 @@ impl MtlContext {
         }
 
         // This cascade's command slots live at `[c*stride, c*stride + stride)`
-        // in the shared shadow ICB (stride = the live cull_count, the same value
-        // `encode_shadow_culls` used as `cascade_base`).
-        let stride = self.cull_count();
-        let base = self.skinned_record_base();
-        let cascade_off = cascade_idx * stride;
+        // in the shared shadow ICB (stride = the live record count, the same
+        // value `encode_shadow_culls` used as `cascade_base`).
+        let counts = self.draw_record_counts();
+        let cascade_off = cascade_idx * counts.total;
         let mut draw_calls = 0u32;
 
         // Static + instance prefix.
-        if base > 0 {
+        if let Some(prefix) = counts.prefix(cascade_off) {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = objc2_foundation::NSRange {
-                location: cascade_off,
-                length: base,
-            };
-            // SAFETY: [cascade_off, cascade_off + base) spans this cascade's
-            // static + instance command slots (ensure_shadow_icb_capacity sized
-            // the ICB for NUM_SHADOW_CASCADES * cull_count).
+            // SAFETY: the prefix spans this cascade's static + instance command
+            // slots (ensure_shadow_icb_capacity sized the ICB for
+            // NUM_SHADOW_CASCADES * cull_count).
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+                enc.executeCommandsInBuffer_withRange(
+                    icb.as_ref(),
+                    crate::metal::context::ns_range(prefix),
+                );
             }
             draw_calls += 1;
         }
 
         // Folded skinned tail: deformed VB at binding 1, skinned u16 IB resident.
-        if let Some(deformed) = deformed_skinned
-            && self.n_skinned > 0
-        {
+        if let (Some(deformed), Some(tail)) = (deformed_skinned, counts.skinned_tail(cascade_off)) {
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
             }
@@ -306,14 +302,12 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            let range = objc2_foundation::NSRange {
-                location: cascade_off + base,
-                length: self.n_skinned,
-            };
-            // SAFETY: [cascade_off + base, cascade_off + cull_count) spans this
-            // cascade's folded skinned command slots.
+            // SAFETY: the tail spans this cascade's folded skinned command slots.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(icb.as_ref(), range);
+                enc.executeCommandsInBuffer_withRange(
+                    icb.as_ref(),
+                    crate::metal::context::ns_range(tail),
+                );
             }
             draw_calls += 1;
         }
