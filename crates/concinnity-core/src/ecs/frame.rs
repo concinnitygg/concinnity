@@ -45,14 +45,20 @@ impl<'a> FrameContext<'a> {
     /// out of the context, needs the context mutably to act on it, and so has
     /// to copy the values out first to end the borrow. That copy is what the
     /// arena is for.
+    /// Reserves from the iterator's upper size bound, so anything that knows
+    /// how much it can yield qualifies -- not just `ExactSizeIterator`. An
+    /// unbounded iterator goes to the heap rather than guessing a reservation.
     pub fn collect<T, I>(&self, items: I) -> FrameVec<'a, T>
     where
         T: Copy,
         I: IntoIterator<Item = T>,
-        I::IntoIter: ExactSizeIterator,
     {
         let items = items.into_iter();
-        match self.scratch.vec::<T>(items.len()) {
+        let reservation = items
+            .size_hint()
+            .1
+            .and_then(|upper| self.scratch.vec::<T>(upper));
+        match reservation {
             Some(mut out) => {
                 out.extend(items);
                 FrameVec::Scratch(out)

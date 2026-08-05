@@ -1597,7 +1597,7 @@ mod tests {
             .events::<crate::assets::SettingCommand>()
             .expect("setting command queued");
         let mut cursor = crate::ecs::EventCursor::default();
-        let seen = events.read(&mut cursor);
+        let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].setting, "ssao");
         assert_eq!(seen[0].op, crate::assets::SettingOp::Next);
@@ -1623,7 +1623,7 @@ mod tests {
             .events::<crate::assets::SettingCommand>()
             .expect("setting command queued");
         let mut cursor = crate::ecs::EventCursor::default();
-        let seen = events.read(&mut cursor);
+        let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].setting, "key_forward");
         assert_eq!(
@@ -1649,7 +1649,7 @@ mod tests {
             .events::<crate::assets::StoryCommand>()
             .expect("story command queued");
         let mut cursor = crate::ecs::EventCursor::default();
-        let seen = events.read(&mut cursor);
+        let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(*seen[0], crate::assets::StoryCommand::Choose(2));
     }
@@ -1674,7 +1674,7 @@ mod tests {
             .events::<crate::assets::DespawnRequest>()
             .expect("despawn request queued");
         let mut cursor = crate::ecs::EventCursor::default();
-        let seen = events.read(&mut cursor);
+        let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(
             seen[0].target.name().unwrap(),
@@ -1717,7 +1717,7 @@ mod tests {
             let events = world
                 .events::<crate::assets::ReparentRequest>()
                 .expect("reparent request queued");
-            let seen = events.read(&mut cursor);
+            let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert_eq!(
                 seen[0].child.name().unwrap(),
@@ -1742,7 +1742,7 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world.events::<crate::assets::ReparentRequest>().unwrap();
-            let seen = events.read(&mut cursor);
+            let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert!(seen[0].parent.is_none());
         }
@@ -1800,7 +1800,7 @@ mod tests {
             let events = world
                 .events::<crate::assets::SpawnRequest>()
                 .expect("spawn request queued");
-            let seen = events.read(&mut cursor);
+            let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].template, crate::ecs::asset_id::AssetId(0));
             // The new instance name was interned to the next id.
@@ -1828,7 +1828,7 @@ mod tests {
         assert!(rx.recv().unwrap().is_ok());
         {
             let events = world.events::<crate::assets::SpawnRequest>().unwrap();
-            let seen = events.read(&mut cursor);
+            let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
             assert_eq!(seen[0].transform.scale, [1.0, 1.0, 1.0]);
         }

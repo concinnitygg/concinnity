@@ -225,7 +225,6 @@ impl System for AudioSystem {
         {
             let shown: Vec<AssetId> = events
                 .read(&mut self.view_shown_cursor)
-                .into_iter()
                 .map(|e| e.screen)
                 .collect();
             for screen in shown {
@@ -252,11 +251,7 @@ impl System for AudioSystem {
         // Play direct requests (the story system's page audio). The story
         // system runs earlier in the schedule, so these are heard this tick.
         if let Some(events) = ctx.events::<PlayCue>() {
-            let requests: Vec<PlayCue> = events
-                .read(&mut self.play_cue_cursor)
-                .into_iter()
-                .copied()
-                .collect();
+            let requests: Vec<PlayCue> = events.read(&mut self.play_cue_cursor).copied().collect();
             for cue in requests {
                 self.cues_matched += 1;
                 let Some(bytes) = self.cue_clip_bytes.get(&cue.clip) else {

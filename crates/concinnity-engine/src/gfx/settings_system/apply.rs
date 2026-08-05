@@ -25,11 +25,7 @@ impl SettingsState {
         // which needs &mut ctx (label/sprite updates, ControlsCommand /
         // AudioCommand sends).
         let setting_cmds: Vec<SettingCommand> = match ctx.events::<SettingCommand>() {
-            Some(events) => events
-                .read(&mut self.setting_cmd_cursor)
-                .into_iter()
-                .cloned()
-                .collect(),
+            Some(events) => events.read(&mut self.setting_cmd_cursor).cloned().collect(),
             None => Vec::new(),
         };
         // One settings snapshot serves the whole command batch: loaded

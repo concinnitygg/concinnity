@@ -418,11 +418,7 @@ impl System for UiInputSystem {
         // of the queue to release the ctx borrow before apply_screen_command,
         // which needs &mut ctx.
         let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
-            Some(events) => events
-                .read(&mut self.screen_cmd_cursor)
-                .into_iter()
-                .cloned()
-                .collect(),
+            Some(events) => events.read(&mut self.screen_cmd_cursor).cloned().collect(),
             None => Vec::new(),
         };
         for cmd in screen_cmds {
@@ -1808,7 +1804,7 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         world
             .events::<ScreenCommand>()
-            .and_then(|e| e.read(&mut cursor).into_iter().next().cloned())
+            .and_then(|e| e.read(&mut cursor).next().cloned())
     }
 
     // Every SettingCommand the system sent, read with a fresh cursor (in send
@@ -1818,7 +1814,7 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         world
             .events::<SettingCommand>()
-            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .map(|e| e.read(&mut cursor).cloned().collect())
             .unwrap_or_default()
     }
 
@@ -3323,7 +3319,7 @@ mod tests {
     fn shown_views(world: &World, cursor: &mut crate::ecs::EventCursor) -> Vec<AssetId> {
         world
             .events::<ScreenShown>()
-            .map(|e| e.read(cursor).into_iter().map(|s| s.screen).collect())
+            .map(|e| e.read(cursor).map(|s| s.screen).collect())
             .unwrap_or_default()
     }
 
@@ -3394,7 +3390,7 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         world
             .events::<StoryCommand>()
-            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .map(|e| e.read(&mut cursor).cloned().collect())
             .unwrap_or_default()
     }
 
@@ -3712,7 +3708,7 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         let sent: Vec<ScreenCommand> = world
             .events::<ScreenCommand>()
-            .map(|e| e.read(&mut cursor).into_iter().cloned().collect())
+            .map(|e| e.read(&mut cursor).cloned().collect())
             .unwrap_or_default();
         assert!(
             sent.iter()

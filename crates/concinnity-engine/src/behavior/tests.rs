@@ -98,7 +98,7 @@ fn count<E: 'static>(world: &mut TestWorld, cursor: &mut EventCursor) -> usize {
     world
         .ctx()
         .events::<E>()
-        .map(|e| e.read(cursor).len())
+        .map(|e| e.read(cursor).count())
         .unwrap_or(0)
 }
 
@@ -326,7 +326,7 @@ fn despawn_of_self_addresses_the_entity_not_a_name() {
     let requests: Vec<Target> = world
         .ctx()
         .events::<DespawnRequest>()
-        .map(|e| e.read(&mut cursor).iter().map(|r| r.target).collect())
+        .map(|e| e.read(&mut cursor).map(|r| r.target).collect())
         .unwrap_or_default();
     assert_eq!(requests, vec![Target::Entity(entity)]);
 }
@@ -839,7 +839,7 @@ fn show_and_hide_send_visibility_requests() {
     let visible: Vec<bool> = world
         .ctx()
         .events::<VisibilityRequest>()
-        .map(|e| e.read(&mut cursor).iter().map(|r| r.visible).collect())
+        .map(|e| e.read(&mut cursor).map(|r| r.visible).collect())
         .unwrap_or_default();
     assert_eq!(visible, vec![false, true], "hide then show, in body order");
 }
@@ -1131,7 +1131,7 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
     world.step();
     let fired = world
         .events::<StoryCommand>()
-        .map(|e| e.read(&mut cursor).len())
+        .map(|e| e.read(&mut cursor).count())
         .unwrap_or(0);
     assert_eq!(fired, 0, "a paused world fires nothing");
 
@@ -1141,7 +1141,7 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
         .events::<StoryCommand>()
         .expect("the behavior fired after unpause")
         .read(&mut cursor)
-        .len();
+        .count();
     assert_eq!(fired, 1);
 }
 

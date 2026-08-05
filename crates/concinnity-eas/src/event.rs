@@ -64,23 +64,32 @@ impl<E> Events<E> {
 
     // Read every buffered event the cursor has not yet seen, in send order, and
     // advance the cursor past them.
-    pub fn read(&self, cursor: &mut EventCursor) -> Vec<&E> {
-        let mut out = Vec::new();
+    //
+    // Lazy: a drain costs no allocation, which matters because every event
+    // reader does this every frame. The cursor advances here rather than as the
+    // iterator is consumed, so a caller that reads only part of the run still
+    // ends up past all of it -- the same thing a returned collection did, and
+    // the only behaviour that makes "every reader sees every event exactly
+    // once" hold for a partial read.
+    pub fn read(&self, cursor: &mut EventCursor) -> impl Iterator<Item = &E> {
         // Visit buffers oldest-first so events come back in send order.
-        let mut order = [0usize, 1usize];
-        if self.starts[order[0]] > self.starts[order[1]] {
-            order.swap(0, 1);
-        }
-        for &buffer in &order {
-            let start = self.starts[buffer];
-            for (offset, event) in self.buffers[buffer].iter().enumerate() {
-                if start + offset >= cursor.next {
-                    out.push(event);
-                }
-            }
-        }
+        let (older, newer) = if self.starts[0] > self.starts[1] {
+            (1, 0)
+        } else {
+            (0, 1)
+        };
+        let from = cursor.next;
         cursor.next = self.next_id;
-        out
+        self.unseen(older, from).chain(self.unseen(newer, from))
+    }
+
+    // The events in one buffer at or past sequence id `from`.
+    fn unseen(&self, buffer: usize, from: usize) -> impl Iterator<Item = &E> {
+        let start = self.starts[buffer];
+        // Ids within a buffer are contiguous from `start`, so the cut is a
+        // position rather than a per-event test.
+        let skip = from.saturating_sub(start);
+        self.buffers[buffer].iter().skip(skip)
     }
 
     // Total events currently buffered across both frames.
@@ -103,13 +112,13 @@ mod tests {
         events.send(1);
         events.send(2);
         let mut cursor = EventCursor::default();
-        let first: Vec<u32> = events.read(&mut cursor).into_iter().copied().collect();
+        let first: Vec<u32> = events.read(&mut cursor).copied().collect();
         assert_eq!(first, vec![1, 2]);
         // A second read with the same cursor sees nothing new.
-        assert!(events.read(&mut cursor).is_empty());
+        assert_eq!(events.read(&mut cursor).count(), 0);
         // A newly sent event is picked up.
         events.send(3);
-        let next: Vec<u32> = events.read(&mut cursor).into_iter().copied().collect();
+        let next: Vec<u32> = events.read(&mut cursor).copied().collect();
         assert_eq!(next, vec![3]);
     }
 
@@ -120,8 +129,8 @@ mod tests {
         events.send(20);
         let mut a = EventCursor::default();
         let mut b = EventCursor::default();
-        let read_a: Vec<u32> = events.read(&mut a).into_iter().copied().collect();
-        let read_b: Vec<u32> = events.read(&mut b).into_iter().copied().collect();
+        let read_a: Vec<u32> = events.read(&mut a).copied().collect();
+        let read_b: Vec<u32> = events.read(&mut b).copied().collect();
         assert_eq!(read_a, vec![10, 20]);
         assert_eq!(read_b, vec![10, 20]);
     }
@@ -134,7 +143,7 @@ mod tests {
         // Still readable one cycle later, in send order with a later event.
         events.send(2);
         let mut cursor = EventCursor::default();
-        let seen: Vec<u32> = events.read(&mut cursor).into_iter().copied().collect();
+        let seen: Vec<u32> = events.read(&mut cursor).copied().collect();
         assert_eq!(seen, vec![1, 2]);
         // Two updates retire the first event entirely.
         events.update();

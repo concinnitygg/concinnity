@@ -370,7 +370,6 @@ impl System for StorySystem {
         let reloads: Vec<Story> = match ctx.events::<StoryReload>() {
             Some(events) => events
                 .read(&mut self.reload_cursor)
-                .into_iter()
                 .map(|e| e.story.clone())
                 .collect(),
             None => Vec::new(),
@@ -384,7 +383,6 @@ impl System for StorySystem {
         let shown: Vec<AssetId> = match ctx.events::<ScreenShown>() {
             Some(events) => events
                 .read(&mut self.view_shown_cursor)
-                .into_iter()
                 .map(|e| e.screen)
                 .collect(),
             None => Vec::new(),
@@ -412,11 +410,7 @@ impl System for StorySystem {
         }
 
         let commands: Vec<StoryCommand> = match ctx.events::<StoryCommand>() {
-            Some(events) => events
-                .read(&mut self.command_cursor)
-                .into_iter()
-                .cloned()
-                .collect(),
+            Some(events) => events.read(&mut self.command_cursor).cloned().collect(),
             None => Vec::new(),
         };
         // One click over a button fires both the full-canvas advance region

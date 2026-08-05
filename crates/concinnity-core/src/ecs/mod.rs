@@ -560,12 +560,11 @@ mod tests {
             .events::<u32>()
             .unwrap()
             .read(&mut cursor)
-            .into_iter()
             .copied()
             .collect();
         assert_eq!(seen, vec![1, 2]);
         // The same cursor sees nothing new on a second read.
-        assert!(ctx.events::<u32>().unwrap().read(&mut cursor).is_empty());
+        assert_eq!(ctx.events::<u32>().unwrap().read(&mut cursor).count(), 0);
     }
 
     // A blob record loads through `from_baked`: the bytes are the serialized

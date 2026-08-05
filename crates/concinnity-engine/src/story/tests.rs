@@ -502,7 +502,6 @@ fn page_audio_sends_play_cues() {
     let cues: Vec<PlayCue> = world
         .events_mut::<PlayCue>()
         .read(&mut cursor)
-        .into_iter()
         .copied()
         .collect();
     assert_eq!(cues.len(), 2);
@@ -1846,7 +1845,6 @@ fn choice_menu_fires_its_one_shot_sounds() {
     let cues: Vec<PlayCue> = world
         .events_mut::<PlayCue>()
         .read(&mut cursor)
-        .into_iter()
         .copied()
         .collect();
     assert!(

@@ -77,7 +77,7 @@ pub(crate) fn step_rigs(
     // frame's physics step; the events queue holds them for one cycle).
     let motions: Vec<RootMotion> = ctx
         .events::<RootMotion>()
-        .map(|ev| ev.read(cursor).into_iter().copied().collect())
+        .map(|ev| ev.read(cursor).copied().collect())
         .unwrap_or_default();
     for rig_body in rigs.iter_mut() {
         let Some(rig) = ctx

@@ -167,11 +167,7 @@ impl SettingsState {
     // starts on this frame).
     fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, backend: &mut dyn RenderBackend) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
-            Some(events) => events
-                .read(&mut self.scene_cmd_cursor)
-                .into_iter()
-                .cloned()
-                .collect(),
+            Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
             None => Vec::new(),
         };
         if scene_cmds.is_empty() {

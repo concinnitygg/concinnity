@@ -274,11 +274,11 @@ impl System for BehaviorSystem {
 
         if let Some(events) = ctx.events::<VolumeEvent>() {
             self.crossings
-                .extend(events.read(&mut self.crossing_cursor).into_iter().copied());
+                .extend(events.read(&mut self.crossing_cursor).copied());
         }
         if let Some(events) = ctx.events::<InteractSignal>() {
             self.presses
-                .extend(events.read(&mut self.press_cursor).into_iter().copied());
+                .extend(events.read(&mut self.press_cursor).copied());
         }
 
         let menu_active = ctx

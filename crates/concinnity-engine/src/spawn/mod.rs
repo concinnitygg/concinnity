@@ -124,12 +124,9 @@ impl SpawnSystem {
         // gone from the GlobalTransform x RenderHandle join this frame and
         // contributes nothing to any pass.
         let despawn_targets = match ctx.events::<DespawnRequest>() {
-            Some(events) => frame.collect(
-                events
-                    .read(&mut self.despawn_cmd_cursor)
-                    .into_iter()
-                    .map(|r| r.target),
-            ),
+            Some(events) => {
+                frame.collect(events.read(&mut self.despawn_cmd_cursor).map(|r| r.target))
+            }
             None => frame.collect([]),
         };
         for &target in &despawn_targets {
@@ -143,12 +140,7 @@ impl SpawnSystem {
         // slots. After the despawn drain so a request naming a just-removed
         // entity simply finds nothing to switch.
         let vis_reqs = match ctx.events::<VisibilityRequest>() {
-            Some(events) => frame.collect(
-                events
-                    .read(&mut self.visibility_cmd_cursor)
-                    .into_iter()
-                    .copied(),
-            ),
+            Some(events) => frame.collect(events.read(&mut self.visibility_cmd_cursor).copied()),
             None => frame.collect([]),
         };
         for &req in &vis_reqs {
@@ -163,12 +155,7 @@ impl SpawnSystem {
         // drain so a reparent naming a just-removed entity simply finds
         // nothing to move.
         let reparents = match ctx.events::<ReparentRequest>() {
-            Some(events) => frame.collect(
-                events
-                    .read(&mut self.reparent_cmd_cursor)
-                    .into_iter()
-                    .copied(),
-            ),
+            Some(events) => frame.collect(events.read(&mut self.reparent_cmd_cursor).copied()),
             None => frame.collect([]),
         };
         for &req in &reparents {
@@ -192,11 +179,7 @@ impl SpawnSystem {
         // slots. After the despawn / reparent drains so a spawn can reuse
         // slots freed this same frame.
         let spawn_reqs: Vec<SpawnRequest> = match ctx.events::<SpawnRequest>() {
-            Some(events) => events
-                .read(&mut self.spawn_cmd_cursor)
-                .into_iter()
-                .copied()
-                .collect(),
+            Some(events) => events.read(&mut self.spawn_cmd_cursor).copied().collect(),
             None => Vec::new(),
         };
         for req in spawn_reqs {

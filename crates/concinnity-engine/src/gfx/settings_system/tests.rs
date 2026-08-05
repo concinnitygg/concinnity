@@ -267,12 +267,7 @@ impl Fixture {
         self.world
             .ctx()
             .events::<ControlsCommand>()
-            .map(|e| {
-                e.read(&mut Default::default())
-                    .into_iter()
-                    .cloned()
-                    .collect()
-            })
+            .map(|e| e.read(&mut Default::default()).cloned().collect())
             .unwrap_or_default()
     }
 }
@@ -569,12 +564,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
         .world
         .ctx()
         .events::<ControlsCommand>()
-        .map(|e| {
-            e.read(&mut Default::default())
-                .into_iter()
-                .cloned()
-                .collect()
-        })
+        .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].mouse_sensitivity.is_some());
@@ -602,12 +592,7 @@ fn fov_slider_sends_a_controls_command() {
         .world
         .ctx()
         .events::<ControlsCommand>()
-        .map(|e| {
-            e.read(&mut Default::default())
-                .into_iter()
-                .cloned()
-                .collect()
-        })
+        .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].fov_y_degrees.is_some());
@@ -728,12 +713,7 @@ fn master_volume_sends_an_audio_command() {
         .world
         .ctx()
         .events::<AudioCommand>()
-        .map(|e| {
-            e.read(&mut Default::default())
-                .into_iter()
-                .cloned()
-                .collect()
-        })
+        .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert_eq!(

@@ -470,7 +470,7 @@ mod tests {
         let mut cursor = crate::ecs::EventCursor::default();
         let cmd = world
             .events::<ScreenCommand>()
-            .and_then(|e| e.read(&mut cursor).into_iter().next().cloned());
+            .and_then(|e| e.read(&mut cursor).next().cloned());
         assert!(
             matches!(cmd, Some(ScreenCommand::Toggle(AssetId(50)))),
             "UiInputSystem must still process Escape when a camera is present"
