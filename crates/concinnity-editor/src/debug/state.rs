@@ -26,6 +26,9 @@ pub(crate) struct DebugState {
     // Asset-streaming `(resident, pending, unloaded)` counts, refreshed every
     // tick (cheap) so the `streaming` command reflects live progress.
     pub(super) streaming: StreamingStats,
+    // Frame scratch reserve, peak and lifetime overflow count, refreshed every
+    // tick so `memory` can answer whether the reserve is sized right.
+    pub(super) scratch: concinnity_engine::ecs::ScratchStats,
     // Per-system CPU step times (micros) from the last completed frame,
     // refreshed every tick for the `profile` command.
     pub(super) profile_systems: Vec<(String, u32)>,

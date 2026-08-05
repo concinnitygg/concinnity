@@ -69,8 +69,9 @@ space:6
 
 eas
 asset
-space:2
+space:1
 blob
+memory
 space:1
 
 runtime --> engine
@@ -84,6 +85,7 @@ cli --> docs
 core --> eas
 core --> asset
 core --> blob
+core --> memory
 
 engine --> audio
 engine --> core

@@ -82,11 +82,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         // Entity in scene 7 with two draw slots.
@@ -121,11 +123,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let a = ctx.components.spawn();
@@ -147,11 +151,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let only_scene = ctx.components.spawn();

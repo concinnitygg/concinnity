@@ -155,6 +155,7 @@ mod tests {
         blob: crate::blob::BlobData,
         profile: crate::gfx::profile::FrameProfile,
         resources: crate::ecs::Resources,
+        scratch: crate::ecs::Arena,
     }
 
     impl TestWorld {
@@ -164,6 +165,7 @@ mod tests {
                 blob: crate::blob::BlobData::new(vec![Some(Vec::new())]),
                 profile: crate::gfx::profile::FrameProfile::default(),
                 resources: crate::ecs::Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -177,6 +179,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: crate::ecs::FrameContext::new(&self.scratch),
             }
         }
     }

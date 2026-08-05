@@ -8,6 +8,7 @@
 // passed in rather than read from the globals here, so the reply shape is
 // testable without a live process.
 
+use concinnity_engine::ecs::ScratchStats;
 use concinnity_memory::{LedgerSnapshot, MemStats, Realm, SizeClass};
 
 pub(super) fn report(
@@ -15,6 +16,7 @@ pub(super) fn report(
     heap: Option<MemStats>,
     tags: &LedgerSnapshot,
     hot_class: Option<SizeClass>,
+    scratch: ScratchStats,
 ) -> serde_json::Value {
     let rows: Vec<_> = Realm::ALL
         .into_iter()
@@ -43,6 +45,14 @@ pub(super) fn report(
             "free_count": h.free_count,
         })),
         "tags": rows,
+        // The frame scratch reserve and the most any single frame drew from it:
+        // `peak` is what the reserve constant should be sized from, and a
+        // non-zero `overflows` means some frame wanted more than it got.
+        "scratch": {
+            "capacity_bytes": scratch.capacity,
+            "peak_bytes": scratch.peak,
+            "overflows": scratch.overflows,
+        },
         // Null unless the allocator was built with its `detail` feature.
         "hot_class": hot_class.map(|c| serde_json::json!({
             "min_bytes": c.min_bytes,
@@ -68,7 +78,7 @@ mod tests {
 
     #[test]
     fn the_reply_lists_every_reported_tag_with_its_budget() {
-        let value = report(7, None, &ledger().snapshot(), None);
+        let value = report(7, None, &ledger().snapshot(), None, ScratchStats::default());
         assert_eq!(value["ok"], true);
         assert_eq!(value["frame"], 7);
 
@@ -88,7 +98,13 @@ mod tests {
     // a measurement.
     #[test]
     fn absent_instruments_read_as_null() {
-        let value = report(0, None, &LedgerSnapshot::default(), None);
+        let value = report(
+            0,
+            None,
+            &LedgerSnapshot::default(),
+            None,
+            ScratchStats::default(),
+        );
         assert!(value["heap"].is_null());
         assert!(value["hot_class"].is_null());
         assert_eq!(value["tags"].as_array().expect("tags is an array").len(), 0);
@@ -108,11 +124,37 @@ mod tests {
             allocs: 900,
             live_blocks: 42,
         };
-        let value = report(1, Some(heap), &LedgerSnapshot::default(), Some(hot));
+        let scratch = ScratchStats {
+            capacity: 1 << 20,
+            peak: 4_096,
+            overflows: 0,
+        };
+        let value = report(
+            1,
+            Some(heap),
+            &LedgerSnapshot::default(),
+            Some(hot),
+            scratch,
+        );
 
         assert_eq!(value["heap"]["live_bytes"], 1_000);
         assert_eq!(value["heap"]["free_count"], 10);
         assert_eq!(value["hot_class"]["min_bytes"], 64);
         assert_eq!(value["hot_class"]["live_blocks"], 42);
+        assert_eq!(value["scratch"]["capacity_bytes"], 1 << 20);
+        assert_eq!(value["scratch"]["peak_bytes"], 4_096);
+    }
+
+    // The reserve holding is the normal case, so the count that says it did not
+    // has to survive to the reply rather than being cleared with the frame.
+    #[test]
+    fn a_reserve_that_overflowed_says_so() {
+        let scratch = ScratchStats {
+            capacity: 1024,
+            peak: 1024,
+            overflows: 17,
+        };
+        let value = report(2, None, &LedgerSnapshot::default(), None, scratch);
+        assert_eq!(value["scratch"]["overflows"], 17);
     }
 }

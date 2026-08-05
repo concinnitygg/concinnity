@@ -317,8 +317,9 @@ mod tests {
     use concinnity_core::blob::BlobData;
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
-        AudioClipHandle, ComponentSlot, ComponentStorage, EntityByName, PayloadLocator,
-        PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult, System,
+        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, EntityByName, FrameContext,
+        PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult,
+        System,
     };
     use concinnity_core::gfx::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
@@ -340,6 +341,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
+        scratch: Arena,
     }
 
     impl AudioWorld {
@@ -387,6 +389,7 @@ mod tests {
                 blob: BlobData::new(vec![Some(self.section)]),
                 profile: FrameProfile::default(),
                 resources,
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
     }
@@ -398,6 +401,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: FrameContext::new(&self.scratch),
             }
         }
     }

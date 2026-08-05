@@ -41,6 +41,7 @@ struct TestWorld {
     blob: BlobData,
     profile: FrameProfile,
     resources: Resources,
+    scratch: crate::ecs::Arena,
 }
 
 impl TestWorld {
@@ -50,6 +51,7 @@ impl TestWorld {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
+            frame: crate::ecs::FrameContext::new(&self.scratch),
         }
     }
 }
@@ -208,6 +210,7 @@ impl WorldBuilder {
             blob: BlobData::new(vec![Some(self.section)]),
             profile: FrameProfile::default(),
             resources,
+            scratch: crate::ecs::Arena::with_capacity(64 * 1024),
         }
     }
 }

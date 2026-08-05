@@ -917,6 +917,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
+        scratch: crate::ecs::Arena,
     }
 
     impl StepWorld {
@@ -926,6 +927,7 @@ mod tests {
                 blob: BlobData::empty(),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -951,6 +953,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: crate::ecs::FrameContext::new(&self.scratch),
             };
             StreamingSystem::new().step(&mut ctx)
         }

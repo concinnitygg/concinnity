@@ -34,6 +34,10 @@ pub struct Arena {
     cap: usize,
     used: Cell<usize>,
     peak: Cell<usize>,
+    // Requests this arena could not satisfy. A caller falling back to the heap
+    // is correct but means the reserve is too small, and a silent fallback
+    // reads as "the arena is sized right" when it is not.
+    overflows: Cell<u32>,
     // Where the reservation is accounted, for as long as the arena lives.
     tag: Option<MemTag>,
 }
@@ -65,6 +69,7 @@ impl Arena {
                 cap: 0,
                 used: Cell::new(0),
                 peak: Cell::new(0),
+                overflows: Cell::new(0),
                 tag,
             };
         }
@@ -79,6 +84,7 @@ impl Arena {
             cap: bytes,
             used: Cell::new(0),
             peak: Cell::new(0),
+            overflows: Cell::new(0),
             tag,
         }
     }
@@ -100,8 +106,22 @@ impl Arena {
         self.peak.get()
     }
 
+    // Requests declined since the last `clear_overflows`. Non-zero means
+    // callers fell back to the heap and the reserve wants raising.
+    pub fn overflows(&self) -> u32 {
+        self.overflows.get()
+    }
+
+    pub fn clear_overflows(&self) {
+        self.overflows.set(0);
+    }
+
     // Give back everything handed out. Taking `&mut self` is the safety
     // argument: no allocation from this arena can still be borrowed.
+    //
+    // Deliberately leaves `peak` and `overflows` alone: both describe the worst
+    // frame so far, which is what sizes the reserve, and a per-frame reset would
+    // erase exactly the evidence they exist to carry.
     pub fn reset(&mut self) {
         self.used.set(0);
     }
@@ -151,7 +171,9 @@ impl Arena {
     }
 
     fn uninit_slice<T>(&self, len: usize) -> Option<&mut [MaybeUninit<T>]> {
-        let bytes = size_of::<T>().checked_mul(len)?;
+        // A length that overflows is asking for more than exists, so it takes
+        // the same declined-and-counted path as any other oversized request.
+        let bytes = size_of::<T>().saturating_mul(len);
         let ptr = self.bump(bytes, align_of::<T>())?.cast::<MaybeUninit<T>>();
         // SAFETY: `bump` returned `len * size_of::<T>()` bytes aligned for `T`
         // inside the arena, and no other live allocation overlaps them.
@@ -160,8 +182,17 @@ impl Arena {
         Some(unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) })
     }
 
-    // Carve `size` bytes aligned to `align` off the front of what is left.
+    // Carve `size` bytes aligned to `align` off the front of what is left,
+    // counting anything this arena could not satisfy.
     fn bump(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
+        let carved = self.try_bump(size, align);
+        if carved.is_none() {
+            self.overflows.set(self.overflows.get().saturating_add(1));
+        }
+        carved
+    }
+
+    fn try_bump(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
         if align > ARENA_ALIGN || self.cap == 0 {
             return None;
         }
@@ -494,5 +525,57 @@ mod tests {
     fn a_reservation_larger_than_the_arena_is_declined() {
         let arena = Arena::with_capacity(64);
         assert!(arena.vec::<u64>(1024).is_none());
+    }
+
+    // A declined request is counted, so a caller falling back to the heap
+    // leaves evidence the reserve is too small instead of hiding it.
+    #[test]
+    fn declined_requests_are_counted() {
+        let arena = Arena::with_capacity(64);
+        assert_eq!(arena.overflows(), 0);
+
+        assert!(arena.alloc_slice(8, 0u64).is_some());
+        assert_eq!(arena.overflows(), 0, "a request that fits counts nothing");
+
+        assert!(arena.alloc(0u8).is_none());
+        assert!(arena.vec::<u32>(4).is_none());
+        assert_eq!(arena.overflows(), 2);
+
+        arena.clear_overflows();
+        assert_eq!(arena.overflows(), 0);
+    }
+
+    // Sizing evidence has to outlive the frame that produced it, so neither
+    // counter is cleared by the per-frame reset.
+    #[test]
+    fn reset_keeps_the_sizing_evidence() {
+        let mut arena = Arena::with_capacity(64);
+        let _ = arena.alloc_slice(8, 0u64).expect("fits");
+        assert!(arena.alloc(0u8).is_none());
+
+        arena.reset();
+        assert_eq!(arena.used(), 0, "the cursor rewinds");
+        assert_eq!(arena.peak(), 64, "the peak does not");
+        assert_eq!(arena.overflows(), 1, "nor does the overflow count");
+    }
+
+    // An over-aligned type and an oversized length are both declines, and both
+    // reach the counter rather than returning early past it.
+    #[test]
+    fn every_decline_path_reaches_the_counter() {
+        #[repr(align(128))]
+        #[derive(Clone, Copy)]
+        struct Overaligned(u8);
+
+        let arena = Arena::with_capacity(4096);
+        let value = Overaligned(7);
+        assert_eq!(value.0, 7);
+        assert!(arena.alloc(value).is_none());
+        assert!(arena.vec::<u64>(usize::MAX).is_none());
+        assert_eq!(arena.overflows(), 2);
+
+        let empty = Arena::with_capacity(0);
+        assert!(empty.alloc(1u8).is_none());
+        assert_eq!(empty.overflows(), 1);
     }
 }

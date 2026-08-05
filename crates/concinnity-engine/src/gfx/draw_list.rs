@@ -1327,11 +1327,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         // A child parented to a root, each with its own GlobalTransform to write.
@@ -1379,11 +1381,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let parent_e = ctx.components.spawn();
@@ -1420,11 +1424,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let e = ctx.components.spawn();
@@ -1486,11 +1492,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         // Two candidate parents and a child, each with a GlobalTransform slot.
@@ -1752,11 +1760,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let e = ctx.components.spawn();
@@ -2197,6 +2207,7 @@ mod tests {
         blob: crate::blob::BlobData,
         profile: crate::gfx::profile::FrameProfile,
         resources: crate::ecs::Resources,
+        scratch: crate::ecs::Arena,
     }
 
     impl BlobWorld {
@@ -2227,6 +2238,7 @@ mod tests {
                 blob: crate::blob::BlobData::new(vec![Some(self.section)]),
                 profile: crate::gfx::profile::FrameProfile::default(),
                 resources: crate::ecs::Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
             }
         }
     }
@@ -2238,6 +2250,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: crate::ecs::FrameContext::new(&self.scratch),
             }
         }
 
@@ -2451,11 +2464,13 @@ mod tests {
         let mut blob = crate::blob::BlobData::empty();
         let mut profile = crate::gfx::profile::FrameProfile::default();
         let mut resources = crate::ecs::Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = crate::ecs::PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let a_t = Transform {
@@ -2502,11 +2517,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
 
         let e = ctx.components.spawn();

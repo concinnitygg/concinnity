@@ -95,6 +95,9 @@ impl SpawnSystem {
         // a clock reset never rushes an expiry.
         let dt = (elapsed - self.prev_elapsed).max(0.0);
         self.prev_elapsed = elapsed;
+        // Copied out of the context so the event drains below can hold scratch
+        // while the cascades they feed take `ctx` mutably.
+        let frame = ctx.frame;
         // The menu state OverlaySystem published earlier this tick.
         let menu_active = ctx
             .resource::<crate::ecs::MenuActive>()
@@ -120,15 +123,16 @@ impl SpawnSystem {
         // GraphicsSystem's transform push so a despawned entity is already
         // gone from the GlobalTransform x RenderHandle join this frame and
         // contributes nothing to any pass.
-        let despawn_targets: Vec<Target> = match ctx.events::<DespawnRequest>() {
-            Some(events) => events
-                .read(&mut self.despawn_cmd_cursor)
-                .into_iter()
-                .map(|r| r.target)
-                .collect(),
-            None => Vec::new(),
+        let despawn_targets = match ctx.events::<DespawnRequest>() {
+            Some(events) => frame.collect(
+                events
+                    .read(&mut self.despawn_cmd_cursor)
+                    .into_iter()
+                    .map(|r| r.target),
+            ),
+            None => frame.collect([]),
         };
-        for target in despawn_targets {
+        for &target in &despawn_targets {
             if let Some(entity) = resolve_target(ctx, target) {
                 despawn::despawn_subtree(ctx, backend, entity);
             }
@@ -138,15 +142,16 @@ impl SpawnSystem {
         // name to its entity, and switch its subtree's Hidden tags and draw
         // slots. After the despawn drain so a request naming a just-removed
         // entity simply finds nothing to switch.
-        let vis_reqs: Vec<VisibilityRequest> = match ctx.events::<VisibilityRequest>() {
-            Some(events) => events
-                .read(&mut self.visibility_cmd_cursor)
-                .into_iter()
-                .copied()
-                .collect(),
-            None => Vec::new(),
+        let vis_reqs = match ctx.events::<VisibilityRequest>() {
+            Some(events) => frame.collect(
+                events
+                    .read(&mut self.visibility_cmd_cursor)
+                    .into_iter()
+                    .copied(),
+            ),
+            None => frame.collect([]),
         };
-        for req in vis_reqs {
+        for &req in &vis_reqs {
             if let Some(entity) = resolve_target(ctx, req.target) {
                 visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
             }
@@ -157,15 +162,16 @@ impl SpawnSystem {
         // Parent edge (recomposing world matrices). After the despawn
         // drain so a reparent naming a just-removed entity simply finds
         // nothing to move.
-        let reparents: Vec<ReparentRequest> = match ctx.events::<ReparentRequest>() {
-            Some(events) => events
-                .read(&mut self.reparent_cmd_cursor)
-                .into_iter()
-                .copied()
-                .collect(),
-            None => Vec::new(),
+        let reparents = match ctx.events::<ReparentRequest>() {
+            Some(events) => frame.collect(
+                events
+                    .read(&mut self.reparent_cmd_cursor)
+                    .into_iter()
+                    .copied(),
+            ),
+            None => frame.collect([]),
         };
-        for req in reparents {
+        for &req in &reparents {
             let Some(child) = resolve_target(ctx, req.child) else {
                 continue;
             };

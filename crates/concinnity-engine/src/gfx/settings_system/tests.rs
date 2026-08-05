@@ -50,6 +50,7 @@ struct World {
     blob: BlobData,
     profile: FrameProfile,
     resources: Resources,
+    scratch: crate::ecs::Arena,
 }
 
 impl World {
@@ -59,6 +60,7 @@ impl World {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
+            frame: crate::ecs::FrameContext::new(&self.scratch),
         }
     }
 }
@@ -202,6 +204,7 @@ impl Fixture {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
             },
             state,
             backend,

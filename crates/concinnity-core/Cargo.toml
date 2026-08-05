@@ -23,6 +23,7 @@ vulkan = []
 concinnity-eas = { path = "../concinnity-eas" }
 concinnity-asset = { path = "../concinnity-asset" }
 concinnity-blob = { path = "../concinnity-blob" }
+concinnity-memory = { path = "../concinnity-memory" }
 
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

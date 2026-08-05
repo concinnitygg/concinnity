@@ -14,10 +14,19 @@
 // under the historical `crate::ecs::*` paths.
 pub mod asset_id;
 mod entity_index;
+mod frame;
 mod payload_store;
 mod protocol;
 mod registry;
 mod system;
+
+// Per-frame facilities carried on `PipelineContext`. Re-exported by the client
+// `ecs` module under the historical `crate::ecs::*` paths, like the rest.
+// `Arena` comes with it so a crate that only builds a context (the physics and
+// audio subsystems, and every test world) can name the scratch type without
+// taking its own dependency on the allocation layer.
+pub use concinnity_memory::Arena;
+pub use frame::{FrameContext, FrameVec};
 
 // Renderer-free per-frame protocol resources the runtime systems publish and
 // read to coordinate a tick (menu state, frame-rate cap, HUD prefs, cursor +
@@ -150,6 +159,10 @@ pub struct PipelineContext<'a> {
     // here too, inside a single `EventStore` resource that owns one `Events<E>`
     // queue per event type, reached via `events` / `events_mut`.
     pub resources: &'a mut Resources,
+    // Frame-scoped facilities: scratch that the frame loop reclaims wholesale.
+    // One field rather than several so what a frame offers can grow without
+    // touching every system and every construction site again.
+    pub frame: FrameContext<'a>,
 }
 
 impl<'a> PipelineContext<'a> {
@@ -493,23 +506,31 @@ mod tests {
 
     // A standalone PipelineContext over empty storage, for exercising the
     // resource and event surfaces without a running world.
-    fn parts() -> (ComponentStorage, EmptyStore, FrameProfile, Resources) {
+    fn parts() -> (
+        ComponentStorage,
+        EmptyStore,
+        FrameProfile,
+        Resources,
+        concinnity_memory::Arena,
+    ) {
         (
             ComponentStorage::default(),
             EmptyStore,
             FrameProfile::default(),
             Resources::new(),
+            concinnity_memory::Arena::with_capacity(64 * 1024),
         )
     }
 
     #[test]
     fn resources_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r) = parts();
+        let (mut c, mut b, mut p, mut r, scratch) = parts();
         let mut ctx = PipelineContext {
             components: &mut c,
             blob: &mut b,
             profile: &mut p,
             resources: &mut r,
+            frame: FrameContext::new(&scratch),
         };
         assert!(ctx.resource::<u32>().is_none());
         assert_eq!(ctx.insert_resource(7u32), None);
@@ -522,12 +543,13 @@ mod tests {
 
     #[test]
     fn events_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r) = parts();
+        let (mut c, mut b, mut p, mut r, scratch) = parts();
         let mut ctx = PipelineContext {
             components: &mut c,
             blob: &mut b,
             profile: &mut p,
             resources: &mut r,
+            frame: FrameContext::new(&scratch),
         };
         assert!(ctx.events::<u32>().is_none());
         ctx.events_mut::<u32>().send(1);
@@ -591,12 +613,13 @@ mod tests {
     #[test]
     fn context_component_ops_cover_the_entity_lifecycle() {
         use crate::assets::{GlobalTransform, Transform};
-        let (mut c, mut b, mut p, mut r) = parts();
+        let (mut c, mut b, mut p, mut r, scratch) = parts();
         let mut ctx = PipelineContext {
             components: &mut c,
             blob: &mut b,
             profile: &mut p,
             resources: &mut r,
+            frame: FrameContext::new(&scratch),
         };
 
         ctx.push(Transform::default());
@@ -633,12 +656,13 @@ mod tests {
 
     #[test]
     fn read_payload_and_release_forward_to_the_store() {
-        let (mut c, mut b, mut p, mut r) = parts();
+        let (mut c, mut b, mut p, mut r, scratch) = parts();
         let mut ctx = PipelineContext {
             components: &mut c,
             blob: &mut b,
             profile: &mut p,
             resources: &mut r,
+            frame: FrameContext::new(&scratch),
         };
         let loc = PayloadLocator {
             blob_index: 0,

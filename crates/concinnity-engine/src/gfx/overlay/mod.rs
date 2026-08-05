@@ -491,6 +491,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
+        scratch: crate::ecs::Arena,
     }
 
     impl TestWorld {
@@ -500,6 +501,7 @@ mod tests {
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -513,6 +515,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: crate::ecs::FrameContext::new(&self.scratch),
             }
         }
 

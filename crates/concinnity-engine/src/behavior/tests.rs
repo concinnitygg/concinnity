@@ -7,7 +7,7 @@ use crate::assets::{
     Behavior, Expr, Literal, LocalDecl, Node, Prop, QueryDecl, Target, Transform, VarDecl,
 };
 use crate::blob::BlobData;
-use crate::ecs::{ComponentStorage, EventCursor, Resources};
+use crate::ecs::{Arena, ComponentStorage, EventCursor, FrameContext, Resources};
 use crate::gfx::profile::FrameProfile;
 
 struct TestWorld {
@@ -15,6 +15,7 @@ struct TestWorld {
     blob: BlobData,
     profile: FrameProfile,
     resources: Resources,
+    scratch: Arena,
 }
 
 impl TestWorld {
@@ -24,6 +25,7 @@ impl TestWorld {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
+            frame: FrameContext::new(&self.scratch),
         }
     }
 }
@@ -34,6 +36,7 @@ fn world_with(behaviors: Vec<Behavior>) -> TestWorld {
         blob: BlobData::empty(),
         profile: FrameProfile::default(),
         resources: Resources::default(),
+        scratch: crate::ecs::Arena::with_capacity(64 * 1024),
     };
     for b in behaviors {
         world.components.push_typed(b);

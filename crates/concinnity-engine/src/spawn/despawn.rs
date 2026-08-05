@@ -98,11 +98,13 @@ mod tests {
         let mut blob = BlobData::empty();
         let mut profile = FrameProfile::default();
         let mut resources = Resources::new();
+        let scratch = crate::ecs::Arena::with_capacity(64 * 1024);
         let mut ctx = PipelineContext {
             components: &mut components,
             blob: &mut blob,
             profile: &mut profile,
             resources: &mut resources,
+            frame: crate::ecs::FrameContext::new(&scratch),
         };
         body(&mut ctx)
     }

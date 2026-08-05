@@ -22,10 +22,10 @@ pub mod schedule;
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot, ComponentStorage,
-    Entity, EventCursor, EventStore, Events, FontHandle, MaterialHandle, MeshBoundsRecord,
-    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle,
-    TextureHandle, Tick, asset_id,
+    Arena, AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot,
+    ComponentStorage, Entity, EventCursor, EventStore, Events, FontHandle, FrameContext,
+    MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext, Resources,
+    SceneGroup, SkinnedMeshHandle, TextureHandle, Tick, asset_id,
 };
 
 // Renderer-free per-frame protocol resources, moved to concinnity-core so the
@@ -42,6 +42,8 @@ pub use concinnity_core::ecs::{
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
 // generated client-side from the system table (see `registry`).
 pub use registry::{SYSTEMS, SystemAsset};
+
+use concinnity_memory::MemTag;
 
 use crate::blob::BlobData;
 use crate::gfx::profile::FrameProfile;
@@ -200,6 +202,25 @@ macro_rules! define_systems {
     };
 }
 
+// What one frame's scratch reserve cost and whether it held. A non-zero
+// `overflows` means some frame fell back to the heap, so `peak` understates
+// what the frame actually wanted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScratchStats {
+    pub capacity: usize,
+    pub peak: usize,
+    pub overflows: u64,
+}
+
+// The per-frame scratch reserve. An engine constant rather than an authored
+// field: a schema field would be blob churn for a knob nobody should have to
+// set, and `World::step` reports any frame that outgrows it.
+//
+// A frame's draw scales with the runtime requests it drains: 2,000 visibility
+// requests in one frame measured 24 KiB, so this holds on the order of 87,000.
+// `cn debug send '{"cmd":"memory"}'` reports the live peak against it.
+const FRAME_SCRATCH_BYTES: usize = 1 << 20;
+
 pub struct World {
     components: ComponentStorage,
     systems: Vec<SystemAsset>,
@@ -208,6 +229,14 @@ pub struct World {
     // Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot
     // GraphicsSystem publishes) and the event queues.
     resources: Resources,
+    // Per-frame scratch, reset at the top of every `step`. Owned here because
+    // `reset` needs `&mut`, which is what proves no system still holds an
+    // allocation from the frame just finished.
+    scratch: Arena,
+    // Requests the scratch reserve could not satisfy, over the world's whole
+    // life. The arena's own counter is cleared each frame once reported, so
+    // this is what survives to say the reserve wants raising.
+    scratch_overflows: u64,
     // Set once `build_internal_systems` has run, so a second `start()` on the
     // same world does not append the internal systems twice.
     internal_systems_built: bool,
@@ -230,6 +259,8 @@ impl World {
             blob,
             profile: FrameProfile::default(),
             resources: Resources::new(),
+            scratch: Arena::tagged(FRAME_SCRATCH_BYTES, MemTag::Scratch),
+            scratch_overflows: 0,
             internal_systems_built: false,
         }
     }
@@ -515,6 +546,7 @@ impl World {
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
+            frame: crate::ecs::FrameContext::new(&self.scratch),
         };
         // Give each loaded Prop's entity its per-instance components before
         // systems init, draining the Prop itself: the decomposed components are
@@ -598,11 +630,15 @@ impl World {
         // finished becomes the readable snapshot for this frame's readers.
         self.profile.begin_frame();
         self.update_events();
+        // Hand the whole frame's scratch back before anything runs. `&mut self`
+        // here is the proof that no allocation from the last frame survives.
+        self.scratch.reset();
         let mut ctx = PipelineContext {
             components: &mut self.components,
             blob: &mut self.blob,
             profile: &mut self.profile,
             resources: &mut self.resources,
+            frame: crate::ecs::FrameContext::new(&self.scratch),
         };
         let mut i = 0;
         while i < self.systems.len() {
@@ -622,10 +658,40 @@ impl World {
                 }
             }
         }
+        self.report_scratch_overflow();
         if self.systems.is_empty() {
             StepResult::Done
         } else {
             StepResult::Continue
+        }
+    }
+
+    // A frame that outgrew the scratch reserve fell back to the heap and still
+    // rendered, so nothing breaks -- but a silent fallback reads as "the reserve
+    // is sized right" when it is not. Reported once per frame rather than per
+    // declined request, and only while the count is climbing, so a world that
+    // is permanently too small does not fill the log.
+    fn report_scratch_overflow(&mut self) {
+        let overflows = self.scratch.overflows();
+        if overflows == 0 {
+            return;
+        }
+        self.scratch.clear_overflows();
+        self.scratch_overflows = self.scratch_overflows.saturating_add(overflows as u64);
+        tracing::warn!(
+            "frame scratch overflowed {overflows} time(s): reserve {} KiB, peak {} KiB",
+            self.scratch.capacity() / 1024,
+            self.scratch.peak() / 1024,
+        );
+    }
+
+    // What the frame scratch cost and whether it was big enough, for the
+    // `memory` query and the Health panel. `peak` is what sizes the reserve.
+    pub fn scratch_stats(&self) -> ScratchStats {
+        ScratchStats {
+            capacity: self.scratch.capacity(),
+            peak: self.scratch.peak(),
+            overflows: self.scratch_overflows,
         }
     }
 }

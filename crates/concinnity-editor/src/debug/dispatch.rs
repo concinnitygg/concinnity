@@ -113,6 +113,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             concinnity_memory::stats(),
             &concinnity_memory::ledger().snapshot(),
             concinnity_memory::size_classes().and_then(|c| c.busiest()),
+            state.scratch,
         ),
         "budget" => match &state.budget {
             Some(b) => serde_json::json!({

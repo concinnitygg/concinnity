@@ -820,7 +820,9 @@ mod tests {
     use super::*;
     use concinnity_core::assets::{CameraController, FollowController, PropCollider};
     use concinnity_core::blob::BlobData;
-    use concinnity_core::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
+    use concinnity_core::ecs::{
+        Arena, ComponentStorage, FrameContext, Resources, SkinnedMeshHandle,
+    };
     use concinnity_core::gfx::profile::FrameProfile;
 
     // Hand-assembled stand-in for the engine's `World`: owns the storage a
@@ -831,6 +833,7 @@ mod tests {
         blob: BlobData,
         profile: FrameProfile,
         resources: Resources,
+        scratch: Arena,
     }
 
     impl TestWorld {
@@ -840,6 +843,7 @@ mod tests {
                 blob: BlobData::empty(),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
+                scratch: Arena::with_capacity(64 * 1024),
             }
         }
 
@@ -849,6 +853,7 @@ mod tests {
                 blob: &mut self.blob,
                 profile: &mut self.profile,
                 resources: &mut self.resources,
+                frame: FrameContext::new(&self.scratch),
             }
         }
 
