@@ -1035,15 +1035,15 @@ impl MtlContext {
             );
         }
         for tex in [
-            &self.shadow_map,
-            &self.spot_shadow_map,
-            &self.ltc_matrix_texture,
-            &self.ltc_magnitude_texture,
-            &self.env_map.irradiance,
-            &self.env_map.prefilter,
+            self.shadow_map.as_ref(),
+            self.spot_shadow_map.as_ref(),
+            self.ltc_matrix_texture.as_ref(),
+            self.ltc_magnitude_texture.as_ref(),
+            self.env_map.irradiance.as_ref(),
+            self.env_map.prefilter.as_ref(),
         ] {
             encoder.useResource_usage_stages(
-                ProtocolObject::from_ref(&**tex),
+                ProtocolObject::from_ref(tex),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Fragment,
             );

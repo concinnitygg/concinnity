@@ -21,6 +21,7 @@ use crate::gfx::ssao::SsaoSettings;
 use crate::gfx::ssgi::SsgiSettings;
 use crate::gfx::ssr::SsrSettings;
 use crate::gfx::volumetric_fog::FogSettings;
+use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposurePipelines, build_auto_exposure_pipelines};
 use crate::metal::decal::build_decal_pipeline;
 use crate::metal::fog::build_fog_pipeline;
@@ -196,12 +197,13 @@ pub(crate) struct QualityEffectsBundle {
 // The RT acceleration structure is also the caller's responsibility (it needs the
 // resident geometry buffers); this builds only the RT resolve pipelines.
 pub(crate) fn build_quality_effects(
-    device: &ProtocolObject<dyn MTLDevice>,
+    alloc: &DeviceAllocator,
     vert_desc: &MTLVertexDescriptor,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
 ) -> Result<QualityEffectsBundle, String> {
+    let device = alloc.device();
     let EffectDimensions {
         render_w,
         render_h,
@@ -257,7 +259,7 @@ pub(crate) fn build_quality_effects(
         targets: ssao_targets,
         kernel_pipeline: ssao_kernel_pipeline,
         blur_pipeline: ssao_blur_pipeline,
-        white: create_fallback_texture(device)?,
+        white: create_fallback_texture(alloc)?,
     };
 
     // Render-graph transient texture pool: `ao_output` (SSAO's blurred
@@ -472,7 +474,7 @@ pub(crate) fn build_quality_effects(
 }
 
 pub(crate) fn build_effects(
-    device: &ProtocolObject<dyn MTLDevice>,
+    alloc: &DeviceAllocator,
     vert_desc: &MTLVertexDescriptor,
     // False for a world with no 3D scene content: bloom pipelines are skipped
     // (the settings-gated features below are already trimmed by the
@@ -483,6 +485,7 @@ pub(crate) fn build_effects(
     flags: EffectFlags,
     world_content: WorldContentEffects,
 ) -> Result<EffectsBundle, String> {
+    let device = alloc.device();
     // Render dimensions ride `dims` into `build_quality_effects`; only the
     // output pair is used directly here, by the bloom chain.
     let EffectDimensions {
@@ -519,7 +522,7 @@ pub(crate) fn build_effects(
         auto_exposure_output,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(device, vert_desc, dims, settings, flags)?;
+    } = build_quality_effects(alloc, vert_desc, dims, settings, flags)?;
 
     // Bloom chain + pipelines. Bloom samples whatever scene_color the post
     // stack hands it: that's at output (drawable) resolution when MetalFX

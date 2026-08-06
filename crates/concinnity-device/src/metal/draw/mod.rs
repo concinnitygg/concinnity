@@ -197,6 +197,11 @@ impl MtlContext {
         let ring_slot = (frame_id % self.frames_in_flight as u64) as usize;
         self.frame_ring_index = frame_id.wrapping_add(1);
 
+        // Hand back the pooled ranges whose retire frame has passed and release
+        // any heap left holding nothing. Ticked here, past the fence, so a range
+        // is only reused once every frame that could reference it has retired.
+        self.allocator.begin_frame();
+
         let cmd_buf = self
             .command_queue
             .commandBuffer()
@@ -1145,8 +1150,8 @@ impl MtlContext {
     ) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.command_queue.clone();
-        let vbuf = self.vertex_buffer.clone();
-        let ibuf = self.index_buffer.clone();
+        let vbuf = self.vertex_buffer.retained();
+        let ibuf = self.index_buffer.retained();
         let exclude_seethrough = self.seethrough_meshes_enabled();
         let draw_objects = std::mem::take(&mut self.draw_objects);
         let res = self

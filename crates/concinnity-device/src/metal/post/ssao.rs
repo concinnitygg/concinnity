@@ -34,7 +34,7 @@ pub(crate) struct SsaoState {
     pub targets: Option<SsaoTargets>,
     pub kernel_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub blur_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub white: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub white: crate::metal::allocator::PooledTexture,
 }
 
 // Pixel format of both occlusion targets: the kernel's raw output and the

@@ -7,6 +7,8 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
+use super::allocator::{DeviceAllocator, PooledTexture};
+
 // Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain.
 // The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and every level
 // is written so the texture minifies through hardware trilinear / aniso
@@ -15,11 +17,11 @@ use objc2_metal::{
 // fragment shaders. StorageModeShared is used so the CPU-side pixel data
 // is accessible without an explicit blit encoder.
 pub(super) fn upload_texture(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -44,9 +46,7 @@ pub(super) fn upload_texture(
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
 
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create MTLTexture")?;
+    let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in chain.iter().enumerate() {
         unsafe {
@@ -78,16 +78,16 @@ pub(super) fn upload_texture(
 // their container mip chain verbatim, one level per `replaceRegion` with a
 // block-row stride. All Apple GPUs sample BC formats natively.
 pub(super) fn upload_texture_image(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     image: &concinnity_core::build::texture::TextureImage,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     use concinnity_core::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
             .first()
             .ok_or("RGBA8 texture image has no mip level")?;
-        return upload_texture(device, mip.width, mip.height, &mip.data);
+        return upload_texture(alloc, mip.width, mip.height, &mip.data);
     }
 
     let (pixel_format, block_bytes) = match image.format {
@@ -113,9 +113,7 @@ pub(super) fn upload_texture_image(
         desc.setUsage(MTLTextureUsage::ShaderRead);
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create compressed MTLTexture")?;
+    let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in image.mips.iter().enumerate() {
         let blocks_x = level.width.div_ceil(4) as usize;
@@ -155,10 +153,8 @@ pub(super) fn upload_texture_image(
 }
 
 // Create a 1x1 opaque white RGBA texture used when no Texture asset is present.
-pub(super) fn create_fallback_texture(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    upload_texture(device, 1, 1, &[255u8, 255, 255, 255])
+pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> Result<PooledTexture, String> {
+    upload_texture(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1x1 Depth32Float texture-array (one layer) with value 1.0, used
@@ -213,10 +209,10 @@ pub(super) fn create_shadow_map_fallback(
 // i.e. 6 * face_size * face_size * 4 floats with face order +X, -X, +Y, -Y, +Z, -Z.
 //
 pub(super) fn upload_cubemap(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     face_size: u32,
     bytes: &[u8],
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let face_bytes = (face_size as usize) * (face_size as usize) * 4 * 4;
     let needed = 6 * face_bytes;
     if bytes.len() < needed {
@@ -238,9 +234,7 @@ pub(super) fn upload_cubemap(
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
 
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create MTLTextureCube")?;
+    let texture = alloc.alloc_texture(&desc)?;
 
     let bytes_per_row = (face_size as usize) * 4 * 4;
     let bytes_per_image = bytes_per_row * (face_size as usize);
@@ -275,8 +269,8 @@ pub(super) fn upload_cubemap(
 // is the runtime signal for "IBL disabled": the fragment shader keys off it
 // to fall back to the legacy ambient/skybox path.
 pub(super) struct EnvironmentMapTextures {
-    pub irradiance: Retained<ProtocolObject<dyn MTLTexture>>,
-    pub prefilter: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub irradiance: PooledTexture,
+    pub prefilter: PooledTexture,
     pub prefilter_mip_count: u32,
 }
 
@@ -285,9 +279,9 @@ pub(super) struct EnvironmentMapTextures {
 // off `prefilter_mip_count == 0` and skips IBL math, but the cube binding
 // must still resolve to a valid texture.
 pub(super) fn create_fallback_cubemap(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     value: [f32; 4],
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let desc = MTLTextureDescriptor::new();
     unsafe {
         desc.setTextureType(MTLTextureType::TypeCube);
@@ -297,9 +291,7 @@ pub(super) fn create_fallback_cubemap(
         desc.setUsage(MTLTextureUsage::ShaderRead);
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create fallback cube texture")?;
+    let texture = alloc.alloc_texture(&desc)?;
     let bytes_per_row = 4 * 4;
     let bytes_per_image = bytes_per_row;
     unsafe {
@@ -332,10 +324,10 @@ pub(super) fn create_fallback_cubemap(
 // red axis fastest, then green, then blue. The result is sampled in the
 // composite pass with the tonemapped sRGB colour as the texture coordinate.
 pub(super) fn upload_color_lut(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     size: u32,
     bytes: &[u8],
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let n = size as usize;
     let needed = n * n * n * 4;
     if bytes.len() < needed {
@@ -357,9 +349,7 @@ pub(super) fn upload_color_lut(
         desc.setUsage(MTLTextureUsage::ShaderRead);
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create 3D color LUT texture")?;
+    let texture = alloc.alloc_texture(&desc)?;
 
     unsafe {
         use objc2_metal::MTLRegion;
@@ -389,9 +379,7 @@ pub(super) fn upload_color_lut(
 // Trilinear interpolation across the corners reproduces the input exactly, so
 // the composite pass becomes a no-op when no `ColorLut` asset is declared.
 // The 3D LUT binding must still resolve to a valid texture regardless.
-pub(super) fn create_fallback_color_lut(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+pub(super) fn create_fallback_color_lut(alloc: &DeviceAllocator) -> Result<PooledTexture, String> {
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
     for b in 0..2u8 {
         for g in 0..2u8 {
@@ -400,7 +388,7 @@ pub(super) fn create_fallback_color_lut(
             }
         }
     }
-    upload_color_lut(device, 2, &data)
+    upload_color_lut(alloc, 2, &data)
 }
 
 // Upload an EnvironmentMap payload into two cube textures: a single-mip
@@ -412,7 +400,7 @@ pub(super) fn create_fallback_color_lut(
 // is one slice per mip in order 0..mip_count; `mip_count` must equal
 // `mip_bytes.len()`.
 pub(super) fn upload_environment_map(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     irradiance_face: u32,
     irradiance_bytes: &[u8],
     prefilter_face: u32,
@@ -421,9 +409,9 @@ pub(super) fn upload_environment_map(
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }
-    let irradiance = upload_cubemap(device, irradiance_face, irradiance_bytes)
+    let irradiance = upload_cubemap(alloc, irradiance_face, irradiance_bytes)
         .map_err(|e| format!("envmap irradiance: {}", e))?;
-    let prefilter = upload_prefilter_cube(device, prefilter_face, mip_bytes)
+    let prefilter = upload_prefilter_cube(alloc, prefilter_face, mip_bytes)
         .map_err(|e| format!("envmap prefilter: {}", e))?;
     Ok(EnvironmentMapTextures {
         irradiance,
@@ -435,10 +423,10 @@ pub(super) fn upload_environment_map(
 // Create a multi-mip RGBA32Float `MTLTextureType::Cube` and upload each mip
 // from `mip_bytes`. `mip_bytes[m]` is expected to be 6 * (face_size >> m)² * 16 bytes.
 fn upload_prefilter_cube(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let mip_count = mip_bytes.len() as u32;
     let desc = MTLTextureDescriptor::new();
     unsafe {
@@ -450,9 +438,7 @@ fn upload_prefilter_cube(
         desc.setUsage(MTLTextureUsage::ShaderRead);
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create prefilter MTLTextureCube")?;
+    let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
         if mip_face_size == 0 {
@@ -687,11 +673,11 @@ pub(super) fn create_hdr_targets(
 // `size * size * components` values. Used for the LTC tables: `components` is 4
 // for the transform table and 2 for the magnitude table.
 pub(super) fn create_lut_texture(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    alloc: &DeviceAllocator,
     texels: &[f32],
     size: u32,
     components: usize,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> Result<PooledTexture, String> {
     let needed = (size as usize) * (size as usize) * components;
     if texels.len() < needed {
         return Err(format!(
@@ -714,9 +700,7 @@ pub(super) fn create_lut_texture(
         desc.setUsage(MTLTextureUsage::ShaderRead);
         desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
     }
-    let texture = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create LUT texture")?;
+    let texture = alloc.alloc_texture(&desc)?;
 
     let bytes_per_row = (size as usize) * components * 4;
     unsafe {

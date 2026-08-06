@@ -45,7 +45,7 @@ impl MtlContext {
                 self.textures.len()
             ));
         }
-        self.textures[slot] = upload_texture_image(&self.device, image)?;
+        self.textures[slot] = upload_texture_image(&self.allocator, image)?;
         Ok(())
     }
 
@@ -63,7 +63,7 @@ impl MtlContext {
                 self.textures.len()
             ));
         }
-        self.textures[slot] = upload_texture(&self.device, 1, 1, &[128, 128, 128, 255])?;
+        self.textures[slot] = upload_texture(&self.allocator, 1, 1, &[128, 128, 128, 255])?;
         Ok(())
     }
 
@@ -72,7 +72,7 @@ impl MtlContext {
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
     pub fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
-        let tex = crate::metal::texture::upload_color_lut(&self.device, size, data)?;
+        let tex = crate::metal::texture::upload_color_lut(&self.allocator, size, data)?;
         self.color_lut = tex;
         Ok(())
     }
@@ -87,7 +87,7 @@ impl MtlContext {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
         let new_env = crate::metal::texture::upload_environment_map(
-            &self.device,
+            &self.allocator,
             view.irradiance_face,
             view.irradiance_bytes,
             view.prefilter_face,
@@ -108,7 +108,7 @@ impl MtlContext {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("reflection probe payload malformed: {}", e))?;
         crate::metal::texture::upload_environment_map(
-            &self.device,
+            &self.allocator,
             view.irradiance_face,
             view.irradiance_bytes,
             view.prefilter_face,

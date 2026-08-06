@@ -183,7 +183,7 @@ pub struct PointLightData {
 // (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
 // packed_float3 sits inside one lane with no GPU alignment promotion. Must match
 // the GpuLight struct in every .metal / .hlsl / .glsl shader.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuLight {
     // World-space position (point / spot).
@@ -405,7 +405,7 @@ pub struct ShadowPassPush {
 // 80 bytes: the matrix fills the first four 16-byte lanes and the three scalars
 // plus a pad fill the fifth, so the MSL (float4x4 + floats), HLSL (no 16-byte
 // straddle), and GLSL std430 (mat4 align-16) layouts all agree.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SpotShadowData {
     // World -> light clip matrix for this spot, column-major.
@@ -439,7 +439,7 @@ impl SpotShadowData {
 //
 // 32 bytes: a scalar follows each vec3 so the MSL (packed_float3), HLSL (float3,
 // no 16-byte straddle), and GLSL std430 (vec3 align-16) layouts all agree.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct AreaLightData {
     // Half-width times the panel's width axis, in world units.

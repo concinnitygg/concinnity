@@ -31,12 +31,12 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _,
     MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
-    MTLTexture,
 };
 
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
+use super::allocator::DeviceAllocator;
 use super::context::*;
 use super::math::IDENTITY4;
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
@@ -182,6 +182,12 @@ impl MtlContext {
             }
         };
 
+        // The block pool the world's persistent buffers and textures are placed
+        // in. Built before anything uploads through it, and per context: a live
+        // reload keeps the device but rebuilds the world's resources, so the
+        // outgoing context's heaps go with it.
+        let allocator = DeviceAllocator::new(&device, frames_in_flight);
+
         // Main + cull + bindless argument encoder. The bundle's `bindless`
         // flag drives the texture-pool overflow warning below. A world with no
         // 3D scene content skips the main PBR pipeline and the whole GPU-cull
@@ -270,46 +276,30 @@ impl MtlContext {
         // zero-length buffer, so a minimal placeholder is allocated instead --
         // the draw list is empty so the placeholder is never read.
         let vertex_buffer = if vertices.is_empty() {
-            device
-                .newBufferWithLength_options(
-                    std::mem::size_of::<Vertex>(),
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("failed to create placeholder vertex buffer")?
+            allocator.alloc_buffer(
+                std::mem::size_of::<Vertex>(),
+                MTLResourceOptions::StorageModeShared,
+            )
         } else {
-            unsafe {
-                let ptr = std::ptr::NonNull::new(vertices.as_ptr() as *mut _)
-                    .ok_or("vertex slice pointer is null")?;
-                device
-                    .newBufferWithBytes_length_options(
-                        ptr,
-                        std::mem::size_of_val(vertices),
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .ok_or("failed to create vertex buffer")?
-            }
-        };
+            allocator.alloc_buffer_with_bytes(
+                bytes_of_slice(vertices),
+                MTLResourceOptions::StorageModeShared,
+            )
+        }
+        .map_err(|e| format!("vertex buffer: {e}"))?;
 
         let index_buffer = if indices.is_empty() {
-            device
-                .newBufferWithLength_options(
-                    std::mem::size_of::<u32>(),
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("failed to create placeholder index buffer")?
+            allocator.alloc_buffer(
+                std::mem::size_of::<u32>(),
+                MTLResourceOptions::StorageModeShared,
+            )
         } else {
-            unsafe {
-                let ptr = std::ptr::NonNull::new(indices.as_ptr() as *mut _)
-                    .ok_or("index slice pointer is null")?;
-                device
-                    .newBufferWithBytes_length_options(
-                        ptr,
-                        std::mem::size_of_val(indices),
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .ok_or("failed to create index buffer")?
-            }
-        };
+            allocator.alloc_buffer_with_bytes(
+                bytes_of_slice(indices),
+                MTLResourceOptions::StorageModeShared,
+            )
+        }
+        .map_err(|e| format!("index buffer: {e}"))?;
 
         // Per-scene local-light storage buffer bound to the forward pass at
         // fragment buffer(8). Metal rejects a zero-length buffer, so a scene with
@@ -318,25 +308,17 @@ impl MtlContext {
         let local_light_buffer = {
             use crate::gfx::render_types::GpuLight;
             if local_lights.is_empty() {
-                device
-                    .newBufferWithLength_options(
-                        std::mem::size_of::<GpuLight>(),
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .ok_or("failed to create placeholder local-light buffer")?
+                allocator.alloc_buffer(
+                    std::mem::size_of::<GpuLight>(),
+                    MTLResourceOptions::StorageModeShared,
+                )
             } else {
-                unsafe {
-                    let ptr = std::ptr::NonNull::new(local_lights.as_ptr() as *mut _)
-                        .ok_or("local-light slice pointer is null")?;
-                    device
-                        .newBufferWithBytes_length_options(
-                            ptr,
-                            std::mem::size_of_val(local_lights.as_slice()),
-                            MTLResourceOptions::StorageModeShared,
-                        )
-                        .ok_or("failed to create local-light buffer")?
-                }
+                allocator.alloc_buffer_with_bytes(
+                    bytes_of_slice(local_lights.as_slice()),
+                    MTLResourceOptions::StorageModeShared,
+                )
             }
+            .map_err(|e| format!("local-light buffer: {e}"))?
         };
 
         // Spot shadow resources: one array slice per shadow-casting spot plus the
@@ -357,25 +339,17 @@ impl MtlContext {
         let spot_shadow_buffer = {
             use crate::gfx::render_types::SpotShadowData;
             if spot_shadows.is_empty() {
-                device
-                    .newBufferWithLength_options(
-                        std::mem::size_of::<SpotShadowData>(),
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .ok_or("failed to create placeholder spot-shadow buffer")?
+                allocator.alloc_buffer(
+                    std::mem::size_of::<SpotShadowData>(),
+                    MTLResourceOptions::StorageModeShared,
+                )
             } else {
-                unsafe {
-                    let ptr = std::ptr::NonNull::new(spot_shadows.as_ptr() as *mut _)
-                        .ok_or("spot-shadow slice pointer is null")?;
-                    device
-                        .newBufferWithBytes_length_options(
-                            ptr,
-                            std::mem::size_of_val(spot_shadows.as_slice()),
-                            MTLResourceOptions::StorageModeShared,
-                        )
-                        .ok_or("failed to create spot-shadow buffer")?
-                }
+                allocator.alloc_buffer_with_bytes(
+                    bytes_of_slice(spot_shadows.as_slice()),
+                    MTLResourceOptions::StorageModeShared,
+                )
             }
+            .map_err(|e| format!("spot-shadow buffer: {e}"))?
         };
 
         // Per-scene rect area-light table, indexed by `GpuLight.data_index`.
@@ -385,38 +359,30 @@ impl MtlContext {
         let area_light_buffer = {
             use crate::gfx::render_types::AreaLightData;
             if area_lights.is_empty() {
-                device
-                    .newBufferWithLength_options(
-                        std::mem::size_of::<AreaLightData>(),
-                        MTLResourceOptions::StorageModeShared,
-                    )
-                    .ok_or("failed to create placeholder area-light buffer")?
+                allocator.alloc_buffer(
+                    std::mem::size_of::<AreaLightData>(),
+                    MTLResourceOptions::StorageModeShared,
+                )
             } else {
-                unsafe {
-                    let ptr = std::ptr::NonNull::new(area_lights.as_ptr() as *mut _)
-                        .ok_or("area-light slice pointer is null")?;
-                    device
-                        .newBufferWithBytes_length_options(
-                            ptr,
-                            std::mem::size_of_val(area_lights.as_slice()),
-                            MTLResourceOptions::StorageModeShared,
-                        )
-                        .ok_or("failed to create area-light buffer")?
-                }
+                allocator.alloc_buffer_with_bytes(
+                    bytes_of_slice(area_lights.as_slice()),
+                    MTLResourceOptions::StorageModeShared,
+                )
             }
+            .map_err(|e| format!("area-light buffer: {e}"))?
         };
 
         // Area-light LTC tables. Scene-independent (they depend only on the
         // build-time fit), so they are created unconditionally and the shader
         // simply never samples them when no area light is declared.
         let ltc_matrix_texture = create_lut_texture(
-            &device,
+            &allocator,
             crate::gfx::ltc::matrix_texels(),
             crate::gfx::ltc::LTC_LUT_SIZE as u32,
             4,
         )?;
         let ltc_magnitude_texture = create_lut_texture(
-            &device,
+            &allocator,
             crate::gfx::ltc::magnitude_texels(),
             crate::gfx::ltc::LTC_LUT_SIZE as u32,
             2,
@@ -437,13 +403,13 @@ impl MtlContext {
 
         // upload textures; fall back to a 1x1 opaque white texture when none provided
         let gpu_textures = if textures.is_empty() {
-            vec![create_fallback_texture(&device)?]
+            vec![create_fallback_texture(&allocator)?]
         } else {
             textures
                 .iter()
                 .enumerate()
                 .map(|(i, image)| {
-                    upload_texture_image(&device, image)
+                    upload_texture_image(&allocator, image)
                         .map_err(|e| format!("texture[{}]: {}", i, e))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -453,9 +419,9 @@ impl MtlContext {
         // (0,0,1)), sampled by a draw with no normal map. Real normal maps are
         // textures in `gpu_textures` (the shared pool) at their own handle; only
         // this fallback lives in `gpu_normal_maps`, one slot past the last texture.
-        let flat_normal = upload_texture(&device, 1, 1, &[128u8, 128, 255, 255])
+        let flat_normal = upload_texture(&allocator, 1, 1, &[128u8, 128, 255, 255])
             .map_err(|e| format!("flat normal fallback: {}", e))?;
-        let gpu_normal_maps: Vec<Retained<ProtocolObject<dyn MTLTexture>>> = vec![flat_normal];
+        let gpu_normal_maps = vec![flat_normal];
 
         // The bindless static pass binds every texture plus the flat-normal
         // fallback into one capped pool. A world that exceeds the cap still
@@ -525,7 +491,7 @@ impl MtlContext {
             let view = crate::build::environment_map::deserialise(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
-                &device,
+                &allocator,
                 view.irradiance_face,
                 view.irradiance_bytes,
                 view.prefilter_face,
@@ -533,8 +499,8 @@ impl MtlContext {
             )?
         } else {
             EnvironmentMapTextures {
-                irradiance: create_fallback_cubemap(&device, [0.05, 0.05, 0.05, 1.0])?,
-                prefilter: create_fallback_cubemap(&device, [0.05, 0.05, 0.05, 1.0])?,
+                irradiance: create_fallback_cubemap(&allocator, [0.05, 0.05, 0.05, 1.0])?,
+                prefilter: create_fallback_cubemap(&allocator, [0.05, 0.05, 0.05, 1.0])?,
                 prefilter_mip_count: 0,
             }
         };
@@ -545,9 +511,9 @@ impl MtlContext {
         let color_lut = if let Some(bytes) = color_lut_bytes {
             let (size, data) = crate::build::color_lut::deserialise(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
-            upload_color_lut(&device, size, data)?
+            upload_color_lut(&allocator, size, data)?
         } else {
-            create_fallback_color_lut(&device)?
+            create_fallback_color_lut(&allocator)?
         };
 
         // shadow pipeline + array map: created only when shadow_map_size > 0.
@@ -667,7 +633,7 @@ impl MtlContext {
             let text_ps = build_text_pipeline(&device, swap_pixel_format, hot_reload)?;
             let mut gpu_atlases = Vec::with_capacity(text_atlases.len());
             for (i, (aw, ah, pixels)) in text_atlases.iter().enumerate() {
-                let tex = upload_texture(&device, *aw, *ah, pixels)
+                let tex = upload_texture(&allocator, *aw, *ah, pixels)
                     .map_err(|e| format!("text_atlas[{}]: {}", i, e))?;
                 gpu_atlases.push(tex);
             }
@@ -812,7 +778,7 @@ impl MtlContext {
             auto_exposure_state,
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
-            &device,
+            &allocator,
             &vert_desc,
             requirements.scene,
             effects::EffectDimensions {
@@ -1170,7 +1136,7 @@ impl MtlContext {
             (records, args)
         };
 
-        Ok(Self {
+        let ctx = Self {
             device,
             command_queue,
             swap_pixel_format,
@@ -1231,6 +1197,7 @@ impl MtlContext {
             scene_fade: 0.0,
             geometry_less,
             view_matrix: IDENTITY4,
+            allocator,
             textures: gpu_textures,
             normal_map_textures: gpu_normal_maps,
             light_uniforms,
@@ -1434,7 +1401,15 @@ impl MtlContext {
             raymarch_volumes: raymarch_records,
             raymarch_cube_vertex_buffer,
             raymarch_cube_index_buffer,
-        })
+        };
+        let pooled = ctx.allocator.stats();
+        tracing::info!(
+            "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
+            pooled.block_count,
+            pooled.reserved_bytes / 1024,
+            pooled.in_use_bytes / 1024,
+        );
+        Ok(ctx)
     }
 
     // Re-upload a new world's GPU content onto this live context, reusing the

@@ -4,7 +4,7 @@
 // add / remove / move-chunk-mesh operations driven after init.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use objc2_metal::{MTLBuffer, MTLDevice as _, MTLResourceOptions};
+use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
 use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::Vertex;
@@ -29,19 +29,19 @@ impl MtlContext {
         let old_i_len = self.index_buffer.length();
 
         let new_vbuf = self
-            .device
-            .newBufferWithLength_options(
+            .allocator
+            .alloc_buffer(
                 old_v_len + chunk_vtx_bytes,
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or("setup_chunk_streaming: failed to allocate chunk vertex buffer")?;
+            .map_err(|e| format!("setup_chunk_streaming: chunk vertex buffer: {e}"))?;
         let new_ibuf = self
-            .device
-            .newBufferWithLength_options(
+            .allocator
+            .alloc_buffer(
                 old_i_len + chunk_idx_bytes,
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or("setup_chunk_streaming: failed to allocate chunk index buffer")?;
+            .map_err(|e| format!("setup_chunk_streaming: chunk index buffer: {e}"))?;
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.

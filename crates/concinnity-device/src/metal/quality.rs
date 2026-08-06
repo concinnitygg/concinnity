@@ -135,7 +135,7 @@ impl MtlContext {
         };
 
         let bundle = match build_quality_effects(
-            &self.device,
+            &self.allocator,
             &make_vertex_descriptor(),
             dims,
             EffectSettings {

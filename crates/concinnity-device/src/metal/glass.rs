@@ -435,8 +435,8 @@ impl MtlContext {
             };
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
-                vertex_buffer: self.vertex_buffer.clone(),
-                index_buffer: self.index_buffer.clone(),
+                vertex_buffer: self.vertex_buffer.retained(),
+                index_buffer: self.index_buffer.retained(),
                 index_count: index_count as u32,
                 index_type: objc2_metal::MTLIndexType::UInt32,
                 index_offset_bytes: index_offset * std::mem::size_of::<u32>(),

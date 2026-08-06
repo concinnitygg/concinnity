@@ -4,11 +4,11 @@
 // re-imported `.glb` source no longer fits each draw's init-time slot.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use objc2_metal::{MTLBuffer as _, MTLDevice as _, MTLResourceOptions};
+use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
 
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::LodSlice;
-use crate::metal::context::MtlContext;
+use crate::metal::context::{MtlContext, bytes_of_slice};
 
 impl MtlContext {
     // Rebuild the shared static-mesh vertex + index buffers, swapping in
@@ -201,31 +201,23 @@ impl MtlContext {
             );
         }
 
-        // Create new MTL buffers sized to the rebuilt layout.
-        let new_vertex_buffer = unsafe {
-            let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
-            let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _)
-                .ok_or("rebuild_static_geometry: vertex slice pointer is null")?;
-            self.device
-                .newBufferWithBytes_length_options(
-                    ptr,
-                    v_bytes,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("rebuild_static_geometry: failed to create new vertex buffer")?
-        };
-        let new_index_buffer = unsafe {
-            let i_bytes = std::mem::size_of_val(new_indices.as_slice());
-            let ptr = std::ptr::NonNull::new(new_indices.as_ptr() as *mut _)
-                .ok_or("rebuild_static_geometry: index slice pointer is null")?;
-            self.device
-                .newBufferWithBytes_length_options(
-                    ptr,
-                    i_bytes,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("rebuild_static_geometry: failed to create new index buffer")?
-        };
+        // Place new buffers sized to the rebuilt layout. The outgoing pair is
+        // replaced below; its ranges return to the pool on drop, withheld until
+        // the frames the `wait_idle` above drained can no longer reference them.
+        let new_vertex_buffer = self
+            .allocator
+            .alloc_buffer_with_bytes(
+                bytes_of_slice(new_vertices.as_slice()),
+                MTLResourceOptions::StorageModeShared,
+            )
+            .map_err(|e| format!("rebuild_static_geometry: vertex buffer: {e}"))?;
+        let new_index_buffer = self
+            .allocator
+            .alloc_buffer_with_bytes(
+                bytes_of_slice(new_indices.as_slice()),
+                MTLResourceOptions::StorageModeShared,
+            )
+            .map_err(|e| format!("rebuild_static_geometry: index buffer: {e}"))?;
 
         // Apply the new per-draw layout.
         for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in

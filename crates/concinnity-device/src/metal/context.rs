@@ -14,6 +14,7 @@ use crate::gfx::render_types::{
     ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
 };
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureGpu;
 use super::cull::CullState;
 use super::decal::DecalState;
@@ -83,6 +84,10 @@ pub(super) fn take_embedded_pump_events() -> bool {
 // Only ever accessed from the main thread.
 pub struct MtlContext {
     pub(super) device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
+    // Block pool every persistent CPU-written, GPU-read-only buffer and texture
+    // is placed in, so the world's resource count costs a handful of heaps
+    // rather than one device allocation each. See `metal/allocator.rs`.
+    pub(super) allocator: DeviceAllocator,
     pub(super) command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     // Pixel format the MTKView's CAMetalLayer is currently presenting at:
     // `BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR. The post + text
@@ -160,9 +165,9 @@ pub struct MtlContext {
     // passes bind this instead of clearing the state.
     pub(super) depth_state_read_only: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
     // Single shared vertex buffer containing geometry for all draw objects.
-    pub(super) vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) vertex_buffer: PooledBuffer,
     // Single shared index buffer containing indices for all draw objects.
-    pub(super) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) index_buffer: PooledBuffer,
     // One entry per renderable object. Replaces the former single index_count.
     pub(super) draw_objects: Vec<DrawObject>,
     // Spatial index over the cullable subset of `draw_objects`, built once
@@ -229,18 +234,18 @@ pub struct MtlContext {
     // emissive/ORM, terrain secondary) lives here once, matching DX/VK. A 1x1
     // opaque-white fallback is always present at slot 0 so shaders that sample
     // texture(0) produce correct output even when no Texture asset was declared.
-    pub(super) textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub(super) textures: Vec<PooledTexture>,
     // Holds only the 1x1 flat-normal fallback (RGBA 128,128,255,255) a
     // normal-less draw samples; its pool slot is one past the last real texture.
     // Real normal maps are entries in `textures`.
-    pub(super) normal_map_textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub(super) normal_map_textures: Vec<PooledTexture>,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,
     // Per-scene local lights (point + spot + area) for the clustered forward
     // pass, bound at fragment buffer(8). Always holds at least one element (a
     // neutral placeholder when the scene declares no local lights) so the
     // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
-    pub(super) local_light_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) local_light_buffer: PooledBuffer,
     pub(super) sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     // Shadow map resources.
     // shadow_pipeline_state is None when no ShadowStage was declared or
@@ -279,17 +284,17 @@ pub struct MtlContext {
     // stands in when no spot casts shadows.
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
-    pub(super) area_light_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) area_light_buffer: PooledBuffer,
     // The two linearly-transformed-cosine lookup tables the area-light shading
     // path samples: the inverse transforms (RGBA32Float) and the matching
     // (albedo, Fresnel) pairs (RG32Float). Generated at build time, so these are
     // scene-independent and created once.
-    pub(super) ltc_matrix_texture: Retained<ProtocolObject<dyn MTLTexture>>,
-    pub(super) ltc_magnitude_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub(super) ltc_matrix_texture: PooledTexture,
+    pub(super) ltc_magnitude_texture: PooledTexture,
     pub(super) spot_shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
     // Per-slice light-space projections, uploaded once (local lights are
     // static). Empty when nothing casts, in which case the pass never runs.
-    pub(super) spot_shadow_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+    pub(super) spot_shadow_buffer: PooledBuffer,
     pub(super) spot_shadow_count: u32,
     // Prime-then-round-robin refresh schedule over the spot slices, the spot
     // analogue of `shadow_scheduler`.
@@ -349,7 +354,7 @@ pub struct MtlContext {
     // pipeline now targets the single-sample drawable in the composite pass
     // (after HDR tonemap), so text is rendered in display-referred LDR.
     pub(super) text_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) text_atlas_textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub(super) text_atlas_textures: Vec<PooledTexture>,
     // Linear-clamp sampler for glyph atlas lookups.
     pub(super) text_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
@@ -384,7 +389,7 @@ pub struct MtlContext {
     // 3D colour-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
     // none, so the composite pass binds a valid 3D texture either way.
-    pub(super) color_lut: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub(super) color_lut: PooledTexture,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
