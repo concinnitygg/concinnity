@@ -25,13 +25,10 @@ impl EditorHook {
     // seeded Transform position padded to a small box. `None` when nothing
     // resolves.
     pub(super) fn selection_bounds(&self, world: &World) -> Option<([f32; 3], [f32; 3])> {
-        let names = crate::ecs::asset_id::name_table();
         let index = world.resource::<crate::ecs::PickIndex>();
         let boxes = self.selection.iter().filter_map(|name| {
-            let id = names.iter().position(|n| n == name)? as u32;
-            if let Some(e) =
-                index.and_then(|i| i.entries.iter().find(|e| e.asset_id == AssetId(id)))
-            {
+            let id = crate::ecs::asset_id::lookup(name)?;
+            if let Some(e) = index.and_then(|i| i.entries.iter().find(|e| e.asset_id == id)) {
                 return Some((e.bb_min, e.bb_max));
             }
             let entity = billboard_drive::entity_by_name(world, name)?;

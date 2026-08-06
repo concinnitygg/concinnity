@@ -553,12 +553,7 @@ pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut crate::ecs::Worl
     let RuntimeCommand::Despawn { name, reply } = cmd else {
         return;
     };
-    let table = crate::ecs::asset_id::name_table();
-    let Some(id) = table
-        .iter()
-        .position(|n| n == &name)
-        .map(|i| crate::ecs::asset_id::AssetId(i as u32))
-    else {
+    let Some(id) = crate::ecs::asset_id::lookup(&name) else {
         let _ = reply.send(Err(format!("despawn: name '{name}' not found")));
         return;
     };
@@ -583,13 +578,7 @@ pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut crate::ecs::Wor
     else {
         return;
     };
-    let table = crate::ecs::asset_id::name_table();
-    let resolve = |name: &str| {
-        table
-            .iter()
-            .position(|n| n == name)
-            .map(|i| crate::ecs::asset_id::AssetId(i as u32))
-    };
+    let resolve = crate::ecs::asset_id::lookup;
     let Some(child_id) = resolve(&child) else {
         let _ = reply.send(Err(format!("reparent: child '{child}' not found")));
         return;
@@ -632,12 +621,7 @@ pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut crate::ecs::World)
     else {
         return;
     };
-    let table = crate::ecs::asset_id::name_table();
-    let Some(template_id) = table
-        .iter()
-        .position(|n| n == &template)
-        .map(|i| crate::ecs::asset_id::AssetId(i as u32))
-    else {
+    let Some(template_id) = crate::ecs::asset_id::lookup(&template) else {
         let _ = reply.send(Err(format!("spawn: template '{template}' not found")));
         return;
     };
@@ -745,11 +729,7 @@ fn resolve_texture_slot(
     let Some(name) = texture else {
         return Ok(0);
     };
-    let table = crate::ecs::asset_id::name_table();
-    let id = table
-        .iter()
-        .position(|n| n == name)
-        .map(|i| crate::ecs::asset_id::AssetId(i as u32))
+    let id = crate::ecs::asset_id::lookup(name)
         .ok_or_else(|| format!("texture '{}' not found in interner", name))?;
     let reload = world_reload.ok_or_else(|| {
         "texture-name resolution requires cn debug (world_reload missing)".to_string()

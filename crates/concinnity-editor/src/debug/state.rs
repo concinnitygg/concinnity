@@ -22,7 +22,13 @@ pub(crate) struct DebugState {
     pub(super) systems: Vec<String>,
     pub(super) assets: Vec<AssetEntry>,
     // `AssetId` -> declared name, indexed by id. Captured once after build.
-    pub(super) names: Vec<String>,
+    //
+    // Shared rather than owned: the interner is thread-local to the engine
+    // thread, so a command handler on the socket thread can only resolve a name
+    // through this snapshot, and it has to take it out from under the lock
+    // before blocking on the engine. An `Arc` makes that handoff a refcount
+    // bump instead of copying every name in the world per command.
+    pub(super) names: Arc<Vec<String>>,
     // Asset-streaming `(resident, pending, unloaded)` counts, refreshed every
     // tick (cheap) so the `streaming` command reflects live progress.
     pub(super) streaming: StreamingStats,

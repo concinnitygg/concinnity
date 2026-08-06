@@ -60,12 +60,11 @@ impl EditorHook {
         }
         let all = self.entries.iter().filter_map(entry_name);
         let hidden = visibility::effective_hidden(&self.hidden_assets, self.isolate.as_ref(), all);
-        let table = crate::ecs::asset_id::name_table();
-        table
+        // Resolve the hidden names rather than scanning every interned one:
+        // the hidden set is a handful, the interner is the whole world.
+        hidden
             .iter()
-            .enumerate()
-            .filter(|(_, n)| hidden.contains(n.as_str()))
-            .map(|(i, _)| AssetId(i as u32))
+            .filter_map(|n| crate::ecs::asset_id::lookup(n))
             .collect()
     }
 }

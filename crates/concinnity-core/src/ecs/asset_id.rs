@@ -142,6 +142,39 @@ mod tests {
         assert_eq!(name_of(AssetId(2)).as_deref(), Some("lamp"));
     }
 
+    // Callers used to resolve a name by scanning a `name_table()` snapshot for
+    // its position. `lookup` replaces that everywhere, so the two must agree on
+    // every name a caller can hold -- and where they diverge, `lookup` must be
+    // the correct one.
+    #[test]
+    fn lookup_agrees_with_scanning_a_name_table_snapshot() {
+        let scan = |name: &str| {
+            name_table()
+                .iter()
+                .position(|n| n == name)
+                .map(|i| AssetId(i as u32))
+        };
+
+        reset_interner();
+        intern_all(&["floor", "wall", "lamp"]);
+        for name in ["floor", "wall", "lamp", "missing"] {
+            assert_eq!(lookup(name), scan(name), "disagreed on '{name}'");
+        }
+
+        // Sparse table: agreement must hold across the gap too.
+        reset_interner();
+        prime_name_table(&[(0, "floor".to_string()), (2, "lamp".to_string())]);
+        for name in ["floor", "lamp", "missing"] {
+            assert_eq!(lookup(name), scan(name), "disagreed on '{name}'");
+        }
+
+        // The one divergence, and the reason the scan was worth replacing: a
+        // blank slot makes the scan resolve the empty name to whichever asset
+        // sits in the first gap. `lookup` refuses it.
+        assert_eq!(scan(""), Some(AssetId(1)));
+        assert_eq!(lookup(""), None);
+    }
+
     #[test]
     fn lookup_resolves_interned_names_only() {
         reset_interner();

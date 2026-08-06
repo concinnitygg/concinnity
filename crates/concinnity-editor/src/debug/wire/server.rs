@@ -362,7 +362,7 @@ impl DebugHook for DebugServer {
             // The AssetId -> name table is the build interner snapshot; it is
             // stable once the world is built, so capture it just once.
             if state.names.is_empty() {
-                state.names = crate::ecs::asset_id::name_table();
+                state.names = std::sync::Arc::new(crate::ecs::asset_id::name_table());
             }
         }
     }

@@ -51,7 +51,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         }),
         "names" => serde_json::json!({
             "ok": true,
-            "names": state.names,
+            "names": &*state.names,
         }),
         "streaming" => {
             // Each pool is null when it is not streaming, else its
@@ -262,17 +262,17 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         "anim-crossfade" => {
             // The handler needs the names table to resolve the target
             // SkinnedMesh, so capture it before dropping the snapshot lock.
-            let names = state.names.clone();
+            let names = std::sync::Arc::clone(&state.names);
             drop(state);
             return handle_anim_crossfade(text, &names);
         }
         "anim-param" => {
-            let names = state.names.clone();
+            let names = std::sync::Arc::clone(&state.names);
             drop(state);
             return handle_anim_param(text, &names);
         }
         "anim-state" => {
-            let names = state.names.clone();
+            let names = std::sync::Arc::clone(&state.names);
             drop(state);
             return handle_anim_state(text, &names);
         }
@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn names_returns_id_table() {
         let st = DebugState {
-            names: vec!["hero".into(), "floor".into()],
+            names: std::sync::Arc::new(vec!["hero".into(), "floor".into()]),
             ..Default::default()
         };
         let r = reply(r#"{"cmd":"names"}"#, st);

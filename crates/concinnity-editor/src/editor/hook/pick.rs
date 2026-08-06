@@ -27,9 +27,7 @@ pub(super) struct PickLast {
 
 // The interned name behind a pick hit, if the id still resolves.
 pub(super) fn resolve_name(id: AssetId) -> Option<String> {
-    crate::ecs::asset_id::name_table()
-        .get(id.0 as usize)
-        .cloned()
+    crate::ecs::asset_id::name_of(id)
 }
 
 impl EditorHook {
@@ -142,14 +140,9 @@ impl EditorHook {
 
     // A selection member's projected screen rect, if it resolves this frame.
     pub(super) fn member_rect(world: &World, vp: [f32; 2], name: &str) -> Option<[f32; 4]> {
-        let id = crate::ecs::asset_id::name_table()
-            .iter()
-            .position(|n| n == name)?;
+        let id = crate::ecs::asset_id::lookup(name)?;
         let index = world.resource::<crate::ecs::PickIndex>()?;
-        let entry = index
-            .entries
-            .iter()
-            .find(|e| e.asset_id == AssetId(id as u32))?;
+        let entry = index.entries.iter().find(|e| e.asset_id == id)?;
         let cam = world.query::<crate::assets::Camera3D>().next()?;
         highlight::screen_rect(
             &cam.view_matrix,

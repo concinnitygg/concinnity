@@ -92,12 +92,10 @@ impl EditorHook {
             return None;
         }
         let has_position = merged.get("position").is_some_and(|p| p.is_array());
-        let id = crate::ecs::asset_id::name_table()
-            .iter()
-            .position(|n| n == name)?;
+        let id = crate::ecs::asset_id::lookup(name)?;
         let entity = world
             .resource::<concinnity_core::ecs::EntityByName>()?
-            .get(AssetId(id as u32))?;
+            .get(id)?;
         if world.get::<crate::assets::Parent>(entity).is_some() {
             return None;
         }

@@ -46,10 +46,7 @@ pub(crate) fn text(val: TraceVal) -> (&'static str, String) {
 // is). Resolved fresh each use: ids drift across preview rebuilds, so a stored
 // one could silently retarget.
 pub(crate) fn id_of(name: &str) -> Option<AssetId> {
-    crate::ecs::asset_id::name_table()
-        .iter()
-        .position(|n| n == name)
-        .map(|i| AssetId(i as u32))
+    crate::ecs::asset_id::lookup(name)
 }
 
 #[cfg(test)]

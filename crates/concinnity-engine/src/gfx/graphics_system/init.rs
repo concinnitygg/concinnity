@@ -1988,10 +1988,9 @@ impl GraphicsSystem {
             AssetId,
             (String, crate::assets::ProceduralMesh),
         > = if crate::app::dev_flags::enabled() {
-            let name_table = crate::ecs::asset_id::name_table();
             ctx.query::<crate::assets::ProceduralMesh>()
                 .filter_map(|pm| {
-                    let name = name_table.get(pm.asset_id.0 as usize).cloned()?;
+                    let name = crate::ecs::asset_id::name_of(pm.asset_id)?;
                     Some((pm.asset_id, (name, pm.clone())))
                 })
                 .collect()

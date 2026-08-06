@@ -24,11 +24,9 @@ impl EditorHook {
     // `position` arg, a live unparented Transform.
     pub(super) fn drop_selection_to_floor(&mut self, world: &mut World) -> usize {
         let names: Vec<String> = self.selection.iter().map(String::from).collect();
-        let table = crate::ecs::asset_id::name_table();
         let selected_ids: std::collections::BTreeSet<AssetId> = names
             .iter()
-            .filter_map(|n| table.iter().position(|t| t == n))
-            .map(|i| AssetId(i as u32))
+            .filter_map(|n| crate::ecs::asset_id::lookup(n))
             .collect();
         let mut changed = Vec::new();
         for name in &names {
@@ -38,10 +36,7 @@ impl EditorHook {
             let Some(position) = world.get::<Transform>(target.entity).map(|t| t.position) else {
                 continue;
             };
-            let id = table
-                .iter()
-                .position(|t| t == name)
-                .map(|i| AssetId(i as u32));
+            let id = crate::ecs::asset_id::lookup(name);
             let bounds = id.and_then(|id| {
                 world
                     .resource::<PickIndex>()?
