@@ -2,6 +2,7 @@
 // in lib.rs; compiled on Linux always and on macOS / Windows with the `vulkan`
 // feature. macOS runs over the MoltenVK portability driver.
 
+mod allocator;
 #[cfg(target_os = "macos")]
 mod appkit_window;
 mod auto_exposure;

@@ -17,7 +17,7 @@
 #[allow(unused_imports)]
 pub(crate) mod gfx {
     pub use concinnity_core::gfx::{
-        auto_exposure, frustum, image_decode, lod, mesh_payload, profile, range_alloc,
+        auto_exposure, block_alloc, frustum, image_decode, lod, mesh_payload, profile, range_alloc,
         render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub use concinnity_render::{

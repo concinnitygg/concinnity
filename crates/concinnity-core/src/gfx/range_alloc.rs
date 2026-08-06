@@ -1,7 +1,9 @@
 // src/gfx/range_alloc.rs
 //
-// A byte-range sub-allocator for the streamed-mesh regions of the renderer's
-// shared vertex and index buffers.
+// A byte-range sub-allocator: it hands out offsets into a larger span it does
+// not own. Streamed meshes place their geometry in the renderer's shared vertex
+// and index buffers with it, and `block_alloc` stacks it into a block pool to
+// place resources inside device-memory blocks.
 //
 // Mesh streaming evicts and re-uploads geometry after init. Before this, every
 // streamed mesh re-filled its fixed build-time region, so the buffers had to
@@ -27,6 +29,11 @@
 struct Block {
     offset: u64,
     size: u64,
+}
+
+// Round `value` up to the next multiple of `align`, which must be non-zero.
+fn align_up(value: u64, align: u64) -> u64 {
+    value.div_ceil(align) * align
 }
 
 // A freed region awaiting reclaim once its `retire_frame` has passed.
@@ -60,26 +67,73 @@ impl RangeAllocator {
     // Best-fit: the smallest sufficient block is chosen, so a block matching
     // the request exactly is consumed whole with no fragmentation.
     pub fn alloc(&mut self, size: u64) -> Option<u64> {
+        self.alloc_aligned(size, 1)
+    }
+
+    // Allocate `size` bytes at an offset that is a multiple of `align`, or
+    // `None` if no free block can host the request.
+    //
+    // Best-fit on the bytes actually wasted, so alignment padding counts
+    // against a candidate block rather than being invisible to the choice. Any
+    // padding skipped ahead of the returned offset stays on the free list, so
+    // `free` takes back exactly the `[offset, offset + size)` handed out here.
+    pub fn alloc_aligned(&mut self, size: u64, align: u64) -> Option<u64> {
         if size == 0 {
             return Some(0);
         }
-        let i = self
-            .free
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.size >= size)
-            .min_by_key(|(_, b)| b.size)?
-            .0;
-        let block = self.free[i];
-        if block.size == size {
-            self.free.remove(i);
-        } else {
-            self.free[i] = Block {
-                offset: block.offset + size,
-                size: block.size - size,
+        let align = align.max(1);
+        let mut best: Option<(usize, u64, u64)> = None;
+        for (i, b) in self.free.iter().enumerate() {
+            let offset = align_up(b.offset, align);
+            let pad = offset - b.offset;
+            let Some(usable) = b.size.checked_sub(pad) else {
+                continue;
             };
+            let Some(waste) = usable.checked_sub(size) else {
+                continue;
+            };
+            if best.is_none_or(|(_, _, best_waste)| waste < best_waste) {
+                best = Some((i, offset, waste));
+            }
         }
-        Some(block.offset)
+        let (i, offset, _) = best?;
+        let block = self.free[i];
+        let pad = offset - block.offset;
+        let tail_offset = offset + size;
+        let tail_size = block.offset + block.size - tail_offset;
+        // Rewrite the chosen block as its leading padding (if any) and re-insert
+        // the trailing remainder after it, keeping `free` sorted by offset.
+        match (pad, tail_size) {
+            (0, 0) => {
+                self.free.remove(i);
+            }
+            (0, _) => {
+                self.free[i] = Block {
+                    offset: tail_offset,
+                    size: tail_size,
+                };
+            }
+            (_, 0) => {
+                self.free[i] = Block {
+                    offset: block.offset,
+                    size: pad,
+                };
+            }
+            _ => {
+                self.free[i] = Block {
+                    offset: block.offset,
+                    size: pad,
+                };
+                self.free.insert(
+                    i + 1,
+                    Block {
+                        offset: tail_offset,
+                        size: tail_size,
+                    },
+                );
+            }
+        }
+        Some(offset)
     }
 
     // Queue `[offset, offset + size)` for release. It becomes allocatable once
@@ -239,6 +293,64 @@ mod tests {
         a.reclaim(1);
         assert_eq!(a.free_block_count(), 1);
         assert_eq!(a.alloc(300), Some(0));
+    }
+
+    #[test]
+    fn aligned_alloc_rounds_the_offset_up() {
+        let mut a = RangeAllocator::new();
+        seed(&mut a, 4, 500);
+        // the block starts at 4, so a 256-aligned request skips to 256
+        assert_eq!(a.alloc_aligned(100, 256), Some(256));
+    }
+
+    #[test]
+    fn alignment_padding_stays_allocatable() {
+        let mut a = RangeAllocator::new();
+        seed(&mut a, 0, 1024);
+        assert_eq!(a.alloc_aligned(64, 1), Some(0));
+        // next 256-aligned offset is 256, leaving [64,256) skipped over
+        assert_eq!(a.alloc_aligned(64, 256), Some(256));
+        // that skipped padding is still free, not leaked
+        assert_eq!(a.alloc_aligned(192, 1), Some(64));
+        assert_eq!(a.free_bytes(), 1024 - 64 - 64 - 192);
+    }
+
+    #[test]
+    fn freeing_an_aligned_alloc_returns_exactly_what_was_handed_out() {
+        let mut a = RangeAllocator::new();
+        seed(&mut a, 0, 1024);
+        let off = a.alloc_aligned(100, 256).unwrap();
+        assert_eq!(off, 0);
+        let second = a.alloc_aligned(100, 256).unwrap();
+        assert_eq!(second, 256);
+        // free takes back the handed-out range, and once both are back the
+        // whole span coalesces to one block again
+        a.free(off, 100, 0);
+        a.free(second, 100, 0);
+        a.reclaim(0);
+        assert_eq!(a.free_block_count(), 1);
+        assert_eq!(a.free_bytes(), 1024);
+    }
+
+    #[test]
+    fn best_fit_counts_alignment_padding_as_waste() {
+        let mut a = RangeAllocator::new();
+        // [0,140) would need 116 bytes of padding to host a 256-aligned 24;
+        // [512,32) hosts it with none, so it is the better fit despite being
+        // the smaller block.
+        seed(&mut a, 0, 140);
+        seed(&mut a, 512, 32);
+        assert_eq!(a.alloc_aligned(24, 256), Some(512));
+    }
+
+    #[test]
+    fn aligned_alloc_fails_when_padding_pushes_it_past_the_block() {
+        let mut a = RangeAllocator::new();
+        // 200 bytes free from offset 100, but a 256-aligned 100 needs [256,356)
+        seed(&mut a, 100, 200);
+        assert_eq!(a.alloc_aligned(100, 256), None);
+        // the same request without alignment fits
+        assert_eq!(a.alloc_aligned(100, 1), Some(100));
     }
 
     #[test]
