@@ -2550,13 +2550,10 @@ impl GraphicsSystem {
         // logged warning rather than failing the whole world build.
         let sdf_volumes: Vec<(SdfVolume, Vec<u8>, String)> = {
             let raw: Vec<SdfVolume> = ctx.drain::<SdfVolume>();
-            let name_table = crate::ecs::asset_id::name_table();
             let mut out = Vec::with_capacity(raw.len());
             for v in raw {
                 let asset_id = v.asset_id;
-                let label = name_table
-                    .get(asset_id.0 as usize)
-                    .cloned()
+                let label = crate::ecs::asset_id::name_of(asset_id)
                     .unwrap_or_else(|| format!("sdf_volume_{}", asset_id.0));
                 let locator = match v.locator.as_ref() {
                     Some(l) => l.clone(),

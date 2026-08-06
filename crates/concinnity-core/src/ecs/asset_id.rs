@@ -59,6 +59,18 @@ pub fn lookup(name: &str) -> Option<AssetId> {
     INTERNER.with(|i| i.borrow().lookup(name).map(AssetId))
 }
 
+// The name `id` was interned under, or `None` when none was recorded for it --
+// an id past the table, or a slot a sparse `prime_name_table` left blank. O(1)
+// and one allocation, for a caller that wants one label rather than the whole
+// table.
+pub fn name_of(id: AssetId) -> Option<String> {
+    ensure_name_resolver();
+    INTERNER.with(|i| match i.borrow().name(id.0) {
+        "" => None,
+        name => Some(name.to_string()),
+    })
+}
+
 // Snapshot every interned name on the current thread, indexed by `AssetId`.
 // Because ids are assigned in world.jsonl declaration order, `table[id]` is
 // the declared name for that id. Used by the binary-only `crate::debug`
@@ -111,6 +123,23 @@ mod tests {
         reset_interner();
         intern_all(&["a", "b", "c"]);
         assert_eq!(name_table(), vec!["a", "b", "c"]);
+    }
+
+    // The single-id counterpart to `name_table`. A blank slot reads as absent
+    // rather than as an empty name, so a caller labelling by id falls back to
+    // its own placeholder instead of printing nothing.
+    #[test]
+    fn name_of_resolves_one_id_and_reports_unnamed_slots_as_absent() {
+        reset_interner();
+        intern_all(&["floor", "wall"]);
+        assert_eq!(name_of(AssetId(0)).as_deref(), Some("floor"));
+        assert_eq!(name_of(AssetId(1)).as_deref(), Some("wall"));
+        assert_eq!(name_of(AssetId(7)), None, "an id past the table is absent");
+
+        reset_interner();
+        prime_name_table(&[(0, "floor".to_string()), (2, "lamp".to_string())]);
+        assert_eq!(name_of(AssetId(1)), None, "a blank slot is absent");
+        assert_eq!(name_of(AssetId(2)).as_deref(), Some("lamp"));
     }
 
     #[test]
