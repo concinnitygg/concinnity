@@ -2389,7 +2389,7 @@ impl VkContext {
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(
                 super::post::reflection_composite::ReflectionCompositeResources::new(
-                    &super::post::reflection_composite::GpuAllocContext {
+                    &super::texture::GpuUploadContext {
                         alloc: &alloc,
                         device: &device,
                         command_pool,
@@ -4015,6 +4015,10 @@ impl VkContext {
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         me.upload_initial_particles(particles)?;
+        // Every init upload above was synchronous (its one-shot idled the
+        // queue), so init's remaining staging debris is retirable now; reclaim
+        // it so the stats below report the steady footprint, not init's peak.
+        me.alloc.reclaim_idle();
         let alloc_stats = me.alloc.stats();
         tracing::info!(
             "device allocator: {} block(s) of {} allowed, {} KiB reserved for {} KiB of resources",

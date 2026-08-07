@@ -792,8 +792,6 @@ impl PlanarReflectionSet {
         self.hiz_ubo = None;
         self.probeset_buf = PooledBuffer::null();
         self.global_sets.clear();
-        self.cull_indirect_bufs.clear();
-        self.cull_status_bufs.clear();
         self.cull_sets.clear();
     }
 }

@@ -108,9 +108,12 @@ impl Pool {
     }
 
     // How large the next block should be to host `size` bytes at `align`. The
-    // standard size doubles with the pool's block count up to `MAX_BLOCK_BYTES`,
-    // and any request too large for that gets a block of its own size (which
-    // `BlockAllocator::add_block` then marks dedicated).
+    // standard size doubles with the pool's live block count up to
+    // `MAX_BLOCK_BYTES`, and any request too large for that gets a block of its
+    // own size (which `BlockAllocator::add_block` then marks dedicated). Keyed
+    // off the live count, so a pool that empties out restarts the ladder: a
+    // teardown that drops a large world recommits small for its successor
+    // rather than at the old high-water block size.
     fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
         let grown = FIRST_BLOCK_BYTES
             .saturating_mul(1 << self.placement.block_count().min(4))
@@ -421,8 +424,23 @@ impl DeviceAllocator {
     // make retired frees placeable again, and release any block that now holds
     // nothing back to the driver.
     pub(super) fn begin_frame(&self) {
+        self.advance(1);
+    }
+
+    // Retire everything pending at once. Only sound right after a queue or
+    // device wait: the deferred window exists to outlast in-flight work, and a
+    // wait leaves none. The synchronous upload helpers call this as their
+    // staging drops so an init upload loop peaks at about one staging buffer,
+    // instead of accumulating every upload's until `draw_frame` starts ticking
+    // `begin_frame`.
+    pub(super) fn reclaim_idle(&self) {
+        let depth = self.inner.borrow().retire_depth;
+        self.advance(depth);
+    }
+
+    fn advance(&self, ticks: u64) {
         let mut inner = self.inner.borrow_mut();
-        inner.frame += 1;
+        inner.frame += ticks;
         let frame = inner.frame;
         let mut index = 0;
         while index < inner.retired.len() {
@@ -740,7 +758,10 @@ mod tests {
 
     #[test]
     fn small_buffers_share_one_block_and_map_at_their_offsets() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let a = alloc
             .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
@@ -769,7 +790,10 @@ mod tests {
 
     #[test]
     fn a_dropped_buffer_frees_its_range_after_the_retire_window() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let buffer = alloc
             .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
@@ -795,7 +819,10 @@ mod tests {
 
     #[test]
     fn a_clone_keeps_the_resource_alive() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let a = alloc
             .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
@@ -811,7 +838,10 @@ mod tests {
 
     #[test]
     fn an_image_and_its_views_retire_together() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -855,7 +885,10 @@ mod tests {
 
     #[test]
     fn linear_and_optimal_images_never_share_a_block() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let base = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -896,7 +929,10 @@ mod tests {
 
     #[test]
     fn an_oversized_buffer_gets_a_dedicated_block() {
-        let Some(gpu) = test_gpu() else { return };
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
         let alloc = test_allocator(&gpu);
         let big = alloc
             .create_buffer(
@@ -913,6 +949,202 @@ mod tests {
         assert_eq!(alloc.stats().block_count, 2);
         drop(big);
         drop(small);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn a_reclaimed_range_is_reused_by_a_later_allocation() {
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        // The anchor keeps the block alive; the big buffer fills most of it, so
+        // a second big buffer only fits if the first one's range came back.
+        let anchor = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let big_size = 3 * 1024 * 1024;
+        let big = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 1);
+        drop(big);
+        for _ in 0..3 {
+            alloc.begin_frame();
+        }
+        let again = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 1);
+        drop(anchor);
+        drop(again);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn reclaim_idle_retires_pending_frees_without_frame_ticks() {
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let anchor = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let big_size = 3 * 1024 * 1024;
+        let big = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        drop(big);
+        // No begin_frame between the drop and the next allocation, like an
+        // init-time upload loop; reclaim_idle alone must make the range
+        // placeable again.
+        alloc.reclaim_idle();
+        let again = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 1);
+        drop(anchor);
+        drop(again);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn a_released_reservation_returns_its_range() {
+        let Some(gpu) = test_gpu() else {
+            eprintln!("skipped: no Vulkan driver");
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        // Exercise the bind-failure path directly: reserve, then release
+        // without a resource ever binding.
+        let reqs = vk::MemoryRequirements {
+            size: 1024,
+            alignment: 256,
+            memory_type_bits: !0,
+        };
+        let reservation = alloc
+            .reserve(reqs, HOST, ResourceKind::Linear, false)
+            .unwrap();
+        assert!(alloc.stats().in_use_bytes >= 1024);
+        alloc.release(reservation);
+        assert_eq!(alloc.stats().in_use_bytes, 0);
+        for _ in 0..3 {
+            alloc.begin_frame();
+        }
+        assert_eq!(alloc.stats().block_count, 0);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn an_emptied_pool_restarts_the_growth_ladder() {
+        // Policy-level: climb the ladder, drain and release every block, and
+        // the next block is back at `FIRST_BLOCK_BYTES`. Deliberate (see
+        // `next_block_bytes`): an emptied pool recommits small rather than at
+        // its high-water block size.
+        let mut pool = Pool::new();
+        let b1 = pool.next_block_bytes(1024, 1);
+        assert_eq!(b1, FIRST_BLOCK_BYTES);
+        let i1 = pool.placement.add_block(b1);
+        let p1 = pool.placement.alloc_in(i1, 1024, 1).unwrap();
+        let b2 = pool.next_block_bytes(1024, 1);
+        assert_eq!(b2, FIRST_BLOCK_BYTES * 2);
+        let i2 = pool.placement.add_block(b2);
+        let p2 = pool.placement.alloc_in(i2, 1024, 1).unwrap();
+
+        pool.placement.free(p1, 1024, 0);
+        pool.placement.free(p2, 1024, 0);
+        pool.placement.reclaim(1);
+        assert_eq!(pool.placement.take_empty_blocks().len(), 2);
+        assert_eq!(pool.next_block_bytes(1024, 1), FIRST_BLOCK_BYTES);
+    }
+
+    // A device with `bufferDeviceAddress` enabled (core 1.2), for the
+    // device-address pool tests, or None where the driver cannot provide one.
+    fn test_gpu_with_device_address() -> Option<TestGpu> {
+        let entry = crate::vulkan::loader::load_entry().ok()?;
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
+        let instance = unsafe {
+            entry.create_instance(
+                &vk::InstanceCreateInfo::default().application_info(&app),
+                None,
+            )
+        }
+        .ok()?;
+        let destroy_instance = |instance: ash::Instance| {
+            unsafe { instance.destroy_instance(None) };
+            None
+        };
+        let physical_device = match unsafe { instance.enumerate_physical_devices() } {
+            Ok(devices) if !devices.is_empty() => devices[0],
+            _ => return destroy_instance(instance),
+        };
+        let props = unsafe { instance.get_physical_device_properties(physical_device) };
+        if props.api_version < vk::API_VERSION_1_2 {
+            return destroy_instance(instance);
+        }
+        let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+        let mut feats = vk::PhysicalDeviceFeatures2::default().push_next(&mut bda);
+        unsafe { instance.get_physical_device_features2(physical_device, &mut feats) };
+        if bda.buffer_device_address == 0 {
+            return destroy_instance(instance);
+        }
+        let mut enable =
+            vk::PhysicalDeviceBufferDeviceAddressFeatures::default().buffer_device_address(true);
+        let queue_infos = [vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(0)
+            .queue_priorities(&[1.0])];
+        let device_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_infos)
+            .push_next(&mut enable);
+        let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
+            Ok(device) => device,
+            Err(_) => return destroy_instance(instance),
+        };
+        Some(TestGpu {
+            device,
+            instance,
+            physical_device,
+            _entry: entry,
+        })
+    }
+
+    #[test]
+    fn device_address_buffers_pool_apart_and_report_addresses() {
+        let Some(gpu) = test_gpu_with_device_address() else {
+            eprintln!("skipped: no bufferDeviceAddress-capable Vulkan driver");
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let plain = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let a = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS, HOST)
+            .unwrap();
+        let b = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS, HOST)
+            .unwrap();
+        // The device-address buffers share one DEVICE_ADDRESS block; the plain
+        // buffer never joins it.
+        assert_eq!(alloc.stats().block_count, 2);
+
+        // `get_buffer_device_address` must be valid for a pooled buffer at any
+        // offset; `b` sits at a non-zero offset behind `a`.
+        let address = |buffer: vk::Buffer| unsafe {
+            gpu.device
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
+        };
+        let addr_a = address(a.buffer());
+        let addr_b = address(b.buffer());
+        assert_ne!(addr_a, 0);
+        assert_ne!(addr_b, 0);
+        assert_ne!(addr_a, addr_b);
+
+        drop(plain);
+        drop(a);
+        drop(b);
         alloc.destroy();
     }
 }

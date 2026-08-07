@@ -65,9 +65,8 @@ pub(in crate::vulkan) struct AutoExposureResources {
     output_buffer: PooledBuffer,
 
     // Per-frame HOST_VISIBLE readback buffers. Each holds 4 bytes (one
-    // f32). Persistently mapped; the CPU reads `readback_ptrs[frame_idx]`
-    // at the top of a later frame after the fence wait gates this slot's
-    // previous copy.
+    // f32). Persistently mapped; the CPU reads this frame's slot at the top
+    // of a later frame after the fence wait gates this slot's previous copy.
     readback_buffers: Vec<PooledBuffer>,
 }
 

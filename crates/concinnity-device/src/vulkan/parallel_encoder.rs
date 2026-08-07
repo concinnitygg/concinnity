@@ -27,8 +27,14 @@
 //   2. Particle `Cell` state (`particle_last_elapsed` / `particle_frame_index`
 //      / per-emitter `spawn_state`) - hoisted to `prepare_particle_pass`
 //      (`&mut self`, before the fan-out), so the workers never touch it.
-//   3. `deferred_destroy` (`RefCell`) - only `encode_composite_and_text`
-//      touches it, and Composite stays on the main thread (not fanned out).
+//   3. The device allocator (`DeviceAllocator`'s `Rc<RefCell<Inner>>`),
+//      reachable through `&VkContext` from every pooled resource: creating,
+//      cloning, or dropping a `PooledBuffer` / `PooledImage` mutates it with
+//      no synchronization. Only `encode_composite_and_text` does any of that
+//      during encode (the transient text buffers), and Composite stays on the
+//      main thread (not fanned out). A pass that touches a pooled resource's
+//      lifetime -- not just its cached handles -- must never migrate onto the
+//      fan-out.
 //   4. `skinned.deformed_primed` (`AtomicBool`) - the G-buffer pass's
 //      first-frame velocity priming gate, stored during encode; atomic, so
 //      concurrent access is sound.
@@ -43,7 +49,8 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // SAFETY: see the module doc above for the complete audit of interior-mutable
 // state reachable during `encode_pass_into` (atomic draw-call accumulator,
 // atomic deformed-primed priming gate, particle Cell state hoisted before the
-// fan-out, RefCell deferred-destroy touched only by the main-thread Composite
-// pass). Vulkan handles are safe for concurrent shared read, and each worker
-// records into a distinct command buffer from a distinct command pool.
+// fan-out, the RefCell device allocator touched only by the main-thread
+// Composite pass). Vulkan handles are safe for concurrent shared read, and
+// each worker records into a distinct command buffer from a distinct command
+// pool.
 unsafe impl crate::gfx::parallel_ctx::ParallelEncodeCtx for VkContext {}

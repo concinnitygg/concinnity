@@ -53,7 +53,12 @@ impl VkContext {
                     )
                 };
             },
-        )
+        )?;
+        // The one-shot idled the queue; drop the staging buffer and retire it
+        // immediately so a per-region upload loop reuses one staging range.
+        drop(staging);
+        self.alloc.reclaim_idle();
+        Ok(())
     }
 
     // Upload a streamed mesh's geometry into the shared vertex and index

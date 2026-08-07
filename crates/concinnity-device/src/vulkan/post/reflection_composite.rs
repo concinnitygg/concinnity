@@ -26,7 +26,6 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
-use crate::vulkan::allocator::DeviceAllocator;
 
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
 // reflections are active (both feed this composite). All `vk::*` handles are owned
@@ -167,17 +166,6 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .map_err(|e| format!("reflection composite render pass: {e}"))
 }
 
-// The Vulkan device / queue context needed to allocate and transition a GPU image.
-// Shared by every target-building entry point (create_target, build_targets, new,
-// rebuild).
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct GpuAllocContext<'a> {
-    pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
-    pub command_pool: vk::CommandPool,
-    pub queue: vk::Queue,
-}
-
 // Per-frame G-buffer / scene input view slices feeding the composite's static
 // bindings: the scene HDR resolve, the unified pre-pass normal+depth, and the
 // roughness views. Wired at init / resize; the reflection binding is re-pointed
@@ -191,8 +179,8 @@ pub(in crate::vulkan) struct CompositeInputViews<'a> {
 
 // One full-screen colour target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
 // descriptor sets bound to it at init see a valid layout before the first encode.
-fn create_target(ctx: &GpuAllocContext, width: u32, height: u32) -> Result<GpuImage, String> {
-    let &GpuAllocContext {
+fn create_target(ctx: &GpuUploadContext, width: u32, height: u32) -> Result<GpuImage, String> {
+    let &GpuUploadContext {
         alloc,
         device,
         command_pool,
@@ -313,7 +301,7 @@ impl ReflectionCompositeResources {
     // bindings while the reflection binding is re-pointed per encode. `blur_scale`
     // is the per-axis blur divisor.
     pub(in crate::vulkan) fn new(
-        ctx: &GpuAllocContext,
+        ctx: &GpuUploadContext,
         width: u32,
         height: u32,
         frames: usize,
@@ -426,7 +414,7 @@ impl ReflectionCompositeResources {
     // their framebuffers at the given extent.
     fn build_targets(
         &mut self,
-        ctx: &GpuAllocContext,
+        ctx: &GpuUploadContext,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -526,7 +514,7 @@ impl ReflectionCompositeResources {
     // caller has already idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: &GpuAllocContext,
+        ctx: &GpuUploadContext,
         width: u32,
         height: u32,
         views: &CompositeInputViews,

@@ -411,7 +411,7 @@ impl VkContext {
                 None => (Vec::new(), Vec::new()),
             };
             rc.rebuild(
-                &super::post::reflection_composite::GpuAllocContext {
+                &super::texture::GpuUploadContext {
                     alloc: &self.alloc,
                     device: &self.device,
                     command_pool: self.commands.command_pool,
@@ -643,6 +643,13 @@ impl VkContext {
         {
             let (view, sampler) = hiz.read_set_sources();
             planar.rewrite_hiz_view(&self.device, view, sampler);
+        }
+
+        // An in-flight probe bake's Hi-Z set captured the same destroyed view
+        // at bake start; re-point it too or its next face binds a freed view.
+        if let (Some(bake), Some(hiz)) = (self.probe_rendering.as_ref(), self.cull.hiz.as_ref()) {
+            let (view, sampler) = hiz.read_set_sources();
+            bake.rewrite_hiz_view(&self.device, view, sampler);
         }
 
         // Rebuild the particle framebuffers at the new resolution. The

@@ -230,9 +230,9 @@ impl VkContext {
         self.write_geometry_region(new_vbuf.buffer(), 0, vert_bytes)?;
         self.write_geometry_region(new_ibuf.buffer(), 0, idx_bytes)?;
 
-        // Commit the swap: destroy old buffers + memory, apply per-draw
-        // layouts, and reset the streaming sub-allocators (the rebuilt
-        // buffer leaves no headroom). `wait_idle` above gated every
+        // Commit the swap: the replaced buffers retire through the allocator,
+        // per-draw layouts apply, and the streaming sub-allocators reset (the
+        // rebuilt buffer leaves no headroom). `wait_idle` above gated every
         // in-flight read.
         self.geometry.vertex_buffer = new_vbuf;
         self.geometry.vertex_buffer_bytes = new_v_bytes;
@@ -479,6 +479,11 @@ impl VkContext {
             obj.index_offset = i_off;
             obj.index_count = i_count;
         }
+
+        // The skin fold's descriptor sets still bind the replaced bind-pose VB
+        // and a deformed ring sized for the old layout; re-point and re-size
+        // both. `wait_idle` above gated every in-flight read.
+        self.refresh_main_skin_geometry(new_vertices.len())?;
         Ok(layouts)
     }
 }

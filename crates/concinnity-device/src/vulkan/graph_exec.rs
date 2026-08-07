@@ -260,10 +260,10 @@ impl VkContext {
         // worker threads. Inert when no clusters are declared.
         self.prepare_instanced_clusters(params.frame_idx, params.cam_pos);
 
-        // Composite stays on the main thread (it writes the swapchain image +
-        // allocates transient text buffers + touches `deferred_destroy`); every
-        // other pass fans onto a `jobs::pool()` worker that records into its own
-        // `(frame, pass)` command buffer.
+        // Composite stays on the main thread (it writes the swapchain image
+        // and allocates + drops transient text buffers through the RefCell
+        // device allocator); every other pass fans onto a `jobs::pool()`
+        // worker that records into its own `(frame, pass)` command buffer.
         let composite_idx = graph.passes.iter().position(|p| p.id == PassId::Composite);
         let frame_idx = params.frame_idx;
         let device = self.device.clone();

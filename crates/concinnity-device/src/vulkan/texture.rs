@@ -533,6 +533,9 @@ pub(super) fn upload_texture_image(
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
     }
+    // See `upload_texture`: the queue is idle, so the staging retires now.
+    drop(in_flight);
+    ctx.alloc.reclaim_idle();
     Ok(img)
 }
 
@@ -696,6 +699,11 @@ pub(super) fn upload_texture(
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
     }
+    // The wait above idled the queue; drop the staging buffer and retire it
+    // immediately so an upload loop reuses one staging range instead of
+    // accumulating every upload's.
+    drop(in_flight);
+    ctx.alloc.reclaim_idle();
     Ok(img)
 }
 

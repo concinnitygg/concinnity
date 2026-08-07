@@ -61,7 +61,7 @@ pub(super) struct SlotSpec {
 }
 
 // One managed image, resolved for one frame in flight.
-struct PooledImage {
+struct TransientImage {
     label: &'static str,
     frame: usize,
     image: vk::Image,
@@ -76,7 +76,7 @@ pub(super) struct TransientImagePool {
     // rebuild after the member images + views are gone.
     slot_memories: Vec<vk::DeviceMemory>,
     // Every member image across all slots + frames.
-    images: Vec<PooledImage>,
+    images: Vec<TransientImage>,
     // The member labels of each slot, in lifetime order (the order they reuse the
     // slot's memory). Drives the executor's aliasing barriers: a member's
     // predecessor in this list is the resource it reuses memory from.
@@ -158,7 +158,7 @@ impl TransientImagePool {
                     unsafe { device.bind_image_memory(image, memory, 0) }
                         .map_err(|e| format!("transient pool bind {}: {e}", spec.label))?;
                     let view = create_image_view(device, image, spec.format, spec.aspect)?;
-                    images.push(PooledImage {
+                    images.push(TransientImage {
                         label: spec.label,
                         frame: f,
                         image,
@@ -246,7 +246,7 @@ impl TransientImagePool {
             .collect()
     }
 
-    fn lookup(&self, label: &str, frame: usize) -> Option<&PooledImage> {
+    fn lookup(&self, label: &str, frame: usize) -> Option<&TransientImage> {
         self.images
             .iter()
             .find(|p| p.label == label && p.frame == frame)

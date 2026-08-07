@@ -327,7 +327,8 @@ impl DecalResources {
     }
 
     // Destroy every GPU resource. Called from `VkContext::destroy` after
-    // `wait_idle`. Buffer memory is unmapped first.
+    // `wait_idle`; the pooled buffers retire through the allocator as their
+    // fields clear.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         unsafe {
             for &fb in &self.framebuffers {

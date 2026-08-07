@@ -308,7 +308,7 @@ impl VkContext {
             let nd_views = gb.normal_depth_views();
             let rough_views = gb.roughness_views();
             let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
-                &super::post::reflection_composite::GpuAllocContext {
+                &super::texture::GpuUploadContext {
                     alloc: &self.alloc,
                     device: &self.device,
                     command_pool: self.commands.command_pool,

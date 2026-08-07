@@ -131,8 +131,8 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     probe_cube_count: u32,
 }
 
-// Raw `params_ptrs` are host-mapped, render-thread-only; the whole struct lives
-// inside `VkContext`, which is already `unsafe impl Send`.
+// The params UBOs' mapped pointers are host-mapped, render-thread-only; the
+// whole struct lives inside `VkContext`, which is already `unsafe impl Send`.
 unsafe impl Send for RtReflectionsResources {}
 
 // RT render pass: one HDR-format colour attachment (`output`), no depth. The

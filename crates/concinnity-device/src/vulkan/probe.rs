@@ -895,6 +895,30 @@ impl RenderingBake {
         self.cursor.saturating_sub(1)
     }
 
+    // Re-point this bake's Hi-Z set at a rebuilt pyramid view. Called by
+    // `rebuild_swapchain` after `hiz.resize_to` retired the view this set
+    // captured at bake start; `wait_idle` gated the in-flight faces, and
+    // hiz_enabled = 0 keeps the binding unsampled, but it must not dangle.
+    // Mirrors the planar cull set's treatment.
+    pub(super) fn rewrite_hiz_view(
+        &self,
+        device: &ash::Device,
+        view: vk::ImageView,
+        sampler: vk::Sampler,
+    ) {
+        let Some(set) = self.bake.hiz_set else { return };
+        let img = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view)
+            .sampler(sampler);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&img));
+        unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    }
+
     // Free every owned GPU resource: the per-face command buffers (back to the
     // one-shot pool), the per-face fences, and the bake target / cull / sets. The
     // caller has ensured the GPU retired them (the last face's fence is signalled, or

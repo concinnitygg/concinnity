@@ -57,7 +57,8 @@ pub(super) struct VkShadow {
     pub(super) ubos: Vec<PooledBuffer>,
     // Carried CSM uniforms: skipped cascades keep the VP their slice was last
     // rendered with. Splits refresh every frame; per-cascade light VPs only when
-    // `render_mask` includes that cascade. Written to `ubo_ptrs[frame]` each frame.
+    // `render_mask` includes that cascade. Written to this frame's `ubos` slot
+    // each frame.
     pub(super) uniforms: ShadowUniforms,
     // World-space direction toward the first directional light, cached at init.
     // Per-frame CSM updates use this; refresh it when lights change for a moving
@@ -774,11 +775,11 @@ impl VkCommands {
 // are always anchored on the `self.<field>` form, never a bare leading-dot.
 pub(super) struct VkUniforms {
     // Per-frame-in-flight `ViewUniforms` UBO (camera + IBL params), persistently
-    // mapped. `record_frame` memcpys this frame's view into `view_ubo_ptrs`.
+    // mapped. `record_frame` memcpys this frame's view into its slot.
     pub(super) view_ubo_buffers: Vec<PooledBuffer>,
     // Per-frame-in-flight `ProbeSet` UBO (reflection-probe count + per-probe
     // parallax boxes), bound at global set 0 binding 7, persistently mapped.
-    // `record_frame` memcpys `self.probe_set` into `probe_set_ubo_ptrs` each
+    // `record_frame` memcpys `self.probe_set` into this frame's slot each
     // frame; it stays `EMPTY` (count 0 = sky reflection) until a probe bakes.
     pub(super) probe_set_ubo_buffers: Vec<PooledBuffer>,
     // Single `LightUniforms` UBO, uploaded once at init and bound into every
@@ -1398,8 +1399,6 @@ pub struct VkContext {
     pub(super) probe_rendering: Option<super::probe::RenderingBake>,
     pub(super) probe_converting: Option<super::probe::ConvertingBake>,
 
-    // Deferred buffer destruction (text transient buffers)
-
     // Stall-free texture streaming. A streamed slot swap replaces
     // `textures[slot]` immediately but cannot rewrite the per-frame bindless
     // pool descriptors while their frames are pending; `pool_rewrites` carries
@@ -1410,7 +1409,7 @@ pub struct VkContext {
     // every pool copy has been re-pointed, every frame recorded against the old
     // view has retired, and the tick's fence wait covers the upload submission
     // itself (a swap lands between frames, after the previous frame's submit,
-    // so the frame-slot-keyed `deferred_destroy` drain would free it too soon).
+    // so a frame-slot-keyed drain would free it too soon).
     pub(super) pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue,
     pub(super) stream_frame: u64,
     pub(super) stream_retires: Vec<StreamedUploadRetire>,
@@ -1451,8 +1450,9 @@ pub struct VkContext {
     pub(super) reused_by_successor: bool,
 }
 
-// GpuImage raw pointers (uniforms.view_ubo_ptrs) are host-mapped and used only
-// on this thread; the RefCell<Vec<DeferredBuffer>> is also single-threaded.
+// The host-mapped uniform pointers and the RefCell device allocator behind
+// every pooled resource are used only on this thread; see
+// `debug_assert_main_thread` below.
 unsafe impl Send for VkContext {}
 
 // Thread id of the thread that built the context. `VkContext::new` runs on the
@@ -1471,7 +1471,7 @@ pub(super) fn record_main_thread() {
 //
 // The `unsafe impl Send for VkContext` above is sound only because the context
 // is touched from one thread alone: the GLFW window/event pump is thread-affine,
-// the host-mapped view UBO pointers and the `deferred_destroy` RefCell are
+// the host-mapped uniform pointers and the device allocator's RefCell are
 // single-threaded, and the parallel-encoder fan-out only ever shares `&self`
 // read-only. The `RenderBackend` mutation entry points (reached through the
 // boxed trait object) had nothing proving this, so scheduling `GraphicsSystem`
@@ -1681,8 +1681,6 @@ impl VkContext {
                 crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
             },
         });
-
-        {}
 
         // Acquire swapchain image.
         let acquire = unsafe {

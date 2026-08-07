@@ -128,7 +128,7 @@ struct AccelBuffer {
 impl AccelBuffer {
     // The backing buffer retires through the allocator when the value drops;
     // only the acceleration-structure handle is destroyed by hand.
-    fn destroy(&self, _device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
+    fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
         unsafe {
             as_loader.destroy_acceleration_structure(self.accel, None);
         }
@@ -225,9 +225,9 @@ struct Retired {
 }
 
 impl Retired {
-    fn destroy(&self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
+    fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
         for b in &self.blas {
-            b.destroy(device, as_loader);
+            b.destroy(as_loader);
         }
     }
 }
@@ -257,12 +257,12 @@ struct SkinnedFrameRing {
 impl SkinnedFrameRing {
     // The buffers retire through the allocator when the slot drops; only the
     // acceleration-structure handles are destroyed by hand.
-    fn destroy(&mut self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
+    fn destroy(&mut self, as_loader: &ash::khr::acceleration_structure::Device) {
         for b in &self.blas {
-            b.destroy(device, as_loader);
+            b.destroy(as_loader);
         }
         if let Some(t) = &self.tlas {
-            t.destroy(device, as_loader);
+            t.destroy(as_loader);
         }
     }
 }
@@ -287,9 +287,9 @@ struct StaticFrameRing {
 
 impl StaticFrameRing {
     // The host buffers retire through the allocator when the slot drops.
-    fn destroy(&self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
+    fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
         if let Some(t) = &self.tlas {
-            t.destroy(device, as_loader);
+            t.destroy(as_loader);
         }
     }
 }
@@ -1160,7 +1160,6 @@ impl RtAccelData {
             mode,
             topology_dirty,
         } = policy;
-        let device = ctx.device;
         self.frame_counter += 1;
         let now = self.frame_counter;
         // Free any retired resources whose frames-in-flight window has elapsed.
@@ -1168,7 +1167,7 @@ impl RtAccelData {
         while i < self.retire.len() {
             if self.retire[i].free_at <= now {
                 let r = self.retire.swap_remove(i);
-                r.destroy(device, &self.as_loader);
+                r.destroy(&self.as_loader);
             } else {
                 i += 1;
             }
@@ -1481,8 +1480,7 @@ impl RtAccelData {
         let tlas = match slot.tlas.take() {
             Some(b) if b.size >= tlas_sizes.acceleration_structure_size => b,
             Some(b) => {
-                b.destroy(device, &self.as_loader);
-                drop(b);
+                b.destroy(&self.as_loader);
                 create_accel(
                     alloc,
                     &self.as_loader,
@@ -1689,8 +1687,7 @@ impl RtAccelData {
         let tlas = match slot.tlas.take() {
             Some(b) if b.size >= self.tlas_size => b,
             Some(b) => {
-                b.destroy(device, &self.as_loader);
-                drop(b);
+                b.destroy(&self.as_loader);
                 create_accel(
                     alloc,
                     &self.as_loader,
@@ -2015,8 +2012,7 @@ impl RtAccelData {
             let blas = match recycled_blas.next() {
                 Some(b) if b.size >= needed => b,
                 Some(b) => {
-                    b.destroy(device, &self.as_loader);
-                    drop(b);
+                    b.destroy(&self.as_loader);
                     create_accel(
                         alloc,
                         &self.as_loader,
@@ -2035,7 +2031,7 @@ impl RtAccelData {
             max_scratch = max_scratch.max(sizes.build_scratch_size);
         }
         for leftover in recycled_blas {
-            leftover.destroy(device, &self.as_loader);
+            leftover.destroy(&self.as_loader);
         }
         let skinned_blas_addresses: Vec<u64> = skinned_blas
             .iter()
@@ -2115,8 +2111,7 @@ impl RtAccelData {
         let tlas = match slot.tlas.take() {
             Some(b) if b.size >= tlas_sizes.acceleration_structure_size => b,
             Some(b) => {
-                b.destroy(device, &self.as_loader);
-                drop(b);
+                b.destroy(&self.as_loader);
                 create_accel(
                     alloc,
                     &self.as_loader,
@@ -2281,18 +2276,18 @@ impl RtAccelData {
     // idled the device.
     pub(super) fn destroy(&mut self, device: &Device) {
         for r in self.retire.drain(..) {
-            r.destroy(device, &self.as_loader);
+            r.destroy(&self.as_loader);
         }
         for slot in &mut self.skinned_ring {
-            slot.destroy(device, &self.as_loader);
+            slot.destroy(&self.as_loader);
         }
         for slot in &self.static_ring {
-            slot.destroy(device, &self.as_loader);
+            slot.destroy(&self.as_loader);
         }
         for b in &self.blas {
-            b.destroy(device, &self.as_loader);
+            b.destroy(&self.as_loader);
         }
-        self.tlas.destroy(device, &self.as_loader);
+        self.tlas.destroy(&self.as_loader);
         if let Some(skin) = &self.skin {
             skin.destroy(device);
         }
@@ -2530,6 +2525,68 @@ impl super::context::VkContext {
             .deformed_primed
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.n_skinned = n;
+        Ok(())
+    }
+
+    // Re-point the skin fold at a replaced bind-pose vertex buffer and re-size
+    // the deformed ring to the new vertex total. Called by
+    // `rebuild_skinned_geometry` after its swap commits (the device is idle):
+    // every (frame, object) set's binding 0 still names the replaced buffer,
+    // and the deformed buffers were sized for the old layout. The joint and
+    // morph bindings (1/3/4) are untouched; their buffers did not move. A
+    // no-op when the fold is inactive. Reached only through the bin's
+    // `cn debug` geometry-rebuild path (dead in the FFI lib, live in the bin).
+    #[allow(dead_code)]
+    pub(in crate::vulkan) fn refresh_main_skin_geometry(
+        &mut self,
+        vertex_total: usize,
+    ) -> Result<(), String> {
+        let Some(skin) = self.skinned.skin.as_ref() else {
+            return Ok(());
+        };
+        let device = self.device.clone();
+        let frames = self.frames_in_flight.max(1);
+        let n = self.skinned.draw_objects.len();
+
+        let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
+        let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            deformed.push(create_main_deformed_buffer(&self.alloc, deformed_bytes)?);
+        }
+
+        let src_buffer = self.skinned.vertex_buffer.buffer();
+        for (f, deformed_buf) in deformed.iter().enumerate() {
+            for o in 0..n {
+                let set = skin.sets[f][o];
+                let src_info = vk::DescriptorBufferInfo::default()
+                    .buffer(src_buffer)
+                    .offset(0)
+                    .range(vk::WHOLE_SIZE);
+                let dst_info = vk::DescriptorBufferInfo::default()
+                    .buffer(deformed_buf.buffer)
+                    .offset(0)
+                    .range(vk::WHOLE_SIZE);
+                let writes = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&src_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(2)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&dst_info)),
+                ];
+                unsafe { device.update_descriptor_sets(&writes, &[]) };
+            }
+        }
+
+        self.skinned.deformed = deformed;
+        // The ring is unposed again; see `build_main_skin`.
+        self.skinned
+            .deformed_primed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 

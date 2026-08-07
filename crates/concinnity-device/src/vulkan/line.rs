@@ -222,7 +222,8 @@ impl LineResources {
     }
 
     // Destroy every GPU resource. Called from `VkContext::destroy` after
-    // `wait_idle`. Buffer memory is unmapped first.
+    // `wait_idle`; the pooled buffers retire through the allocator as their
+    // fields clear.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         unsafe {
             for &fb in &self.framebuffers {
@@ -599,9 +600,8 @@ impl VkContext {
     }
 
     // Reallocate this frame slot's ribbon-vertex buffer when the frame's
-    // expansion outgrows it. The old buffer is destroyed outright rather than
-    // deferred: the caller already fence-waited this slot, so nothing in flight
-    // references it.
+    // expansion outgrows it. The replaced buffer retires through the
+    // allocator.
     fn grow_line_vertex_slot(&mut self, frame_idx: usize, needed: u64) -> Result<(), String> {
         let Some(lines) = self.lines.resources.as_mut() else {
             return Ok(());

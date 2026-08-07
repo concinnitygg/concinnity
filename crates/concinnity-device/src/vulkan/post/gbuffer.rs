@@ -1096,15 +1096,7 @@ impl GbufferResources {
         for &fb in &self.framebuffers {
             unsafe { device.destroy_framebuffer(fb, None) };
         }
-        for img in self
-            .normal_depth_images
-            .iter()
-            .chain(&self.roughness_images)
-            .chain(&self.velocity_images)
-            .chain(&self.depth_images)
-        {
-            let _ = img;
-        }
+        // The cleared target images retire through the allocator as they drop.
         self.framebuffers.clear();
         self.normal_depth_images.clear();
         self.roughness_images.clear();
