@@ -200,7 +200,7 @@ impl VkContext {
                 };
                 std::ptr::copy_nonoverlapping(
                     &params as *const CullHizParams as *const u8,
-                    hiz.cull_ubo_ptrs[frame_idx],
+                    hiz.cull_ubos[frame_idx].mapped_ptr(),
                     std::mem::size_of::<CullHizParams>(),
                 );
                 device.cmd_bind_descriptor_sets(
@@ -387,7 +387,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &hiz_params as *const CullHizParams as *const u8,
-                hiz.cull_ubo2_ptrs[frame_idx],
+                hiz.cull_ubos2[frame_idx].mapped_ptr(),
                 std::mem::size_of::<CullHizParams>(),
             );
 

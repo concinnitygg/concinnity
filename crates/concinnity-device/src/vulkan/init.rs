@@ -562,6 +562,11 @@ impl VkContext {
             }
         };
 
+        // The device allocator every pooled buffer / image is placed through.
+        // Built before any resource creation so init-time resources can pool.
+        let alloc =
+            super::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
+
         // Drive the composite shader's `hdr_output > 0.5` branch and its
         // in-branch `pq_output` encode flag from the resolved HDR mode (freshly
         // negotiated or inherited on a reload). Mirrors `DxContext::new`.
@@ -2568,9 +2573,8 @@ impl VkContext {
             let depth_views: Vec<vk::ImageView> = depth_images.iter().map(|img| img.view).collect();
             let hiz = crate::vulkan::hiz::HiZResources::new(
                 crate::vulkan::hiz::HiZDeviceCtx {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                     command_pool,
                     queue: graphics_queue,
                 },
@@ -3511,9 +3515,8 @@ impl VkContext {
         let fog_resources = if fog_settings.is_some() {
             Some(crate::vulkan::fog::FogResources::new(
                 crate::vulkan::fog::FogDeviceContext {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                     command_pool,
                     queue: graphics_queue,
                 },
@@ -3875,6 +3878,7 @@ impl VkContext {
             instance,
             device,
             physical_device,
+            alloc,
             surface,
             surface_loader,
             graphics_queue,
@@ -4228,6 +4232,14 @@ impl VkContext {
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         me.upload_initial_particles(particles)?;
+        let alloc_stats = me.alloc.stats();
+        tracing::info!(
+            "device allocator: {} block(s) of {} allowed, {} KiB reserved for {} KiB of resources",
+            alloc_stats.block_count,
+            me.alloc.max_allocations(),
+            alloc_stats.reserved_bytes / 1024,
+            alloc_stats.in_use_bytes / 1024,
+        );
         crate::shader_cache::report_init_and_prune();
         Ok(me)
     }

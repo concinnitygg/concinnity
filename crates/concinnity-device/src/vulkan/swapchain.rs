@@ -642,9 +642,8 @@ impl VkContext {
                 self.depth_images.iter().map(|img| img.view).collect();
             hiz.resize_to(
                 HiZDeviceCtx {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },

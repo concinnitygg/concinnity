@@ -49,11 +49,6 @@
 // only ever used from one at a time, and workers given `&VkContext` only read
 // handles, never drop or allocate.
 
-// Removed once `create_buffer` and `create_image` in texture.rs construct
-// through this module: until they do, nothing builds a `DeviceAllocator` and
-// every item here reads as dead.
-#![allow(dead_code)]
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -213,7 +208,10 @@ impl PooledBuffer {
     }
 
     // A placeholder naming no buffer, for a slot filled before its real
-    // resource exists. Dropping it is a no-op.
+    // resource exists. Dropping it is a no-op. Unused until the call-site
+    // conversion reaches the buffer holders with a null state; remove the
+    // allows once it does.
+    #[allow(dead_code)]
     pub(super) fn null() -> Self {
         Self {
             buffer: vk::Buffer::null(),
@@ -222,6 +220,7 @@ impl PooledBuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn is_null(&self) -> bool {
         self.buffer == vk::Buffer::null()
     }
@@ -243,7 +242,9 @@ impl PooledImage {
     }
 
     // A pointer to this image's own bytes, or null when its memory type is not
-    // host-visible. Only meaningful for LINEAR-tiled images.
+    // host-visible. Only meaningful for LINEAR-tiled images; unused until the
+    // call-site conversion reaches the readback images. Remove the allow then.
+    #[allow(dead_code)]
     pub(super) fn mapped_ptr(&self) -> *mut u8 {
         self.mapped
     }
@@ -267,6 +268,9 @@ impl PooledImage {
         }
     }
 
+    // Unused until the call-site conversion reaches the image holders that
+    // branch on their null state; remove the allow once it does.
+    #[allow(dead_code)]
     pub(super) fn is_null(&self) -> bool {
         self.image == vk::Image::null()
     }
@@ -335,7 +339,10 @@ impl DeviceAllocator {
 
     // The device the pooled blocks are allocated on. Lets a caller that already
     // holds an allocator create the objects that stay outside it (views,
-    // samplers, pipelines) without carrying a second handle.
+    // samplers, pipelines) without carrying a second handle. Unused until the
+    // call-site conversion slims the device contexts down; remove the allow
+    // once it does.
+    #[allow(dead_code)]
     pub(super) fn device(&self) -> &Device {
         &self.device
     }

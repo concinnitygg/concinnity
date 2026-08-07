@@ -26,11 +26,11 @@ use ash::{Device, vk};
 use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
 use super::pipeline::spv_module;
 use super::texture::{
-    LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
-    transition_image_layout_range,
+    LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
 
 // Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
@@ -53,15 +53,11 @@ pub(in crate::vulkan) struct FogResources {
     pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
 
     // Per-frame FogParams view UBO (176 bytes). Persistently mapped.
-    pub(in crate::vulkan) params_ubos: Vec<vk::Buffer>,
-    pub(in crate::vulkan) params_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) params_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) params_ubos: Vec<PooledBuffer>,
 
     // Per-frame FogFroxelParams UBO (96 bytes). Persistently mapped. Bound at
     // the froxel kernel's set binding 1 and the fog fragment's set binding 2.
-    pub(in crate::vulkan) froxel_ubos: Vec<vk::Buffer>,
-    pub(in crate::vulkan) froxel_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) froxel_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) froxel_ubos: Vec<PooledBuffer>,
 
     // Per-frame fog-render view sets (binding 0 FogParams, 1 depth, 2
     // FogFroxelParams, 3 volume sampler3D).
@@ -81,10 +77,7 @@ pub(in crate::vulkan) struct FogResources {
     // consumer barriers, emitted by the executor); the cross-frame hazard chain
     // spans submission order on the one queue (same reasoning as the Hi-Z
     // pyramid).
-    pub(in crate::vulkan) volume_image: vk::Image,
-    pub(in crate::vulkan) volume_memory: vk::DeviceMemory,
-    pub(in crate::vulkan) volume_storage_view: vk::ImageView,
-    pub(in crate::vulkan) volume_sampled_view: vk::ImageView,
+    pub(in crate::vulkan) volume: PooledImage,
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
     // `hdr_resolve_images[i].view` as the sole colour attachment.
@@ -102,9 +95,8 @@ pub(in crate::vulkan) struct FogResources {
 // `queue` are used once to move the volume into `SHADER_READ_ONLY_OPTIMAL`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogDeviceContext<'a> {
-    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a Device,
-    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,
 }
@@ -143,9 +135,8 @@ impl FogResources {
         hot_reload: bool,
     ) -> Result<Self, String> {
         let FogDeviceContext {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
         } = ctx;
@@ -180,12 +171,12 @@ impl FogResources {
         // The shared 3D volume + its storage (compute write) + sampled
         // (fragment read) views. Rest it in SHADER_READ_ONLY so the first
         // froxel build's opening barrier (SHADER_READ_ONLY -> GENERAL) matches.
-        let (volume_image, volume_memory) = create_volume_image(instance, device, physical_device)?;
+        let volume = create_volume_image(alloc)?;
         one_shot_submit(device, command_pool, queue, |cmd| {
             transition_image_layout_range(
                 device,
                 cmd,
-                volume_image,
+                volume.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
                     new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -199,26 +190,17 @@ impl FogResources {
                 },
             );
         })?;
-        let volume_storage_view = create_volume_view(device, volume_image)?;
-        let volume_sampled_view = create_volume_view(device, volume_image)?;
+        let volume_storage_view = create_volume_view(device, volume.image())?;
+        volume.attach_view(volume_storage_view);
+        let volume_sampled_view = create_volume_view(device, volume.image())?;
+        volume.attach_view(volume_sampled_view);
         let volume_sampler = create_volume_sampler(device)?;
 
         // Per-frame FogParams UBOs (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let (params_ubos, params_ubo_memories, params_ubo_ptrs) = alloc_ubo_ring(
-            instance,
-            device,
-            physical_device,
-            frames,
-            std::mem::size_of::<FogParams>() as u64,
-        )?;
+        let params_ubos = alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogParams>() as u64)?;
         // Per-frame FogFroxelParams UBOs.
-        let (froxel_ubos, froxel_ubo_memories, froxel_ubo_ptrs) = alloc_ubo_ring(
-            instance,
-            device,
-            physical_device,
-            frames,
-            std::mem::size_of::<FogFroxelParams>() as u64,
-        )?;
+        let froxel_ubos =
+            alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogFroxelParams>() as u64)?;
 
         let descriptor_pool = create_fog_descriptor_pool(device, frames)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
@@ -232,10 +214,10 @@ impl FogResources {
                 device,
                 set,
                 FogViewBindings {
-                    params_ubo: params_ubos[i],
+                    params_ubo: params_ubos[i].buffer(),
                     depth_view: depth_views[i.min(last_depth)],
                     depth_sampler: sampler,
-                    froxel_ubo: froxel_ubos[i],
+                    froxel_ubo: froxel_ubos[i].buffer(),
                     volume_view: volume_sampled_view,
                     volume_sampler,
                 },
@@ -246,8 +228,8 @@ impl FogResources {
                 device,
                 set,
                 FogFroxelBindings {
-                    params_ubo: params_ubos[i],
-                    froxel_ubo: froxel_ubos[i],
+                    params_ubo: params_ubos[i].buffer(),
+                    froxel_ubo: froxel_ubos[i].buffer(),
                     shadow_ubo: shadow_ubos[i],
                     shadow_map_view,
                     shadow_sampler,
@@ -279,20 +261,13 @@ impl FogResources {
             view_set_layout,
             descriptor_pool,
             params_ubos,
-            params_ubo_memories,
-            params_ubo_ptrs,
             froxel_ubos,
-            froxel_ubo_memories,
-            froxel_ubo_ptrs,
             view_sets,
             froxel_pipeline,
             froxel_pipeline_layout,
             froxel_set_layout,
             froxel_sets,
-            volume_image,
-            volume_memory,
-            volume_storage_view,
-            volume_sampled_view,
+            volume,
             framebuffers,
             sampler,
             volume_sampler,
@@ -344,28 +319,15 @@ impl FogResources {
         Ok(())
     }
 
-    // Destroy every GPU resource. Called from `VkContext::drop` after
-    // `wait_idle`. Buffer memory is unmapped first.
+    // Destroy every non-pooled GPU resource and drop the pooled ones (the
+    // UBO rings and the volume + its views retire through the allocator).
+    // Called from `VkContext::drop` after `wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            for (&buf, &mem) in self.params_ubos.iter().zip(self.params_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for (&buf, &mem) in self.froxel_ubos.iter().zip(self.froxel_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
             device.destroy_sampler(self.volume_sampler, None);
-            device.destroy_image_view(self.volume_storage_view, None);
-            device.destroy_image_view(self.volume_sampled_view, None);
-            device.destroy_image(self.volume_image, None);
-            device.free_memory(self.volume_memory, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.view_set_layout, None);
             device.destroy_descriptor_set_layout(self.froxel_set_layout, None);
@@ -377,44 +339,27 @@ impl FogResources {
         }
         self.framebuffers.clear();
         self.params_ubos.clear();
-        self.params_ubo_memories.clear();
-        self.params_ubo_ptrs.clear();
         self.froxel_ubos.clear();
-        self.froxel_ubo_memories.clear();
-        self.froxel_ubo_ptrs.clear();
+        self.volume = PooledImage::null();
     }
 }
 
 // Allocate `count` host-visible/coherent uniform buffers of `size` bytes,
-// each persistently mapped. Returns the buffers, their memory, and the mapped
-// host pointers.
-type UboRing = (Vec<vk::Buffer>, Vec<vk::DeviceMemory>, Vec<*mut u8>);
+// each persistently mapped through its pooled block.
 fn alloc_ubo_ring(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     count: usize,
     size: u64,
-) -> Result<UboRing, String> {
-    let mut bufs = Vec::with_capacity(count);
-    let mut mems = Vec::with_capacity(count);
-    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(count);
-    for _ in 0..count {
-        let (buf, mem) = create_buffer(
-            instance,
-            device,
-            physical_device,
-            size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        let ptr = unsafe { device.map_memory(mem, 0, size, vk::MemoryMapFlags::empty()) }
-            .map_err(|e| format!("map fog ubo: {e}"))? as *mut u8;
-        bufs.push(buf);
-        mems.push(mem);
-        ptrs.push(ptr);
-    }
-    Ok((bufs, mems, ptrs))
+) -> Result<Vec<PooledBuffer>, String> {
+    (0..count)
+        .map(|_| {
+            alloc.create_buffer(
+                size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+        })
+        .collect()
 }
 
 // Render pass / pipeline construction
@@ -733,11 +678,7 @@ fn write_froxel_set(device: &Device, set: vk::DescriptorSet, bindings: FogFroxel
 }
 
 // Create the shared 3D RGBA16F froxel volume (STORAGE | SAMPLED, GPU-local).
-fn create_volume_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-) -> Result<(vk::Image, vk::DeviceMemory), String> {
+fn create_volume_image(alloc: &DeviceAllocator) -> Result<PooledImage, String> {
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_3D)
         .extent(vk::Extent3D {
@@ -753,22 +694,9 @@ fn create_volume_image(
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
-        .map_err(|e| format!("fog volume image: {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc, None) }
-        .map_err(|e| format!("fog volume memory: {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("fog volume bind memory: {e}"))?;
-    Ok((image, memory))
+    alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        .map_err(|e| format!("fog volume image: {e}"))
 }
 
 // A whole-image 3D view of the froxel volume (used for both the compute
@@ -1045,12 +973,12 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const FogParams as *const u8,
-                fog.params_ubo_ptrs[frame_idx],
+                fog.params_ubos[frame_idx].mapped_ptr(),
                 std::mem::size_of::<FogParams>(),
             );
             std::ptr::copy_nonoverlapping(
                 &froxel_params as *const FogFroxelParams as *const u8,
-                fog.froxel_ubo_ptrs[frame_idx],
+                fog.froxel_ubos[frame_idx].mapped_ptr(),
                 std::mem::size_of::<FogFroxelParams>(),
             );
         }

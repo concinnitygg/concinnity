@@ -37,11 +37,11 @@
 
 use ash::{Device, vk};
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::pipeline::spv_module;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
-    LayoutTransition, SubresourceRange, create_buffer, find_memory_type, one_shot_submit,
-    transition_image_layout_range,
+    LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
 
 // Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
@@ -52,10 +52,6 @@ const MAX_HIZ_MIPS: usize = 16;
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]` and the Metal `HIZ_TILE`).
 const HIZ_TILE: u32 = 8;
-
-// One per-frame ring of cull-read uniform buffers: the buffers, their backing
-// memory, and their persistently-mapped host pointers.
-type CullUboRing = (Vec<vk::Buffer>, Vec<vk::DeviceMemory>, Vec<*mut u8>);
 
 // `HizParams` (Hi-Z build push constant) and `CullHizParams` (cull-side Hi-Z
 // std140 UBO) are GPU-free layout structs that live in concinnity-render;
@@ -96,9 +92,10 @@ pub(super) struct HiZResources {
     descriptor_pool: vk::DescriptorPool,
 
     // R32F mip-chain image. Written mip-by-mip during the build (GENERAL),
-    // sampled by the cull kernel between frames (SHADER_READ_ONLY).
-    image: vk::Image,
-    memory: vk::DeviceMemory,
+    // sampled by the cull kernel between frames (SHADER_READ_ONLY). Its views
+    // below are attached to the lease, so replacing it on a resize retires the
+    // whole set together.
+    pyramid: PooledImage,
     // All-mips sampled view bound in the cull-read set.
     sampled_view: vk::ImageView,
     // One single-level storage view per mip, bound as the init dst (mip 0) and
@@ -117,9 +114,7 @@ pub(super) struct HiZResources {
     pub(super) read_sets: Vec<vk::DescriptorSet>,
     // Per-frame CullHizParams uniform buffers (host-mapped), bound in
     // `read_sets[i]` binding 1 and written by `encode_cull`.
-    cull_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(super) cull_ubo_ptrs: Vec<*mut u8>,
-    cull_ubos: Vec<vk::Buffer>,
+    pub(super) cull_ubos: Vec<PooledBuffer>,
 
     // Two-pass occlusion phase-2 cull-read sets + their own per-frame UBOs.
     // Empty unless two-pass occlusion is active. The phase-2 `Cull2` dispatch
@@ -130,9 +125,7 @@ pub(super) struct HiZResources {
     // the same pyramid `sampled_view`, re-pointed alongside `read_sets` on a
     // resize. Uses the shared `read_set_layout`.
     pub(super) read_sets2: Vec<vk::DescriptorSet>,
-    cull_ubo2_memories: Vec<vk::DeviceMemory>,
-    pub(super) cull_ubo2_ptrs: Vec<*mut u8>,
-    cull_ubos2: Vec<vk::Buffer>,
+    pub(super) cull_ubos2: Vec<PooledBuffer>,
 
     pub(super) width: u32,
     pub(super) height: u32,
@@ -142,15 +135,13 @@ pub(super) struct HiZResources {
     sample_count: u32,
 }
 
-// Create the R32F mip-chain image + memory (STORAGE + SAMPLED), GPU-local.
+// Create the R32F mip-chain image (STORAGE + SAMPLED), GPU-local.
 fn create_hiz_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     width: u32,
     height: u32,
     mip_count: u32,
-) -> Result<(vk::Image, vk::DeviceMemory), String> {
+) -> Result<PooledImage, String> {
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -166,22 +157,9 @@ fn create_hiz_image(
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image =
-        unsafe { device.create_image(&img_info, None) }.map_err(|e| format!("hiz image: {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc, None) }
-        .map_err(|e| format!("hiz image memory: {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("hiz bind image memory: {e}"))?;
-    Ok((image, memory))
+    alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        .map_err(|e| format!("hiz image: {e}"))
 }
 
 // A single-level (`mip`) or all-mips (`base_mip = 0`, `count = mip_count`) 2D
@@ -260,9 +238,8 @@ fn create_compute_pipeline(
 // the layout-transition submit.
 #[derive(Clone, Copy)]
 pub(super) struct HiZDeviceCtx<'a> {
-    pub(super) instance: &'a ash::Instance,
+    pub(super) alloc: &'a DeviceAllocator,
     pub(super) device: &'a Device,
-    pub(super) physical_device: vk::PhysicalDevice,
     pub(super) command_pool: vk::CommandPool,
     pub(super) queue: vk::Queue,
 }
@@ -302,12 +279,7 @@ impl HiZResources {
     ) -> Result<Self, String> {
         // `command_pool`, `queue`, and `depth_views` are only needed by the
         // `create_image_and_sets` call below, which takes `ctx` / `target` whole.
-        let HiZDeviceCtx {
-            instance,
-            device,
-            physical_device,
-            ..
-        } = ctx;
+        let HiZDeviceCtx { alloc, device, .. } = ctx;
         let HiZTarget { width, height, .. } = target;
         // Set layouts.
         // Init: binding 0 depth sampler, binding 1 dst-mip storage image.
@@ -358,34 +330,20 @@ impl HiZResources {
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
         // gets its own ring (`cull_ubos2`) when two-pass occlusion is active.
         let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
-        let alloc_ubo_ring = |count: usize| -> Result<CullUboRing, String> {
-            let mut bufs = Vec::with_capacity(count);
-            let mut mems = Vec::with_capacity(count);
-            let mut ptrs: Vec<*mut u8> = Vec::with_capacity(count);
-            for _ in 0..count {
-                let (buf, mem) = create_buffer(
-                    instance,
-                    device,
-                    physical_device,
-                    ubo_size,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?;
-                let ptr = unsafe {
-                    device
-                        .map_memory(mem, 0, ubo_size, vk::MemoryMapFlags::empty())
-                        .map_err(|e| format!("map hiz cull ubo: {e}"))?
-                        as *mut u8
-                };
-                bufs.push(buf);
-                mems.push(mem);
-                ptrs.push(ptr);
-            }
-            Ok((bufs, mems, ptrs))
+        let alloc_ubo_ring = |count: usize| -> Result<Vec<PooledBuffer>, String> {
+            (0..count)
+                .map(|_| {
+                    alloc.create_buffer(
+                        ubo_size,
+                        vk::BufferUsageFlags::UNIFORM_BUFFER,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )
+                })
+                .collect()
         };
-        let (cull_ubos, cull_ubo_memories, cull_ubo_ptrs) = alloc_ubo_ring(frames)?;
-        let (cull_ubos2, cull_ubo2_memories, cull_ubo2_ptrs) =
-            alloc_ubo_ring(if two_pass { frames } else { 0 })?;
+        let cull_ubos = alloc_ubo_ring(frames)?;
+        let cull_ubos2 = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
 
         let mut res = Self {
             init_pipeline,
@@ -396,20 +354,15 @@ impl HiZResources {
             downsample_set_layout,
             read_set_layout,
             descriptor_pool,
-            image: vk::Image::null(),
-            memory: vk::DeviceMemory::null(),
+            pyramid: PooledImage::null(),
             sampled_view: vk::ImageView::null(),
             mip_views: Vec::new(),
             sampler: create_sampler(device)?,
             init_sets: Vec::new(),
             downsample_sets: Vec::new(),
             read_sets: Vec::new(),
-            cull_ubo_memories,
-            cull_ubo_ptrs,
             cull_ubos,
             read_sets2: Vec::new(),
-            cull_ubo2_memories,
-            cull_ubo2_ptrs,
             cull_ubos2,
             width,
             height,
@@ -430,9 +383,8 @@ impl HiZResources {
         target: HiZTarget,
     ) -> Result<(), String> {
         let HiZDeviceCtx {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
         } = ctx;
@@ -442,8 +394,7 @@ impl HiZResources {
             depth_views,
         } = target;
         let mip_count = hiz_mip_count(width, height).min(MAX_HIZ_MIPS as u32).max(1);
-        let (image, memory) =
-            create_hiz_image(instance, device, physical_device, width, height, mip_count)?;
+        let pyramid = create_hiz_image(alloc, width, height, mip_count)?;
         // Rest in SHADER_READ_ONLY so the cull-read descriptor's layout is
         // satisfied on the first frame (the cull kernel won't sample it -
         // `hiz_enabled` is 0 - but the descriptor layout must still match).
@@ -451,7 +402,7 @@ impl HiZResources {
             transition_image_layout_range(
                 device,
                 cmd,
-                image,
+                pyramid.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
                     new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -466,10 +417,13 @@ impl HiZResources {
             );
         })?;
 
-        let sampled_view = create_hiz_view(device, image, 0, mip_count)?;
+        let sampled_view = create_hiz_view(device, pyramid.image(), 0, mip_count)?;
+        pyramid.attach_view(sampled_view);
         let mut mip_views = Vec::with_capacity(mip_count as usize);
         for mip in 0..mip_count {
-            mip_views.push(create_hiz_view(device, image, mip, 1)?);
+            let view = create_hiz_view(device, pyramid.image(), mip, 1)?;
+            pyramid.attach_view(view);
+            mip_views.push(view);
         }
 
         // Reset the pool and reallocate every set (init / downsample / read).
@@ -514,7 +468,7 @@ impl HiZResources {
                 device,
                 set,
                 1,
-                self.cull_ubos[i],
+                self.cull_ubos[i].buffer(),
                 std::mem::size_of::<CullHizParams>() as u64,
             );
         }
@@ -525,13 +479,14 @@ impl HiZResources {
                 device,
                 set,
                 1,
-                self.cull_ubos2[i],
+                self.cull_ubos2[i].buffer(),
                 std::mem::size_of::<CullHizParams>() as u64,
             );
         }
 
-        self.image = image;
-        self.memory = memory;
+        // Replacing the pooled image drops the previous lease: the old pyramid
+        // and every view attached to it retire through the allocator.
+        self.pyramid = pyramid;
         self.sampled_view = sampled_view;
         self.mip_views = mip_views;
         self.init_sets = init_sets;
@@ -545,11 +500,11 @@ impl HiZResources {
     }
 
     // Recreate the image + views + sets at new render-target dimensions. The
-    // pipelines, layouts, sampler, and cull-read UBO buffers survive. The
+    // pipelines, layouts, sampler, and cull-read UBO buffers survive; the old
+    // pyramid retires through the allocator when the new one replaces it. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
-    // now-stale pyramid, and must have idled the GPU first.
+    // now-stale pyramid.
     pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> Result<(), String> {
-        self.destroy_image_and_views(ctx.device);
         self.create_image_and_sets(ctx, target)
     }
 
@@ -585,27 +540,9 @@ impl HiZResources {
         )
     }
 
-    fn destroy_image_and_views(&mut self, device: &Device) {
-        unsafe {
-            if self.sampled_view != vk::ImageView::null() {
-                device.destroy_image_view(self.sampled_view, None);
-            }
-            for &v in &self.mip_views {
-                device.destroy_image_view(v, None);
-            }
-            if self.image != vk::Image::null() {
-                device.destroy_image(self.image, None);
-                device.free_memory(self.memory, None);
-            }
-        }
-        self.mip_views.clear();
-        self.sampled_view = vk::ImageView::null();
-        self.image = vk::Image::null();
-        self.memory = vk::DeviceMemory::null();
-    }
-
+    // Destroy every non-pooled GPU resource and drop the pooled ones (the
+    // pyramid + its views and the cull UBO rings retire through the allocator).
     pub(super) fn destroy(&mut self, device: &Device) {
-        self.destroy_image_and_views(device);
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_pipeline(self.init_pipeline, None);
@@ -616,18 +553,12 @@ impl HiZResources {
             device.destroy_descriptor_set_layout(self.downsample_set_layout, None);
             device.destroy_descriptor_set_layout(self.read_set_layout, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
-            for &buf in self.cull_ubos.iter().chain(self.cull_ubos2.iter()) {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in self
-                .cull_ubo_memories
-                .iter()
-                .chain(self.cull_ubo2_memories.iter())
-            {
-                device.unmap_memory(mem);
-                device.free_memory(mem, None);
-            }
         }
+        self.pyramid = PooledImage::null();
+        self.sampled_view = vk::ImageView::null();
+        self.mip_views.clear();
+        self.cull_ubos.clear();
+        self.cull_ubos2.clear();
     }
 }
 
@@ -658,7 +589,7 @@ impl crate::vulkan::context::VkContext {
             vk::AccessFlags::SHADER_READ,
         );
         let hiz_to_general = hiz_image_barrier(
-            hiz.image,
+            hiz.pyramid.image(),
             hiz.mip_count,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::ImageLayout::GENERAL,
@@ -724,7 +655,7 @@ impl crate::vulkan::context::VkContext {
                     &[],
                     &[],
                     &[hiz_image_barrier(
-                        hiz.image,
+                        hiz.pyramid.image(),
                         hiz.mip_count,
                         vk::ImageLayout::GENERAL,
                         vk::ImageLayout::GENERAL,
@@ -780,7 +711,7 @@ impl crate::vulkan::context::VkContext {
             vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
         );
         let hiz_back = hiz_image_barrier(
-            hiz.image,
+            hiz.pyramid.image(),
             hiz.mip_count,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

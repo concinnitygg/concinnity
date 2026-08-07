@@ -510,7 +510,7 @@ impl VkContext {
             // SHADER_READ_ONLY -> GENERAL open, the consumer (Write -> Read) the
             // GENERAL -> SHADER_READ_ONLY close. One array layer (the 3D volume).
             "fog_froxel_volume" => self.fog_resources.as_ref().map(|f| VkBarrierTarget {
-                image: f.volume_image,
+                image: f.volume.image(),
                 class: GraphResourceClass::StorageImage,
                 layer_count: 1,
             }),

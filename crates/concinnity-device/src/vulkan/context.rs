@@ -960,6 +960,10 @@ pub struct VkContext {
     pub(super) graphics_queue: vk::Queue,
     pub(super) present_queue: vk::Queue,
     pub(super) graphics_family: u32,
+    // The device allocator every pooled buffer / image is placed through. Ticked
+    // once per frame in `draw_frame`; drained in Drop after every pooled holder
+    // has been torn down.
+    pub(super) alloc: super::allocator::DeviceAllocator,
 
     // Swapchain
     pub(super) swapchain_loader: ash::khr::swapchain::Device,
@@ -1694,6 +1698,12 @@ impl VkContext {
         // trip (this slot's fence signalling also covers the older frames that
         // last sampled them, and every pool copy has been re-pointed since).
         self.apply_streamed_texture_rewrites(frame);
+
+        // Tick the device allocator: destroy retired handles, reclaim retired
+        // ranges, release empty blocks. Here because the fence wait above is
+        // what guarantees a range freed `retire_depth` ticks ago is no longer
+        // referenced.
+        self.alloc.begin_frame();
 
         // Advance the staggered reflection-probe bake one step. Runs here -- after
         // this frame's slot fence wait, before `record_frame` -- so any cube it
@@ -2578,6 +2588,12 @@ impl Drop for VkContext {
         for t in &self.probe_maps {
             t.destroy(device);
         }
+
+        // Device allocator: destroy every handle its dropped leases queued and
+        // free the blocks. After every pooled holder above so all leases have
+        // dropped, before the device teardown below. On a reload the successor
+        // built its own allocator, so the outgoing one drains unconditionally.
+        self.alloc.destroy();
 
         // Surface / device / instance are the shared hardware. On a
         // `reload_world` the successor context inherited them (Vulkan handles are
