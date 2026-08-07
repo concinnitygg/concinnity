@@ -23,6 +23,7 @@ use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
 
+use super::super::allocator::DeviceAllocator;
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -185,18 +186,13 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
 // Allocate a single-format colour render target usable as both attachment and
 // sampled texture. Mirrors the SSR `create_color_target`.
 fn create_gi_target(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -207,13 +203,9 @@ fn create_gi_target(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Build one fullscreen SSGI pipeline. No vertex input (the fullscreen triangle
@@ -345,9 +337,8 @@ pub(in crate::vulkan) fn rebuild_ssgi_pipelines(
 // and `rebuild`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct SsgiDevice<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
 }
 
 // The image views `SsgiResources::new` wires its descriptor sets + framebuffers
@@ -373,11 +364,7 @@ impl SsgiResources {
         views: SsgiInputViews<'_>,
         hot_reload: bool,
     ) -> Result<Self, String> {
-        let SsgiDevice {
-            instance,
-            device,
-            physical_device,
-        } = dev;
+        let SsgiDevice { alloc, device } = dev;
         let SsgiInputViews {
             hdr_resolve_views,
             gbuffer_view,
@@ -471,12 +458,7 @@ impl SsgiResources {
             composite_sets,
             sampler,
             // Placeholder; replaced by build_targets below.
-            gi: GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            },
+            gi: GpuImage::null(),
             gi_extent: vk::Extent2D {
                 width: 1,
                 height: 1,
@@ -484,14 +466,7 @@ impl SsgiResources {
             gather_framebuffer: vk::Framebuffer::null(),
             composite_framebuffers: Vec::new(),
         };
-        me.build_targets(
-            instance,
-            device,
-            physical_device,
-            width,
-            height,
-            hdr_resolve_views,
-        )?;
+        me.build_targets(alloc, device, width, height, hdr_resolve_views)?;
         me.wire_sets(
             device,
             hdr_resolve_views,
@@ -504,9 +479,8 @@ impl SsgiResources {
     // gather / composite framebuffers at the given extent.
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        physical_device: vk::PhysicalDevice,
         width: u32,
         height: u32,
         hdr_resolve_views: &[vk::ImageView],
@@ -523,7 +497,7 @@ impl SsgiResources {
             width: gw,
             height: gh,
         };
-        self.gi = create_gi_target(instance, device, physical_device, gw, gh)?;
+        self.gi = create_gi_target(alloc, device, gw, gh)?;
         self.gather_framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -646,13 +620,7 @@ impl SsgiResources {
         }
         self.composite_framebuffers.clear();
         if self.gi.image != vk::Image::null() {
-            self.gi.destroy(device);
-            self.gi = GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            };
+            self.gi = GpuImage::null();
         }
     }
 
@@ -667,20 +635,9 @@ impl SsgiResources {
         hdr_resolve_views: &[vk::ImageView],
         gbuffer_views: &[vk::ImageView],
     ) -> Result<(), String> {
-        let SsgiDevice {
-            instance,
-            device,
-            physical_device,
-        } = dev;
+        let SsgiDevice { alloc, device } = dev;
         self.destroy_targets(device);
-        self.build_targets(
-            instance,
-            device,
-            physical_device,
-            width,
-            height,
-            hdr_resolve_views,
-        )?;
+        self.build_targets(alloc, device, width, height, hdr_resolve_views)?;
         self.wire_sets(device, hdr_resolve_views, gbuffer_views);
         Ok(())
     }

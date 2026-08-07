@@ -19,9 +19,10 @@ use ash::{Device, vk};
 
 use crate::gfx::decal::DecalRecord;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
-use super::texture::{GpuImage, create_buffer};
+use super::texture::GpuImage;
 
 // Cap on the number of active decals: the descriptor pool reserves a
 // fixed block of `MAX_DECALS` per-decal albedo sets at init, so runtime
@@ -98,22 +99,16 @@ pub(in crate::vulkan) struct DecalResources {
     pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
 
     // Unit-cube vertex + index buffers (shared across frames).
-    pub(in crate::vulkan) vertex_buffer: vk::Buffer,
-    pub(in crate::vulkan) vertex_memory: vk::DeviceMemory,
-    pub(in crate::vulkan) index_buffer: vk::Buffer,
-    pub(in crate::vulkan) index_memory: vk::DeviceMemory,
+    pub(in crate::vulkan) vertex_buffer: PooledBuffer,
+    pub(in crate::vulkan) index_buffer: PooledBuffer,
 
     // Per-frame view UBO (DecalView, 144 bytes). Persistently mapped.
-    pub(in crate::vulkan) view_ubos: Vec<vk::Buffer>,
-    pub(in crate::vulkan) view_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) view_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) view_ubos: Vec<PooledBuffer>,
 
     // Per-frame per-decal params ring (PARAMS_STRIDE * MAX_DECALS bytes).
     // Persistently mapped; bound as UNIFORM_BUFFER_DYNAMIC with a
     // per-draw offset of `decal_id * PARAMS_STRIDE`.
-    pub(in crate::vulkan) params_ubos: Vec<vk::Buffer>,
-    pub(in crate::vulkan) params_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) params_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) params_ubos: Vec<PooledBuffer>,
 
     // Per-frame view sets (binding 0 view UBO, 1 params dynamic, 2 depth).
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
@@ -139,9 +134,8 @@ pub(in crate::vulkan) struct DecalResources {
 // `DecalResources::new`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct DecalDeviceContext<'a> {
-    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a Device,
-    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,
 }
@@ -171,9 +165,8 @@ impl DecalResources {
         hot_reload: bool,
     ) -> Result<Self, String> {
         let DecalDeviceContext {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
         } = ctx;
@@ -194,19 +187,17 @@ impl DecalResources {
             create_decal_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
 
         // Unit-cube vertex + index buffers (single device-local upload).
-        let (vertex_buffer, vertex_memory) = upload_static_buffer(
-            instance,
+        let vertex_buffer = upload_static_buffer(
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
             bytemuck_cast(&CUBE_VERTS),
             vk::BufferUsageFlags::VERTEX_BUFFER,
         )?;
-        let (index_buffer, index_memory) = upload_static_buffer(
-            instance,
+        let index_buffer = upload_static_buffer(
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
             bytemuck_cast(&CUBE_INDICES),
@@ -216,51 +207,23 @@ impl DecalResources {
         // Per-frame view UBOs (HOST_VISIBLE | HOST_COHERENT, persistently
         // mapped).
         let mut view_ubos = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            view_ubos.push(alloc.create_buffer(
                 std::mem::size_of::<DecalView>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe {
-                device.map_memory(
-                    mem,
-                    0,
-                    std::mem::size_of::<DecalView>() as u64,
-                    vk::MemoryMapFlags::empty(),
-                )
-            }
-            .map_err(|e| format!("map decal view ubo: {e}"))? as *mut u8;
-            view_ubos.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
+            )?);
         }
 
         // Per-frame per-decal params ring.
         let params_total = PARAMS_STRIDE * MAX_DECALS as u64;
         let mut params_ubos = Vec::with_capacity(frames);
-        let mut params_ubo_memories = Vec::with_capacity(frames);
-        let mut params_ubo_ptrs = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            params_ubos.push(alloc.create_buffer(
                 params_total,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr =
-                unsafe { device.map_memory(mem, 0, params_total, vk::MemoryMapFlags::empty()) }
-                    .map_err(|e| format!("map decal params ubo: {e}"))? as *mut u8;
-            params_ubos.push(buf);
-            params_ubo_memories.push(mem);
-            params_ubo_ptrs.push(ptr);
+            )?);
         }
 
         let descriptor_pool = create_decal_descriptor_pool(device, frames)?;
@@ -272,8 +235,8 @@ impl DecalResources {
             write_view_set(
                 device,
                 set,
-                view_ubos[i],
-                params_ubos[i],
+                view_ubos[i].buffer(),
+                params_ubos[i].buffer(),
                 depth_views[i.min(depth_views.len().saturating_sub(1))],
                 sampler,
             );
@@ -307,15 +270,9 @@ impl DecalResources {
             albedo_set_layout,
             descriptor_pool,
             vertex_buffer,
-            vertex_memory,
             index_buffer,
-            index_memory,
             view_ubos,
-            view_ubo_memories,
-            view_ubo_ptrs,
             params_ubos,
-            params_ubo_memories,
-            params_ubo_ptrs,
             view_sets,
             albedo_sets,
             framebuffers,
@@ -376,20 +333,6 @@ impl DecalResources {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            for (&buf, &mem) in self.view_ubos.iter().zip(self.view_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for (&buf, &mem) in self.params_ubos.iter().zip(self.params_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            device.destroy_buffer(self.vertex_buffer, None);
-            device.free_memory(self.vertex_memory, None);
-            device.destroy_buffer(self.index_buffer, None);
-            device.free_memory(self.index_memory, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.view_set_layout, None);
             device.destroy_descriptor_set_layout(self.albedo_set_layout, None);
@@ -399,11 +342,9 @@ impl DecalResources {
         }
         self.framebuffers.clear();
         self.view_ubos.clear();
-        self.view_ubo_memories.clear();
-        self.view_ubo_ptrs.clear();
         self.params_ubos.clear();
-        self.params_ubo_memories.clear();
-        self.params_ubo_ptrs.clear();
+        self.vertex_buffer = PooledBuffer::null();
+        self.index_buffer = PooledBuffer::null();
     }
 }
 
@@ -735,47 +676,39 @@ fn create_decal_pipeline(
 // Helpers for upload + casting
 
 fn upload_static_buffer(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     data: &[u8],
     usage: vk::BufferUsageFlags,
-) -> Result<(vk::Buffer, vk::DeviceMemory), String> {
+) -> Result<PooledBuffer, String> {
     let size = data.len() as vk::DeviceSize;
-    let (staging, staging_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let staging = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(staging_mem, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map decal staging: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-        device.unmap_memory(staging_mem);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), data.len());
     }
-    let (buf, mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let buf = alloc.create_buffer(
         size,
         usage | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
         let region = vk::BufferCopy::default().size(size);
-        unsafe { device.cmd_copy_buffer(cmd, staging, buf, std::slice::from_ref(&region)) };
+        unsafe {
+            device.cmd_copy_buffer(
+                cmd,
+                staging.buffer(),
+                buf.buffer(),
+                std::slice::from_ref(&region),
+            )
+        };
     })?;
-    unsafe {
-        device.destroy_buffer(staging, None);
-        device.free_memory(staging_mem, None);
-    }
-    Ok((buf, mem))
+    Ok(buf)
 }
 
 fn bytemuck_cast<T: bytemuck::NoUninit>(s: &[T]) -> &[u8] {
@@ -840,7 +773,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const DecalView as *const u8,
-                decals.view_ubo_ptrs[frame_idx],
+                decals.view_ubos[frame_idx].mapped_ptr(),
                 std::mem::size_of::<DecalView>(),
             );
         }
@@ -860,7 +793,9 @@ impl VkContext {
                 fade: [2.0, 0.0, 0.0, 0.0],
             };
             unsafe {
-                let dst = decals.params_ubo_ptrs[frame_idx].add(i * PARAMS_STRIDE as usize);
+                let dst = decals.params_ubos[frame_idx]
+                    .mapped_ptr()
+                    .add(i * PARAMS_STRIDE as usize);
                 std::ptr::copy_nonoverlapping(
                     &params as *const DecalParams as *const u8,
                     dst,
@@ -922,13 +857,13 @@ impl VkContext {
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, decals.pipeline);
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                decals.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&decals.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT16,
             );
-            device.cmd_bind_index_buffer(cmd, decals.index_buffer, 0, vk::IndexType::UINT16);
         }
 
         for (i, slot) in self.decals.iter().enumerate() {

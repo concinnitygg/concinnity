@@ -119,7 +119,7 @@ pub(in crate::vulkan) struct FogFrameTargets<'a> {
 // per-frame-in-flight ShadowUniforms ring; slot `i` binds into froxel set `i`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogShadowResources<'a> {
-    pub(in crate::vulkan) ubos: &'a [vk::Buffer],
+    pub(in crate::vulkan) ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) map_view: vk::ImageView,
     pub(in crate::vulkan) sampler: vk::Sampler,
 }
@@ -230,7 +230,7 @@ impl FogResources {
                 FogFroxelBindings {
                     params_ubo: params_ubos[i].buffer(),
                     froxel_ubo: froxel_ubos[i].buffer(),
-                    shadow_ubo: shadow_ubos[i],
+                    shadow_ubo: shadow_ubos[i].buffer(),
                     shadow_map_view,
                     shadow_sampler,
                     volume_storage_view,

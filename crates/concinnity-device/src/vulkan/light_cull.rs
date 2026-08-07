@@ -11,9 +11,9 @@ use ash::vk;
 
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
-use super::texture::create_buffer;
 
 // Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
 // CLUSTER_LIGHT_LIST_STRIDE u32 (slot 0 = count, slots 1.. = light indices).
@@ -37,24 +37,20 @@ pub(in crate::vulkan) struct VkLightCull {
     pub sets: Vec<vk::DescriptorSet>,
     // Per-cluster light-index lists. Device-local; written by the kernel and
     // read by the forward pass at global set 0 binding 11.
-    pub cluster_buffer: vk::Buffer,
-    pub cluster_memory: vk::DeviceMemory,
+    pub cluster_buffer: PooledBuffer,
     // Per-frame `ClusterParams` UBOs (host-visible, persistently mapped), bound
     // at global set 0 binding 10 for the main camera.
-    pub params_buffers: Vec<vk::Buffer>,
-    pub params_memories: Vec<vk::DeviceMemory>,
-    pub params_ptrs: Vec<*mut u8>,
+    pub params_buffers: Vec<PooledBuffer>,
     // A single `use_clusters = 0` copy, written once at init. The planar +
     // probe re-renders bind this at binding 10 so they fall back to iterating
     // every local light (their viewpoint differs from the main camera's grid).
-    pub unclustered_buffer: vk::Buffer,
-    pub unclustered_memory: vk::DeviceMemory,
+    pub unclustered_buffer: PooledBuffer,
 }
 
 impl VkLightCull {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(in crate::vulkan) fn destroy(&self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -68,16 +64,10 @@ impl VkLightCull {
             if let Some(p) = self.descriptor_pool {
                 device.destroy_descriptor_pool(p, None);
             }
-            device.destroy_buffer(self.cluster_buffer, None);
-            device.free_memory(self.cluster_memory, None);
-            for (&b, &m) in self.params_buffers.iter().zip(self.params_memories.iter()) {
-                device.unmap_memory(m);
-                device.destroy_buffer(b, None);
-                device.free_memory(m, None);
-            }
-            device.destroy_buffer(self.unclustered_buffer, None);
-            device.free_memory(self.unclustered_memory, None);
         }
+        self.cluster_buffer = PooledBuffer::null();
+        self.params_buffers.clear();
+        self.unclustered_buffer = PooledBuffer::null();
     }
 }
 
@@ -110,11 +100,9 @@ fn create_light_cull_set_layout(device: &Device) -> Result<vk::DescriptorSetLayo
 // per-scene `GpuLight` SSBO the kernel bins; when the scene has no local lights
 // the pipeline + descriptor set are skipped (the graph then omits `LightCull`)
 // but the buffers are still allocated for the forward pass's unconditional binds.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::vulkan) fn build_light_cull(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     frames: usize,
     local_light_buffer: vk::Buffer,
     local_light_size: vk::DeviceSize,
@@ -123,10 +111,7 @@ pub(in crate::vulkan) fn build_light_cull(
 ) -> Result<VkLightCull, String> {
     // Per-cluster light lists: device-local, written by compute, read by the
     // fragment stage.
-    let (cluster_buffer, cluster_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let cluster_buffer = alloc.create_buffer(
         cluster_list_size(),
         vk::BufferUsageFlags::STORAGE_BUFFER,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -135,50 +120,27 @@ pub(in crate::vulkan) fn build_light_cull(
     // Per-frame `ClusterParams` UBOs, persistently mapped.
     let params_size = std::mem::size_of::<ClusterParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
-    let mut params_memories = Vec::with_capacity(frames);
-    let mut params_ptrs = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let (buf, mem) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        params_buffers.push(alloc.create_buffer(
             params_size,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        let ptr = unsafe { device.map_memory(mem, 0, params_size, vk::MemoryMapFlags::empty()) }
-            .map_err(|e| format!("map cluster params UBO: {e}"))? as *mut u8;
-        params_buffers.push(buf);
-        params_memories.push(mem);
-        params_ptrs.push(ptr);
+        )?);
     }
 
     // The static `use_clusters = 0` copy the planar / probe global sets bind.
-    let (unclustered_buffer, unclustered_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let unclustered_buffer = alloc.create_buffer(
         params_size,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(
-                unclustered_memory,
-                0,
-                params_size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .map_err(|e| format!("map unclustered cluster params UBO: {e}"))?
-            as *mut u8;
         let zero = ClusterParams::ZERO;
         std::ptr::copy_nonoverlapping(
             &zero as *const ClusterParams as *const u8,
-            ptr,
+            unclustered_buffer.mapped_ptr(),
             std::mem::size_of::<ClusterParams>(),
         );
-        device.unmap_memory(unclustered_memory);
     }
 
     if !has_local_lights {
@@ -189,12 +151,8 @@ pub(in crate::vulkan) fn build_light_cull(
             descriptor_pool: None,
             sets: Vec::new(),
             cluster_buffer,
-            cluster_memory,
             params_buffers,
-            params_memories,
-            params_ptrs,
             unclustered_buffer,
-            unclustered_memory,
         });
     }
 
@@ -250,7 +208,7 @@ pub(in crate::vulkan) fn build_light_cull(
 
     for (i, &set) in sets.iter().enumerate() {
         let params_info = vk::DescriptorBufferInfo::default()
-            .buffer(params_buffers[i])
+            .buffer(params_buffers[i].buffer())
             .offset(0)
             .range(params_size);
         let lights_info = vk::DescriptorBufferInfo::default()
@@ -258,7 +216,7 @@ pub(in crate::vulkan) fn build_light_cull(
             .offset(0)
             .range(local_light_size);
         let list_info = vk::DescriptorBufferInfo::default()
-            .buffer(cluster_buffer)
+            .buffer(cluster_buffer.buffer())
             .offset(0)
             .range(cluster_list_size());
         let writes = [
@@ -288,12 +246,8 @@ pub(in crate::vulkan) fn build_light_cull(
         descriptor_pool: Some(descriptor_pool),
         sets,
         cluster_buffer,
-        cluster_memory,
         params_buffers,
-        params_memories,
-        params_ptrs,
         unclustered_buffer,
-        unclustered_memory,
     })
 }
 
@@ -304,7 +258,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 params as *const ClusterParams as *const u8,
-                self.light_cull.params_ptrs[frame_idx],
+                self.light_cull.params_buffers[frame_idx].mapped_ptr(),
                 std::mem::size_of::<ClusterParams>(),
             );
         }
@@ -342,7 +296,7 @@ impl VkContext {
                 .dst_access_mask(vk::AccessFlags::SHADER_READ)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .buffer(self.light_cull.cluster_buffer)
+                .buffer(self.light_cull.cluster_buffer.buffer())
                 .offset(0)
                 .size(cluster_list_size());
             device.cmd_pipeline_barrier(

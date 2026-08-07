@@ -15,6 +15,7 @@ use ash::{Device, vk};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
+use crate::vulkan::allocator::DeviceAllocator;
 
 use super::super::context::VkContext;
 use super::super::pipeline::*;
@@ -172,9 +173,8 @@ fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String>
 // Shared device/queue handles every SSR target build needs. Borrowed by
 // `create_output_target`, `build_targets`, `new`, and `rebuild`.
 pub(in crate::vulkan) struct SsrGpuContext<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -192,19 +192,14 @@ pub(in crate::vulkan) struct SsrExtent {
 // first frame's composite reads ssr.output before SSR has fired this slot).
 fn create_output_target(gpu: &SsrGpuContext, extent: SsrExtent) -> Result<GpuImage, String> {
     let &SsrGpuContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = gpu;
     let SsrExtent { width, height } = extent;
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -221,6 +216,7 @@ fn create_output_target(gpu: &SsrGpuContext, extent: SsrExtent) -> Result<GpuIma
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
             device,
@@ -233,16 +229,11 @@ fn create_output_target(gpu: &SsrGpuContext, extent: SsrExtent) -> Result<GpuIma
     })?;
     let view = create_image_view(
         device,
-        image,
+        pooled.image(),
         SSR_OUTPUT_FORMAT,
         vk::ImageAspectFlags::COLOR,
     )?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Build the fullscreen resolve pipeline. No vertex input (the fullscreen
@@ -462,12 +453,7 @@ impl SsrResources {
             descriptor_pool,
             sampler,
             // Placeholder GpuImage; replaced by build_targets below.
-            output: GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            },
+            output: GpuImage::null(),
             resolve_framebuffer: vk::Framebuffer::null(),
         };
         me.build_targets(gpu, extent)?;
@@ -598,7 +584,7 @@ impl SsrResources {
                 device.destroy_framebuffer(self.resolve_framebuffer, None);
             }
             self.resolve_framebuffer = vk::Framebuffer::null();
-            self.output.destroy(device);
+            self.output = GpuImage::null();
         }
     }
 

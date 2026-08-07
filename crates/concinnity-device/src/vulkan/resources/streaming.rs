@@ -12,7 +12,7 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::*;
 
 use super::super::context::*;
-use super::super::texture::{self, create_buffer};
+use super::super::texture::{self};
 use super::alloc_descriptor_sets;
 
 impl VkContext {
@@ -34,18 +34,12 @@ impl VkContext {
         let new_i = old_i + chunk_idx_bytes as u64;
 
         let shared = super::shared_geometry_usage(self.rt_capable);
-        let (new_vbuf, new_vmem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_vbuf = self.alloc.create_buffer(
             new_v,
             vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let (new_ibuf, new_imem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_ibuf = self.alloc.create_buffer(
             new_i,
             vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -63,33 +57,22 @@ impl VkContext {
                 unsafe {
                     self.device.cmd_copy_buffer(
                         cmd,
-                        self.geometry.vertex_buffer,
-                        new_vbuf,
+                        self.geometry.vertex_buffer.buffer(),
+                        new_vbuf.buffer(),
                         std::slice::from_ref(&vcopy),
                     );
                     self.device.cmd_copy_buffer(
                         cmd,
-                        self.geometry.index_buffer,
-                        new_ibuf,
+                        self.geometry.index_buffer.buffer(),
+                        new_ibuf.buffer(),
                         std::slice::from_ref(&icopy),
                     );
                 }
             },
         )?;
 
-        unsafe {
-            self.device
-                .destroy_buffer(self.geometry.vertex_buffer, None);
-            self.device
-                .free_memory(self.geometry.vertex_buffer_memory, None);
-            self.device.destroy_buffer(self.geometry.index_buffer, None);
-            self.device
-                .free_memory(self.geometry.index_buffer_memory, None);
-        }
         self.geometry.vertex_buffer = new_vbuf;
-        self.geometry.vertex_buffer_memory = new_vmem;
         self.geometry.index_buffer = new_ibuf;
-        self.geometry.index_buffer_memory = new_imem;
         self.geometry.vertex_buffer_bytes = new_v;
         self.geometry.index_buffer_bytes = new_i;
 
@@ -190,10 +173,14 @@ impl VkContext {
         self.wait_idle();
 
         let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(self.geometry.vertex_buffer, v_off as u64, vert_bytes)?;
+        self.write_geometry_region(
+            self.geometry.vertex_buffer.buffer(),
+            v_off as u64,
+            vert_bytes,
+        )?;
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
         let idx_bytes = bytemuck::cast_slice(&widened);
-        self.write_geometry_region(self.geometry.index_buffer, i_off as u64, idx_bytes)?;
+        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off as u64, idx_bytes)?;
 
         let base_vertex = (v_off / std::mem::size_of::<Vertex>()) as i32;
         let obj = DrawObject {

@@ -240,9 +240,8 @@ impl VkContext {
             ));
         }
         let ctx = GpuUploadContext {
-            instance: &self.instance,
+            alloc: &self.alloc,
             device: &self.device,
-            physical_device: self.physical_device,
             command_pool: self.commands.command_pool,
             queue: self.graphics_queue,
         };
@@ -259,7 +258,7 @@ impl VkContext {
             // The full rewrite covered every per-frame pool copy, so any
             // propagation queued for this slot is already satisfied.
             self.pool_rewrites.remove(slot);
-            old.destroy(&self.device);
+            drop(old);
             return Ok(());
         }
         let (img, in_flight) = upload_texture_image_deferred(&ctx, image)?;
@@ -271,9 +270,8 @@ impl VkContext {
         // is the one signalled by the NEXT draw -- waited `frames_in_flight`
         // ticks after that draw's own tick.
         self.stream_retires.push(StreamedUploadRetire {
-            image: old,
-            staging_buf: in_flight.staging_buf,
-            staging_mem: in_flight.staging_mem,
+            _image: old,
+            _staging: in_flight.staging,
             cmd: in_flight.cmd,
             retire_at: self.stream_frame + self.frames_in_flight as u64 + 1,
         });
@@ -343,11 +341,12 @@ impl VkContext {
     pub fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &GpuUploadContext {
+                alloc: &self.alloc,
+                device: &self.device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             size,
             data,
         )?;
@@ -370,7 +369,7 @@ impl VkContext {
                     .update_descriptor_sets(std::slice::from_ref(&write), &[])
             };
         }
-        old.destroy(&self.device);
+        drop(old);
         Ok(())
     }
 
@@ -396,9 +395,8 @@ impl VkContext {
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
             &GpuUploadContext {
-                instance: &self.instance,
+                alloc: &self.alloc,
                 device: &self.device,
-                physical_device: self.physical_device,
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
@@ -477,8 +475,7 @@ impl VkContext {
         if let Some(rt) = self.rt_reflections.as_ref() {
             rt.rewire_prefilter(&self.device, new_prefilter_view, self.cube_sampler);
         }
-        old.irradiance.destroy(&self.device);
-        old.prefilter.destroy(&self.device);
+        drop(old);
         Ok(())
     }
 }

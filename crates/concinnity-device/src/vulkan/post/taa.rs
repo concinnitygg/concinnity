@@ -8,6 +8,7 @@
 use ash::{Device, vk};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
+use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::uniforms::TaaPush;
 
 use super::super::context::*;
@@ -93,9 +94,8 @@ fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
 // builder.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TaaDeviceContext<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub pd: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -350,9 +350,6 @@ impl TaaResources {
     fn destroy_targets(&mut self, device: &Device) {
         for &fb in &self.taa_framebuffers {
             unsafe { device.destroy_framebuffer(fb, None) };
-        }
-        for img in &self.taa_out_images {
-            img.destroy(device);
         }
         self.taa_framebuffers.clear();
         self.taa_out_images.clear();
@@ -637,18 +634,13 @@ fn create_taa_history_image(
     format: vk::Format,
 ) -> Result<GpuImage, String> {
     let &TaaDeviceContext {
-        instance,
+        alloc,
         device,
-        pd: physical_device,
         command_pool,
         queue,
     } = ctx;
-    let (image, memory) = create_image(
-        &super::super::texture::GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &super::super::texture::ImageSpec {
             width,
             height,
@@ -659,6 +651,7 @@ fn create_taa_history_image(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
             device,
@@ -670,12 +663,7 @@ fn create_taa_history_image(
         );
     })?;
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 #[cfg(test)]

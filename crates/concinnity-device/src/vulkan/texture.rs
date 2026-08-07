@@ -4,14 +4,18 @@
 
 use ash::{Device, vk};
 
-// Opaque handle to a GPU image and its backing memory.
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
+
+// Opaque handle to a GPU image: cached raw handles for the bind sites, backed
+// by a pooled allocation that owns the image, its memory, and every view.
+// Dropping the last holder retires all of them through the allocator.
 pub(super) struct GpuImage {
     pub image: vk::Image,
-    pub memory: vk::DeviceMemory,
     pub view: vk::ImageView,
     // Auxiliary image views for the same image (e.g. per-cascade DSVs for an
-    // array shadow map). Destroyed alongside `view`.
+    // array shadow map). Owned by the pooled allocation alongside `view`.
     pub aux_views: Vec<vk::ImageView>,
+    pooled: PooledImage,
 }
 
 impl GpuImage {
@@ -19,20 +23,39 @@ impl GpuImage {
     pub(super) fn null() -> Self {
         Self {
             image: vk::Image::null(),
-            memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
             aux_views: Vec::new(),
+            pooled: PooledImage::null(),
         }
     }
 
-    pub(super) fn destroy(&self, device: &Device) {
-        unsafe {
-            for &v in &self.aux_views {
-                device.destroy_image_view(v, None);
-            }
-            device.destroy_image_view(self.view, None);
-            device.destroy_image(self.image, None);
-            device.free_memory(self.memory, None);
+    // Wrap a pooled image and its primary view, tying the view's lifetime to
+    // the allocation.
+    pub(super) fn from_pooled(pooled: PooledImage, view: vk::ImageView) -> Self {
+        pooled.attach_view(view);
+        Self {
+            image: pooled.image(),
+            view,
+            aux_views: Vec::new(),
+            pooled,
+        }
+    }
+
+    // Add an auxiliary view, destroyed with the image.
+    pub(super) fn push_aux_view(&mut self, view: vk::ImageView) {
+        self.pooled.attach_view(view);
+        self.aux_views.push(view);
+    }
+
+    // Wrap handles owned elsewhere (e.g. the transient pool), so a mip chain
+    // can index owned and borrowed images uniformly. Dropping it releases
+    // nothing.
+    pub(super) fn borrowed(image: vk::Image, view: vk::ImageView) -> Self {
+        Self {
+            image,
+            view,
+            aux_views: Vec::new(),
+            pooled: PooledImage::null(),
         }
     }
 }
@@ -57,57 +80,6 @@ pub(super) fn find_memory_type(
     Err("no suitable memory type found".to_string())
 }
 
-// Allocate a VkBuffer with its own DeviceMemory.
-pub(super) fn create_buffer(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    size: vk::DeviceSize,
-    usage: vk::BufferUsageFlags,
-    mem_props: vk::MemoryPropertyFlags,
-) -> Result<(vk::Buffer, vk::DeviceMemory), String> {
-    let buf_info = vk::BufferCreateInfo::default()
-        .size(size)
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let buffer = unsafe { device.create_buffer(&buf_info, None) }
-        .map_err(|e| format!("create_buffer: {e}"))?;
-    let reqs = unsafe { device.get_buffer_memory_requirements(buffer) };
-    // A buffer created with SHADER_DEVICE_ADDRESS usage (the ray-tracing
-    // acceleration-structure buffers + their build inputs) needs its backing
-    // memory allocated with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, or
-    // `get_buffer_device_address` is invalid. The flag is inert (and the chain
-    // omitted) for every other buffer, so this is a no-op when RT is off.
-    let mut flags_info =
-        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-    let needs_device_address = usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
-    let mut alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            mem_props,
-        )?);
-    if needs_device_address {
-        alloc_info = alloc_info.push_next(&mut flags_info);
-    }
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (buffer): {e}"))?;
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-        .map_err(|e| format!("bind_buffer_memory: {e}"))?;
-    Ok((buffer, memory))
-}
-
-// The Vulkan handles needed to allocate a device resource: the instance and
-// physical device (for memory-type queries) plus the logical device.
-#[derive(Clone, Copy)]
-pub(super) struct GpuAllocContext<'a> {
-    pub instance: &'a ash::Instance,
-    pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
-}
-
 // Immutable description of a 2-D image to allocate.
 #[derive(Clone, Copy)]
 pub(super) struct ImageSpec {
@@ -120,16 +92,11 @@ pub(super) struct ImageSpec {
     pub samples: vk::SampleCountFlags,
 }
 
-// Allocate a VkImage with its own DeviceMemory.
+// Allocate a pooled VkImage from `spec`.
 pub(super) fn create_image(
-    ctx: &GpuAllocContext,
+    alloc: &DeviceAllocator,
     spec: &ImageSpec,
-) -> Result<(vk::Image, vk::DeviceMemory), String> {
-    let &GpuAllocContext {
-        instance,
-        device,
-        physical_device,
-    } = ctx;
+) -> Result<PooledImage, String> {
     let &ImageSpec {
         width,
         height,
@@ -154,22 +121,7 @@ pub(super) fn create_image(
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(samples);
-    let image = unsafe { device.create_image(&img_info, None) }
-        .map_err(|e| format!("create_image: {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            mem_props,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (image): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory: {e}"))?;
-    Ok((image, memory))
+    alloc.create_image(&img_info, mem_props)
 }
 
 // Create a VkImageView for a 2-D image.
@@ -441,14 +393,13 @@ pub(super) fn transition_image_layout_array(
     );
 }
 
-// The Vulkan handles needed to allocate a resource and run a one-shot upload:
-// a `GpuAllocContext`'s handles plus the transient command pool and the queue
-// the copy is submitted to.
+// The handles needed to allocate a resource and run a one-shot upload: the
+// device allocator plus the transient command pool and the queue the copy is
+// submitted to.
 #[derive(Clone, Copy)]
 pub(super) struct GpuUploadContext<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -458,8 +409,7 @@ pub(super) struct GpuUploadContext<'a> {
 // buffer. Neither may be freed until the GPU retired the upload; the texture
 // streaming path parks these on `VkContext::stream_retires`.
 pub(super) struct UploadInFlight {
-    pub staging_buf: vk::Buffer,
-    pub staging_mem: vk::DeviceMemory,
+    pub staging: PooledBuffer,
     pub cmd: vk::CommandBuffer,
 }
 
@@ -468,11 +418,11 @@ pub(super) struct UploadInFlight {
 // sample it, and the per-frame pool copies re-point over the next
 // `frames_in_flight` ticks) plus the upload's in-flight transients (still
 // executing when parked; covered by the first frame fence signalled after the
-// upload's submission).
+// upload's submission). The image and staging buffer retire through the
+// allocator when this drops; only the command buffer is freed by hand.
 pub(super) struct StreamedUploadRetire {
-    pub image: GpuImage,
-    pub staging_buf: vk::Buffer,
-    pub staging_mem: vk::DeviceMemory,
+    pub _image: GpuImage,
+    pub _staging: PooledBuffer,
     pub cmd: vk::CommandBuffer,
     pub retire_at: u64,
 }
@@ -481,10 +431,7 @@ impl StreamedUploadRetire {
     pub(super) fn destroy(&self, device: &Device, command_pool: vk::CommandPool) {
         unsafe {
             device.free_command_buffers(command_pool, std::slice::from_ref(&self.cmd));
-            device.destroy_buffer(self.staging_buf, None);
-            device.free_memory(self.staging_mem, None);
         }
-        self.image.destroy(device);
     }
 }
 
@@ -585,8 +532,6 @@ pub(super) fn upload_texture_image(
     unsafe {
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
-        ctx.device.destroy_buffer(in_flight.staging_buf, None);
-        ctx.device.free_memory(in_flight.staging_mem, None);
     }
     Ok(img)
 }
@@ -601,9 +546,8 @@ fn upload_texture_levels_deferred(
     levels: &[TextureLevel<'_>],
 ) -> Result<(GpuImage, UploadInFlight), String> {
     let &GpuUploadContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = ctx;
@@ -613,29 +557,18 @@ fn upload_texture_levels_deferred(
 
     // One packed staging buffer holding mip 0..N concatenated.
     let total: usize = levels.iter().map(|m| m.data.len()).sum();
-    let (staging_buf, staging_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let staging = alloc.create_buffer(
         total as vk::DeviceSize,
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(
-                staging_mem,
-                0,
-                total as vk::DeviceSize,
-                vk::MemoryMapFlags::empty(),
-            )
-            .map_err(|e| format!("map staging: {e}"))? as *mut u8;
+        let ptr = staging.mapped_ptr();
         let mut off = 0usize;
         for m in levels {
             std::ptr::copy_nonoverlapping(m.data.as_ptr(), ptr.add(off), m.data.len());
             off += m.data.len();
         }
-        device.unmap_memory(staging_mem);
     }
 
     // Device-local image with the full mip chain.
@@ -654,21 +587,8 @@ fn upload_texture_levels_deferred(
         .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
-        .map_err(|e| format!("create_image: {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (image): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory: {e}"))?;
+    let pooled = alloc.create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+    let image = pooled.image();
 
     let cmd = one_shot_submit_nowait(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
@@ -714,7 +634,7 @@ fn upload_texture_levels_deferred(
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
-                staging_buf,
+                staging.buffer(),
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &regions,
@@ -757,17 +677,8 @@ fn upload_texture_levels_deferred(
     };
 
     Ok((
-        GpuImage {
-            image,
-            memory,
-            view,
-            aux_views: Vec::new(),
-        },
-        UploadInFlight {
-            staging_buf,
-            staging_mem,
-            cmd,
-        },
+        GpuImage::from_pooled(pooled, view),
+        UploadInFlight { staging, cmd },
     ))
 }
 
@@ -784,54 +695,18 @@ pub(super) fn upload_texture(
     unsafe {
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
-        ctx.device.destroy_buffer(in_flight.staging_buf, None);
-        ctx.device.free_memory(in_flight.staging_mem, None);
     }
     Ok(img)
 }
 
 // Create a 1x1 opaque white RGBA texture (fallback when no albedo asset is present).
-pub(super) fn create_fallback_white(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-) -> Result<GpuImage, String> {
-    upload_texture(
-        &GpuUploadContext {
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-        },
-        1,
-        1,
-        &[255u8, 255, 255, 255],
-    )
+pub(super) fn create_fallback_white(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
+    upload_texture(ctx, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1x1 flat-normal RGBA texture (tangent-space (0,0,1) = no perturbation).
-pub(super) fn create_fallback_flat_normal(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-) -> Result<GpuImage, String> {
-    upload_texture(
-        &GpuUploadContext {
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-        },
-        1,
-        1,
-        &[128u8, 128, 255, 255],
-    )
+pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
+    upload_texture(ctx, 1, 1, &[128u8, 128, 255, 255])
 }
 
 // Upload a 3D colour-grading LUT from a `ColorLut` payload. `data` is the raw
@@ -841,14 +716,16 @@ pub(super) fn create_fallback_flat_normal(
 // `VK_IMAGE_VIEW_TYPE_3D` view left in `SHADER_READ_ONLY_OPTIMAL`, ready for
 // the composite pass to sample as a `sampler3D`.
 pub(super) fn upload_color_lut(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     size: u32,
     data: &[u8],
 ) -> Result<GpuImage, String> {
+    let &GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = ctx;
     let needed = (size as usize).pow(3) * 4;
     if data.len() < needed {
         return Err(format!(
@@ -861,20 +738,13 @@ pub(super) fn upload_color_lut(
 
     // Staging buffer (host visible).
     let byte_size = needed as vk::DeviceSize;
-    let (staging_buf, staging_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let staging = alloc.create_buffer(
         byte_size,
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(staging_mem, 0, byte_size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map LUT staging: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, needed);
-        device.unmap_memory(staging_mem);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), needed);
     }
 
     // Device-local 3D image. `create_image` is TYPE_2D only, so the LUT image
@@ -894,21 +764,10 @@ pub(super) fn upload_color_lut(
         .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
+    let pooled = alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
         .map_err(|e| format!("create_image (LUT): {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (LUT): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory (LUT): {e}"))?;
+    let image = pooled.image();
 
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -939,7 +798,7 @@ pub(super) fn upload_color_lut(
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
-                staging_buf,
+                staging.buffer(),
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 std::slice::from_ref(&copy_region),
@@ -954,11 +813,6 @@ pub(super) fn upload_color_lut(
             vk::ImageAspectFlags::COLOR,
         );
     })?;
-
-    unsafe {
-        device.destroy_buffer(staging_buf, None);
-        device.free_memory(staging_mem, None);
-    }
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -975,12 +829,7 @@ pub(super) fn upload_color_lut(
     let view = unsafe { device.create_image_view(&view_info, None) }
         .map_err(|e| format!("create_image_view (LUT): {e}"))?;
 
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Upload a square float lookup table as a 2D image. `components` selects the
@@ -994,9 +843,8 @@ pub(super) fn upload_float_lut(
     texels: &[f32],
 ) -> Result<GpuImage, String> {
     let GpuUploadContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = *ctx;
@@ -1014,20 +862,13 @@ pub(super) fn upload_float_lut(
     };
 
     let byte_size = (needed * std::mem::size_of::<f32>()) as vk::DeviceSize;
-    let (staging_buf, staging_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let staging = alloc.create_buffer(
         byte_size,
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(staging_mem, 0, byte_size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map float LUT staging: {e}"))? as *mut f32;
-        std::ptr::copy_nonoverlapping(texels.as_ptr(), ptr, needed);
-        device.unmap_memory(staging_mem);
+        std::ptr::copy_nonoverlapping(texels.as_ptr(), staging.mapped_ptr() as *mut f32, needed);
     }
 
     let img_info = vk::ImageCreateInfo::default()
@@ -1045,21 +886,10 @@ pub(super) fn upload_float_lut(
         .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
+    let pooled = alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
         .map_err(|e| format!("create_image (float LUT): {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (float LUT): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory (float LUT): {e}"))?;
+    let image = pooled.image();
 
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
@@ -1090,7 +920,7 @@ pub(super) fn upload_float_lut(
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
-                staging_buf,
+                staging.buffer(),
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 std::slice::from_ref(&copy_region),
@@ -1105,11 +935,6 @@ pub(super) fn upload_float_lut(
             vk::ImageAspectFlags::COLOR,
         );
     })?;
-
-    unsafe {
-        device.destroy_buffer(staging_buf, None);
-        device.free_memory(staging_mem, None);
-    }
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -1126,25 +951,14 @@ pub(super) fn upload_float_lut(
     let view = unsafe { device.create_image_view(&view_info, None) }
         .map_err(|e| format!("create_image_view (float LUT): {e}"))?;
 
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Build a 2x2x2 identity colour LUT: the eight corners of the unit RGB cube.
 // Mirrors `metal/texture.rs::create_fallback_color_lut`. With the identity LUT
 // the composite grade is a no-op at any `lut_strength`, so the `sampler3D`
 // binding stays valid even when the world declares no `ColorLut`.
-pub(super) fn create_fallback_color_lut(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-) -> Result<GpuImage, String> {
+pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
     // Red-fastest, then green, then blue, matching the payload texel order.
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
     for b in 0..2u8 {
@@ -1154,15 +968,7 @@ pub(super) fn create_fallback_color_lut(
             }
         }
     }
-    upload_color_lut(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        2,
-        &data,
-    )
+    upload_color_lut(ctx, 2, &data)
 }
 
 // Create a `layers`-slice D32_SFLOAT array shadow map. The returned `view` is
@@ -1176,14 +982,16 @@ pub(super) fn create_fallback_color_lut(
 // array layer because the shader's cascade selection falls back to cascade 0
 // when `cascade_splits == +inf`, so layer 0 is the only one ever sampled.
 pub(super) fn create_shadow_map_array(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     size: u32,
     layers: u32,
 ) -> Result<GpuImage, String> {
+    let &GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = ctx;
     let (w, h, layer_count) = if size > 0 {
         (size, size, layers.max(1))
     } else {
@@ -1204,21 +1012,10 @@ pub(super) fn create_shadow_map_array(
         .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
+    let pooled = alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
         .map_err(|e| format!("create_image (shadow array): {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (shadow array): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory (shadow array): {e}"))?;
+    let image = pooled.image();
 
     // Rest the cascades sampled. The graph's Shadow producer barrier transitions
     // them to DEPTH_STENCIL_ATTACHMENT before each shadow loop and Main's consumer
@@ -1276,12 +1073,11 @@ pub(super) fn create_shadow_map_array(
         aux_views.push(v);
     }
 
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views,
-    })
+    let mut img = GpuImage::from_pooled(pooled, view);
+    for v in aux_views {
+        img.push_aux_view(v);
+    }
+    Ok(img)
 }
 
 // Create a device-local depth image for the main render pass.
@@ -1292,18 +1088,13 @@ pub(super) fn create_depth_image(
     samples: vk::SampleCountFlags,
 ) -> Result<GpuImage, String> {
     let &GpuUploadContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = ctx;
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -1319,6 +1110,7 @@ pub(super) fn create_depth_image(
             samples,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
             device,
@@ -1335,12 +1127,7 @@ pub(super) fn create_depth_image(
         vk::Format::D32_SFLOAT,
         vk::ImageAspectFlags::DEPTH,
     )?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Create a multisampled color image for the MSAA resolve target.
@@ -1352,18 +1139,13 @@ pub(super) fn create_msaa_color_image(
     samples: vk::SampleCountFlags,
 ) -> Result<GpuImage, String> {
     let &GpuUploadContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = ctx;
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -1375,6 +1157,7 @@ pub(super) fn create_msaa_color_image(
             samples,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
             device,
@@ -1386,12 +1169,7 @@ pub(super) fn create_msaa_color_image(
         );
     })?;
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Create a single-sample colour image usable as both a render target and a
@@ -1400,19 +1178,14 @@ pub(super) fn create_msaa_color_image(
 // it to tonemap. No pre-transition is needed: the main render pass declares
 // an `UNDEFINED` initial layout for it.
 pub(super) fn create_hdr_resolve_image(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
     format: vk::Format,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -1428,13 +1201,8 @@ pub(super) fn create_hdr_resolve_image(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
-    let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    let view = create_image_view(device, pooled.image(), format, vk::ImageAspectFlags::COLOR)?;
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Linear repeat sampler for albedo and normal map sampling. Now that scene
@@ -1513,14 +1281,16 @@ pub(super) struct EnvironmentMapTextures {
 // (+X, -X, +Y, -Y, +Z, -Z). Returns a `GpuImage` whose `view` is a
 // `VK_IMAGE_VIEW_TYPE_CUBE` view spanning every mip.
 fn create_cube_image(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> Result<GpuImage, String> {
+    let &GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = ctx;
     let mip_count = mip_bytes.len() as u32;
     if mip_count == 0 {
         return Err("cubemap upload: mip_bytes must not be empty".into());
@@ -1568,46 +1338,24 @@ fn create_cube_image(
         .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    let image = unsafe { device.create_image(&img_info, None) }
+    let pooled = alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
         .map_err(|e| format!("create_image (cube): {e}"))?;
-    let reqs = unsafe { device.get_image_memory_requirements(image) };
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(reqs.size)
-        .memory_type_index(find_memory_type(
-            instance,
-            physical_device,
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?);
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(|e| format!("allocate_memory (cube): {e}"))?;
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .map_err(|e| format!("bind_image_memory (cube): {e}"))?;
+    let image = pooled.image();
 
     // Build one packed staging buffer with mip 0..N concatenated.
-    let (staging_buf, staging_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let staging = alloc.create_buffer(
         total as vk::DeviceSize,
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     unsafe {
-        let ptr = device
-            .map_memory(
-                staging_mem,
-                0,
-                total as vk::DeviceSize,
-                vk::MemoryMapFlags::empty(),
-            )
-            .map_err(|e| format!("map cube staging: {e}"))? as *mut u8;
+        let ptr = staging.mapped_ptr();
         let mut off = 0usize;
         for (m, bytes) in mip_bytes.iter().enumerate() {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(off), mip_sizes[m]);
             off += mip_sizes[m];
         }
-        device.unmap_memory(staging_mem);
     }
 
     // Transition all 6 layers / N mips to TRANSFER_DST, copy each face per mip,
@@ -1662,7 +1410,7 @@ fn create_cube_image(
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
-                staging_buf,
+                staging.buffer(),
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &regions,
@@ -1687,11 +1435,6 @@ fn create_cube_image(
         );
     })?;
 
-    unsafe {
-        device.destroy_buffer(staging_buf, None);
-        device.free_memory(staging_mem, None);
-    }
-
     // Single cube view covering all mips.
     let view = {
         let info = vk::ImageViewCreateInfo::default()
@@ -1709,12 +1452,7 @@ fn create_cube_image(
         unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("cube view: {e}"))?
     };
 
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Upload a six-face HDR cubemap from a `CubemapTexture` payload. RGBA32F,
@@ -1722,23 +1460,11 @@ fn create_cube_image(
 // (+X, -X, +Y, -Y, +Z, -Z). Single-mip.
 #[allow(dead_code)]
 pub(super) fn upload_cubemap(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     face_size: u32,
     bytes: &[u8],
 ) -> Result<GpuImage, String> {
-    create_cube_image(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        face_size,
-        &[bytes],
-    )
+    create_cube_image(ctx, face_size, &[bytes])
 }
 
 // Create a 1×1 RGBA32F cube of `value` for every face. Used as the IBL
@@ -1746,11 +1472,7 @@ pub(super) fn upload_cubemap(
 // `prefilter_mip_count == 0` and skips IBL math, but the cube binding must
 // still resolve to a valid texture.
 pub(super) fn create_fallback_cubemap(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     value: [f32; 4],
 ) -> Result<GpuImage, String> {
     let mut face_bytes = Vec::with_capacity(6 * 16);
@@ -1759,15 +1481,7 @@ pub(super) fn create_fallback_cubemap(
             face_bytes.extend_from_slice(&v.to_le_bytes());
         }
     }
-    create_cube_image(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        1,
-        &[&face_bytes],
-    )
+    create_cube_image(ctx, 1, &[&face_bytes])
 }
 
 // Upload an `EnvironmentMap` payload into two cube textures: a single-mip
@@ -1780,36 +1494,13 @@ pub(super) fn upload_environment_map(
     prefilter_face: u32,
     mip_bytes: &[&[u8]],
 ) -> Result<EnvironmentMapTextures, String> {
-    let &GpuUploadContext {
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-    } = ctx;
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }
-    let irradiance = create_cube_image(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        irradiance_face,
-        &[irradiance_bytes],
-    )
-    .map_err(|e| format!("envmap irradiance: {e}"))?;
-    let prefilter = create_cube_image(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        prefilter_face,
-        mip_bytes,
-    )
-    .map_err(|e| format!("envmap prefilter: {e}"))?;
+    let irradiance = create_cube_image(ctx, irradiance_face, &[irradiance_bytes])
+        .map_err(|e| format!("envmap irradiance: {e}"))?;
+    let prefilter = create_cube_image(ctx, prefilter_face, mip_bytes)
+        .map_err(|e| format!("envmap prefilter: {e}"))?;
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,
@@ -1827,27 +1518,14 @@ pub(super) fn upload_environment_map(
 // shared `cube_sampler`. Mirrors `directx::texture::upload_probe_prefilter_cube`.
 #[allow(dead_code)] // installed by the probe capture pass (next slice).
 pub(super) fn upload_probe_prefilter_cube(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
+    ctx: &GpuUploadContext,
     prefilter_face: u32,
     mip_bytes: &[&[u8]],
 ) -> Result<GpuImage, String> {
     if mip_bytes.is_empty() {
         return Err("probe prefilter upload: mip_bytes must not be empty".into());
     }
-    create_cube_image(
-        instance,
-        device,
-        physical_device,
-        command_pool,
-        queue,
-        prefilter_face,
-        mip_bytes,
-    )
-    .map_err(|e| format!("probe prefilter: {e}"))
+    create_cube_image(ctx, prefilter_face, mip_bytes).map_err(|e| format!("probe prefilter: {e}"))
 }
 
 // Linear-clamp sampler with full mipmap support, used by the IBL prefilter

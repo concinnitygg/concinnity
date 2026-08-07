@@ -200,7 +200,7 @@ impl VkContext {
             .cull
             .shadow_indirect_buffers
             .get(frame_idx)
-            .and_then(|c| c.get(cascade_idx).copied())
+            .and_then(|c| c.get(cascade_idx).map(|b| b.buffer()))
         else {
             return;
         };
@@ -230,13 +230,13 @@ impl VkContext {
             );
 
             // Static + instance prefix against the static VB/IB.
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
             if prefix > 0 {
                 device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride);
                 self.inc_draw_calls(1);
@@ -254,7 +254,7 @@ impl VkContext {
                 );
                 device.cmd_bind_index_buffer(
                     cmd,
-                    self.skinned.index_buffer,
+                    self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT16,
                 );
@@ -305,13 +305,13 @@ impl VkContext {
                 std::slice::from_ref(&self.shadow.global_sets[frame_idx]),
                 &[],
             );
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
             for (i, obj) in self.draw_objects.iter().enumerate() {
                 if i < self.n_objects || !obj.visible || !obj.resident {
                     continue;
@@ -380,13 +380,13 @@ impl VkContext {
                 &[],
             );
 
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
 
             for obj in &self.draw_objects {
                 // A non-resident streamed mesh has no geometry in the

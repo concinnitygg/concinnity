@@ -66,7 +66,12 @@ impl VkContext {
     // for a normal-less draw). Rebuilt every frame so `update_model` /
     // `update_visibility` edits are reflected; a no-op when bindless is off.
     fn build_object_buffer(&self, frame_idx: usize) {
-        let Some(&ptr) = self.cull.object_buffer_ptrs.get(frame_idx) else {
+        let Some(ptr) = self
+            .cull
+            .object_buffers
+            .get(frame_idx)
+            .map(|b| b.mapped_ptr())
+        else {
             return;
         };
         self.build_object_records_into(ptr);
@@ -163,7 +168,12 @@ impl VkContext {
     // picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `directx/cull.rs`.
     fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3]) {
-        let Some(&ptr) = self.cull.draw_args_buffer_ptrs.get(frame_idx) else {
+        let Some(ptr) = self
+            .cull
+            .draw_args_buffers
+            .get(frame_idx)
+            .map(|b| b.mapped_ptr())
+        else {
             return;
         };
         self.build_draw_args_records_into(ptr, cam_pos);
@@ -412,7 +422,10 @@ impl VkContext {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
             }
-            upload_shadow_uniforms(self.shadow.ubo_ptrs[frame_idx], &self.shadow.uniforms);
+            upload_shadow_uniforms(
+                self.shadow.ubos[frame_idx].mapped_ptr(),
+                &self.shadow.uniforms,
+            );
         }
 
         // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
@@ -648,7 +661,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ViewUniforms as *const u8,
-                self.uniforms.view_ubo_ptrs[frame_idx],
+                self.uniforms.view_ubo_buffers[frame_idx].mapped_ptr(),
                 std::mem::size_of::<ViewUniforms>(),
             );
         }
@@ -659,7 +672,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.probe_set as *const super::probe_uniforms::ProbeSet as *const u8,
-                self.uniforms.probe_set_ubo_ptrs[frame_idx],
+                self.uniforms.probe_set_ubo_buffers[frame_idx].mapped_ptr(),
                 std::mem::size_of::<super::probe_uniforms::ProbeSet>(),
             );
         }
@@ -833,26 +846,6 @@ impl VkContext {
     }
 }
 
-// A buffer+memory pair that must be destroyed after the GPU finishes using it.
-//
-// `frame` records the frame-in-flight slot whose command buffer references
-// the buffer; it is only safe to destroy once that slot's fence has been
-// waited on again (i.e. the next time `draw_frame` reuses the same slot).
-pub(super) struct DeferredBuffer {
-    pub buffer: vk::Buffer,
-    pub memory: vk::DeviceMemory,
-    pub frame: usize,
-}
-
-impl DeferredBuffer {
-    pub(super) fn destroy(&self, device: &ash::Device) {
-        unsafe {
-            device.destroy_buffer(self.buffer, None);
-            device.free_memory(self.memory, None);
-        }
-    }
-}
-
 // Helper: write ShadowUniforms into one persistently-mapped slot of the
 // per-frame-in-flight ring. `ptr` must be that slot's mapping, which is at least
 // `size_of::<ShadowUniforms>()` bytes and HOST_COHERENT.
@@ -870,19 +863,17 @@ pub(super) fn upload_shadow_uniforms(ptr: *mut u8, su: &ShadowUniforms) {
 
 // Helper: upload LightUniforms to the shared light UBO.
 pub(super) fn upload_light_uniforms(
-    device: &ash::Device,
-    light_ubo_memory: vk::DeviceMemory,
+    light_ubo: &super::allocator::PooledBuffer,
     lu: &LightUniforms,
-) -> Result<(), String> {
-    let size = std::mem::size_of::<LightUniforms>() as u64;
+) {
+    let size = std::mem::size_of::<LightUniforms>();
     unsafe {
-        let ptr = device
-            .map_memory(light_ubo_memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map light ubo: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(lu as *const LightUniforms as *const u8, ptr, size as usize);
-        device.unmap_memory(light_ubo_memory);
+        std::ptr::copy_nonoverlapping(
+            lu as *const LightUniforms as *const u8,
+            light_ubo.mapped_ptr(),
+            size,
+        );
     }
-    Ok(())
 }
 
 // Helper: one-shot upload of the per-scene local lights into the static SSBO.
@@ -890,21 +881,14 @@ pub(super) fn upload_light_uniforms(
 // (num_local_lights == 0 keeps the shader from reading it). Mirrors the single
 // upload path of upload_light_uniforms; the SSBO is never rewritten per-frame.
 pub(super) fn upload_static_records<T: Copy>(
-    device: &ash::Device,
-    memory: vk::DeviceMemory,
+    buffer: &super::allocator::PooledBuffer,
     records: &[T],
-    label: &str,
-) -> Result<(), String> {
+) {
     if records.is_empty() {
-        return Ok(());
+        return;
     }
-    let size = std::mem::size_of_val(records) as u64;
+    let size = std::mem::size_of_val(records);
     unsafe {
-        let ptr = device
-            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map {label} ssbo: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr, size as usize);
-        device.unmap_memory(memory);
+        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
     }
-    Ok(())
 }

@@ -44,7 +44,7 @@ impl VkContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        if self.instanced.clusters.is_empty() || self.instanced.ptrs.is_empty() {
+        if self.instanced.clusters.is_empty() || self.instanced.buffers.is_empty() {
             return;
         }
         // Re-shape on a runtime cluster-count change (asset hot-reload), then
@@ -61,7 +61,7 @@ impl VkContext {
             if cluster.instances.is_empty() {
                 continue;
             }
-            let upload_ptr = self.instanced.ptrs[frame_idx][cluster_idx];
+            let upload_ptr = self.instanced.buffers[frame_idx][cluster_idx].mapped_ptr();
             let buckets = cluster.lod_buckets(cam_pos);
             row.reserve(buckets.len());
             let mut prefix_instances: usize = 0;
@@ -207,13 +207,13 @@ impl VkContext {
         // Geometry buffers, pipeline-layout-independent, so bound once for
         // both the bindless and legacy main sub-passes below.
         unsafe {
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
         }
 
         // Build-time static objects render through the bindless pipeline
@@ -258,7 +258,7 @@ impl VkContext {
                 // exactly one bucket's region, so the regions never double-draw.
                 device.cmd_draw_indexed_indirect(
                     cmd,
-                    self.cull.indirect_buffers[frame_idx],
+                    self.cull.indirect_buffers[frame_idx].buffer(),
                     0,
                     self.skinned_record_base() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
@@ -270,7 +270,7 @@ impl VkContext {
             self.inc_draw_calls(1);
             self.inc_draw_calls(self.draw_bucket_regions(
                 cmd,
-                self.cull.indirect_buffers[frame_idx],
+                self.cull.indirect_buffers[frame_idx].buffer(),
                 self.skinned_record_base() as u32,
             ));
             // Restore the default bindless pipeline for the sub-paths below.
@@ -545,7 +545,7 @@ impl VkContext {
                     );
                     device.cmd_bind_index_buffer(
                         cmd,
-                        self.skinned.index_buffer,
+                        self.skinned.index_buffer.buffer(),
                         0,
                         vk::IndexType::UINT16,
                     );
@@ -555,7 +555,7 @@ impl VkContext {
                     let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
                     device.cmd_draw_indexed_indirect(
                         cmd,
-                        self.cull.indirect_buffers[frame_idx],
+                        self.cull.indirect_buffers[frame_idx].buffer(),
                         (self.skinned_record_base() * cmd_stride) as u64,
                         self.n_skinned as u32,
                         cmd_stride as u32,
@@ -732,13 +732,13 @@ impl VkContext {
         unsafe {
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
 
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
             device.cmd_bind_descriptor_sets(
@@ -756,7 +756,7 @@ impl VkContext {
             // VB/IB bound above, once per shader bucket.
             device.cmd_draw_indexed_indirect(
                 cmd,
-                self.cull.indirect_buffers2[frame_idx],
+                self.cull.indirect_buffers2[frame_idx].buffer(),
                 0,
                 self.skinned_record_base() as u32,
                 std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
@@ -765,7 +765,7 @@ impl VkContext {
         self.inc_draw_calls(1);
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
-            self.cull.indirect_buffers2[frame_idx],
+            self.cull.indirect_buffers2[frame_idx].buffer(),
             self.skinned_record_base() as u32,
         ));
 
@@ -787,13 +787,13 @@ impl VkContext {
                 );
                 device.cmd_bind_index_buffer(
                     cmd,
-                    self.skinned.index_buffer,
+                    self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT16,
                 );
                 device.cmd_draw_indexed_indirect(
                     cmd,
-                    self.cull.indirect_buffers2[frame_idx],
+                    self.cull.indirect_buffers2[frame_idx].buffer(),
                     (self.skinned_record_base() * cmd_stride) as u64,
                     self.n_skinned as u32,
                     cmd_stride as u32,

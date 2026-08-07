@@ -2,13 +2,12 @@
 // Mirrors the public API of metal::MtlContext so GraphicsSystem can drive both
 // backends identically.
 
-use std::cell::RefCell;
-
 use ash::{Device, vk};
 
 use crate::gfx::backend::FrameParams;
 use crate::gfx::render_types::*;
 
+use super::allocator::PooledBuffer;
 use super::draw::*;
 use super::input::*;
 use super::post::*;
@@ -55,9 +54,7 @@ pub(super) struct VkShadow {
     // per frame: a single buffer would let this frame's cascade VPs overwrite
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
     // freshly-jumped far-cascade VP with depth rasterized from the old one.
-    pub(super) ubos: Vec<vk::Buffer>,
-    pub(super) ubo_memories: Vec<vk::DeviceMemory>,
-    pub(super) ubo_ptrs: Vec<*mut u8>,
+    pub(super) ubos: Vec<PooledBuffer>,
     // Carried CSM uniforms: skipped cascades keep the VP their slice was last
     // rendered with. Splits refresh every frame; per-cascade light VPs only when
     // `render_mask` includes that cascade. Written to `ubo_ptrs[frame]` each frame.
@@ -89,7 +86,7 @@ impl VkShadow {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The per-frame `global_sets` are freed with the shared
     // descriptor pool, so they are not destroyed here.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &Device) {
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -109,19 +106,11 @@ impl VkShadow {
             if let Some(sl) = self.global_set_layout {
                 device.destroy_descriptor_set_layout(sl, None);
             }
-        }
-        self.map.destroy(device);
-        unsafe {
             device.destroy_render_pass(self.render_pass, None);
-            for &buf in &self.ubos {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in &self.ubo_memories {
-                device.unmap_memory(mem);
-                device.free_memory(mem, None);
-            }
             device.destroy_sampler(self.sampler, None);
         }
+        self.map = GpuImage::null();
+        self.ubos.clear();
     }
 }
 
@@ -138,15 +127,15 @@ pub(super) struct VkSpotShadow {
     pub(super) framebuffers: Vec<vk::Framebuffer>,
     pub(super) slice_size: u32,
     // `SpotShadowData` per slice, uploaded once at init.
-    pub(super) data_buffer: vk::Buffer,
-    pub(super) data_memory: vk::DeviceMemory,
+    pub(super) data_buffer: PooledBuffer,
+
     // One `ShadowUniforms` per slice, each carrying that spot's matrix in
     // `light_vps[0]` so the shared shadow vertex shader renders a spot slice by
     // pushing cascade_idx = 0. Written once at init: the projections are fixed
     // for the world's lifetime, so unlike the cascade UBO this needs no
     // per-frame copy. One descriptor set per slice binds its own range.
-    pub(super) ubo: vk::Buffer,
-    pub(super) ubo_memory: vk::DeviceMemory,
+    pub(super) ubo: PooledBuffer,
+
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) descriptor_pool: vk::DescriptorPool,
     // Round-robin clock + primed set, advanced once per frame in draw_frame.
@@ -171,20 +160,16 @@ impl VkSpotShadow {
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`; `sets` are freed with `descriptor_pool`.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &Device) {
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
             device.destroy_descriptor_pool(self.descriptor_pool, None);
         }
-        self.map.destroy(device);
-        unsafe {
-            device.destroy_buffer(self.data_buffer, None);
-            device.free_memory(self.data_memory, None);
-            device.destroy_buffer(self.ubo, None);
-            device.free_memory(self.ubo_memory, None);
-        }
+        self.map = GpuImage::null();
+        self.data_buffer = PooledBuffer::null();
+        self.ubo = PooledBuffer::null();
     }
 }
 
@@ -194,8 +179,7 @@ impl VkSpotShadow {
 // scene-independent (fitted at build time), so they are uploaded even with no
 // area light declared -- the shader simply never samples them.
 pub(super) struct VkAreaLight {
-    pub(super) buffer: vk::Buffer,
-    pub(super) memory: vk::DeviceMemory,
+    pub(super) buffer: PooledBuffer,
     pub(super) ltc_matrix: GpuImage,
     pub(super) ltc_magnitude: GpuImage,
     // Linear clamp-to-edge sampler for both tables.
@@ -205,12 +189,11 @@ pub(super) struct VkAreaLight {
 impl VkAreaLight {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(super) fn destroy(&self, device: &Device) {
-        self.ltc_matrix.destroy(device);
-        self.ltc_magnitude.destroy(device);
+    pub(super) fn destroy(&mut self, device: &Device) {
+        self.ltc_matrix = GpuImage::null();
+        self.ltc_magnitude = GpuImage::null();
+        self.buffer = PooledBuffer::null();
         unsafe {
-            device.destroy_buffer(self.buffer, None);
-            device.free_memory(self.memory, None);
             device.destroy_sampler(self.sampler, None);
         }
     }
@@ -227,10 +210,8 @@ pub(super) struct VkSkinned {
     pub(super) pipeline_layout: Option<vk::PipelineLayout>,
     pub(super) joint_set_layout: Option<vk::DescriptorSetLayout>,
     pub(super) descriptor_pool: Option<vk::DescriptorPool>,
-    pub(super) vertex_buffer: vk::Buffer,
-    pub(super) vertex_buffer_memory: vk::DeviceMemory,
-    pub(super) index_buffer: vk::Buffer,
-    pub(super) index_buffer_memory: vk::DeviceMemory,
+    pub(super) vertex_buffer: PooledBuffer,
+    pub(super) index_buffer: PooledBuffer,
     // Current byte sizes of the skinned VB / IB. Used by
     // `update_skinned_mesh_geometry` to bound-check the slot region the asset
     // hot-reload write lands in. Zero until `upload_skinned` runs.
@@ -241,9 +222,7 @@ pub(super) struct VkSkinned {
     pub(super) object_sets: Vec<vk::DescriptorSet>,
     // Per-(frame, object) joint storage buffers (host-mapped) + their
     // descriptor sets. Indexed [frame_idx][skinned_idx].
-    pub(super) joint_buffers: Vec<Vec<vk::Buffer>>,
-    pub(super) joint_memories: Vec<Vec<vk::DeviceMemory>>,
-    pub(super) joint_ptrs: Vec<Vec<*mut u8>>,
+    pub(super) joint_buffers: Vec<Vec<PooledBuffer>>,
     pub(super) joint_sets: Vec<Vec<vk::DescriptorSet>>,
     // Current skinning matrices per skinned object, parallel to `draw_objects`.
     // Rewritten each frame by `update_skinned_pose`.
@@ -268,13 +247,11 @@ pub(super) struct VkSkinned {
     // empty when no skinned object carries morphs. The skin descriptor sets'
     // morph bindings (3 = deltas, 4 = weights) are re-pointed in
     // `upload_skinned_morphs`.
-    pub(super) morph_delta_unique: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    pub(super) morph_delta_unique: Vec<PooledBuffer>,
     pub(super) morph_delta_buffers: Vec<vk::Buffer>,
     pub(super) morph_target_counts: Vec<u32>,
     pub(super) morph_weights: Vec<Vec<f32>>,
-    pub(super) morph_weight_buffers: Vec<Vec<vk::Buffer>>,
-    pub(super) morph_weight_memories: Vec<Vec<vk::DeviceMemory>>,
-    pub(super) morph_weight_ptrs: Vec<Vec<*mut u8>>,
+    pub(super) morph_weight_buffers: Vec<Vec<PooledBuffer>>,
     // `false` until the deformed-vertex ring has been posed at least one full
     // frame. While false the GPU-driven G-buffer velocity binds the current
     // deformed buffer as the previous one (prev_pos == cur_pos), so an unposed
@@ -291,7 +268,7 @@ impl VkSkinned {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The per-object `object_sets` and per-frame `joint_sets` are
     // freed with `descriptor_pool`, so they are not destroyed here.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &Device) {
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -305,47 +282,17 @@ impl VkSkinned {
             if let Some(pool) = self.descriptor_pool {
                 device.destroy_descriptor_pool(pool, None);
             }
-            if self.vertex_buffer != vk::Buffer::null() {
-                device.destroy_buffer(self.vertex_buffer, None);
-                device.free_memory(self.vertex_buffer_memory, None);
-                device.destroy_buffer(self.index_buffer, None);
-                device.free_memory(self.index_buffer_memory, None);
-            }
-            for frame_bufs in &self.joint_buffers {
-                for &buf in frame_bufs {
-                    device.destroy_buffer(buf, None);
-                }
-            }
-            for frame_mems in &self.joint_memories {
-                for &mem in frame_mems {
-                    device.unmap_memory(mem);
-                    device.free_memory(mem, None);
-                }
-            }
-            // Morph delta device buffers + per-(frame, object) weight buffers.
-            for &(buf, mem) in &self.morph_delta_unique {
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for frame_bufs in &self.morph_weight_buffers {
-                for &buf in frame_bufs {
-                    device.destroy_buffer(buf, None);
-                }
-            }
-            for frame_mems in &self.morph_weight_memories {
-                for &mem in frame_mems {
-                    device.unmap_memory(mem);
-                    device.free_memory(mem, None);
-                }
-            }
         }
+        self.vertex_buffer = PooledBuffer::null();
+        self.index_buffer = PooledBuffer::null();
+        self.joint_buffers.clear();
+        self.morph_delta_unique.clear();
+        self.morph_weight_buffers.clear();
         // GPU-driven main-pass skinning resources.
-        if let Some(skin) = &self.skin {
+        if let Some(skin) = self.skin.take() {
             skin.destroy(device);
         }
-        for buf in &self.deformed {
-            buf.destroy(device);
-        }
+        self.deformed.clear();
     }
 }
 
@@ -354,10 +301,8 @@ impl VkSkinned {
 // field soup. Created at init and live for the context's lifetime; the
 // streaming and geometry-rebuild paths swap the buffers in place.
 pub(super) struct VkGeometry {
-    pub(super) vertex_buffer: vk::Buffer,
-    pub(super) vertex_buffer_memory: vk::DeviceMemory,
-    pub(super) index_buffer: vk::Buffer,
-    pub(super) index_buffer_memory: vk::DeviceMemory,
+    pub(super) vertex_buffer: PooledBuffer,
+    pub(super) index_buffer: PooledBuffer,
     // Byte-range sub-allocators for the streamed-mesh regions of the shared
     // vertex/index buffers. Empty until mesh streaming is active; `evict_mesh`
     // seeds them with each streamed draw's build-time region at init, then
@@ -373,16 +318,11 @@ pub(super) struct VkGeometry {
 }
 
 impl VkGeometry {
-    // Destroy the shared vertex/index buffers and their memory. Called from
-    // `VkContext::drop` after `wait_idle`. The range allocators and byte counts
-    // are plain CPU state with nothing to free.
-    pub(super) fn destroy(&self, device: &Device) {
-        unsafe {
-            device.destroy_buffer(self.vertex_buffer, None);
-            device.free_memory(self.vertex_buffer_memory, None);
-            device.destroy_buffer(self.index_buffer, None);
-            device.free_memory(self.index_buffer_memory, None);
-        }
+    // Drop the shared vertex/index buffers (they retire through the
+    // allocator). The range allocators and byte counts are plain CPU state.
+    pub(super) fn destroy(&mut self) {
+        self.vertex_buffer = PooledBuffer::null();
+        self.index_buffer = PooledBuffer::null();
     }
 }
 
@@ -449,9 +389,7 @@ pub(super) struct VkInstanced {
     // Indexed [frame_idx][cluster_idx].
     pub(super) sets: Vec<Vec<vk::DescriptorSet>>,
     // Per-frame, per-cluster instance storage buffers (host-mapped).
-    pub(super) buffers: Vec<Vec<vk::Buffer>>,
-    pub(super) memories: Vec<Vec<vk::DeviceMemory>>,
-    pub(super) ptrs: Vec<Vec<*mut u8>>,
+    pub(super) buffers: Vec<Vec<PooledBuffer>>,
     // Per-cluster LOD-bucket partition for the current frame, indexed by
     // cluster index. Recomputed once per frame by `prepare_instanced_clusters`
     // (on `&mut self`, before the parallel pass fan-out) and consumed read-only
@@ -468,7 +406,7 @@ impl VkInstanced {
     // `VkContext::drop` after `wait_idle`. The descriptor sets (`object_sets`,
     // `sets`) are freed with the shared descriptor pool, so they are not
     // destroyed here; `clusters` / `lod_buckets` are plain CPU state.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &Device) {
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -479,18 +417,8 @@ impl VkInstanced {
             if let Some(l) = self.set_layout {
                 device.destroy_descriptor_set_layout(l, None);
             }
-            for frame_bufs in &self.buffers {
-                for &buf in frame_bufs {
-                    device.destroy_buffer(buf, None);
-                }
-            }
-            for frame_mems in &self.memories {
-                for &mem in frame_mems {
-                    device.unmap_memory(mem);
-                    device.free_memory(mem, None);
-                }
-            }
         }
+        self.buffers.clear();
     }
 }
 
@@ -576,9 +504,7 @@ pub(super) struct VkCull {
     pub(super) bindless_sets: Vec<vk::DescriptorSet>,
     // Per-frame GpuObjectData storage buffers, persistently mapped; rebuilt each
     // frame from `draw_objects[..n_objects]`.
-    pub(super) object_buffers: Vec<vk::Buffer>,
-    pub(super) object_buffer_memories: Vec<vk::DeviceMemory>,
-    pub(super) object_buffer_ptrs: Vec<*mut u8>,
+    pub(super) object_buffers: Vec<PooledBuffer>,
     // Compute cull pipeline + its per-frame sets (bindings 0/1/2 = that frame's
     // object SSBO, draw-args SSBO, indirect-command SSBO). Sets are pool-freed.
     pub(super) cull_pipeline: Option<vk::Pipeline>,
@@ -586,17 +512,13 @@ pub(super) struct VkCull {
     pub(super) cull_set_layout: Option<vk::DescriptorSetLayout>,
     pub(super) cull_sets: Vec<vk::DescriptorSet>,
     // Per-frame `GpuDrawArgs` storage buffers, persistently mapped.
-    pub(super) draw_args_buffers: Vec<vk::Buffer>,
-    pub(super) draw_args_buffer_memories: Vec<vk::DeviceMemory>,
-    pub(super) draw_args_buffer_ptrs: Vec<*mut u8>,
+    pub(super) draw_args_buffers: Vec<PooledBuffer>,
     // Per-frame indirect draw-command buffers the cull kernel writes and the
     // main pass consumes (`INDIRECT_BUFFER`). Device-local.
-    pub(super) indirect_buffers: Vec<vk::Buffer>,
-    pub(super) indirect_buffer_memories: Vec<vk::DeviceMemory>,
+    pub(super) indirect_buffers: Vec<PooledBuffer>,
     // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
     // phase-2 reads. Device-local storage.
-    pub(super) cull_status_buffers: Vec<vk::Buffer>,
-    pub(super) cull_status_buffer_memories: Vec<vk::DeviceMemory>,
+    pub(super) cull_status_buffers: Vec<PooledBuffer>,
     // Two-pass Hi-Z occlusion (HizBuild -> Cull2 -> Main2). `occlusion_two_pass`
     // records the world's request; the live resources below are `Some` /
     // non-empty only when it AND the bindless cull path are active.
@@ -608,8 +530,7 @@ pub(super) struct VkCull {
     pub(super) two_pass_pool: Option<vk::DescriptorPool>,
     // Per-frame second indirect draw-command buffers `Cull2` writes and `Main2`
     // consumes. Device-local.
-    pub(super) indirect_buffers2: Vec<vk::Buffer>,
-    pub(super) indirect_buffer2_memories: Vec<vk::DeviceMemory>,
+    pub(super) indirect_buffers2: Vec<PooledBuffer>,
     // Phase-1 / phase-2 main render passes (render-pass-compatible with the
     // main-pass `framebuffers`).
     pub(super) main_render_pass_phase1: Option<vk::RenderPass>,
@@ -650,8 +571,7 @@ pub(super) struct VkCull {
     pub(super) shadow_cull_sets: Vec<Vec<vk::DescriptorSet>>,
     pub(super) shadow_bindless_pipeline: Option<vk::Pipeline>,
     pub(super) shadow_bindless_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) shadow_indirect_buffers: Vec<Vec<vk::Buffer>>,
-    pub(super) shadow_indirect_buffer_memories: Vec<Vec<vk::DeviceMemory>>,
+    pub(super) shadow_indirect_buffers: Vec<Vec<PooledBuffer>>,
     // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
     // reads `model` + `roughness` from the GpuObjectData SSBO (gl_InstanceIndex)
     // and the previous-frame model from `prev_model_buffers`; the velocity history
@@ -666,9 +586,7 @@ pub(super) struct VkCull {
     pub(super) gbuffer_bindless_pipeline_layout: Option<vk::PipelineLayout>,
     pub(super) gbuffer_set_layout: Option<vk::DescriptorSetLayout>,
     pub(super) gbuffer_sets: Vec<vk::DescriptorSet>,
-    pub(super) prev_model_buffers: Vec<vk::Buffer>,
-    pub(super) prev_model_memories: Vec<vk::DeviceMemory>,
-    pub(super) prev_model_ptrs: Vec<*mut u8>,
+    pub(super) prev_model_buffers: Vec<PooledBuffer>,
 }
 
 impl VkCull {
@@ -695,12 +613,6 @@ impl VkCull {
             }
             if let Some(sl) = self.bindless_set_layout {
                 device.destroy_descriptor_set_layout(sl, None);
-            }
-            for &buf in &self.object_buffers {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in &self.object_buffer_memories {
-                device.free_memory(mem, None);
             }
             if let Some(p) = self.cull_pipeline {
                 device.destroy_pipeline(p, None);
@@ -741,30 +653,6 @@ impl VkCull {
             if let Some(pl) = self.shadow_bindless_pipeline_layout {
                 device.destroy_pipeline_layout(pl, None);
             }
-            for &buf in self.shadow_indirect_buffers.iter().flatten() {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in self.shadow_indirect_buffer_memories.iter().flatten() {
-                device.free_memory(mem, None);
-            }
-            for &buf in self
-                .draw_args_buffers
-                .iter()
-                .chain(self.indirect_buffers.iter())
-                .chain(self.cull_status_buffers.iter())
-                .chain(self.indirect_buffers2.iter())
-            {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in self
-                .draw_args_buffer_memories
-                .iter()
-                .chain(self.indirect_buffer_memories.iter())
-                .chain(self.cull_status_buffer_memories.iter())
-                .chain(self.indirect_buffer2_memories.iter())
-            {
-                device.free_memory(mem, None);
-            }
             // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` are freed
             // with the shared descriptor pool, so only the pipeline, layout, set
             // layout, and the per-frame prev_model buffers are destroyed here.
@@ -777,13 +665,14 @@ impl VkCull {
             if let Some(sl) = self.gbuffer_set_layout {
                 device.destroy_descriptor_set_layout(sl, None);
             }
-            for &buf in &self.prev_model_buffers {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in &self.prev_model_memories {
-                device.free_memory(mem, None);
-            }
         }
+        self.object_buffers.clear();
+        self.draw_args_buffers.clear();
+        self.indirect_buffers.clear();
+        self.cull_status_buffers.clear();
+        self.indirect_buffers2.clear();
+        self.shadow_indirect_buffers.clear();
+        self.prev_model_buffers.clear();
     }
 }
 
@@ -886,25 +775,19 @@ impl VkCommands {
 pub(super) struct VkUniforms {
     // Per-frame-in-flight `ViewUniforms` UBO (camera + IBL params), persistently
     // mapped. `record_frame` memcpys this frame's view into `view_ubo_ptrs`.
-    pub(super) view_ubo_buffers: Vec<vk::Buffer>,
-    pub(super) view_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(super) view_ubo_ptrs: Vec<*mut u8>,
+    pub(super) view_ubo_buffers: Vec<PooledBuffer>,
     // Per-frame-in-flight `ProbeSet` UBO (reflection-probe count + per-probe
     // parallax boxes), bound at global set 0 binding 7, persistently mapped.
     // `record_frame` memcpys `self.probe_set` into `probe_set_ubo_ptrs` each
     // frame; it stays `EMPTY` (count 0 = sky reflection) until a probe bakes.
-    pub(super) probe_set_ubo_buffers: Vec<vk::Buffer>,
-    pub(super) probe_set_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(super) probe_set_ubo_ptrs: Vec<*mut u8>,
+    pub(super) probe_set_ubo_buffers: Vec<PooledBuffer>,
     // Single `LightUniforms` UBO, uploaded once at init and bound into every
     // object descriptor set.
-    pub(super) light_ubo: vk::Buffer,
-    pub(super) light_ubo_memory: vk::DeviceMemory,
+    pub(super) light_ubo: PooledBuffer,
     // Single per-scene local-light storage buffer (SSBO), uploaded once at init
     // and bound at global set 0 binding 9. Static like `light_ubo` (never
     // rewritten per-frame).
-    pub(super) local_light_buffer: vk::Buffer,
-    pub(super) local_light_memory: vk::DeviceMemory,
+    pub(super) local_light_buffer: PooledBuffer,
     // Byte size of `local_light_buffer`, kept so passes that rebind the global
     // set from `ctx` (probe bake) can set the SSBO descriptor range without the
     // original `local_lights` slice.
@@ -918,33 +801,13 @@ pub(super) struct VkUniforms {
 }
 
 impl VkUniforms {
-    // Destroy the per-frame view UBOs (unmapping first) + the light UBO + the
-    // local-light SSBO. Called from `VkContext::drop` after `wait_idle`.
-    pub(super) fn destroy(&self, device: &Device) {
-        unsafe {
-            for (&buf, &mem) in self
-                .view_ubo_buffers
-                .iter()
-                .zip(self.view_ubo_memories.iter())
-            {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for (&buf, &mem) in self
-                .probe_set_ubo_buffers
-                .iter()
-                .zip(self.probe_set_ubo_memories.iter())
-            {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            device.destroy_buffer(self.light_ubo, None);
-            device.free_memory(self.light_ubo_memory, None);
-            device.destroy_buffer(self.local_light_buffer, None);
-            device.free_memory(self.local_light_memory, None);
-        }
+    // Drop the per-frame view UBOs, the light UBO, and the local-light SSBO
+    // (they retire through the allocator).
+    pub(super) fn destroy(&mut self) {
+        self.view_ubo_buffers.clear();
+        self.probe_set_ubo_buffers.clear();
+        self.light_ubo = PooledBuffer::null();
+        self.local_light_buffer = PooledBuffer::null();
     }
 }
 
@@ -1536,7 +1399,6 @@ pub struct VkContext {
     pub(super) probe_converting: Option<super::probe::ConvertingBake>,
 
     // Deferred buffer destruction (text transient buffers)
-    pub(super) deferred_destroy: RefCell<Vec<DeferredBuffer>>,
 
     // Stall-free texture streaming. A streamed slot swap replaces
     // `textures[slot]` immediately but cannot rewrite the per-frame bindless
@@ -1820,21 +1682,7 @@ impl VkContext {
             },
         });
 
-        // Destroy transient text buffers from this slot's previous submission.
-        // The fence wait above guarantees that command buffer has completed,
-        // so its referenced buffers are no longer in use. Buffers belonging to
-        // the *other* in-flight slot may still be executing, so leave them.
-        {
-            let mut deferred = self.deferred_destroy.borrow_mut();
-            let mut i = 0;
-            while i < deferred.len() {
-                if deferred[i].frame == frame {
-                    deferred.swap_remove(i).destroy(device);
-                } else {
-                    i += 1;
-                }
-            }
-        }
+        {}
 
         // Acquire swapchain image.
         let acquire = unsafe {
@@ -2189,13 +2037,7 @@ impl VkContext {
         }
         self.uniforms.light_uniforms.ambient_intensity = value;
         self.wait_idle();
-        if let Err(e) = super::draw::upload_light_uniforms(
-            &self.device,
-            self.uniforms.light_ubo_memory,
-            &self.uniforms.light_uniforms,
-        ) {
-            tracing::warn!("set_ambient_intensity: re-upload light uniforms failed: {e}");
-        }
+        super::draw::upload_light_uniforms(&self.uniforms.light_ubo, &self.uniforms.light_uniforms);
     }
 
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
@@ -2363,11 +2205,6 @@ impl Drop for VkContext {
             rendering.destroy(device, self.commands.command_pool);
         }
 
-        // Deferred text buffers.
-        for db in self.deferred_destroy.borrow().iter() {
-            db.destroy(device);
-        }
-
         // Parked streamed-texture retires (`wait_idle` above covered them).
         self.drain_stream_retires();
 
@@ -2387,8 +2224,8 @@ impl Drop for VkContext {
         self.area_light.destroy(device);
 
         // IBL cubes + cube sampler.
-        self.env_map.irradiance.destroy(device);
-        self.env_map.prefilter.destroy(device);
+        self.env_map.irradiance = GpuImage::null();
+        self.env_map.prefilter = GpuImage::null();
         unsafe { device.destroy_sampler(self.cube_sampler, None) };
 
         // Pipelines.
@@ -2410,8 +2247,8 @@ impl Drop for VkContext {
         self.cull.destroy(device);
         self.light_cull.destroy(device);
 
-        // Composite pass resources.
-        self.color_lut.destroy(device);
+        // Composite pass resources (the LUT retires through the allocator).
+        self.color_lut = GpuImage::null();
         unsafe {
             device.destroy_pipeline(self.composite_pipeline, None);
             device.destroy_pipeline_layout(self.composite_pipeline_layout, None);
@@ -2433,95 +2270,95 @@ impl Drop for VkContext {
         }
 
         // TAA resources (velocity + history passes, pipelines, targets, UBOs).
-        if let Some(taa) = &mut self.taa {
+        if let Some(mut taa) = self.taa.take() {
             taa.destroy(device);
         }
 
         // SSAO resources (pre-pass + kernel + blur). The blur framebuffer
         // references the pool's `ao_output` view, so SSAO is torn down before
         // the transient pool below (framebuffers before their views).
-        if let Some(ssao) = &mut self.ssao {
+        if let Some(mut ssao) = self.ssao.take() {
             ssao.destroy(device);
         }
-        self.ssao_white.destroy(device);
+        self.ssao_white = GpuImage::null();
 
         // Transient image pool (the graph-owned transients, e.g. `ao_output`).
         self.transient_pool.destroy(device);
 
         // SSR resources (pre-pass + resolve).
-        if let Some(ssr) = &mut self.ssr {
+        if let Some(mut ssr) = self.ssr.take() {
             ssr.destroy(device);
         }
 
         // Reflection composite (roughness blur + composite of the SSR/RT output).
-        if let Some(rc) = &mut self.reflection_composite {
+        if let Some(mut rc) = self.reflection_composite.take() {
             rc.destroy(device);
         }
 
         // SSGI resources (gather + composite).
-        if let Some(ssgi) = &mut self.ssgi {
+        if let Some(mut ssgi) = self.ssgi.take() {
             ssgi.destroy(device);
         }
 
         // Unified G-buffer pre-pass resources (per-frame MRT + pipelines + UBOs).
-        if let Some(gb) = &mut self.gbuffer {
+        if let Some(mut gb) = self.gbuffer.take() {
             gb.destroy(device);
         }
 
         // Hardware ray-traced reflection resources (the pass + the acceleration
         // structures). The pass is destroyed first (its output + pipelines), then
         // the BLAS / TLAS / scratch / geometry table.
-        if let Some(rt) = &mut self.rt_reflections {
+        if let Some(mut rt) = self.rt_reflections.take() {
             rt.destroy(device);
         }
-        if let Some(accel) = &mut self.rt_accel {
+        if let Some(mut accel) = self.rt_accel.take() {
             accel.destroy(device);
         }
 
         // Temporal upscaling (FSR / DLSS / XeSS): the vendor context + the
         // output texture, via the backend trait.
-        if let Some(up) = &mut self.upscale {
+        if let Some(mut up) = self.upscale.take() {
             up.destroy(device);
         }
 
         // Decal resources (pipeline + per-frame uniforms + per-decal sets).
-        if let Some(decals) = &mut self.decals_state {
+        if let Some(mut decals) = self.decals_state.take() {
             decals.destroy(device);
         }
 
         // Line resources (pipeline + per-frame uniforms + vertex buffers +
         // framebuffers). Only present once a frame published lines.
-        if let Some(lines) = &mut self.lines.resources {
+        if let Some(mut lines) = self.lines.resources.take() {
             lines.destroy(device);
         }
 
         // Volumetric-fog resources (pipeline + per-frame uniforms).
-        if let Some(fog) = &mut self.fog_resources {
+        if let Some(mut fog) = self.fog_resources.take() {
             fog.destroy(device);
         }
 
         // Raymarched SDF volume resources (per-volume pipelines + UBOs, view
         // ring, descriptor pool, render passes, snapshot image).
-        if let Some(rm) = &mut self.raymarch {
+        if let Some(mut rm) = self.raymarch.take() {
             rm.destroy(device);
         }
 
         // Planar reflection resources (mirror targets + framebuffers + per-(plane,
         // frame) view ring + global sets + descriptor pool). Destroyed before glass,
         // whose per-pane sets reference the planar target views.
-        if let Some(planar) = &mut self.planar_reflection {
+        if let Some(mut planar) = self.planar_reflection.take() {
             planar.destroy(device);
         }
 
         // Glass / transparent-pass resources (pipeline, per-panel buffers +
         // UBOs, per-frame view ring, descriptor pool, render pass, framebuffers,
         // snapshot image).
-        if let Some(glass) = &mut self.glass {
+        if let Some(mut glass) = self.glass.take() {
             glass.destroy(device);
         }
 
         // Auto-exposure resources (pipelines + histogram + per-frame readbacks).
-        if let Some(ae) = &mut self.auto_exposure {
+        if let Some(mut ae) = self.auto_exposure.take() {
             ae.destroy(device);
         }
 
@@ -2532,7 +2369,7 @@ impl Drop for VkContext {
         // gone first so the upcoming pipeline destroys can't trip a
         // validation error on a still-referenced descriptor.
         self.destroy_particle_emitter_states(device);
-        if let Some(p) = &mut self.particle_resources {
+        if let Some(mut p) = self.particle_resources.take() {
             p.destroy(device);
         }
 
@@ -2563,10 +2400,10 @@ impl Drop for VkContext {
         self.descriptors.destroy(device);
 
         // Geometry.
-        self.geometry.destroy(device);
+        self.geometry.destroy();
 
         // UBOs (per-frame view + shared light).
-        self.uniforms.destroy(device);
+        self.uniforms.destroy();
 
         // Samplers.
         unsafe {
@@ -2574,20 +2411,12 @@ impl Drop for VkContext {
             device.destroy_sampler(self.text_sampler, None);
         }
 
-        // Scene textures.
-        for t in &self.textures {
-            t.destroy(device);
-        }
-        for t in &self.normal_map_textures {
-            t.destroy(device);
-        }
-        for t in &self.text_atlas_textures {
-            t.destroy(device);
-        }
-        // Baked reflection-probe cubes (empty until the capture pass bakes).
-        for t in &self.probe_maps {
-            t.destroy(device);
-        }
+        // Scene textures + baked reflection-probe cubes: dropping them retires
+        // them through the allocator.
+        self.textures.clear();
+        self.normal_map_textures.clear();
+        self.text_atlas_textures.clear();
+        self.probe_maps.clear();
 
         // Device allocator: destroy every handle its dropped leases queued and
         // free the blocks. After every pooled holder above so all leases have

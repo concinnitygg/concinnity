@@ -86,9 +86,8 @@ impl VkContext {
         if gbuffer_needed && self.gbuffer.is_none() {
             let gb = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 super::post::gbuffer::GbufferQueueCtx {
                     command_pool: self.commands.command_pool,
@@ -114,9 +113,8 @@ impl VkContext {
         if desired_taa && self.taa.is_none() {
             let taa = super::post::taa::TaaResources::new(
                 &super::post::taa::TaaDeviceContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    pd: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -144,9 +142,8 @@ impl VkContext {
                 .unwrap_or_else(|| crate::gfx::ssr::SsrSettings::resolve(0.0, 0.0));
             let ssr = super::post::ssr::SsrResources::new(
                 &super::post::ssr::SsrGpuContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -181,9 +178,8 @@ impl VkContext {
                 .normal_depth_views();
             let ssgi = super::post::ssgi::SsgiResources::new(
                 super::post::ssgi::SsgiDevice {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 self.render_extent.width,
                 self.render_extent.height,
@@ -210,9 +206,8 @@ impl VkContext {
                 .as_ref()
                 .expect("desired_ae implies auto-exposure settings");
             let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
-                &self.instance,
+                &self.alloc,
                 &self.device,
-                self.physical_device,
                 self.frames_in_flight,
                 &hdr_views,
                 self.linear_sampler,
@@ -237,7 +232,7 @@ impl VkContext {
         // now-Some `self.ssao`, then re-points binding 6 at the rebuilt views.
         if desired_ssao && self.ssao.is_none() {
             self.transient_pool.rebuild(
-                &super::texture::GpuUploadContext {
+                &super::transient_pool::TransientPoolGpu {
                     instance: &self.instance,
                     device: &self.device,
                     physical_device: self.physical_device,
@@ -258,9 +253,8 @@ impl VkContext {
                 .views_for_frames("ao_output", self.frames_in_flight);
             let ssao = super::post::ssao::SsaoResources::new(
                 &super::post::ssao::SsaoDeviceCtx {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 self.render_extent.width,
                 self.render_extent.height,
@@ -315,9 +309,8 @@ impl VkContext {
             let rough_views = gb.roughness_views();
             let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
                 &super::post::reflection_composite::GpuAllocContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -367,6 +360,7 @@ impl VkContext {
     ) -> Result<(), String> {
         let accel = match crate::vulkan::raytrace::build_rt_accel(
             crate::vulkan::raytrace::RtDeviceCtx {
+                alloc: &self.alloc,
                 instance: &self.instance,
                 device: &self.device,
                 pd: self.physical_device,
@@ -374,8 +368,8 @@ impl VkContext {
             self.commands.command_pool,
             self.graphics_queue,
             crate::vulkan::raytrace::RtSceneGeometry {
-                vertex_buffer: self.geometry.vertex_buffer,
-                index_buffer: self.geometry.index_buffer,
+                vertex_buffer: self.geometry.vertex_buffer.buffer(),
+                index_buffer: self.geometry.index_buffer.buffer(),
                 draw_objects: &self.draw_objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
@@ -413,17 +407,16 @@ impl VkContext {
         let bindless_pool_size = self.cull.bindless_pool_size;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuild {
-                instance: &self.instance,
+                alloc: &self.alloc,
                 device: &self.device,
-                physical_device: self.physical_device,
                 width: self.render_extent.width,
                 height: self.render_extent.height,
                 frames: self.frames_in_flight,
             },
             settings,
             super::post::rt_reflections::RtStaticInputs {
-                vertex_buffer: self.geometry.vertex_buffer,
-                index_buffer: self.geometry.index_buffer,
+                vertex_buffer: self.geometry.vertex_buffer.buffer(),
+                index_buffer: self.geometry.index_buffer.buffer(),
                 hdr_resolve_views: &hdr_views,
                 gbuffer_views: &nd_views,
                 roughness_views: &rough_views,

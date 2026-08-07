@@ -2,7 +2,6 @@
 //
 // VkContext construction: platform window creation and the one-time GPU
 // resource setup performed by VkContext::new.
-use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 
 use ash::vk;
@@ -596,6 +595,7 @@ impl VkContext {
         let upscale = if temporal_upscaling {
             let (built, resolved) = super::post::build_upscaler(
                 super::post::upscale::UpscalerGpu {
+                    alloc: &alloc,
                     instance: &instance,
                     device: &device,
                     physical_device,
@@ -657,11 +657,12 @@ impl VkContext {
         // internal-shadow path.
         let effective_shadow_size = shadow_map_size;
         let shadow_map = create_shadow_map_array(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
+            &GpuUploadContext {
+                alloc: &alloc,
+                device: &device,
+                command_pool,
+                queue: graphics_queue,
+            },
             effective_shadow_size,
             NUM_SHADOW_CASCADES as u32,
         )?;
@@ -678,20 +679,16 @@ impl VkContext {
             area_lights.clone()
         };
         let area_light_size = std::mem::size_of_val(area_light_data.as_slice()) as u64;
-        let (area_light_buffer, area_light_memory) = create_buffer(
-            &instance,
-            &device,
-            physical_device,
+        let area_light_buffer = alloc.create_buffer(
             area_light_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        upload_static_records(&device, area_light_memory, &area_light_data, "area-light")?;
+        upload_static_records(&area_light_buffer, &area_light_data);
         let ltc_size = crate::gfx::ltc::LTC_LUT_SIZE as u32;
         let ltc_upload = GpuUploadContext {
-            instance: &instance,
+            alloc: &alloc,
             device: &device,
-            physical_device,
             command_pool,
             queue: graphics_queue,
         };
@@ -714,11 +711,12 @@ impl VkContext {
         let spot_shadow_slice_size =
             crate::gfx::render_types::spot_shadow_slice_size(effective_shadow_size);
         let spot_shadow_map = create_shadow_map_array(
-            &instance,
-            &device,
-            physical_device,
-            command_pool,
-            graphics_queue,
+            &GpuUploadContext {
+                alloc: &alloc,
+                device: &device,
+                command_pool,
+                queue: graphics_queue,
+            },
             if spot_shadows.is_empty() {
                 0
             } else {
@@ -729,13 +727,12 @@ impl VkContext {
 
         //  Textures
         let gpu_textures: Vec<GpuImage> = if textures.is_empty() {
-            vec![texture::create_fallback_white(
-                &instance,
-                &device,
-                physical_device,
+            vec![texture::create_fallback_white(&GpuUploadContext {
+                alloc: &alloc,
+                device: &device,
                 command_pool,
-                graphics_queue,
-            )?]
+                queue: graphics_queue,
+            })?]
         } else {
             textures
                 .iter()
@@ -743,9 +740,8 @@ impl VkContext {
                 .map(|(i, image)| {
                     texture::upload_texture_image(
                         &GpuUploadContext {
-                            instance: &instance,
+                            alloc: &alloc,
                             device: &device,
-                            physical_device,
                             command_pool,
                             queue: graphics_queue,
                         },
@@ -760,13 +756,12 @@ impl VkContext {
         // draw with no normal map. Real normal maps are textures in
         // `gpu_textures` (the shared pool) at their own handle; only this
         // fallback lives in `normal_map_textures`, one slot past the last texture.
-        let flat_normal = texture::create_fallback_flat_normal(
-            &instance,
-            &device,
-            physical_device,
+        let flat_normal = texture::create_fallback_flat_normal(&GpuUploadContext {
+            alloc: &alloc,
+            device: &device,
             command_pool,
-            graphics_queue,
-        )?;
+            queue: graphics_queue,
+        })?;
         let gpu_normal_maps = vec![flat_normal];
 
         let gpu_text_atlases: Vec<GpuImage> = text_atlases
@@ -775,9 +770,8 @@ impl VkContext {
             .map(|(i, (w, h, px))| {
                 upload_texture(
                     &GpuUploadContext {
-                        instance: &instance,
+                        alloc: &alloc,
                         device: &device,
-                        physical_device,
                         command_pool,
                         queue: graphics_queue,
                     },
@@ -822,9 +816,8 @@ impl VkContext {
         //  Off-screen HDR attachments (one set per frame-in-flight slot)
         let (color_images, depth_images, hdr_resolve_images) = create_attachments(
             &AttachmentDeviceCtx {
-                instance: &instance,
+                alloc: &alloc,
                 device: &device,
-                pd: physical_device,
                 command_pool,
                 queue: graphics_queue,
             },
@@ -857,7 +850,7 @@ impl VkContext {
         //  framebuffers + the main pass binding 6 bind the pooled `ao_output`.
         let bloom_on = post_process.bloom_intensity > 0.0;
         let transient_pool = super::transient_pool::TransientImagePool::build(
-            &GpuUploadContext {
+            &super::transient_pool::TransientPoolGpu {
                 instance: &instance,
                 device: &device,
                 physical_device,
@@ -877,9 +870,8 @@ impl VkContext {
         //  Bloom chain (per frame-in-flight slot)
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
             &BloomDeviceContext {
-                instance: &instance,
+                alloc: &alloc,
                 device: &device,
-                physical_device,
                 command_pool,
                 queue: graphics_queue,
             },
@@ -899,19 +891,17 @@ impl VkContext {
         //  device carries the acceleration-structure / storage usage here even
         //  when RT is off at launch. Inert when RT is never built.
         let rt_geo_usage = super::resources::shared_geometry_usage(rt_capable);
-        let (vertex_buffer, vertex_buffer_memory) = upload_geometry_buffer(
-            &instance,
+        let vertex_buffer = upload_geometry_buffer(
+            &alloc,
             &device,
-            physical_device,
             command_pool,
             graphics_queue,
             vertices,
             vk::BufferUsageFlags::VERTEX_BUFFER | rt_geo_usage,
         )?;
-        let (index_buffer, index_buffer_memory) = upload_geometry_buffer(
-            &instance,
+        let index_buffer = upload_geometry_buffer(
+            &alloc,
             &device,
-            physical_device,
             command_pool,
             graphics_queue,
             indices,
@@ -936,25 +926,12 @@ impl VkContext {
             (local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64;
 
         let mut view_ubo_buffers = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                &instance,
-                &device,
-                physical_device,
+            view_ubo_buffers.push(alloc.create_buffer(
                 view_ubo_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe {
-                device
-                    .map_memory(mem, 0, view_ubo_size, vk::MemoryMapFlags::empty())
-                    .map_err(|e| format!("map view ubo: {e}"))? as *mut u8
-            };
-            view_ubo_buffers.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
+            )?);
         }
 
         // Per-frame `ProbeSet` UBO ring (global set 0 binding 7): the
@@ -962,31 +939,15 @@ impl VkContext {
         // `record_frame` writes `self.probe_set` here each frame.
         let probe_set_ubo_size = std::mem::size_of::<super::probe_uniforms::ProbeSet>() as u64;
         let mut probe_set_ubo_buffers = Vec::with_capacity(frames);
-        let mut probe_set_ubo_memories = Vec::with_capacity(frames);
-        let mut probe_set_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                &instance,
-                &device,
-                physical_device,
+            probe_set_ubo_buffers.push(alloc.create_buffer(
                 probe_set_ubo_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe {
-                device
-                    .map_memory(mem, 0, probe_set_ubo_size, vk::MemoryMapFlags::empty())
-                    .map_err(|e| format!("map probe set ubo: {e}"))? as *mut u8
-            };
-            probe_set_ubo_buffers.push(buf);
-            probe_set_ubo_memories.push(mem);
-            probe_set_ubo_ptrs.push(ptr);
+            )?);
         }
 
-        let (light_ubo, light_ubo_memory) = create_buffer(
-            &instance,
-            &device,
-            physical_device,
+        let light_ubo = alloc.create_buffer(
             light_ubo_size,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -998,31 +959,15 @@ impl VkContext {
         // texel-snap quantum, so an aliased read samples that cascade with the
         // jumped VP against depth rasterized with the old one.
         let mut shadow_ubos = Vec::with_capacity(frames);
-        let mut shadow_ubo_memories = Vec::with_capacity(frames);
-        let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                &instance,
-                &device,
-                physical_device,
+            shadow_ubos.push(alloc.create_buffer(
                 shadow_ubo_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe {
-                device
-                    .map_memory(mem, 0, shadow_ubo_size, vk::MemoryMapFlags::empty())
-                    .map_err(|e| format!("map shadow ubo: {e}"))? as *mut u8
-            };
-            shadow_ubos.push(buf);
-            shadow_ubo_memories.push(mem);
-            shadow_ubo_ptrs.push(ptr);
+            )?);
         }
         // Static per-scene local-light SSBO; uploaded once below, never per-frame.
-        let (local_light_buffer, local_light_memory) = create_buffer(
-            &instance,
-            &device,
-            physical_device,
+        let local_light_buffer = alloc.create_buffer(
             local_light_buffer_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -1053,12 +998,12 @@ impl VkContext {
             [1.0, 1.0, 1.0]
         };
         let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
-        for &ptr in &shadow_ubo_ptrs {
-            upload_shadow_uniforms(ptr, &shadow_uniforms);
+        for ubo in &shadow_ubos {
+            upload_shadow_uniforms(ubo.mapped_ptr(), &shadow_uniforms);
         }
-        upload_light_uniforms(&device, light_ubo_memory, &light_uniforms)?;
+        upload_light_uniforms(&light_ubo, &light_uniforms);
         // Empty scene keeps the 1-element placeholder (nothing copied in).
-        upload_static_records(&device, local_light_memory, &local_lights, "local-light")?;
+        upload_static_records(&local_light_buffer, &local_lights);
 
         // Clustered light binning. The per-cluster list + `ClusterParams` buffers
         // are always allocated (the forward shaders reference bindings 10 + 11
@@ -1066,11 +1011,10 @@ impl VkContext {
         // built only when the world has local lights to bin, which is also what
         // gates the `LightCull` graph node.
         let light_cull = super::light_cull::build_light_cull(
-            &instance,
+            &alloc,
             &device,
-            physical_device,
             frames,
-            local_light_buffer,
+            local_light_buffer.buffer(),
             local_light_buffer_size,
             !local_lights.is_empty(),
             hot_reload,
@@ -1083,9 +1027,8 @@ impl VkContext {
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
                 &GpuUploadContext {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                     command_pool,
                     queue: graphics_queue,
                 },
@@ -1097,19 +1040,21 @@ impl VkContext {
         } else {
             EnvironmentMapTextures {
                 irradiance: texture::create_fallback_cubemap(
-                    &instance,
-                    &device,
-                    physical_device,
-                    command_pool,
-                    graphics_queue,
+                    &GpuUploadContext {
+                        alloc: &alloc,
+                        device: &device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
                     [0.05, 0.05, 0.05, 1.0],
                 )?,
                 prefilter: texture::create_fallback_cubemap(
-                    &instance,
-                    &device,
-                    physical_device,
-                    command_pool,
-                    graphics_queue,
+                    &GpuUploadContext {
+                        alloc: &alloc,
+                        device: &device,
+                        command_pool,
+                        queue: graphics_queue,
+                    },
                     [0.05, 0.05, 0.05, 1.0],
                 )?,
                 prefilter_mip_count: 0,
@@ -1123,22 +1068,22 @@ impl VkContext {
             let (size, data) = crate::build::color_lut::deserialise(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
             upload_color_lut(
-                &instance,
-                &device,
-                physical_device,
-                command_pool,
-                graphics_queue,
+                &GpuUploadContext {
+                    alloc: &alloc,
+                    device: &device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
                 size,
                 data,
             )?
         } else {
-            create_fallback_color_lut(
-                &instance,
-                &device,
-                physical_device,
+            create_fallback_color_lut(&GpuUploadContext {
+                alloc: &alloc,
+                device: &device,
                 command_pool,
-                graphics_queue,
-            )?
+                queue: graphics_queue,
+            })?
         };
 
         //  Descriptor set layouts
@@ -1505,6 +1450,7 @@ impl VkContext {
         // so the main pass's bindings 12/13 are always valid.
         let spot_shadow =
             super::spot_shadow::build_spot_shadow(super::spot_shadow::SpotShadowBuild {
+                alloc: &alloc,
                 instance: &instance,
                 device: &device,
                 physical_device,
@@ -1579,22 +1525,20 @@ impl VkContext {
         //  SSAO (GTAO): pre-pass + kernel + blur, plus a 1×1 white fallback
         //  that is always bound at set 0 binding 6 when SSAO is off so the
         //  main pass's `ambient *= ao` multiplier collapses to a pass-through.
-        let ssao_white = texture::create_fallback_white(
-            &instance,
-            &device,
-            physical_device,
+        let ssao_white = texture::create_fallback_white(&GpuUploadContext {
+            alloc: &alloc,
+            device: &device,
             command_pool,
-            graphics_queue,
-        )?;
+            queue: graphics_queue,
+        })?;
         // The transient image pool was built above (before the bloom chain); it
         // already holds this frame's pooled `ao_output` views when SSAO is on.
         let ssao_opt = if let Some(settings) = ssao_settings {
             let ao_views = transient_pool.views_for_frames("ao_output", frames);
             Some(super::post::ssao::SsaoResources::new(
                 &super::post::ssao::SsaoDeviceCtx {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                 },
                 render_extent.width,
                 render_extent.height,
@@ -1637,9 +1581,8 @@ impl VkContext {
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(super::post::ssr::SsrResources::new(
                 &super::post::ssr::SsrGpuContext {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                     command_pool,
                     queue: graphics_queue,
                 },
@@ -1673,9 +1616,8 @@ impl VkContext {
         let gbuffer_opt = if ssr_opt.is_some() || ssao_opt.is_some() || taa_enabled {
             Some(super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                 },
                 super::post::gbuffer::GbufferQueueCtx {
                     command_pool,
@@ -1718,9 +1660,8 @@ impl VkContext {
                 hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(super::post::ssgi::SsgiResources::new(
                 super::post::ssgi::SsgiDevice {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                 },
                 render_extent.width,
                 render_extent.height,
@@ -1897,15 +1838,15 @@ impl VkContext {
         // Update global sets.
         for (i, &set) in global_sets.iter().enumerate() {
             let view_info = vk::DescriptorBufferInfo::default()
-                .buffer(view_ubo_buffers[i])
+                .buffer(view_ubo_buffers[i].buffer())
                 .offset(0)
                 .range(view_ubo_size);
             let light_info = vk::DescriptorBufferInfo::default()
-                .buffer(light_ubo)
+                .buffer(light_ubo.buffer())
                 .offset(0)
                 .range(light_ubo_size);
             let shadow_info = vk::DescriptorBufferInfo::default()
-                .buffer(shadow_ubos[i])
+                .buffer(shadow_ubos[i].buffer())
                 .offset(0)
                 .range(shadow_ubo_size);
             // Layout must match the post-cascade transition in draw.rs, which
@@ -1921,11 +1862,11 @@ impl VkContext {
                 .image_view(spot_shadow.map.view)
                 .sampler(shadow_sampler);
             let spot_shadow_data_info = vk::DescriptorBufferInfo::default()
-                .buffer(spot_shadow.data_buffer)
+                .buffer(spot_shadow.data_buffer.buffer())
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             let area_light_info = vk::DescriptorBufferInfo::default()
-                .buffer(area_light_buffer)
+                .buffer(area_light_buffer.buffer())
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             let ltc_matrix_info = vk::DescriptorImageInfo::default()
@@ -1957,23 +1898,23 @@ impl VkContext {
                 .sampler(linear_sampler);
             // ProbeSet UBO (binding 7): this frame's reflection-probe set.
             let probe_set_info = vk::DescriptorBufferInfo::default()
-                .buffer(probe_set_ubo_buffers[i])
+                .buffer(probe_set_ubo_buffers[i].buffer())
                 .offset(0)
                 .range(probe_set_ubo_size);
             // Local-light SSBO (binding 9): the single static buffer, bound into
             // every frame's global set.
             let local_light_info = vk::DescriptorBufferInfo::default()
-                .buffer(local_light_buffer)
+                .buffer(local_light_buffer.buffer())
                 .offset(0)
                 .range(local_light_buffer_size);
             // Clustered lighting: this frame's live ClusterParams (binding 10)
             // and the shared per-cluster light lists (binding 11).
             let cluster_params_info = vk::DescriptorBufferInfo::default()
-                .buffer(light_cull.params_buffers[i])
+                .buffer(light_cull.params_buffers[i].buffer())
                 .offset(0)
                 .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
             let cluster_list_info = vk::DescriptorBufferInfo::default()
-                .buffer(light_cull.cluster_buffer)
+                .buffer(light_cull.cluster_buffer.buffer())
                 .offset(0)
                 .range(super::light_cull::cluster_list_size());
             // Probe cube array (binding 8): every slot points at the IBL prefilter
@@ -2094,7 +2035,7 @@ impl VkContext {
             alloc_descriptor_sets(&device, descriptor_pool, &shadow_global_layouts)?;
         for (i, &set) in shadow_global_sets.iter().enumerate() {
             let su_info = vk::DescriptorBufferInfo::default()
-                .buffer(shadow_ubos[i])
+                .buffer(shadow_ubos[i].buffer())
                 .offset(0)
                 .range(shadow_ubo_size);
             let write = vk::WriteDescriptorSet::default()
@@ -2160,8 +2101,6 @@ impl VkContext {
             bindless_set_layout,
             bindless_sets,
             object_buffers,
-            object_buffer_memories,
-            object_buffer_ptrs,
             bindless_main_spv,
         ) = if bindless_active {
             let set_bindings = [
@@ -2225,26 +2164,12 @@ impl VkContext {
             let object_buffer_size =
                 (n_cull * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>()) as u64;
             let mut buffers = Vec::with_capacity(frames);
-            let mut memories = Vec::with_capacity(frames);
-            let mut ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let (buf, mem) = create_buffer(
-                    &instance,
-                    &device,
-                    physical_device,
+                buffers.push(alloc.create_buffer(
                     object_buffer_size,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?;
-                let ptr = unsafe {
-                    device
-                        .map_memory(mem, 0, object_buffer_size, vk::MemoryMapFlags::empty())
-                        .map_err(|e| format!("map object buffer: {e}"))?
-                        as *mut u8
-                };
-                buffers.push(buf);
-                memories.push(mem);
-                ptrs.push(ptr);
+                )?);
             }
 
             // One bindless set per frame: binding 0 = that frame's SSBO,
@@ -2263,7 +2188,7 @@ impl VkContext {
                 .collect();
             for (i, &set) in sets.iter().enumerate() {
                 let buf_info = vk::DescriptorBufferInfo::default()
-                    .buffer(buffers[i])
+                    .buffer(buffers[i].buffer())
                     .offset(0)
                     .range(object_buffer_size);
                 let writes = [
@@ -2288,8 +2213,6 @@ impl VkContext {
                 Some(set_layout),
                 sets,
                 buffers,
-                memories,
-                ptrs,
                 (bvs, bfs),
             )
         } else {
@@ -2297,8 +2220,6 @@ impl VkContext {
                 None,
                 None,
                 None,
-                Vec::new(),
-                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 (Vec::new(), Vec::new()),
@@ -2355,6 +2276,7 @@ impl VkContext {
         let (rt_accel_opt, rt_opt) = if rt_wanted {
             match crate::vulkan::raytrace::build_rt_accel(
                 crate::vulkan::raytrace::RtDeviceCtx {
+                    alloc: &alloc,
                     instance: &instance,
                     device: &device,
                     pd: physical_device,
@@ -2362,8 +2284,8 @@ impl VkContext {
                 command_pool,
                 graphics_queue,
                 crate::vulkan::raytrace::RtSceneGeometry {
-                    vertex_buffer,
-                    index_buffer,
+                    vertex_buffer: vertex_buffer.buffer(),
+                    index_buffer: index_buffer.buffer(),
                     draw_objects: &draw_objects,
                     clusters: &instanced_clusters,
                     albedo_count: gpu_textures.len(),
@@ -2387,17 +2309,16 @@ impl VkContext {
                     let (geom_buffer, geom_size) = accel.geom_table();
                     match super::post::rt_reflections::RtReflectionsResources::new(
                         super::post::rt_reflections::RtBuild {
-                            instance: &instance,
+                            alloc: &alloc,
                             device: &device,
-                            physical_device,
                             width: render_extent.width,
                             height: render_extent.height,
                             frames,
                         },
                         rt_settings.expect("rt_wanted implies rt_settings is Some"),
                         super::post::rt_reflections::RtStaticInputs {
-                            vertex_buffer,
-                            index_buffer,
+                            vertex_buffer: vertex_buffer.buffer(),
+                            index_buffer: index_buffer.buffer(),
                             hdr_resolve_views: &hdr_views,
                             gbuffer_views: &nd_views,
                             roughness_views: &rough_views,
@@ -2469,9 +2390,8 @@ impl VkContext {
             Some(
                 super::post::reflection_composite::ReflectionCompositeResources::new(
                     &super::post::reflection_composite::GpuAllocContext {
-                        instance: &instance,
+                        alloc: &alloc,
                         device: &device,
-                        physical_device,
                         command_pool,
                         queue: graphics_queue,
                     },
@@ -2497,25 +2417,19 @@ impl VkContext {
         // present so the phase-1 kernel always has a valid binding; under
         // single-pass occlusion the values are simply never read. Device-local.
         // Mirrors `directx/cull.rs`.
-        let (cull_status_buffers, cull_status_buffer_memories) = if bindless_active {
+        let cull_status_buffers = if bindless_active {
             let status_size = n_cull as u64 * std::mem::size_of::<u32>() as u64;
             let mut bufs = Vec::with_capacity(frames);
-            let mut mems = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let (buf, mem) = create_buffer(
-                    &instance,
-                    &device,
-                    physical_device,
+                bufs.push(alloc.create_buffer(
                     status_size,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                )?;
-                bufs.push(buf);
-                mems.push(mem);
+                )?);
             }
-            (bufs, mems)
+            bufs
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
 
         // Compute cull: the cull compute pipeline + per-frame draw-args /
@@ -2528,11 +2442,8 @@ impl VkContext {
             Option<vk::PipelineLayout>,
             Option<vk::DescriptorSetLayout>,
             Vec<vk::DescriptorSet>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Vec<*mut u8>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
+            Vec<super::allocator::PooledBuffer>,
+            Vec<super::allocator::PooledBuffer>,
             Option<crate::vulkan::hiz::HiZResources>,
         );
         let (
@@ -2541,10 +2452,7 @@ impl VkContext {
             cull_set_layout,
             cull_sets,
             draw_args_buffers,
-            draw_args_buffer_memories,
-            draw_args_buffer_ptrs,
             indirect_buffers,
-            indirect_buffer_memories,
             hiz,
         ): CullPipelineResources = if bindless_active {
             // Set 0: object SSBO + draw-args SSBO + indirect-command SSBO +
@@ -2622,39 +2530,18 @@ impl VkContext {
                 * n
                 * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
             let mut da_buffers = Vec::with_capacity(frames);
-            let mut da_memories = Vec::with_capacity(frames);
-            let mut da_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
             let mut ind_buffers = Vec::with_capacity(frames);
-            let mut ind_memories = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let (da_buf, da_mem) = create_buffer(
-                    &instance,
-                    &device,
-                    physical_device,
+                da_buffers.push(alloc.create_buffer(
                     draw_args_size,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?;
-                let da_ptr = unsafe {
-                    device
-                        .map_memory(da_mem, 0, draw_args_size, vk::MemoryMapFlags::empty())
-                        .map_err(|e| format!("map draw args buffer: {e}"))?
-                        as *mut u8
-                };
-                da_buffers.push(da_buf);
-                da_memories.push(da_mem);
-                da_ptrs.push(da_ptr);
-
-                let (ind_buf, ind_mem) = create_buffer(
-                    &instance,
-                    &device,
-                    physical_device,
+                )?);
+                ind_buffers.push(alloc.create_buffer(
                     indirect_size,
                     vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                )?;
-                ind_buffers.push(ind_buf);
-                ind_memories.push(ind_mem);
+                )?);
             }
 
             // One cull set per frame: that frame's object / draw-args /
@@ -2663,19 +2550,19 @@ impl VkContext {
             let sets = alloc_descriptor_sets(&device, descriptor_pool, &set_layouts)?;
             for (i, &set) in sets.iter().enumerate() {
                 let obj_info = vk::DescriptorBufferInfo::default()
-                    .buffer(object_buffers[i])
+                    .buffer(object_buffers[i].buffer())
                     .offset(0)
                     .range(object_buffer_size);
                 let arg_info = vk::DescriptorBufferInfo::default()
-                    .buffer(da_buffers[i])
+                    .buffer(da_buffers[i].buffer())
                     .offset(0)
                     .range(draw_args_size);
                 let cmd_info = vk::DescriptorBufferInfo::default()
-                    .buffer(ind_buffers[i])
+                    .buffer(ind_buffers[i].buffer())
                     .offset(0)
                     .range(indirect_size);
                 let status_info = vk::DescriptorBufferInfo::default()
-                    .buffer(cull_status_buffers[i])
+                    .buffer(cull_status_buffers[i].buffer())
                     .offset(0)
                     .range(n * std::mem::size_of::<u32>() as u64);
                 let writes = [
@@ -2709,25 +2596,11 @@ impl VkContext {
                 Some(set_layout),
                 sets,
                 da_buffers,
-                da_memories,
-                da_ptrs,
                 ind_buffers,
-                ind_memories,
                 Some(hiz),
             )
         } else {
-            (
-                None,
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                None,
-            )
+            (None, None, None, Vec::new(), Vec::new(), Vec::new(), None)
         };
 
         // GPU-driven instanced merge: write each instance's `GpuObjectData`
@@ -2739,7 +2612,7 @@ impl VkContext {
         // bindless cull buffers exist (the bindless pass is active with build-time
         // geometry) and the world declares instanced props. Mirrors
         // `directx/init/mod.rs`.
-        if n_instances > 0 && !object_buffer_ptrs.is_empty() {
+        if n_instances > 0 && !object_buffers.is_empty() {
             use crate::gfx::render_types::{
                 GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
             };
@@ -2762,7 +2635,8 @@ impl VkContext {
             let n_objects = draw_objects.len();
             let obj_stride = std::mem::size_of::<GpuObjectData>();
             let da_stride = std::mem::size_of::<GpuDrawArgs>();
-            for (obj_ptr, da_ptr) in object_buffer_ptrs.iter().zip(draw_args_buffer_ptrs.iter()) {
+            for (obj_buf, da_buf) in object_buffers.iter().zip(draw_args_buffers.iter()) {
+                let (obj_ptr, da_ptr) = (obj_buf.mapped_ptr(), da_buf.mapped_ptr());
                 // SAFETY: the buffers were sized for `n_objects + n_instances`
                 // records, so writing `records.len()` past the `n_objects` offset
                 // stays in bounds.
@@ -2797,8 +2671,7 @@ impl VkContext {
             Vec<Vec<vk::DescriptorSet>>,
             Option<vk::Pipeline>,
             Option<vk::PipelineLayout>,
-            Vec<Vec<vk::Buffer>>,
-            Vec<Vec<vk::DeviceMemory>>,
+            Vec<Vec<super::allocator::PooledBuffer>>,
         );
         let (
             shadow_cull_pipeline,
@@ -2808,7 +2681,6 @@ impl VkContext {
             shadow_bindless_pipeline,
             shadow_bindless_pipeline_layout,
             shadow_indirect_buffers,
-            shadow_indirect_buffer_memories,
         ): ShadowCullResources = if bindless_active
             && shadow_pipeline_opt.is_some()
             && let Some(bl_set_layout) = bindless_set_layout
@@ -2878,38 +2750,32 @@ impl VkContext {
             let draw_args_size =
                 n * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>() as u64;
             let indirect_size = n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
-            let mut sc_indirect_bufs: Vec<Vec<vk::Buffer>> = Vec::with_capacity(frames);
-            let mut sc_indirect_mems: Vec<Vec<vk::DeviceMemory>> = Vec::with_capacity(frames);
+            let mut sc_indirect_bufs: Vec<Vec<super::allocator::PooledBuffer>> =
+                Vec::with_capacity(frames);
             let mut sc_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
             for f in 0..frames {
                 let mut bufs = Vec::with_capacity(cascades);
-                let mut mems = Vec::with_capacity(cascades);
                 for _ in 0..cascades {
-                    let (buf, mem) = create_buffer(
-                        &instance,
-                        &device,
-                        physical_device,
+                    bufs.push(alloc.create_buffer(
                         indirect_size,
                         vk::BufferUsageFlags::STORAGE_BUFFER
                             | vk::BufferUsageFlags::INDIRECT_BUFFER,
                         vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    )?;
-                    bufs.push(buf);
-                    mems.push(mem);
+                    )?);
                 }
                 let set_layouts: Vec<_> = (0..cascades).map(|_| sc_set_layout).collect();
                 let sets = alloc_descriptor_sets(&device, descriptor_pool, &set_layouts)?;
                 for (c, &set) in sets.iter().enumerate() {
                     let obj_info = vk::DescriptorBufferInfo::default()
-                        .buffer(object_buffers[f])
+                        .buffer(object_buffers[f].buffer())
                         .offset(0)
                         .range(object_buffer_size);
                     let arg_info = vk::DescriptorBufferInfo::default()
-                        .buffer(draw_args_buffers[f])
+                        .buffer(draw_args_buffers[f].buffer())
                         .offset(0)
                         .range(draw_args_size);
                     let cmd_info = vk::DescriptorBufferInfo::default()
-                        .buffer(bufs[c])
+                        .buffer(bufs[c].buffer())
                         .offset(0)
                         .range(indirect_size);
                     let writes = [
@@ -2932,7 +2798,6 @@ impl VkContext {
                     unsafe { device.update_descriptor_sets(&writes, &[]) };
                 }
                 sc_indirect_bufs.push(bufs);
-                sc_indirect_mems.push(mems);
                 sc_sets.push(sets);
             }
 
@@ -2944,19 +2809,9 @@ impl VkContext {
                 Some(sb_pipeline),
                 Some(sb_pl),
                 sc_indirect_bufs,
-                sc_indirect_mems,
             )
         } else {
-            (
-                None,
-                None,
-                None,
-                Vec::new(),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-            )
+            (None, None, None, Vec::new(), None, None, Vec::new())
         };
 
         // GPU-driven G-buffer pre-pass resources. Built when the bindless cull
@@ -2970,9 +2825,7 @@ impl VkContext {
             Option<vk::PipelineLayout>,
             Option<vk::DescriptorSetLayout>,
             Vec<vk::DescriptorSet>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
-            Vec<*mut u8>,
+            Vec<super::allocator::PooledBuffer>,
         );
         let (
             gbuffer_bindless_pipeline,
@@ -2980,8 +2833,6 @@ impl VkContext {
             gbuffer_set_layout,
             gbuffer_sets,
             prev_model_buffers,
-            prev_model_memories,
-            prev_model_ptrs,
         ): GbufferBindlessResources = if let (true, Some(gb), Some(bl_set_layout)) =
             (gbuffer_active, gbuffer_opt.as_ref(), bindless_set_layout)
         {
@@ -2994,9 +2845,8 @@ impl VkContext {
                 .collect();
             let gbb = super::post::gbuffer::build_gbuffer_bindless(
                 super::post::gbuffer::GbufferDeviceCtx {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    physical_device,
                 },
                 super::post::gbuffer::GbufferBindlessDescriptors {
                     descriptor_pool,
@@ -3017,19 +2867,9 @@ impl VkContext {
                 Some(gbb.set_layout),
                 gbb.sets,
                 gbb.prev_model_buffers,
-                gbb.prev_model_memories,
-                gbb.prev_model_ptrs,
             )
         } else {
-            (
-                None,
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            )
+            (None, None, None, Vec::new(), Vec::new())
         };
 
         // Two-pass Hi-Z occlusion resources. Built only when the world
@@ -3045,8 +2885,7 @@ impl VkContext {
             Option<vk::Pipeline>,
             Vec<vk::DescriptorSet>,
             Option<vk::DescriptorPool>,
-            Vec<vk::Buffer>,
-            Vec<vk::DeviceMemory>,
+            Vec<super::allocator::PooledBuffer>,
             Option<vk::RenderPass>,
             Option<vk::RenderPass>,
         );
@@ -3055,7 +2894,6 @@ impl VkContext {
             cull_sets2,
             two_pass_pool,
             indirect_buffers2,
-            indirect_buffer2_memories,
             main_render_pass_phase1,
             main_render_pass_phase2,
         ): TwoPassCullResources = if let (Some(set_layout), Some(pipeline_layout)) =
@@ -3080,18 +2918,12 @@ impl VkContext {
 
             // Second indirect-command buffers (device-local, GPU-written).
             let mut ind2_buffers = Vec::with_capacity(frames);
-            let mut ind2_memories = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let (buf, mem) = create_buffer(
-                    &instance,
-                    &device,
-                    physical_device,
+                ind2_buffers.push(alloc.create_buffer(
                     indirect_size,
                     vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                )?;
-                ind2_buffers.push(buf);
-                ind2_memories.push(mem);
+                )?);
             }
 
             // Dedicated descriptor pool for the per-frame phase-2 cull sets
@@ -3112,21 +2944,21 @@ impl VkContext {
             let sets2 = alloc_descriptor_sets(&device, pool, &set_layouts2)?;
             for (i, &set) in sets2.iter().enumerate() {
                 let obj_info = vk::DescriptorBufferInfo::default()
-                    .buffer(object_buffers[i])
+                    .buffer(object_buffers[i].buffer())
                     .offset(0)
                     .range(object_buffer_size);
                 let arg_info = vk::DescriptorBufferInfo::default()
-                    .buffer(draw_args_buffers[i])
+                    .buffer(draw_args_buffers[i].buffer())
                     .offset(0)
                     .range(draw_args_size);
                 // Binding 2: the *second* indirect buffer (Cull2 writes it).
                 let cmd_info = vk::DescriptorBufferInfo::default()
-                    .buffer(ind2_buffers[i])
+                    .buffer(ind2_buffers[i].buffer())
                     .offset(0)
                     .range(indirect_size);
                 // Binding 3: the cull-status buffer (phase 1 wrote it; read here).
                 let status_info = vk::DescriptorBufferInfo::default()
-                    .buffer(cull_status_buffers[i])
+                    .buffer(cull_status_buffers[i].buffer())
                     .offset(0)
                     .range(status_size);
                 let infos = [obj_info, arg_info, cmd_info, status_info];
@@ -3154,12 +2986,11 @@ impl VkContext {
                 sets2,
                 Some(pool),
                 ind2_buffers,
-                ind2_memories,
                 Some(rp1),
                 Some(rp2),
             )
         } else {
-            (None, Vec::new(), None, Vec::new(), Vec::new(), None, None)
+            (None, Vec::new(), None, Vec::new(), None, None)
         };
 
         // Per-cluster (albedo, normal) sets share the per-object layout.
@@ -3207,37 +3038,25 @@ impl VkContext {
         };
 
         // Per-frame, per-cluster instance storage buffers (host-mapped).
-        let mut instance_buffers: Vec<Vec<vk::Buffer>> = Vec::with_capacity(frames);
-        let mut instance_memories: Vec<Vec<vk::DeviceMemory>> = Vec::with_capacity(frames);
-        let mut instance_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(frames);
+        let mut instance_buffers: Vec<Vec<super::allocator::PooledBuffer>> =
+            Vec::with_capacity(frames);
         let mut instance_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
         if !instanced_clusters.is_empty() {
             let instance_set_layout = instance_set_layout_opt.unwrap();
             for _ in 0..frames {
-                let mut bufs: Vec<vk::Buffer> = Vec::with_capacity(instanced_clusters.len());
-                let mut mems: Vec<vk::DeviceMemory> = Vec::with_capacity(instanced_clusters.len());
-                let mut ptrs: Vec<*mut u8> = Vec::with_capacity(instanced_clusters.len());
+                let mut bufs: Vec<super::allocator::PooledBuffer> =
+                    Vec::with_capacity(instanced_clusters.len());
                 for cluster in &instanced_clusters {
                     let size_bytes = (cluster.instances.len().max(1)
                         * std::mem::size_of::<[[f32; 4]; 4]>())
                         as vk::DeviceSize;
-                    let (buf, mem) = create_buffer(
-                        &instance,
-                        &device,
-                        physical_device,
+                    let buf = alloc.create_buffer(
                         size_bytes,
                         vk::BufferUsageFlags::STORAGE_BUFFER,
                         vk::MemoryPropertyFlags::HOST_VISIBLE
                             | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )?;
-                    let ptr = unsafe {
-                        device.map_memory(mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                    }
-                    .map_err(|e| format!("map instance buffer: {e}"))?
-                        as *mut u8;
                     bufs.push(buf);
-                    mems.push(mem);
-                    ptrs.push(ptr);
                 }
                 // Allocate one descriptor set per cluster for this frame.
                 let layouts: Vec<_> = instanced_clusters
@@ -3248,7 +3067,7 @@ impl VkContext {
                 // Wire each set to its buffer.
                 for (i, &set) in sets.iter().enumerate() {
                     let info = vk::DescriptorBufferInfo::default()
-                        .buffer(bufs[i])
+                        .buffer(bufs[i].buffer())
                         .offset(0)
                         .range(vk::WHOLE_SIZE);
                     let write = vk::WriteDescriptorSet::default()
@@ -3259,8 +3078,6 @@ impl VkContext {
                     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
                 }
                 instance_buffers.push(bufs);
-                instance_memories.push(mems);
-                instance_ptrs.push(ptrs);
                 instance_sets.push(sets);
             }
         }
@@ -3356,9 +3173,8 @@ impl VkContext {
         let taa = if taa_enabled {
             let taa = TaaResources::new(
                 &TaaDeviceContext {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    pd: physical_device,
                     command_pool,
                     queue: graphics_queue,
                 },
@@ -3491,9 +3307,8 @@ impl VkContext {
             hdr_resolve_images.iter().map(|img| img.view).collect();
         let decals_state = Some(crate::vulkan::decal::DecalResources::new(
             crate::vulkan::decal::DecalDeviceContext {
-                instance: &instance,
+                alloc: &alloc,
                 device: &device,
-                physical_device,
                 command_pool,
                 queue: graphics_queue,
             },
@@ -3546,9 +3361,8 @@ impl VkContext {
         // is omitted from the frame graph.
         let raymarch = crate::vulkan::raymarch::RaymarchResources::try_new(
             crate::vulkan::raymarch::RaymarchDeviceContext {
-                instance: &instance,
+                alloc: &alloc,
                 device: &device,
-                physical_device,
                 command_pool,
                 queue: graphics_queue,
             },
@@ -3565,7 +3379,7 @@ impl VkContext {
                 prefilter_view: env_map.prefilter.view,
                 cube_sampler,
                 linear_sampler,
-                light_ubo,
+                light_ubo: light_ubo.buffer(),
                 shadow_ubos: &shadow_ubos,
                 shadow_render_pass,
             },
@@ -3607,9 +3421,8 @@ impl VkContext {
             };
             Some(crate::vulkan::planar::PlanarReflectionSet::new(
                 crate::vulkan::planar::PlanarDevice {
-                    instance: &instance,
+                    alloc: &alloc,
                     device: &device,
-                    pd: physical_device,
                 },
                 crate::vulkan::planar::PlanarConfig {
                     frames,
@@ -3625,15 +3438,15 @@ impl VkContext {
                     probe_cube_count,
                 },
                 crate::vulkan::planar::PlanarLightingBindings {
-                    light_ubo,
+                    light_ubo: light_ubo.buffer(),
                     light_size: light_ubo_size,
-                    local_light_buffer,
+                    local_light_buffer: local_light_buffer.buffer(),
                     local_light_size: local_light_buffer_size,
-                    cluster_params_ubo: light_cull.unclustered_buffer,
-                    cluster_list_buffer: light_cull.cluster_buffer,
+                    cluster_params_ubo: light_cull.unclustered_buffer.buffer(),
+                    cluster_list_buffer: light_cull.cluster_buffer.buffer(),
                     spot_shadow_map_view: spot_shadow.map.view,
-                    spot_shadow_data_buffer: spot_shadow.data_buffer,
-                    area_light_buffer,
+                    spot_shadow_data_buffer: spot_shadow.data_buffer.buffer(),
+                    area_light_buffer: area_light_buffer.buffer(),
                     ltc_matrix_view: ltc_matrix_image.view,
                     ltc_magnitude_view: ltc_magnitude_image.view,
                     ltc_sampler,
@@ -3697,6 +3510,7 @@ impl VkContext {
             });
             Some(crate::vulkan::glass::GlassResources::new(
                 crate::vulkan::glass::GlassDeviceCtx {
+                    alloc: &alloc,
                     instance: &instance,
                     device: &device,
                     physical_device,
@@ -3724,8 +3538,8 @@ impl VkContext {
                 },
                 crate::vulkan::glass::GlassRtSetup {
                     rt_capable,
-                    vertex_buffer,
-                    index_buffer,
+                    vertex_buffer: vertex_buffer.buffer(),
+                    index_buffer: index_buffer.buffer(),
                     rt_inputs: glass_rt_inputs,
                     bindless_set_layout,
                     bindless_pool_size,
@@ -3743,9 +3557,8 @@ impl VkContext {
         let (auto_exposure, auto_exposure_state) =
             if let Some(settings) = auto_exposure_settings.as_ref() {
                 let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
-                    &instance,
+                    &alloc,
                     &device,
-                    physical_device,
                     frames,
                     &hdr_resolve_views,
                     linear_sampler,
@@ -3913,8 +3726,6 @@ impl VkContext {
                 skinned_pipeline: None,
                 skinned_pipeline_layout: None,
                 ubos: shadow_ubos,
-                ubo_memories: shadow_ubo_memories,
-                ubo_ptrs: shadow_ubo_ptrs,
                 uniforms: shadow_uniforms,
                 light_dir: shadow_light_dir,
                 update: shadow_update,
@@ -3926,7 +3737,6 @@ impl VkContext {
             spot_shadow,
             area_light: super::context::VkAreaLight {
                 buffer: area_light_buffer,
-                memory: area_light_memory,
                 ltc_matrix: ltc_matrix_image,
                 ltc_magnitude: ltc_magnitude_image,
                 sampler: ltc_sampler,
@@ -3950,25 +3760,18 @@ impl VkContext {
                 bindless_main_spv,
                 bindless_sets,
                 object_buffers,
-                object_buffer_memories,
-                object_buffer_ptrs,
                 cull_pipeline,
                 cull_pipeline_layout,
                 cull_set_layout,
                 cull_sets,
                 draw_args_buffers,
-                draw_args_buffer_memories,
-                draw_args_buffer_ptrs,
                 indirect_buffers,
-                indirect_buffer_memories,
                 cull_status_buffers,
-                cull_status_buffer_memories,
                 occlusion_two_pass,
                 cull_pipeline_phase2,
                 cull_sets2,
                 two_pass_pool,
                 indirect_buffers2,
-                indirect_buffer2_memories,
                 main_render_pass_phase1,
                 main_render_pass_phase2,
                 hiz,
@@ -3981,14 +3784,11 @@ impl VkContext {
                 shadow_bindless_pipeline,
                 shadow_bindless_pipeline_layout,
                 shadow_indirect_buffers,
-                shadow_indirect_buffer_memories,
                 gbuffer_bindless_pipeline,
                 gbuffer_bindless_pipeline_layout,
                 gbuffer_set_layout,
                 gbuffer_sets,
                 prev_model_buffers,
-                prev_model_memories,
-                prev_model_ptrs,
             },
             text_pipeline: text_pipeline_opt,
             text_pipeline_layout,
@@ -3999,8 +3799,6 @@ impl VkContext {
                 object_sets: cluster_object_sets,
                 sets: instance_sets,
                 buffers: instance_buffers,
-                memories: instance_memories,
-                ptrs: instance_ptrs,
                 lod_buckets: vec![Vec::new(); instanced_clusters.len()],
                 clusters: instanced_clusters,
             },
@@ -4088,9 +3886,7 @@ impl VkContext {
             },
             geometry: VkGeometry {
                 vertex_buffer,
-                vertex_buffer_memory,
                 index_buffer,
-                index_buffer_memory,
                 mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
                 mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
                 vertex_buffer_bytes,
@@ -4126,17 +3922,13 @@ impl VkContext {
                 pipeline_layout: None,
                 joint_set_layout: None,
                 descriptor_pool: None,
-                vertex_buffer: vk::Buffer::null(),
-                vertex_buffer_memory: vk::DeviceMemory::null(),
+                vertex_buffer: super::allocator::PooledBuffer::null(),
                 vertex_buffer_bytes: 0,
-                index_buffer: vk::Buffer::null(),
-                index_buffer_memory: vk::DeviceMemory::null(),
+                index_buffer: super::allocator::PooledBuffer::null(),
                 index_buffer_bytes: 0,
                 draw_objects: Vec::new(),
                 object_sets: Vec::new(),
                 joint_buffers: Vec::new(),
-                joint_memories: Vec::new(),
-                joint_ptrs: Vec::new(),
                 joint_sets: Vec::new(),
                 joint_matrices: Vec::new(),
                 skin: None,
@@ -4146,22 +3938,14 @@ impl VkContext {
                 morph_target_counts: Vec::new(),
                 morph_weights: Vec::new(),
                 morph_weight_buffers: Vec::new(),
-                morph_weight_memories: Vec::new(),
-                morph_weight_ptrs: Vec::new(),
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
             },
             skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             uniforms: VkUniforms {
                 view_ubo_buffers,
-                view_ubo_memories,
-                view_ubo_ptrs,
                 probe_set_ubo_buffers,
-                probe_set_ubo_memories,
-                probe_set_ubo_ptrs,
                 light_ubo,
-                light_ubo_memory,
                 local_light_buffer,
-                local_light_memory,
                 local_light_size: local_light_buffer_size,
                 light_uniforms,
             },
@@ -4203,7 +3987,6 @@ impl VkContext {
             probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
             probe_rendering: None,
             probe_converting: None,
-            deferred_destroy: RefCell::new(Vec::new()),
             pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(frames),
             stream_frame: 0,
             stream_retires: Vec::new(),

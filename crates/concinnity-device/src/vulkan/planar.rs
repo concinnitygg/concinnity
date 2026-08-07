@@ -25,12 +25,11 @@
 
 use ash::{Device, vk};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
 use super::draw::ViewUniforms;
 use super::resources::alloc_descriptor_sets;
-use super::texture::{
-    GpuAllocContext, GpuImage, ImageSpec, create_buffer, create_image, create_image_view,
-};
+use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets are sized to. Single-sourced from `gfx::planar_reflection`
@@ -89,33 +88,28 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // indexed plane * frames + frame, so the CPU writes this frame's slot without
     // racing the GPU reading a prior frame's. Bound at binding 0 of the matching
     // planar global set.
-    view_bufs: Vec<vk::Buffer>,
-    view_mems: Vec<vk::DeviceMemory>,
-    view_ptrs: Vec<*mut u8>,
+    view_bufs: Vec<PooledBuffer>,
     // Per-(plane, frame) global set (the bindless main set): binding 0 = that
     // (plane, frame) reflected view, 1/2 = the shared light/shadow UBOs, 3..6 =
     // the static shadow/env/ssao images, 7 = an EMPTY ProbeSet (the mirror render
     // reflects only sky -- no recursion), 8 = the sky-filled probe cube array.
     global_sets: Vec<vk::DescriptorSet>,
     // EMPTY ProbeSet UBO (count 0), shared by every planar global set.
-    probeset_buf: vk::Buffer,
-    probeset_mem: vk::DeviceMemory,
+    probeset_buf: PooledBuffer,
 
     // Per-(plane, frame) reflected-frustum mirror cull: a DEVICE_LOCAL indirect +
     // status SSBO each (indexed plane * frames + frame), and a cull set that reads
     // the FRAME's object + draw-args SSBOs (camera-independent, so the reflected
     // cull sees every object) and writes this plane's indirect + status. Sized by
     // the build-time object count, so resize never touches them.
-    cull_indirect_bufs: Vec<vk::Buffer>,
-    cull_indirect_mems: Vec<vk::DeviceMemory>,
-    cull_status_bufs: Vec<vk::Buffer>,
-    cull_status_mems: Vec<vk::DeviceMemory>,
+    cull_indirect_bufs: Vec<PooledBuffer>,
+    cull_status_bufs: Vec<PooledBuffer>,
     cull_sets: Vec<vk::DescriptorSet>,
     // A bake-style Hi-Z read set (cull set 1) with hiz_enabled = 0 so the mirror
     // cull is frustum-only -- the main camera's pyramid is meaningless for a
     // reflected frustum. `Some` only when the world runs Hi-Z. Shared across planes.
     hiz_set: Option<vk::DescriptorSet>,
-    hiz_ubo: Option<(vk::Buffer, vk::DeviceMemory)>,
+    hiz_ubo: Option<PooledBuffer>,
     pool: vk::DescriptorPool,
 }
 
@@ -126,8 +120,8 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
 // read-set layout + pyramid (view, sampler) so a hiz_enabled = 0 set can be bound
 // (the cull pipeline layout statically references set 1).
 pub(in crate::vulkan) struct PlanarCullSources<'a> {
-    pub(in crate::vulkan) frame_object_buffers: &'a [vk::Buffer],
-    pub(in crate::vulkan) frame_draw_args_buffers: &'a [vk::Buffer],
+    pub(in crate::vulkan) frame_object_buffers: &'a [PooledBuffer],
+    pub(in crate::vulkan) frame_draw_args_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) cull_set_layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) cull_count: usize,
     pub(in crate::vulkan) hiz: Option<(vk::DescriptorSetLayout, vk::ImageView, vk::Sampler)>,
@@ -143,9 +137,8 @@ unsafe impl Sync for PlanarReflectionSet {}
 // instance + logical device + physical device create_image / create_buffer need.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarDevice<'a> {
-    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a Device,
-    pub(in crate::vulkan) pd: vk::PhysicalDevice,
 }
 
 // Render dimensions for the shared colour + depth + per-plane targets: the MSAA
@@ -164,11 +157,7 @@ fn create_targets(
     gpu: PlanarDevice<'_>,
     dims: PlanarTargetDims,
 ) -> Result<(Option<GpuImage>, GpuImage, Vec<GpuImage>), String> {
-    let PlanarDevice {
-        instance,
-        device,
-        pd,
-    } = gpu;
+    let PlanarDevice { alloc, device } = gpu;
     let PlanarTargetDims {
         sample_count,
         width,
@@ -180,12 +169,8 @@ fn create_targets(
     let h = height.max(1);
 
     let color = if msaa {
-        let (img, mem) = create_image(
-            &GpuAllocContext {
-                instance,
-                device,
-                physical_device: pd,
-            },
+        let pooled = create_image(
+            alloc,
             &ImageSpec {
                 width: w,
                 height: h,
@@ -196,23 +181,15 @@ fn create_targets(
                 samples: sample_count,
             },
         )?;
+        let img = pooled.image();
         let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        Some(GpuImage {
-            image: img,
-            memory: mem,
-            view,
-            aux_views: Vec::new(),
-        })
+        Some(GpuImage::from_pooled(pooled, view))
     } else {
         None
     };
 
-    let (depth_img, depth_mem) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device: pd,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width: w,
             height: h,
@@ -223,27 +200,19 @@ fn create_targets(
             samples: sample_count,
         },
     )?;
+    let depth_img = pooled.image();
     let depth_view = create_image_view(
         device,
         depth_img,
         PLANAR_DEPTH_FORMAT,
         vk::ImageAspectFlags::DEPTH,
     )?;
-    let depth = GpuImage {
-        image: depth_img,
-        memory: depth_mem,
-        view: depth_view,
-        aux_views: Vec::new(),
-    };
+    let depth = GpuImage::from_pooled(pooled, depth_view);
 
     let mut targets = Vec::with_capacity(plane_count);
     for _ in 0..plane_count {
-        let (img, mem) = create_image(
-            &GpuAllocContext {
-                instance,
-                device,
-                physical_device: pd,
-            },
+        let pooled = create_image(
+            alloc,
             &ImageSpec {
                 width: w,
                 height: h,
@@ -254,13 +223,9 @@ fn create_targets(
                 samples: vk::SampleCountFlags::TYPE_1,
             },
         )?;
+        let img = pooled.image();
         let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        targets.push(GpuImage {
-            image: img,
-            memory: mem,
-            view,
-            aux_views: Vec::new(),
-        });
+        targets.push(GpuImage::from_pooled(pooled, view));
     }
     Ok((color, depth, targets))
 }
@@ -368,7 +333,7 @@ pub(in crate::vulkan) struct PlanarLightingBindings<'a> {
     pub(in crate::vulkan) ltc_sampler: vk::Sampler,
     // Per-frame-in-flight ShadowUniforms ring; set `i` covers plane
     // `i / frames`, frame `i % frames`.
-    pub(in crate::vulkan) shadow_ubos: &'a [vk::Buffer],
+    pub(in crate::vulkan) shadow_ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) shadow_size: u64,
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
     pub(in crate::vulkan) shadow_sampler: vk::Sampler,
@@ -405,11 +370,7 @@ impl PlanarReflectionSet {
             update_after_bind: global_update_after_bind,
         } = global_set;
 
-        let PlanarDevice {
-            instance,
-            device,
-            pd,
-        } = gpu;
+        let PlanarDevice { alloc, device } = gpu;
         let PlanarConfig {
             frames,
             sample_count,
@@ -468,46 +429,26 @@ impl PlanarReflectionSet {
         let empty = ProbeSet::EMPTY;
         let probeset_size = std::mem::size_of::<ProbeSet>() as u64;
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let (probeset_buf, probeset_mem) = create_buffer(
-            instance,
-            device,
-            pd,
-            probeset_size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            host,
-        )?;
+        let probeset_buf =
+            alloc.create_buffer(probeset_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
         unsafe {
-            let p = device
-                .map_memory(probeset_mem, 0, probeset_size, vk::MemoryMapFlags::empty())
-                .map_err(|e| format!("planar map probeset: {e}"))?;
             std::ptr::copy_nonoverlapping(
                 &empty as *const ProbeSet as *const u8,
-                p as *mut u8,
+                probeset_buf.mapped_ptr(),
                 probeset_size as usize,
             );
-            device.unmap_memory(probeset_mem);
         }
 
         // Per-(plane, frame) reflected-view UBO ring.
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
         let ring = plane_count * frames;
         let mut view_bufs = Vec::with_capacity(ring);
-        let mut view_mems = Vec::with_capacity(ring);
-        let mut view_ptrs: Vec<*mut u8> = Vec::with_capacity(ring);
         for _ in 0..ring {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                pd,
+            view_bufs.push(alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 host,
-            )?;
-            let ptr = unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("planar map view ubo: {e}"))? as *mut u8;
-            view_bufs.push(buf);
-            view_mems.push(mem);
-            view_ptrs.push(ptr);
+            )?);
         }
 
         // Per-(plane, frame) reflected-frustum cull output: a DEVICE_LOCAL indirect +
@@ -520,30 +461,18 @@ impl PlanarReflectionSet {
             (cull.cull_count * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()).max(4) as u64;
         let status_size = (cull.cull_count * std::mem::size_of::<u32>()).max(4) as u64;
         let mut cull_indirect_bufs = Vec::with_capacity(ring);
-        let mut cull_indirect_mems = Vec::with_capacity(ring);
         let mut cull_status_bufs = Vec::with_capacity(ring);
-        let mut cull_status_mems = Vec::with_capacity(ring);
         for _ in 0..ring {
-            let (ib, im) = create_buffer(
-                instance,
-                device,
-                pd,
+            cull_indirect_bufs.push(alloc.create_buffer(
                 indirect_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )?;
-            let (sb, sm) = create_buffer(
-                instance,
-                device,
-                pd,
+            )?);
+            cull_status_bufs.push(alloc.create_buffer(
                 status_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )?;
-            cull_indirect_bufs.push(ib);
-            cull_indirect_mems.push(im);
-            cull_status_bufs.push(sb);
-            cull_status_mems.push(sm);
+            )?);
         }
 
         // One pool: the per-(plane, frame) global sets (4 UBO + 4 sampler + the cube
@@ -591,10 +520,10 @@ impl PlanarReflectionSet {
             })
             .collect();
         for (i, &set) in global_sets.iter().enumerate() {
-            let view_info = buf_info(view_bufs[i], view_size);
+            let view_info = buf_info(view_bufs[i].buffer(), view_size);
             let light_info = buf_info(light_ubo, light_size);
-            let shadow_info = buf_info(shadow_ubos[i % frames], shadow_size);
-            let probeset_info = buf_info(probeset_buf, probeset_size);
+            let shadow_info = buf_info(shadow_ubos[i % frames].buffer(), shadow_size);
+            let probeset_info = buf_info(probeset_buf.buffer(), probeset_size);
             let shadow_img = img_info(shadow_map_view, shadow_sampler);
             let irr_img = img_info(irradiance_view, cube_sampler);
             let pre_img = img_info(prefilter_view, cube_sampler);
@@ -688,18 +617,24 @@ impl PlanarReflectionSet {
                 device,
                 set,
                 0,
-                cull.frame_object_buffers[frame],
+                cull.frame_object_buffers[frame].buffer(),
                 object_range,
             );
             write_storage(
                 device,
                 set,
                 1,
-                cull.frame_draw_args_buffers[frame],
+                cull.frame_draw_args_buffers[frame].buffer(),
                 args_range,
             );
-            write_storage(device, set, 2, cull_indirect_bufs[i], indirect_size);
-            write_storage(device, set, 3, cull_status_bufs[i], status_size);
+            write_storage(
+                device,
+                set,
+                2,
+                cull_indirect_bufs[i].buffer(),
+                indirect_size,
+            );
+            write_storage(device, set, 3, cull_status_bufs[i].buffer(), status_size);
         }
 
         // The Hi-Z set (cull set 1) with hiz_enabled = 0: a frustum-only reflected
@@ -714,31 +649,21 @@ impl PlanarReflectionSet {
                 hiz_enabled: 0,
             };
             let params_size = std::mem::size_of::<CullHizParams>() as u64;
-            let (ubo, umem) = create_buffer(
-                instance,
-                device,
-                pd,
-                params_size,
-                vk::BufferUsageFlags::UNIFORM_BUFFER,
-                host,
-            )?;
+            let ubo =
+                alloc.create_buffer(params_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
             unsafe {
-                let p = device
-                    .map_memory(umem, 0, params_size, vk::MemoryMapFlags::empty())
-                    .map_err(|e| format!("planar map hiz ubo: {e}"))?;
                 std::ptr::copy_nonoverlapping(
                     &params as *const CullHizParams as *const u8,
-                    p as *mut u8,
+                    ubo.mapped_ptr(),
                     params_size as usize,
                 );
-                device.unmap_memory(umem);
             }
             let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&hiz_layout))?[0];
             let img = img_info(hiz_view, hiz_sampler);
-            let ubo_info = buf_info(ubo, params_size);
+            let ubo_info = buf_info(ubo.buffer(), params_size);
             let writes = [sampler_write(set, 0, &img), ubo_write(set, 1, &ubo_info)];
             unsafe { device.update_descriptor_sets(&writes, &[]) };
-            (Some(set), Some((ubo, umem)))
+            (Some(set), Some(ubo))
         } else {
             (None, None)
         };
@@ -755,15 +680,10 @@ impl PlanarReflectionSet {
             targets,
             framebuffers,
             view_bufs,
-            view_mems,
-            view_ptrs,
             global_sets,
             probeset_buf,
-            probeset_mem,
             cull_indirect_bufs,
-            cull_indirect_mems,
             cull_status_bufs,
-            cull_status_mems,
             cull_sets,
             hiz_set,
             hiz_ubo,
@@ -810,20 +730,15 @@ impl PlanarReflectionSet {
     // the glass pass's per-pane planar binding afterward.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        pd: vk::PhysicalDevice,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
         // Build the new targets + framebuffers first, then retire the old ones, so
         // a failure leaves the existing set intact.
         let (color, depth, targets) = create_targets(
-            PlanarDevice {
-                instance,
-                device,
-                pd,
-            },
+            PlanarDevice { alloc, device },
             PlanarTargetDims {
                 sample_count: self.sample_count,
                 width,
@@ -849,15 +764,10 @@ impl PlanarReflectionSet {
                 device.destroy_framebuffer(fb, None);
             }
         }
-        if let Some(c) = self.color.take() {
-            c.destroy(device);
-        }
-        let old_depth = std::mem::replace(&mut self.depth, depth);
-        old_depth.destroy(device);
-        for t in std::mem::replace(&mut self.targets, targets) {
-            t.destroy(device);
-        }
+        // The replaced targets retire through the allocator as they drop.
         self.color = color;
+        self.depth = depth;
+        self.targets = targets;
         self.framebuffers = framebuffers;
         self.width = width;
         self.height = height;
@@ -869,50 +779,21 @@ impl PlanarReflectionSet {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            if let Some(c) = &self.color {
-                c.destroy(device);
-            }
-            self.depth.destroy(device);
-            for t in &self.targets {
-                t.destroy(device);
-            }
-            for (&buf, &mem) in self.view_bufs.iter().zip(self.view_mems.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for (&buf, &mem) in self
-                .cull_indirect_bufs
-                .iter()
-                .zip(self.cull_indirect_mems.iter())
-                .chain(
-                    self.cull_status_bufs
-                        .iter()
-                        .zip(self.cull_status_mems.iter()),
-                )
-            {
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            if let Some((buf, mem)) = self.hiz_ubo {
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            device.destroy_buffer(self.probeset_buf, None);
-            device.free_memory(self.probeset_mem, None);
             // The pool frees every global / cull / Hi-Z set allocated from it.
             device.destroy_descriptor_pool(self.pool, None);
         }
+        self.color = None;
+        self.depth = GpuImage::null();
         self.framebuffers.clear();
         self.targets.clear();
         self.view_bufs.clear();
-        self.view_mems.clear();
-        self.view_ptrs.clear();
+        self.cull_indirect_bufs.clear();
+        self.cull_status_bufs.clear();
+        self.hiz_ubo = None;
+        self.probeset_buf = PooledBuffer::null();
         self.global_sets.clear();
         self.cull_indirect_bufs.clear();
-        self.cull_indirect_mems.clear();
         self.cull_status_bufs.clear();
-        self.cull_status_mems.clear();
         self.cull_sets.clear();
     }
 }
@@ -1037,7 +918,7 @@ impl VkContext {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &view as *const ViewUniforms as *const u8,
-                    set.view_ptrs[ring],
+                    set.view_bufs[ring].mapped_ptr(),
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
@@ -1054,7 +935,7 @@ impl VkContext {
                 extent,
                 set.global_sets[ring],
                 bindless_set,
-                set.cull_indirect_bufs[ring],
+                set.cull_indirect_bufs[ring].buffer(),
             );
         }
 

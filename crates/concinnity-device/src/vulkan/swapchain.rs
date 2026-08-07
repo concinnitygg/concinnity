@@ -4,6 +4,7 @@
 // swapchain rebuild path.
 use ash::{Device, vk};
 
+use super::allocator::DeviceAllocator;
 use super::context::*;
 use super::device::*;
 use super::glass::{GlassDeviceCtx, GlassRebuildTargets};
@@ -43,24 +44,6 @@ impl VkContext {
                 unsafe { device.destroy_framebuffer(fb, None) };
             }
         }
-        for frame_mips in &self.bloom_mips {
-            for img in frame_mips {
-                // A null-memory mip is a borrowed pooled `bloom_top` (mip 0); the
-                // transient pool owns and frees it. Committed mips free here.
-                if img.memory != vk::DeviceMemory::null() {
-                    img.destroy(device);
-                }
-            }
-        }
-        for img in &self.color_images {
-            img.destroy(device);
-        }
-        for img in &self.depth_images {
-            img.destroy(device);
-        }
-        for img in &self.hdr_resolve_images {
-            img.destroy(device);
-        }
         for iv in &self.swapchain_image_views {
             unsafe { device.destroy_image_view(*iv, None) };
         }
@@ -79,6 +62,8 @@ impl VkContext {
         self.composite_framebuffers.clear();
         self.bloom_write_framebuffers.clear();
         self.bloom_blend_framebuffers.clear();
+        // Dropping the attachment images (and the bloom mips; a borrowed
+        // pooled mip 0 releases nothing) retires them through the allocator.
         self.bloom_mips.clear();
         self.bloom_mip_extents.clear();
         self.color_images.clear();
@@ -146,6 +131,7 @@ impl VkContext {
             // to the same first choice, so the rebuilt backend matches the device.
             let (built, resolved) = super::post::build_upscaler(
                 UpscalerGpu {
+                    alloc: &self.alloc,
                     instance: &self.instance,
                     device: &self.device,
                     physical_device: self.physical_device,
@@ -187,7 +173,7 @@ impl VkContext {
         // per frame in flight. `bloom_top_pairs` feeds the bloom chain's mip 0
         // below (empty when bloom is off, so mip 0 is committed instead).
         self.transient_pool.rebuild(
-            &super::texture::GpuUploadContext {
+            &super::transient_pool::TransientPoolGpu {
                 instance: &self.instance,
                 device: &self.device,
                 physical_device: self.physical_device,
@@ -211,9 +197,8 @@ impl VkContext {
 
         let (color_images, depth_images, hdr_resolve_images) = create_attachments(
             &AttachmentDeviceCtx {
-                instance: &self.instance,
+                alloc: &self.alloc,
                 device: &self.device,
-                pd: self.physical_device,
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
@@ -244,9 +229,8 @@ impl VkContext {
         // Rebuild the bloom chain at the new resolution.
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
             &BloomDeviceContext {
-                instance: &self.instance,
+                alloc: &self.alloc,
                 device: &self.device,
-                physical_device: self.physical_device,
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
@@ -294,9 +278,8 @@ impl VkContext {
         if let Some(mut gb) = self.gbuffer.take() {
             gb.rebuild(
                 GbufferDeviceCtx {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 GbufferQueueCtx {
                     command_pool: self.commands.command_pool,
@@ -328,9 +311,8 @@ impl VkContext {
             };
             ssr.rebuild(
                 &SsrGpuContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -367,9 +349,8 @@ impl VkContext {
                 .normal_depth_views();
             ssgi.rebuild(
                 SsgiDevice {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 render_ext.width,
                 render_ext.height,
@@ -397,14 +378,13 @@ impl VkContext {
             let nd_views = gb.normal_depth_views();
             let rough_views = gb.roughness_views();
             rt.rebuild(
-                &self.instance,
+                &self.alloc,
                 &self.device,
-                self.physical_device,
                 render_ext.width,
                 render_ext.height,
                 RtStaticInputs {
-                    vertex_buffer: self.geometry.vertex_buffer,
-                    index_buffer: self.geometry.index_buffer,
+                    vertex_buffer: self.geometry.vertex_buffer.buffer(),
+                    index_buffer: self.geometry.index_buffer.buffer(),
                     hdr_resolve_views: &hdr_views,
                     gbuffer_views: &nd_views,
                     roughness_views: &rough_views,
@@ -432,9 +412,8 @@ impl VkContext {
             };
             rc.rebuild(
                 &super::post::reflection_composite::GpuAllocContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -465,9 +444,8 @@ impl VkContext {
         if let Some(mut taa) = self.taa.take() {
             taa.rebuild(
                 &TaaDeviceContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    pd: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -562,9 +540,8 @@ impl VkContext {
         if let Some(mut rm) = self.raymarch.take() {
             rm.rebuild(
                 RaymarchDeviceContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                     command_pool: self.commands.command_pool,
                     queue: self.graphics_queue,
                 },
@@ -586,9 +563,8 @@ impl VkContext {
         // the new target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
-                &self.instance,
+                &self.alloc,
                 &self.device,
-                self.physical_device,
                 render_ext.width,
                 render_ext.height,
             )?;
@@ -614,6 +590,7 @@ impl VkContext {
                 self.depth_images.iter().map(|img| img.view).collect();
             glass.rebuild(
                 GlassDeviceCtx {
+                    alloc: &self.alloc,
                     instance: &self.instance,
                     device: &self.device,
                     physical_device: self.physical_device,
@@ -707,9 +684,8 @@ impl VkContext {
             let ao_views = self.transient_pool.views_for_frames("ao_output", frames);
             ssao.rebuild(
                 &SsaoDeviceCtx {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 render_ext.width,
                 render_ext.height,
@@ -1006,9 +982,8 @@ pub(super) fn create_swapchain_image_views(
 
 // Vulkan handles needed to allocate + transition off-screen attachment images.
 pub(super) struct AttachmentDeviceCtx<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub pd: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -1024,16 +999,14 @@ pub(super) fn create_attachments(
     count: usize,
 ) -> Result<FrameAttachments, String> {
     let &AttachmentDeviceCtx {
-        instance,
+        alloc,
         device,
-        pd,
         command_pool,
         queue,
     } = ctx;
     let upload_ctx = GpuUploadContext {
-        instance,
+        alloc,
         device,
-        physical_device: pd,
         command_pool,
         queue,
     };
@@ -1044,7 +1017,7 @@ pub(super) fn create_attachments(
         let depth = create_depth_image(&upload_ctx, width, height, msaa)?;
         depth_images.push(depth);
         resolve_images.push(create_hdr_resolve_image(
-            instance, device, pd, width, height, HDR_FORMAT,
+            alloc, device, width, height, HDR_FORMAT,
         )?);
         if msaa != vk::SampleCountFlags::TYPE_1 {
             let color = create_msaa_color_image(&upload_ctx, width, height, HDR_FORMAT, msaa)?;

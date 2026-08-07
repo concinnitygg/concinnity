@@ -29,9 +29,10 @@ use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
 use crate::vulkan::uniforms::{GpuParticle, ParticleView};
 
+use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::spv_module;
-use super::texture::{GpuAllocContext, GpuUploadContext, create_buffer};
+use super::texture::GpuUploadContext;
 
 // Cap on the number of simultaneously-live particle emitters. The
 // per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
@@ -68,8 +69,8 @@ pub(in crate::vulkan) fn compile_particle_shaders(
 pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`. Used
     // as a storage buffer by both the compute pass and the vertex pass.
-    pub pool_buffer: vk::Buffer,
-    pub pool_memory: vk::DeviceMemory,
+    // Held for the emitter's lifetime; the descriptor sets alias it.
+    pub _pool_buffer: PooledBuffer,
     // Pool size in bytes. Kept around so a future hot-reload that
     // resizes a live emitter's pool can reuse the descriptor write
     // helper (`write_compute_set`) with the new range.
@@ -78,8 +79,7 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
     // each frame via `vkCmdUpdateBuffer`; decremented by the compute
     // kernel as threads claim spawn slots.
-    pub counter_buffer: vk::Buffer,
-    pub counter_memory: vk::DeviceMemory,
+    pub counter_buffer: PooledBuffer,
     // Carry-over fractional spawn count. Combined with `dt` and the
     // emitter's `spawn_rate` to produce the integer spawn budget for each
     // dispatch. Interior-mutable so `encode_particles` (which is reached
@@ -100,17 +100,6 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Read by `rewrite_particle_albedo_slot` so a streamed or hot-reloaded
     // albedo swap that recreates this slot's view re-points the binding.
     pub texture_slot: usize,
-}
-
-impl ParticleEmitterGpuState {
-    fn destroy(&self, device: &Device) {
-        unsafe {
-            device.destroy_buffer(self.pool_buffer, None);
-            device.free_memory(self.pool_memory, None);
-            device.destroy_buffer(self.counter_buffer, None);
-            device.free_memory(self.counter_memory, None);
-        }
-    }
 }
 
 // Pipelines + per-frame view uniform ring + per-emitter descriptor pool
@@ -141,9 +130,7 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
 
     // Per-frame view UBO (single 96-byte block), persistently mapped.
-    pub(in crate::vulkan) view_ubos: Vec<vk::Buffer>,
-    pub(in crate::vulkan) view_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) view_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) view_ubos: Vec<PooledBuffer>,
     // Per-frame view set (binding 0 = view UBO). One per frame slot.
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
@@ -162,17 +149,13 @@ impl ParticleResources {
     // declared at least one `ParticleEmitter`. The encoder is a no-op
     // when this is `None`.
     pub(in crate::vulkan) fn new(
-        gpu: GpuAllocContext,
+        gpu: &GpuUploadContext,
         frames: usize,
         hdr_resolve_views: &[vk::ImageView],
         extent: vk::Extent2D,
         hot_reload: bool,
     ) -> Result<Self, String> {
-        let GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        } = gpu;
+        let &GpuUploadContext { alloc, device, .. } = gpu;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
         let compute_set_layout = create_compute_set_layout(device)?;
         let (view_set_layout, emitter_set_layout) = create_render_set_layouts(device)?;
@@ -194,23 +177,13 @@ impl ParticleResources {
         // persistently mapped).
         let view_size = std::mem::size_of::<ParticleView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            let buf = alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-            let ptr = unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map particle view ubo: {e}"))?
-                as *mut u8;
             view_ubos.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
         }
 
         let sampler = create_sampler(device)?;
@@ -220,7 +193,7 @@ impl ParticleResources {
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
         let view_sets = alloc_descriptor_sets(device, descriptor_pool, &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
-            write_view_set(device, set, view_ubos[i]);
+            write_view_set(device, set, view_ubos[i].buffer());
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
@@ -250,8 +223,6 @@ impl ParticleResources {
             emitter_set_layout,
             descriptor_pool,
             view_ubos,
-            view_ubo_memories,
-            view_ubo_ptrs,
             view_sets,
             framebuffers,
             sampler,
@@ -331,11 +302,6 @@ impl ParticleResources {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            for (&buf, &mem) in self.view_ubos.iter().zip(self.view_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
             device.destroy_sampler(self.sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_pipeline(self.compute_pipeline, None);
@@ -349,8 +315,6 @@ impl ParticleResources {
         }
         self.framebuffers.clear();
         self.view_ubos.clear();
-        self.view_ubo_memories.clear();
-        self.view_ubo_ptrs.clear();
     }
 }
 
@@ -366,41 +330,30 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 ) -> Result<ParticleEmitterGpuState, String> {
     // Destructure the handles the buffer allocations need directly; the
     // one-shot zero-fills below take the whole `gpu` context (it is Copy).
-    let GpuUploadContext {
-        instance,
-        device,
-        physical_device,
-        ..
-    } = gpu;
+    let GpuUploadContext { alloc, device, .. } = gpu;
     let slots = record.max_particles as u64;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
 
     // Pool buffer: DEVICE_LOCAL, used as STORAGE by both passes. The
     // compute kernel writes through it; the vertex stage reads it. A WAR
     // barrier in the encoder transitions accesses between dispatches.
-    let (pool_buffer, pool_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let pool_buffer = alloc.create_buffer(
         pool_bytes,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    zero_device_buffer(gpu, pool_buffer, pool_bytes)?;
+    zero_device_buffer(gpu, pool_buffer.buffer(), pool_bytes)?;
 
     // Counter buffer: DEVICE_LOCAL, 4 bytes, used as STORAGE by the
     // compute kernel and TRANSFER_DST for the per-frame
     // `vkCmdUpdateBuffer` that resets it to the integer budget.
     let counter_bytes = std::mem::size_of::<u32>() as u64;
-    let (counter_buffer, counter_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let counter_buffer = alloc.create_buffer(
         counter_bytes,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    zero_device_buffer(gpu, counter_buffer, counter_bytes)?;
+    zero_device_buffer(gpu, counter_buffer.buffer(), counter_bytes)?;
 
     // Allocate the (compute, render) descriptor set pair.
     let set_layouts = [resources.compute_set_layout, resources.emitter_set_layout];
@@ -409,18 +362,22 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     let render_set = sets[1];
 
     // Write the pool + counter bindings on the compute set (set 0).
-    write_compute_set(device, compute_set, pool_buffer, pool_bytes, counter_buffer);
+    write_compute_set(
+        device,
+        compute_set,
+        pool_buffer.buffer(),
+        pool_bytes,
+        counter_buffer.buffer(),
+    );
     // Write the pool binding on the render set (set 1, binding 0). The
     // albedo binding (set 1, binding 1) is written by `add_emitter` from
     // the live texture pool.
-    write_render_pool_binding(device, render_set, pool_buffer, pool_bytes);
+    write_render_pool_binding(device, render_set, pool_buffer.buffer(), pool_bytes);
 
     Ok(ParticleEmitterGpuState {
-        pool_buffer,
-        pool_memory,
+        _pool_buffer: pool_buffer,
         pool_bytes,
         counter_buffer,
-        counter_memory,
         spawn_state: Cell::new(ParticleSpawnState::default()),
         compute_set,
         render_set,
@@ -913,7 +870,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ParticleView as *const u8,
-                resources.view_ubo_ptrs[frame_idx],
+                resources.view_ubos[frame_idx].mapped_ptr(),
                 std::mem::size_of::<ParticleView>(),
             );
         }
@@ -963,7 +920,7 @@ impl VkContext {
             // counter reset.
             let bytes = spawn_budget.to_ne_bytes();
             unsafe {
-                device.cmd_update_buffer(cmd, gpu.counter_buffer, 0, &bytes);
+                device.cmd_update_buffer(cmd, gpu.counter_buffer.buffer(), 0, &bytes);
             }
         }
         // Barrier: TRANSFER_WRITE → SHADER_READ on every emitter's
@@ -1158,10 +1115,11 @@ impl VkContext {
             let hdr_resolve_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
             let resources = ParticleResources::new(
-                GpuAllocContext {
-                    instance: &self.instance,
+                &GpuUploadContext {
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
                 },
                 self.frames_in_flight,
                 &hdr_resolve_views,
@@ -1182,9 +1140,8 @@ impl VkContext {
 
         let gpu_state = build_emitter_gpu_state(
             GpuUploadContext {
-                instance: &self.instance,
+                alloc: &self.alloc,
                 device: &self.device,
-                physical_device: self.physical_device,
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
@@ -1252,7 +1209,7 @@ impl VkContext {
             // memory. `cn debug` is the only consumer; this is not
             // on a hot path.
             self.wait_idle();
-            state.destroy(&self.device);
+            drop(state);
             // Free the (compute, render) descriptor sets back to the
             // particle descriptor pool so the next `add_emitter` can
             // re-allocate them. Requires
@@ -1331,10 +1288,10 @@ impl VkContext {
     // Free every per-emitter pool/counter buffer. Called from
     // `Drop for VkContext` after `device_wait_idle`. Sibling of
     // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, device: &Device) {
-        for state in self.particle_emitter_state.drain(..).flatten() {
-            state.destroy(device);
-        }
+    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &Device) {
+        // The pooled per-emitter buffers retire through the allocator as the
+        // states drop.
+        self.particle_emitter_state.clear();
     }
 }
 

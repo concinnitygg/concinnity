@@ -378,6 +378,7 @@ impl FsrUpscaler {
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
         let UpscalerGpu {
+            alloc,
             instance,
             device,
             physical_device,
@@ -503,9 +504,8 @@ impl FsrUpscaler {
 
         // Output texture FFX writes into.
         let output = match super::create_output_image(
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
             output_width,
@@ -723,14 +723,14 @@ impl VkUpscaleBackend for FsrUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, device: &Device) {
+    fn destroy(&mut self, _device: &Device) {
         if !self.ctx.is_null() {
             unsafe {
                 let _ = (self.ffx.destroy_context)(&mut self.ctx, ptr::null());
             }
             self.ctx = ptr::null_mut();
         }
-        self.output.destroy(device);
+        self.output = GpuImage::null();
     }
 }
 

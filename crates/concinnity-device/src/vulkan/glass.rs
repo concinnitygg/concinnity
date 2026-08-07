@@ -17,6 +17,7 @@
 
 use ash::{Device, vk};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::assets::GlassPanel;
 use crate::geometry::glass_quad::build_glass_quad;
 use crate::gfx::mesh_payload::Vertex;
@@ -28,8 +29,8 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::spv_module;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::texture::{
-    GpuAllocContext, GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_buffer,
-    create_image, create_image_view, one_shot_submit, transition_image_layout_range,
+    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
+    one_shot_submit, transition_image_layout_range,
 };
 
 // The live acceleration-structure handles wired into the glass RT descriptor ring.
@@ -198,7 +199,7 @@ impl GlassRt {
     fn wire_static(&self, device: &Device, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer) {
         for (i, &set) in self.sets.iter().enumerate() {
             let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(self.params_buffers[i])
+                .buffer(self.params_buffers[i].buffer())
                 .offset(0)
                 .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
             let writes = [vk::WriteDescriptorSet::default()
@@ -292,7 +293,7 @@ impl GlassRt {
         let sidx_buffer = if skinned_indices != vk::Buffer::null() {
             skinned_indices
         } else {
-            self.dummy_ssbo
+            self.dummy_ssbo.buffer()
         };
         let sidx_info = vk::DescriptorBufferInfo::default()
             .buffer(sidx_buffer)
@@ -321,14 +322,9 @@ impl GlassRt {
             }
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_pool(self.pool, None);
-            for (&buf, &mem) in self.params_buffers.iter().zip(&self.params_memories) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            device.destroy_buffer(self.dummy_ssbo, None);
-            device.free_memory(self.dummy_ssbo_memory, None);
         }
+        self.params_buffers.clear();
+        self.dummy_ssbo = PooledBuffer::null();
     }
 }
 
@@ -377,6 +373,7 @@ struct GlassRtGeometry {
 // wires the initial accel handles when RT is live at launch; otherwise the first
 // `rt_dynamic_update` fills them before the RT path is taken.
 fn build_glass_rt(
+    alloc: &DeviceAllocator,
     instance: &ash::Instance,
     device: &Device,
     physical_device: vk::PhysicalDevice,
@@ -471,22 +468,12 @@ fn build_glass_rt(
     // Per-frame RtParams UBO ring (host-mapped).
     let params_size = std::mem::size_of::<RtParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
-    let mut params_memories = Vec::with_capacity(frames);
-    let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let (buf, mem) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        params_buffers.push(alloc.create_buffer(
             params_size,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        let ptr = unsafe { device.map_memory(mem, 0, params_size, vk::MemoryMapFlags::empty()) }
-            .map_err(|e| format!("map glass rt params ubo: {e}"))? as *mut u8;
-        params_buffers.push(buf);
-        params_memories.push(mem);
-        params_ptrs.push(ptr);
+        )?);
     }
 
     // Pool: per-frame sets, each 1 UBO + 1 TLAS + 5 SSBO (geom, verts, indices,
@@ -517,10 +504,7 @@ fn build_glass_rt(
 
     // 1-element dummy SSBO for the skinned-index binding when there is no skinned
     // geometry.
-    let (dummy_ssbo, dummy_ssbo_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let dummy_ssbo = alloc.create_buffer(
         16,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -533,12 +517,9 @@ fn build_glass_rt(
         flat_pso,
         textured_pso,
         params_buffers,
-        params_memories,
-        params_ptrs,
         sets,
         pool,
         dummy_ssbo,
-        dummy_ssbo_memory,
     };
     rt.wire_static(device, vertex_buffer, index_buffer);
     if let Some(inputs) = rt_inputs {
@@ -562,13 +543,10 @@ fn build_glass_rt(
 // Per-panel GPU state: the static world-space quad VB + IB, the per-panel
 // `GlassParams` UBO + its descriptor set, and the visibility flag.
 struct GlassPanelRecord {
-    vertex_buffer: vk::Buffer,
-    vertex_memory: vk::DeviceMemory,
-    index_buffer: vk::Buffer,
-    index_memory: vk::DeviceMemory,
+    vertex_buffer: PooledBuffer,
+    index_buffer: PooledBuffer,
     index_count: u32,
-    params_ubo: vk::Buffer,
-    params_ubo_memory: vk::DeviceMemory,
+    params_ubo: PooledBuffer,
     params_set: vk::DescriptorSet,
     visible: bool,
     // World-space centre, used for the back-to-front camera-distance sort.
@@ -591,10 +569,8 @@ pub(in crate::vulkan) struct GlassResources {
     descriptor_pool: vk::DescriptorPool,
 
     // Per-frame `TransparentView` UBO ring. Persistently mapped; the encoder
-    // memcpys this frame's view into `view_ubo_ptrs[frame_idx]` before binding.
-    view_ubos: Vec<vk::Buffer>,
-    view_ubo_memories: Vec<vk::DeviceMemory>,
-    view_ubo_ptrs: Vec<*mut u8>,
+    // memcpys this frame's view into `view_ubo_buffers[frame_idx].mapped_ptr()` before binding.
+    view_ubos: Vec<PooledBuffer>,
     view_sets: Vec<vk::DescriptorSet>,
 
     // Per-frame scene target the pass blends into: `SsrResources::output`
@@ -643,9 +619,7 @@ struct GlassRt {
     // Per-frame RtParams UBO ring (144 B, host-mapped). The encoder fills this
     // frame's slot (sun + ray tunables) before binding, mirroring
     // `encode_rt_reflections`.
-    params_buffers: Vec<vk::Buffer>,
-    params_memories: Vec<vk::DeviceMemory>,
-    params_ptrs: Vec<*mut u8>,
+    params_buffers: Vec<PooledBuffer>,
 
     // Per-frame RT descriptor ring (set 3). Static bindings (RtParams UBO, the
     // shared static verts / indices) are written once; the TLAS / geom table /
@@ -658,8 +632,7 @@ struct GlassRt {
     // the scene carries no skinned geometry (the accel data's skinned-index handle
     // is then `vk::Buffer::null()`), so the descriptor stays valid. Mirrors the
     // RT-reflection pass's dummy.
-    dummy_ssbo: vk::Buffer,
-    dummy_ssbo_memory: vk::DeviceMemory,
+    dummy_ssbo: PooledBuffer,
 }
 
 // The transparent render pass: load + store the single-sample scene image (the
@@ -964,20 +937,15 @@ fn create_pipeline(
 // barrier (SHADER_READ_ONLY -> TRANSFER_DST) matches. Mirrors the raymarch
 // scene snapshot.
 fn create_snapshot(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width: width.max(1),
             height: height.max(1),
@@ -988,6 +956,7 @@ fn create_snapshot(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
             device,
@@ -1007,27 +976,14 @@ fn create_snapshot(
         );
     })?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Upload one panel's static quad VB + IB (host-visible, written once) and its
 // per-panel `GlassParams` UBO; allocate + write the panel's descriptor set.
-type PanelBuffers = (
-    vk::Buffer,
-    vk::DeviceMemory,
-    vk::Buffer,
-    vk::DeviceMemory,
-    u32,
-);
+type PanelBuffers = (PooledBuffer, PooledBuffer, u32);
 fn build_panel_buffers(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     panel: &GlassPanel,
 ) -> Result<PanelBuffers, String> {
     let (verts, idxs) = build_glass_quad(panel.centre, panel.normal, panel.half_size);
@@ -1049,40 +1005,21 @@ fn build_panel_buffers(
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     let vb_bytes = std::mem::size_of_val(packed.as_slice()) as u64;
     let ib_bytes = std::mem::size_of_val(idxs.as_slice()) as u64;
-    let (vb, vb_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
-        vb_bytes,
-        vk::BufferUsageFlags::VERTEX_BUFFER,
-        host,
-    )?;
-    let (ib, ib_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
-        ib_bytes,
-        vk::BufferUsageFlags::INDEX_BUFFER,
-        host,
-    )?;
+    let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
+    let ib = alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
     unsafe {
-        let p = device
-            .map_memory(vb_mem, 0, vb_bytes, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("glass vb map: {e}"))?;
         std::ptr::copy_nonoverlapping(
             packed.as_ptr() as *const u8,
-            p as *mut u8,
+            vb.mapped_ptr(),
             vb_bytes as usize,
         );
-        device.unmap_memory(vb_mem);
-
-        let p = device
-            .map_memory(ib_mem, 0, ib_bytes, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("glass ib map: {e}"))?;
-        std::ptr::copy_nonoverlapping(idxs.as_ptr() as *const u8, p as *mut u8, ib_bytes as usize);
-        device.unmap_memory(ib_mem);
+        std::ptr::copy_nonoverlapping(
+            idxs.as_ptr() as *const u8,
+            ib.mapped_ptr(),
+            ib_bytes as usize,
+        );
     }
-    Ok((vb, vb_mem, ib, ib_mem, idxs.len() as u32))
+    Ok((vb, ib, idxs.len() as u32))
 }
 
 // The Vulkan device handles the glass build + rebuild need: the instance,
@@ -1090,6 +1027,7 @@ fn build_panel_buffers(
 // one-shot snapshot layout transition.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GlassDeviceCtx<'a> {
+    pub alloc: &'a DeviceAllocator,
     pub instance: &'a ash::Instance,
     pub device: &'a Device,
     pub physical_device: vk::PhysicalDevice,
@@ -1184,6 +1122,7 @@ impl GlassResources {
         panels: &[GlassPanel],
     ) -> Result<Self, String> {
         let GlassDeviceCtx {
+            alloc,
             instance,
             device,
             physical_device,
@@ -1236,6 +1175,7 @@ impl GlassResources {
         // (mirrors DirectX's `build_glass_rt` graceful fallback).
         let rt = if rt_capable {
             match build_glass_rt(
+                alloc,
                 instance,
                 device,
                 physical_device,
@@ -1271,35 +1211,17 @@ impl GlassResources {
             None
         };
 
-        let snapshot = create_snapshot(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
+        let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
         let view_size = std::mem::size_of::<TransparentView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            view_ubos.push(alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map glass view ubo: {e}"))? as *mut u8;
-            view_ubos.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
+            )?);
         }
 
         let descriptor_pool = create_descriptor_pool(device, frames, panels.len())?;
@@ -1309,7 +1231,7 @@ impl GlassResources {
             write_view_set(
                 device,
                 set,
-                view_ubos[i],
+                view_ubos[i].buffer(),
                 snapshot.view,
                 depth_views[i.min(depth_views.len().saturating_sub(1))],
                 sampler,
@@ -1322,50 +1244,40 @@ impl GlassResources {
         // Per-panel records: quad buffers + static params UBO + descriptor set.
         let mut records: Vec<GlassPanelRecord> = Vec::with_capacity(panels.len());
         for (i, panel) in panels.iter().enumerate() {
-            let (vertex_buffer, vertex_memory, index_buffer, index_memory, index_count) =
-                build_panel_buffers(instance, device, physical_device, panel)?;
+            let (vertex_buffer, index_buffer, index_count) = build_panel_buffers(alloc, panel)?;
 
             let planar_slot = planar_slots.get(i).copied().flatten();
             let planar = if planar_slot.is_some() { 1.0 } else { 0.0 };
             let params = glass_params_from(panel, planar);
-            let (params_ubo, params_ubo_memory) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            let params_ubo = alloc.create_buffer(
                 std::mem::size_of::<GlassParams>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
             unsafe {
-                let p = device
-                    .map_memory(
-                        params_ubo_memory,
-                        0,
-                        std::mem::size_of::<GlassParams>() as u64,
-                        vk::MemoryMapFlags::empty(),
-                    )
-                    .map_err(|e| format!("map glass params ubo: {e}"))?;
                 std::ptr::copy_nonoverlapping(
                     &params as *const GlassParams as *const u8,
-                    p as *mut u8,
+                    params_ubo.mapped_ptr(),
                     std::mem::size_of::<GlassParams>(),
                 );
-                device.unmap_memory(params_ubo_memory);
             }
             let planar_view = planar_slot
                 .and_then(|s| planar_target_views.get(s).copied())
                 .unwrap_or(snapshot.view);
             let params_set = alloc_sets(device, descriptor_pool, &[params_set_layout])?[0];
-            write_params_set(device, params_set, params_ubo, planar_view, sampler);
+            write_params_set(
+                device,
+                params_set,
+                params_ubo.buffer(),
+                planar_view,
+                sampler,
+            );
 
             records.push(GlassPanelRecord {
                 vertex_buffer,
-                vertex_memory,
                 index_buffer,
-                index_memory,
                 index_count,
                 params_ubo,
-                params_ubo_memory,
                 params_set,
                 visible: panel.visible,
                 centre: panel.centre,
@@ -1381,8 +1293,6 @@ impl GlassResources {
             params_set_layout,
             descriptor_pool,
             view_ubos,
-            view_ubo_memories,
-            view_ubo_ptrs,
             view_sets,
             scene_images: scene_images.to_vec(),
             framebuffers,
@@ -1450,11 +1360,11 @@ impl GlassResources {
         targets: GlassRebuildTargets,
     ) -> Result<(), String> {
         let GlassDeviceCtx {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
+            ..
         } = ctx;
         let GlassRebuildTargets {
             scene_views,
@@ -1464,17 +1374,9 @@ impl GlassResources {
         } = targets;
         let old = std::mem::replace(
             &mut self.snapshot,
-            create_snapshot(
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
-                width,
-                height,
-            )?,
+            create_snapshot(alloc, device, command_pool, queue, width, height)?,
         );
-        old.destroy(device);
+        drop(old);
 
         unsafe {
             for &fb in &self.framebuffers {
@@ -1489,7 +1391,7 @@ impl GlassResources {
             write_view_set(
                 device,
                 set,
-                self.view_ubos[i],
+                self.view_ubos[i].buffer(),
                 self.snapshot.view,
                 depth_views[i.min(depth_views.len().saturating_sub(1))],
                 self.sampler,
@@ -1507,7 +1409,7 @@ impl GlassResources {
             write_params_set(
                 device,
                 p.params_set,
-                p.params_ubo,
+                p.params_ubo.buffer(),
                 planar_view,
                 self.sampler,
             );
@@ -1522,23 +1424,9 @@ impl GlassResources {
             rt.destroy(device);
         }
         unsafe {
-            for p in &self.panels {
-                device.destroy_buffer(p.vertex_buffer, None);
-                device.free_memory(p.vertex_memory, None);
-                device.destroy_buffer(p.index_buffer, None);
-                device.free_memory(p.index_memory, None);
-                device.destroy_buffer(p.params_ubo, None);
-                device.free_memory(p.params_ubo_memory, None);
-            }
-            for (&buf, &mem) in self.view_ubos.iter().zip(self.view_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            self.snapshot.destroy(device);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.view_set_layout, None);
             device.destroy_descriptor_set_layout(self.params_set_layout, None);
@@ -1548,8 +1436,7 @@ impl GlassResources {
         }
         self.panels.clear();
         self.view_ubos.clear();
-        self.view_ubo_memories.clear();
-        self.view_ubo_ptrs.clear();
+        self.snapshot = GpuImage::null();
         self.framebuffers.clear();
         self.scene_images.clear();
     }
@@ -1641,10 +1528,11 @@ impl VkContext {
         let depth_image = self.depth_images[frame_idx].image;
 
         // Upload this frame's view UBO.
-        let view_ptr = *glass
-            .view_ubo_ptrs
+        let view_ptr = glass
+            .view_ubos
             .get(frame_idx)
-            .ok_or("glass: view_ubo_ptrs index OOB")?;
+            .map(|b| b.mapped_ptr())
+            .ok_or("glass: view_ubos index OOB")?;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const TransparentView as *const u8,
@@ -1696,7 +1584,7 @@ impl VkContext {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const RtParams as *const u8,
-                    glass_rt.params_ptrs[frame_idx],
+                    glass_rt.params_buffers[frame_idx].mapped_ptr(),
                     std::mem::size_of::<RtParams>(),
                 );
             }
@@ -1920,13 +1808,13 @@ impl VkContext {
                     std::slice::from_ref(&p.params_set),
                     &[],
                 );
-                device.cmd_bind_vertex_buffers(
+                device.cmd_bind_vertex_buffers(cmd, 0, &[p.vertex_buffer.buffer()], &[0]);
+                device.cmd_bind_index_buffer(
                     cmd,
+                    p.index_buffer.buffer(),
                     0,
-                    std::slice::from_ref(&p.vertex_buffer),
-                    &[0],
+                    vk::IndexType::UINT16,
                 );
-                device.cmd_bind_index_buffer(cmd, p.index_buffer, 0, vk::IndexType::UINT16);
                 device.cmd_draw_indexed(cmd, p.index_count, 1, 0, 0, 0);
                 self.inc_draw_calls(1);
             }

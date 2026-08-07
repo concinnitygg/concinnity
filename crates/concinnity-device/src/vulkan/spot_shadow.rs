@@ -15,13 +15,15 @@
 use ash::{Device, vk};
 
 use crate::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
 use crate::vulkan::context::{VkContext, VkSpotShadow};
 use crate::vulkan::resources::alloc_descriptor_sets;
-use crate::vulkan::texture::{GpuImage, create_buffer};
+use crate::vulkan::texture::GpuImage;
 
 // Everything `build_spot_shadow` needs from init. Grouped so the builder takes
 // one parameter instead of a nine-argument list.
 pub(super) struct SpotShadowBuild<'a> {
+    pub alloc: &'a DeviceAllocator,
     pub instance: &'a ash::Instance,
     pub device: &'a Device,
     pub physical_device: vk::PhysicalDevice,
@@ -42,6 +44,7 @@ pub(super) struct SpotShadowBuild<'a> {
 // lifetime; only the depth contents change per frame.
 pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, String> {
     let SpotShadowBuild {
+        alloc,
         instance,
         device,
         physical_device,
@@ -67,15 +70,12 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
         spot_shadows.to_vec()
     };
     let data_size = std::mem::size_of_val(data.as_slice()) as u64;
-    let (data_buffer, data_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let data_buffer = alloc.create_buffer(
         data_size,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    upload_records(device, data_memory, &data, "spot-shadow data")?;
+    upload_records(&data_buffer, &data);
 
     // One `ShadowUniforms` per slice, each with the spot's matrix in
     // `light_vps[0]`, so the shared shadow vertex shader renders a spot slice by
@@ -87,10 +87,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
         .max(1);
     let stride = (size_of::<ShadowUniforms>() as u64).div_ceil(align) * align;
     let slots = framebuffers.len().max(1) as u64;
-    let (ubo, ubo_memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+    let ubo = alloc.create_buffer(
         stride * slots,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -105,7 +102,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
                 u
             })
             .collect();
-        upload_strided(device, ubo_memory, &uniforms, stride, "spot-shadow UBO")?;
+        upload_strided(&ubo, &uniforms, stride);
     }
 
     // The pass's own descriptor pool: one single-UBO set per slice. Kept
@@ -129,7 +126,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
     let sets = alloc_descriptor_sets(device, descriptor_pool, &layouts)?;
     for (i, &set) in sets.iter().enumerate() {
         let info = vk::DescriptorBufferInfo::default()
-            .buffer(ubo)
+            .buffer(ubo.buffer())
             .offset(i as u64 * stride)
             .range(size_of::<ShadowUniforms>() as u64);
         let write = vk::WriteDescriptorSet::default()
@@ -145,9 +142,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
         framebuffers,
         slice_size,
         data_buffer,
-        data_memory,
         ubo,
-        ubo_memory,
         sets,
         descriptor_pool,
         scheduler: Default::default(),
@@ -155,38 +150,20 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
     })
 }
 
-// One-shot tightly packed upload of a record slice into host-visible memory.
-fn upload_records<T: Copy>(
-    device: &Device,
-    memory: vk::DeviceMemory,
-    records: &[T],
-    label: &str,
-) -> Result<(), String> {
-    let size = std::mem::size_of_val(records) as u64;
+// One-shot tightly packed upload of a record slice into a host-visible pooled
+// buffer.
+fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
+    let size = std::mem::size_of_val(records);
     unsafe {
-        let ptr = device
-            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map {label}: {e}"))? as *mut u8;
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr, size as usize);
-        device.unmap_memory(memory);
+        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
     }
-    Ok(())
 }
 
 // As `upload_records`, but places record `i` at `i * stride` so each slot can
 // back its own uniform-buffer descriptor.
-fn upload_strided<T: Copy>(
-    device: &Device,
-    memory: vk::DeviceMemory,
-    records: &[T],
-    stride: u64,
-    label: &str,
-) -> Result<(), String> {
-    let size = stride * records.len() as u64;
+fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
     unsafe {
-        let base = device
-            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("map {label}: {e}"))? as *mut u8;
+        let base = buffer.mapped_ptr();
         for (i, r) in records.iter().enumerate() {
             std::ptr::copy_nonoverlapping(
                 r as *const T as *const u8,
@@ -194,9 +171,7 @@ fn upload_strided<T: Copy>(
                 size_of::<T>(),
             );
         }
-        device.unmap_memory(memory);
     }
-    Ok(())
 }
 
 impl VkContext {

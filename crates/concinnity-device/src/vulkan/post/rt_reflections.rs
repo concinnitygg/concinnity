@@ -26,6 +26,7 @@ use ash::{Device, vk};
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
+use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -102,9 +103,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     textured_pso: Option<vk::Pipeline>,
 
     // Per-frame `RtParams` UBO (144 B), host-mapped.
-    params_buffers: Vec<vk::Buffer>,
-    params_memories: Vec<vk::DeviceMemory>,
-    params_ptrs: Vec<*mut u8>,
+    params_buffers: Vec<PooledBuffer>,
 
     descriptor_pool: vk::DescriptorPool,
     // Per-frame resolve sets: scene = that frame's HDR resolve, plus the shared
@@ -120,8 +119,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // index handle is then `vk::Buffer::null()`). Keeps the descriptor always
     // valid; the deformed-verts SSBO (binding 9) needs no dummy because the accel
     // data always holds a valid 1-element deformed buffer.
-    dummy_ssbo: vk::Buffer,
-    dummy_ssbo_memory: vk::DeviceMemory,
+    dummy_ssbo: PooledBuffer,
 
     // Bindless texture-pool length, kept for the hot-reload recompile of the
     // textured variant.
@@ -298,9 +296,8 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
 // descriptor sets). Everything `create_buffer` / `create_image` / `build_targets`
 // need to size and place the pass's GPU memory.
 pub(in crate::vulkan) struct RtBuild<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
     pub width: u32,
     pub height: u32,
     pub frames: usize,
@@ -362,9 +359,8 @@ impl RtReflectionsResources {
         layout: RtLayoutConfig,
     ) -> Result<Self, String> {
         let RtBuild {
-            instance,
+            alloc,
             device,
-            physical_device,
             width,
             height,
             frames,
@@ -509,22 +505,13 @@ impl RtReflectionsResources {
         // Per-frame RtParams UBO.
         let params_size = std::mem::size_of::<RtParams>() as vk::DeviceSize;
         let mut params_buffers = Vec::with_capacity(frames);
-        let mut params_memories = Vec::with_capacity(frames);
-        let mut params_ptrs = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            let buf = alloc.create_buffer(
                 params_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-            let ptr = unsafe { device.map_memory(mem, 0, params_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map RT params UBO: {e}"))? as *mut u8;
             params_buffers.push(buf);
-            params_memories.push(mem);
-            params_ptrs.push(ptr);
         }
 
         // Pool: per-frame sets, each with 1 UBO + 1 TLAS + 5 SSBO (geom table,
@@ -560,10 +547,7 @@ impl RtReflectionsResources {
 
         // 1-element dummy storage buffer for the skinned-index binding when there
         // is no skinned geometry.
-        let (dummy_ssbo, dummy_ssbo_memory) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        let dummy_ssbo = alloc.create_buffer(
             16,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -571,12 +555,7 @@ impl RtReflectionsResources {
 
         let mut me = Self {
             settings,
-            output: GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            },
+            output: GpuImage::null(),
             render_pass,
             framebuffer: vk::Framebuffer::null(),
             set_layout,
@@ -585,17 +564,14 @@ impl RtReflectionsResources {
             flat_pso,
             textured_pso,
             params_buffers,
-            params_memories,
-            params_ptrs,
             descriptor_pool,
             resolve_sets,
             sampler,
             dummy_ssbo,
-            dummy_ssbo_memory,
             pool_size,
             probe_cube_count,
         };
-        me.build_targets(instance, device, physical_device, width, height)?;
+        me.build_targets(alloc, device, width, height)?;
         me.wire_static(
             device,
             RtStaticInputs {
@@ -627,20 +603,15 @@ impl RtReflectionsResources {
     // Allocate / re-allocate the resolution-dependent output target + framebuffer.
     fn build_targets(
         &mut self,
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        physical_device: vk::PhysicalDevice,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
         let w = width.max(1);
         let h = height.max(1);
-        let (image, memory) = create_image(
-            &GpuAllocContext {
-                instance,
-                device,
-                physical_device,
-            },
+        let pooled = create_image(
+            alloc,
             &ImageSpec {
                 width: w,
                 height: h,
@@ -656,13 +627,9 @@ impl RtReflectionsResources {
                 samples: vk::SampleCountFlags::TYPE_1,
             },
         )?;
+        let image = pooled.image();
         let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        self.output = GpuImage {
-            image,
-            memory,
-            view,
-            aux_views: Vec::new(),
-        };
+        self.output = GpuImage::from_pooled(pooled, view);
         self.framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -747,7 +714,7 @@ impl RtReflectionsResources {
                 .image_view(roughness_views[i % roughness_views.len().max(1)])
                 .sampler(self.sampler);
             let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(self.params_buffers[i])
+                .buffer(self.params_buffers[i].buffer())
                 .offset(0)
                 .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
             let scene_view = hdr_resolve_views[i % hdr_resolve_views.len().max(1)];
@@ -841,7 +808,7 @@ impl RtReflectionsResources {
         let sidx_buffer = if skinned_indices != vk::Buffer::null() {
             skinned_indices
         } else {
-            self.dummy_ssbo
+            self.dummy_ssbo.buffer()
         };
         let sidx_info = vk::DescriptorBufferInfo::default()
             .buffer(sidx_buffer)
@@ -889,13 +856,7 @@ impl RtReflectionsResources {
             self.framebuffer = vk::Framebuffer::null();
         }
         if self.output.image != vk::Image::null() {
-            self.output.destroy(device);
-            self.output = GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            };
+            self.output = GpuImage::null();
         }
     }
 
@@ -905,15 +866,14 @@ impl RtReflectionsResources {
     // per frame as usual.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        physical_device: vk::PhysicalDevice,
         width: u32,
         height: u32,
         inputs: RtStaticInputs,
     ) -> Result<(), String> {
         self.destroy_targets(device);
-        self.build_targets(instance, device, physical_device, width, height)?;
+        self.build_targets(alloc, device, width, height)?;
         self.wire_static(device, inputs);
         Ok(())
     }
@@ -950,14 +910,9 @@ impl RtReflectionsResources {
             device.destroy_render_pass(self.render_pass, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_sampler(self.sampler, None);
-            device.destroy_buffer(self.dummy_ssbo, None);
-            device.free_memory(self.dummy_ssbo_memory, None);
-            for (&buf, &mem) in self.params_buffers.iter().zip(&self.params_memories) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
         }
+        self.dummy_ssbo = PooledBuffer::null();
+        self.params_buffers.clear();
     }
 }
 
@@ -1013,18 +968,18 @@ impl VkContext {
         // overlap the `rt_accel` mutable borrow below.
         let skinned_inputs: Option<(vk::Buffer, vk::Buffer, Vec<vk::Buffer>)> =
             if !self.skinned.draw_objects.is_empty()
-                && self.skinned.vertex_buffer != vk::Buffer::null()
-                && self.skinned.index_buffer != vk::Buffer::null()
+                && !self.skinned.vertex_buffer.is_null()
+                && !self.skinned.index_buffer.is_null()
             {
                 let joint_buffers: Vec<vk::Buffer> = self
                     .skinned
                     .joint_buffers
                     .get(frame_idx)
-                    .cloned()
+                    .map(|bufs| bufs.iter().map(|b| b.buffer()).collect())
                     .unwrap_or_default();
                 Some((
-                    self.skinned.vertex_buffer,
-                    self.skinned.index_buffer,
+                    self.skinned.vertex_buffer.buffer(),
+                    self.skinned.index_buffer.buffer(),
                     joint_buffers,
                 ))
             } else {
@@ -1045,6 +1000,7 @@ impl VkContext {
             });
             accel.dynamic_update(
                 super::super::raytrace::RtDeviceCtx {
+                    alloc: &self.alloc,
                     instance: &instance,
                     device: &device,
                     pd,
@@ -1137,7 +1093,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const RtParams as *const u8,
-                rt.params_ptrs[frame_idx],
+                rt.params_buffers[frame_idx].mapped_ptr(),
                 std::mem::size_of::<RtParams>(),
             );
         }

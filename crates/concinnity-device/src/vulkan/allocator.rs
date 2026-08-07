@@ -208,10 +208,7 @@ impl PooledBuffer {
     }
 
     // A placeholder naming no buffer, for a slot filled before its real
-    // resource exists. Dropping it is a no-op. Unused until the call-site
-    // conversion reaches the buffer holders with a null state; remove the
-    // allows once it does.
-    #[allow(dead_code)]
+    // resource exists. Dropping it is a no-op.
     pub(super) fn null() -> Self {
         Self {
             buffer: vk::Buffer::null(),
@@ -220,7 +217,6 @@ impl PooledBuffer {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn is_null(&self) -> bool {
         self.buffer == vk::Buffer::null()
     }
@@ -242,8 +238,9 @@ impl PooledImage {
     }
 
     // A pointer to this image's own bytes, or null when its memory type is not
-    // host-visible. Only meaningful for LINEAR-tiled images; unused until the
-    // call-site conversion reaches the readback images. Remove the allow then.
+    // host-visible. Only meaningful for LINEAR-tiled images; nothing pools one
+    // yet, so this is exercised by the unit tests alone. Remove the allow with
+    // its first live caller.
     #[allow(dead_code)]
     pub(super) fn mapped_ptr(&self) -> *mut u8 {
         self.mapped
@@ -268,8 +265,8 @@ impl PooledImage {
         }
     }
 
-    // Unused until the call-site conversion reaches the image holders that
-    // branch on their null state; remove the allow once it does.
+    // Exercised by the unit tests; no live caller branches on an image's null
+    // state yet. Remove the allow with the first one.
     #[allow(dead_code)]
     pub(super) fn is_null(&self) -> bool {
         self.image == vk::Image::null()
@@ -335,16 +332,6 @@ impl DeviceAllocator {
             memory_props,
             max_allocations,
         }
-    }
-
-    // The device the pooled blocks are allocated on. Lets a caller that already
-    // holds an allocator create the objects that stay outside it (views,
-    // samplers, pipelines) without carrying a second handle. Unused until the
-    // call-site conversion slims the device contexts down; remove the allow
-    // once it does.
-    #[allow(dead_code)]
-    pub(super) fn device(&self) -> &Device {
-        &self.device
     }
 
     // Create a `size`-byte buffer with `usage`, placed in memory satisfying

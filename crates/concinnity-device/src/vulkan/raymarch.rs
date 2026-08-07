@@ -27,6 +27,7 @@ use std::ffi::CString;
 
 use ash::{Device, vk};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::assets::SdfVolume;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{LightUniforms, ShadowUniforms};
@@ -35,8 +36,8 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{compile_glsl, shader_source, spv_module};
 use super::render_pass::create_main_render_pass_two_pass;
 use super::texture::{
-    GpuAllocContext, GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_buffer,
-    create_image, create_image_view, one_shot_submit, transition_image_layout_range,
+    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
+    one_shot_submit, transition_image_layout_range,
 };
 
 // Engine-shipped GLSL: the helpers + opaque template the per-volume user
@@ -88,8 +89,8 @@ struct RaymarchVolumeRecord {
     // is set; the shadow encoder iterates only the volumes where this is `Some`
     // and `visible`. Targets `shadow_render_pass`.
     shadow_pipeline: Option<vk::Pipeline>,
-    volume_ubo: vk::Buffer,
-    volume_ubo_memory: vk::DeviceMemory,
+    // Held for the volume's lifetime; `volume_set` aliases it.
+    _volume_ubo: PooledBuffer,
     volume_set: vk::DescriptorSet,
     visible: bool,
 }
@@ -112,18 +113,14 @@ pub(in crate::vulkan) struct RaymarchResources {
     descriptor_pool: vk::DescriptorPool,
 
     // Per-frame `RaymarchView` UBO ring. Persistently mapped; the encoder
-    // memcpys this frame's view into `view_ubo_ptrs[frame_idx]` before binding.
-    view_ubos: Vec<vk::Buffer>,
-    view_ubo_memories: Vec<vk::DeviceMemory>,
-    view_ubo_ptrs: Vec<*mut u8>,
+    // memcpys this frame's view into `view_ubo_buffers[frame_idx].mapped_ptr()` before binding.
+    view_ubos: Vec<PooledBuffer>,
     view_sets: Vec<vk::DescriptorSet>,
 
     // Shared unit-cube proxy geometry (positions at +/-1; the vertex shader
     // scales by `vol_extent` + offsets by `vol_centre`).
-    cube_vb: vk::Buffer,
-    cube_vb_memory: vk::DeviceMemory,
-    cube_ib: vk::Buffer,
-    cube_ib_memory: vk::DeviceMemory,
+    cube_vb: PooledBuffer,
+    cube_ib: PooledBuffer,
 
     // Pre-raymarch HDR scene snapshot for the refraction tap (`scene_color`).
     // The encoder copies hdr_resolve into this at the head of the pass; sized to
@@ -142,9 +139,7 @@ pub(in crate::vulkan) struct RaymarchResources {
     // `cascade_idx` push constant.
     shadow_pipeline_layout: vk::PipelineLayout,
     shadow_view_set_layout: vk::DescriptorSetLayout,
-    shadow_view_ubos: Vec<vk::Buffer>,
-    shadow_view_ubo_memories: Vec<vk::DeviceMemory>,
-    shadow_view_ubo_ptrs: Vec<*mut u8>,
+    shadow_view_ubos: Vec<PooledBuffer>,
     shadow_view_sets: Vec<vk::DescriptorSet>,
 
     msaa: bool,
@@ -266,12 +261,8 @@ fn cube_vertex(pos: [f32; 3]) -> Vertex {
 // Build the shared unit-cube proxy VB + IB. 8 corners at +/-1; 36 indices (the
 // pipeline culls front faces so only back faces fire). Host-visible buffers,
 // written once. Mirrors `directx::raymarch::build_cube_buffers`.
-type CubeBuffers = (vk::Buffer, vk::DeviceMemory, vk::Buffer, vk::DeviceMemory);
-fn build_cube_buffers(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-) -> Result<CubeBuffers, String> {
+type CubeBuffers = (PooledBuffer, PooledBuffer);
+fn build_cube_buffers(alloc: &DeviceAllocator) -> Result<CubeBuffers, String> {
     #[rustfmt::skip]
     let corners: [Vertex; 8] = [
         cube_vertex([-1.0, -1.0, -1.0]),
@@ -297,44 +288,21 @@ fn build_cube_buffers(
     let ib_bytes = std::mem::size_of_val(&indices) as u64;
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
 
-    let (vb, vb_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
-        vb_bytes,
-        vk::BufferUsageFlags::VERTEX_BUFFER,
-        host,
-    )?;
-    let (ib, ib_mem) = create_buffer(
-        instance,
-        device,
-        physical_device,
-        ib_bytes,
-        vk::BufferUsageFlags::INDEX_BUFFER,
-        host,
-    )?;
+    let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
+    let ib = alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
     unsafe {
-        let p = device
-            .map_memory(vb_mem, 0, vb_bytes, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("raymarch cube vb map: {e}"))?;
         std::ptr::copy_nonoverlapping(
             corners.as_ptr() as *const u8,
-            p as *mut u8,
+            vb.mapped_ptr(),
             vb_bytes as usize,
         );
-        device.unmap_memory(vb_mem);
-
-        let p = device
-            .map_memory(ib_mem, 0, ib_bytes, vk::MemoryMapFlags::empty())
-            .map_err(|e| format!("raymarch cube ib map: {e}"))?;
         std::ptr::copy_nonoverlapping(
             indices.as_ptr() as *const u8,
-            p as *mut u8,
+            ib.mapped_ptr(),
             ib_bytes as usize,
         );
-        device.unmap_memory(ib_mem);
     }
-    Ok((vb, vb_mem, ib, ib_mem))
+    Ok((vb, ib))
 }
 
 // The single-sample raymarch render pass: load + store hdr_resolve directly
@@ -942,20 +910,15 @@ fn create_shadow_pipeline(
 // and rest it in SHADER_READ_ONLY so the first frame's snapshot barrier
 // (SHADER_READ_ONLY -> TRANSFER_DST) matches.
 fn create_snapshot(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width: width.max(1),
             height: height.max(1),
@@ -966,6 +929,7 @@ fn create_snapshot(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout_range(
             device,
@@ -985,21 +949,15 @@ fn create_snapshot(
         );
     })?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Vulkan device/instance handles used to create + rebuild raymarch GPU
 // resources. Shared by `try_new` and `rebuild`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RaymarchDeviceContext<'a> {
-    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a Device,
-    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,
 }
@@ -1028,7 +986,7 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
     pub(in crate::vulkan) linear_sampler: vk::Sampler,
     pub(in crate::vulkan) light_ubo: vk::Buffer,
     // Per-frame-in-flight ShadowUniforms ring, indexed by frame slot.
-    pub(in crate::vulkan) shadow_ubos: &'a [vk::Buffer],
+    pub(in crate::vulkan) shadow_ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) shadow_render_pass: vk::RenderPass,
 }
 
@@ -1047,9 +1005,8 @@ impl RaymarchResources {
         hot_reload: bool,
     ) -> Result<Option<Self>, String> {
         let RaymarchDeviceContext {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
         } = ctx;
@@ -1119,39 +1076,19 @@ impl RaymarchResources {
                 .map_err(|e| format!("raymarch pipeline layout: {e}"))?
         };
 
-        let (cube_vb, cube_vb_memory, cube_ib, cube_ib_memory) =
-            build_cube_buffers(instance, device, physical_device)?;
+        let (cube_vb, cube_ib) = build_cube_buffers(alloc)?;
 
-        let snapshot = create_snapshot(
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-            width,
-            height,
-        )?;
+        let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
         let view_size = std::mem::size_of::<RaymarchView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            view_ubos.push(alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map raymarch view ubo: {e}"))?
-                as *mut u8;
-            view_ubos.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
+            )?);
         }
 
         let has_shadow = active.iter().any(|(v, _, _)| v.cast_shadows);
@@ -1163,9 +1100,9 @@ impl RaymarchResources {
                 device,
                 set,
                 RaymarchViewSetBuffers {
-                    view_ubo: view_ubos[i],
+                    view_ubo: view_ubos[i].buffer(),
                     light_ubo,
-                    shadow_ubo: shadow_ubos[i],
+                    shadow_ubo: shadow_ubos[i].buffer(),
                 },
                 RaymarchViewSetTextures {
                     shadow_map_view,
@@ -1185,9 +1122,7 @@ impl RaymarchResources {
         // `cascade_idx` push constant. Built only when a volume casts shadows.
         let mut shadow_pipeline_layout = vk::PipelineLayout::null();
         let mut shadow_view_set_layout = vk::DescriptorSetLayout::null();
-        let mut shadow_view_ubos: Vec<vk::Buffer> = Vec::new();
-        let mut shadow_view_ubo_memories: Vec<vk::DeviceMemory> = Vec::new();
-        let mut shadow_view_ubo_ptrs: Vec<*mut u8> = Vec::new();
+        let mut shadow_view_ubos: Vec<PooledBuffer> = Vec::new();
         let mut shadow_view_sets: Vec<vk::DescriptorSet> = Vec::new();
         if has_shadow {
             shadow_view_set_layout = create_shadow_view_set_layout(device)?;
@@ -1203,26 +1138,22 @@ impl RaymarchResources {
                 .map_err(|e| format!("raymarch shadow pipeline layout: {e}"))?;
 
             for _ in 0..frames {
-                let (buf, mem) = create_buffer(
-                    instance,
-                    device,
-                    physical_device,
+                shadow_view_ubos.push(alloc.create_buffer(
                     view_size,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?;
-                let ptr =
-                    unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                        .map_err(|e| format!("map raymarch shadow view ubo: {e}"))?
-                        as *mut u8;
-                shadow_view_ubos.push(buf);
-                shadow_view_ubo_memories.push(mem);
-                shadow_view_ubo_ptrs.push(ptr);
+                )?);
             }
             let shadow_layouts: Vec<_> = (0..frames).map(|_| shadow_view_set_layout).collect();
             shadow_view_sets = alloc_sets(device, descriptor_pool, &shadow_layouts)?;
             for (i, &set) in shadow_view_sets.iter().enumerate() {
-                write_shadow_view_set(device, set, shadow_view_ubos[i], light_ubo, shadow_ubos[i]);
+                write_shadow_view_set(
+                    device,
+                    set,
+                    shadow_view_ubos[i].buffer(),
+                    light_ubo,
+                    shadow_ubos[i].buffer(),
+                );
             }
         }
 
@@ -1281,38 +1212,25 @@ impl RaymarchResources {
             };
 
             let uniforms = volume_uniforms_from(vol);
-            let (volume_ubo, volume_ubo_memory) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            let volume_ubo = alloc.create_buffer(
                 std::mem::size_of::<RaymarchVolumeUniforms>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
             unsafe {
-                let p = device
-                    .map_memory(
-                        volume_ubo_memory,
-                        0,
-                        std::mem::size_of::<RaymarchVolumeUniforms>() as u64,
-                        vk::MemoryMapFlags::empty(),
-                    )
-                    .map_err(|e| format!("map raymarch volume ubo: {e}"))?;
                 std::ptr::copy_nonoverlapping(
                     &uniforms as *const RaymarchVolumeUniforms as *const u8,
-                    p as *mut u8,
+                    volume_ubo.mapped_ptr(),
                     std::mem::size_of::<RaymarchVolumeUniforms>(),
                 );
-                device.unmap_memory(volume_ubo_memory);
             }
             let volume_set = alloc_sets(device, descriptor_pool, &[volume_set_layout])?[0];
-            write_volume_set(device, volume_set, volume_ubo);
+            write_volume_set(device, volume_set, volume_ubo.buffer());
 
             volumes.push(RaymarchVolumeRecord {
                 pipeline,
                 shadow_pipeline,
-                volume_ubo,
-                volume_ubo_memory,
+                _volume_ubo: volume_ubo,
                 volume_set,
                 visible: vol.visible,
             });
@@ -1326,20 +1244,14 @@ impl RaymarchResources {
             volume_set_layout,
             descriptor_pool,
             view_ubos,
-            view_ubo_memories,
-            view_ubo_ptrs,
             view_sets,
             cube_vb,
-            cube_vb_memory,
             cube_ib,
-            cube_ib_memory,
             snapshot,
             scene_sampler: linear_sampler,
             shadow_pipeline_layout,
             shadow_view_set_layout,
             shadow_view_ubos,
-            shadow_view_ubo_memories,
-            shadow_view_ubo_ptrs,
             shadow_view_sets,
             msaa,
             volumes,
@@ -1370,25 +1282,16 @@ impl RaymarchResources {
         height: u32,
     ) -> Result<(), String> {
         let RaymarchDeviceContext {
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
         } = ctx;
         let old = std::mem::replace(
             &mut self.snapshot,
-            create_snapshot(
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
-                width,
-                height,
-            )?,
+            create_snapshot(alloc, device, command_pool, queue, width, height)?,
         );
-        old.destroy(device);
+        drop(old);
         for &set in &self.view_sets {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -1452,28 +1355,7 @@ impl RaymarchResources {
                 if let Some(p) = vol.shadow_pipeline {
                     device.destroy_pipeline(p, None);
                 }
-                device.destroy_buffer(vol.volume_ubo, None);
-                device.free_memory(vol.volume_ubo_memory, None);
             }
-            for (&buf, &mem) in self.view_ubos.iter().zip(self.view_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for (&buf, &mem) in self
-                .shadow_view_ubos
-                .iter()
-                .zip(self.shadow_view_ubo_memories.iter())
-            {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            self.snapshot.destroy(device);
-            device.destroy_buffer(self.cube_vb, None);
-            device.free_memory(self.cube_vb_memory, None);
-            device.destroy_buffer(self.cube_ib, None);
-            device.free_memory(self.cube_ib_memory, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.view_set_layout, None);
             device.destroy_descriptor_set_layout(self.volume_set_layout, None);
@@ -1491,11 +1373,10 @@ impl RaymarchResources {
         }
         self.volumes.clear();
         self.view_ubos.clear();
-        self.view_ubo_memories.clear();
-        self.view_ubo_ptrs.clear();
         self.shadow_view_ubos.clear();
-        self.shadow_view_ubo_memories.clear();
-        self.shadow_view_ubo_ptrs.clear();
+        self.snapshot = GpuImage::null();
+        self.cube_vb = PooledBuffer::null();
+        self.cube_ib = PooledBuffer::null();
     }
 }
 
@@ -1534,7 +1415,7 @@ impl VkContext {
         if !rm.any_shadow_casters() {
             return;
         }
-        let Some(&ptr) = rm.shadow_view_ubo_ptrs.get(frame_idx) else {
+        let Some(ptr) = rm.shadow_view_ubos.get(frame_idx).map(|b| b.mapped_ptr()) else {
             return;
         };
         // Only `time` is read by the shadow shaders; the rest is inert padding.
@@ -1580,8 +1461,8 @@ impl VkContext {
             cascade_idx: cascade_idx as u32,
         };
         unsafe {
-            device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&rm.cube_vb), &[0]);
-            device.cmd_bind_index_buffer(cmd, rm.cube_ib, 0, vk::IndexType::UINT16);
+            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
+            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1651,10 +1532,11 @@ impl VkContext {
         let snapshot = rm.snapshot.image;
 
         // Upload this frame's view.
-        let view_ptr = *rm
-            .view_ubo_ptrs
+        let view_ptr = rm
+            .view_ubos
             .get(frame_idx)
-            .ok_or("raymarch: view_ubo_ptrs index OOB")?;
+            .map(|b| b.mapped_ptr())
+            .ok_or("raymarch: view_ubos index OOB")?;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const RaymarchView as *const u8,
@@ -1819,8 +1701,8 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&rm.cube_vb), &[0]);
-            device.cmd_bind_index_buffer(cmd, rm.cube_ib, 0, vk::IndexType::UINT16);
+            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
+            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,

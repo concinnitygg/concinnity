@@ -20,7 +20,7 @@
 use ash::vk;
 
 use super::context::VkContext;
-use super::texture::{create_buffer, one_shot_submit};
+use super::texture::one_shot_submit;
 use crate::gfx::hdr_output::{HdrEncoding, HdrOutputMode};
 use crate::gfx::image_decode::{self, PixelLayout};
 
@@ -56,10 +56,7 @@ impl VkContext {
         // loses the device, so derive it from the actual format.
         let bytes_per_pixel = swapchain_bytes_per_pixel(self.swapchain_format) as u64;
         let byte_size = (width as u64) * (height as u64) * bytes_per_pixel;
-        let (buffer, memory) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let readback = self.alloc.create_buffer(
             byte_size,
             vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -118,7 +115,7 @@ impl VkContext {
                         cmd,
                         src_image,
                         vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        buffer,
+                        readback.buffer(),
                         std::slice::from_ref(&region),
                     );
                     device.cmd_pipeline_barrier(
@@ -136,13 +133,10 @@ impl VkContext {
 
         // Map + swizzle + encode, then always free the buffer.
         let result = copied.and_then(|()| {
-            let ptr =
-                unsafe { device.map_memory(memory, 0, byte_size, vk::MemoryMapFlags::empty()) }
-                    .map_err(|e| format!("screenshot: map readback: {e}"))?
-                    as *const u8;
             // SAFETY: the buffer is HOST_COHERENT and `byte_size` bytes long; the
             // copy above completed (one_shot_submit waits its fence).
-            let raw = unsafe { std::slice::from_raw_parts(ptr, byte_size as usize) };
+            let raw =
+                unsafe { std::slice::from_raw_parts(readback.mapped_ptr(), byte_size as usize) };
             // The HDR float swapchain needs the encoding to decode for display:
             // scRGB-linear gets the sRGB OETF, PQ-encoded code values pass
             // through (not display-correct, but a valid PNG rather than a crash).
@@ -152,13 +146,8 @@ impl VkContext {
             };
             let rgba =
                 image_decode::decode_to_rgba8(raw, classify(self.swapchain_format, encoding));
-            unsafe { device.unmap_memory(memory) };
             encode_png(path, width, height, &rgba)
         });
-        unsafe {
-            device.destroy_buffer(buffer, None);
-            device.free_memory(memory, None);
-        }
         result.map(|()| path.to_string())
     }
 }

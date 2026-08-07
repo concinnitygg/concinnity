@@ -26,6 +26,7 @@ use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::allocator::DeviceAllocator;
 
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
 // reflections are active (both feed this composite). All `vk::*` handles are owned
@@ -171,9 +172,8 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
 // rebuild).
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GpuAllocContext<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -193,20 +193,13 @@ pub(in crate::vulkan) struct CompositeInputViews<'a> {
 // descriptor sets bound to it at init see a valid layout before the first encode.
 fn create_target(ctx: &GpuAllocContext, width: u32, height: u32) -> Result<GpuImage, String> {
     let &GpuAllocContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = ctx;
-    let (image, memory) = create_image(
-        // The local GpuAllocContext also carries command_pool + queue; create_image
-        // takes the texture-module context, so build that variant explicitly.
-        &super::super::texture::GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &super::super::texture::ImageSpec {
             width,
             height,
@@ -222,6 +215,7 @@ fn create_target(ctx: &GpuAllocContext, width: u32, height: u32) -> Result<GpuIm
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     one_shot_submit(device, command_pool, queue, |cmd| {
         transition_image_layout(
             device,
@@ -233,12 +227,7 @@ fn create_target(ctx: &GpuAllocContext, width: u32, height: u32) -> Result<GpuIm
         );
     })?;
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Fullscreen pipeline: no vertex input, no depth, no blend; writes one HDR target.
@@ -528,14 +517,8 @@ impl ReflectionCompositeResources {
                 self.blur_framebuffer = vk::Framebuffer::null();
             }
         }
-        if self.output.image != vk::Image::null() {
-            self.output.destroy(device);
-            self.output = GpuImage::null();
-        }
-        if self.blur.image != vk::Image::null() {
-            self.blur.destroy(device);
-            self.blur = GpuImage::null();
-        }
+        self.output = GpuImage::null();
+        self.blur = GpuImage::null();
     }
 
     // Rebuild the resolution-dependent targets at a new extent and re-wire the

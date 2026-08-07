@@ -48,8 +48,8 @@ use crate::vulkan::uniforms::SkinParams;
 // `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::pipeline::spv_module;
-use super::texture::create_buffer;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + colour + uv = 14 floats). The BLAS reads positions at this stride and the
@@ -120,17 +120,17 @@ fn align_up(value: u64, align: u64) -> u64 {
 // reused in place when a later build still fits.
 struct AccelBuffer {
     accel: vk::AccelerationStructureKHR,
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    // Backing buffer, held so the acceleration structure's memory outlives it.
+    _pooled: PooledBuffer,
     size: u64,
 }
 
 impl AccelBuffer {
-    fn destroy(&self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
+    // The backing buffer retires through the allocator when the value drops;
+    // only the acceleration-structure handle is destroyed by hand.
+    fn destroy(&self, _device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
         unsafe {
             as_loader.destroy_acceleration_structure(self.accel, None);
-            device.destroy_buffer(self.buffer, None);
-            device.free_memory(self.memory, None);
         }
     }
 }
@@ -140,17 +140,8 @@ impl AccelBuffer {
 // dynamic rebuild, so there is no need to keep it mapped past the initial copy.
 struct HostBuffer {
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    pooled: PooledBuffer,
     size: vk::DeviceSize,
-}
-
-impl HostBuffer {
-    fn destroy(&self, device: &Device) {
-        unsafe {
-            device.destroy_buffer(self.buffer, None);
-            device.free_memory(self.memory, None);
-        }
-    }
 }
 
 // A plain device-local buffer (the deformed-vertex buffer the skin pass writes
@@ -159,18 +150,10 @@ impl HostBuffer {
 // when a later rebuild still fits.
 pub(super) struct DeviceBuffer {
     pub(super) buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    // Owns the buffer; held so it outlives every reference.
+    _pooled: PooledBuffer,
     address: u64,
     size: u64,
-}
-
-impl DeviceBuffer {
-    pub(super) fn destroy(&self, device: &Device) {
-        unsafe {
-            device.destroy_buffer(self.buffer, None);
-            device.free_memory(self.memory, None);
-        }
-    }
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
@@ -194,7 +177,7 @@ pub(super) struct SkinPipeline {
     // whose object carries no morph targets, so those bindings stay valid
     // without borrowing an unrelated buffer for the job.
     pub(in crate::vulkan) morph_dummy: vk::Buffer,
-    morph_dummy_memory: vk::DeviceMemory,
+    _morph_dummy_pooled: PooledBuffer,
 }
 
 impl SkinPipeline {
@@ -206,8 +189,6 @@ impl SkinPipeline {
             if self.descriptor_pool != vk::DescriptorPool::null() {
                 device.destroy_descriptor_pool(self.descriptor_pool, None);
             }
-            device.destroy_buffer(self.morph_dummy, None);
-            device.free_memory(self.morph_dummy_memory, None);
         }
     }
 }
@@ -251,14 +232,6 @@ impl Retired {
     }
 }
 
-// An outgoing scratch buffer parked by a `grow_scratch`, freed once the
-// frames-in-flight fence retires the frames whose build could still read it.
-struct RetiredScratch {
-    free_at: u64,
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-}
-
 // One frame slot's recyclable skinned-rebuild buffers. The skinned rebuild swaps
 // the live set (`self.*`) with the slot every frame: it recycles the buffers this
 // slot last held (displaced `frames_in_flight` frames ago, so their fence has
@@ -282,21 +255,14 @@ struct SkinnedFrameRing {
 }
 
 impl SkinnedFrameRing {
+    // The buffers retire through the allocator when the slot drops; only the
+    // acceleration-structure handles are destroyed by hand.
     fn destroy(&mut self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
-        if let Some(d) = &self.deformed {
-            d.destroy(device);
-        }
         for b in &self.blas {
             b.destroy(device, as_loader);
         }
         if let Some(t) = &self.tlas {
             t.destroy(device, as_loader);
-        }
-        if let Some(i) = &self.instance {
-            i.destroy(device);
-        }
-        if let Some(g) = &self.geom {
-            g.destroy(device);
         }
     }
 }
@@ -320,15 +286,10 @@ struct StaticFrameRing {
 }
 
 impl StaticFrameRing {
+    // The host buffers retire through the allocator when the slot drops.
     fn destroy(&self, device: &Device, as_loader: &ash::khr::acceleration_structure::Device) {
         if let Some(t) = &self.tlas {
             t.destroy(device, as_loader);
-        }
-        if let Some(i) = &self.instance {
-            i.destroy(device);
-        }
-        if let Some(g) = &self.geom {
-            g.destroy(device);
         }
     }
 }
@@ -369,12 +330,9 @@ pub(super) struct RtAccelData {
     // device address is pre-aligned to the scratch-offset alignment. The skinned
     // rebuild grows it (retiring the old) when a skinned BLAS + TLAS build needs
     // more; `scratch_capacity` is the buffer's byte size.
-    scratch_buffer: vk::Buffer,
-    scratch_memory: vk::DeviceMemory,
+    scratch: PooledBuffer,
     scratch_addr: u64,
     scratch_capacity: u64,
-    // Outgoing scratch buffers parked by a `grow_scratch` for deferred free.
-    retired_scratch: Vec<RetiredScratch>,
     // Size the TLAS prebuild reported; the static rebuild recycles the ring slot's
     // TLAS at this size (the static instance count is fixed).
     tlas_size: u64,
@@ -566,23 +524,19 @@ fn buffer_address(device: &Device, buffer: vk::Buffer) -> u64 {
 
 // Allocate a fresh acceleration-structure backing buffer + create the AS handle.
 fn create_accel(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     as_loader: &ash::khr::acceleration_structure::Device,
     size: u64,
     ty: vk::AccelerationStructureTypeKHR,
 ) -> Result<AccelBuffer, String> {
     let size = size.max(256);
-    let (buffer, memory) = create_buffer(
-        instance,
-        device,
-        pd,
+    let pooled = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
+    let buffer = pooled.buffer();
     let info = vk::AccelerationStructureCreateInfoKHR::default()
         .buffer(buffer)
         .offset(0)
@@ -592,8 +546,7 @@ fn create_accel(
         .map_err(|e| format!("create acceleration structure: {e}"))?;
     Ok(AccelBuffer {
         accel,
-        buffer,
-        memory,
+        _pooled: pooled,
         size,
     })
 }
@@ -601,32 +554,28 @@ fn create_accel(
 // Allocate a host-visible, persistently-mapped buffer of `size` bytes with the
 // given usage, copy `data` into it, and return the mapped handle.
 fn create_host_buffer<T: Copy>(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     data: &[T],
     usage: vk::BufferUsageFlags,
-    label: &str,
+    _label: &str,
 ) -> Result<HostBuffer, String> {
     let size = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
-    let (buffer, memory) = create_buffer(
-        instance,
-        device,
-        pd,
+    let pooled = alloc.create_buffer(
         size,
         usage,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    let ptr = unsafe { device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty()) }
-        .map_err(|e| format!("map {label}: {e}"))? as *mut u8;
+    let buffer = pooled.buffer();
     unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, ptr, std::mem::size_of_val(data));
-        // HOST_COHERENT + written once: unmap immediately, the GPU reads it as-is.
-        device.unmap_memory(memory);
+        std::ptr::copy_nonoverlapping(
+            data.as_ptr() as *const u8,
+            pooled.mapped_ptr(),
+            std::mem::size_of_val(data),
+        );
     }
     Ok(HostBuffer {
         buffer,
-        memory,
+        pooled,
         size,
     })
 }
@@ -638,32 +587,25 @@ fn create_host_buffer<T: Copy>(
 // (the ring only ever stores a buffer of the matching usage in each slot).
 fn write_or_recreate_host<T: Copy>(
     existing: Option<HostBuffer>,
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     data: &[T],
     usage: vk::BufferUsageFlags,
     label: &str,
 ) -> Result<HostBuffer, String> {
     let needed = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
-    if let Some(buf) = existing {
-        if buf.size >= needed {
-            let ptr =
-                unsafe { device.map_memory(buf.memory, 0, buf.size, vk::MemoryMapFlags::empty()) }
-                    .map_err(|e| format!("map {label}: {e}"))? as *mut u8;
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    data.as_ptr() as *const u8,
-                    ptr,
-                    std::mem::size_of_val(data),
-                );
-                device.unmap_memory(buf.memory);
-            }
-            return Ok(buf);
+    if let Some(buf) = existing
+        && buf.size >= needed
+    {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr() as *const u8,
+                buf.pooled.mapped_ptr(),
+                std::mem::size_of_val(data),
+            );
         }
-        buf.destroy(device);
+        return Ok(buf);
     }
-    create_host_buffer(instance, device, pd, data, usage, label)
+    create_host_buffer(alloc, data, usage, label)
 }
 
 // Allocate a fresh device-local buffer usable as the deformed-vertex buffer: a
@@ -671,26 +613,23 @@ fn write_or_recreate_host<T: Copy>(
 // input, and device-addressable (the BLAS reads it by address). Caches the
 // device address.
 fn create_device_buffer(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    pd: vk::PhysicalDevice,
     size: u64,
 ) -> Result<DeviceBuffer, String> {
     let size = size.max(VERTEX_STRIDE);
-    let (buffer, memory) = create_buffer(
-        instance,
-        device,
-        pd,
+    let pooled = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
+    let buffer = pooled.buffer();
     let address = buffer_address(device, buffer);
     Ok(DeviceBuffer {
         buffer,
-        memory,
+        _pooled: pooled,
         address,
         size,
     })
@@ -704,9 +643,8 @@ fn create_device_buffer(
 // geometry). Per-(frame, object) descriptor sets are allocated lazily on the
 // first `rebuild_skinned`, when the skinned object count is known.
 pub(super) fn build_skin_pipeline(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    pd: vk::PhysicalDevice,
     hot_reload: bool,
 ) -> Result<SkinPipeline, String> {
     let spv = super::builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
@@ -781,22 +719,20 @@ pub(super) fn build_skin_pipeline(
 
     // Sized to one `MorphDelta` (two packed float3s) so even a stray read of
     // slot 0 stays in bounds; `target_count == 0` keeps it unread.
-    let (morph_dummy, morph_dummy_memory) = create_buffer(
-        instance,
-        device,
-        pd,
-        24,
-        vk::BufferUsageFlags::STORAGE_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )
-    .map_err(|e| {
-        unsafe {
-            device.destroy_pipeline(pipeline, None);
-            device.destroy_pipeline_layout(pipeline_layout, None);
-            device.destroy_descriptor_set_layout(set_layout, None);
-        }
-        format!("rt skin morph dummy buffer: {e}")
-    })?;
+    let morph_dummy_pooled = alloc
+        .create_buffer(
+            24,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )
+        .map_err(|e| {
+            unsafe {
+                device.destroy_pipeline(pipeline, None);
+                device.destroy_pipeline_layout(pipeline_layout, None);
+                device.destroy_descriptor_set_layout(set_layout, None);
+            }
+            format!("rt skin morph dummy buffer: {e}")
+        })?;
 
     Ok(SkinPipeline {
         set_layout,
@@ -804,8 +740,8 @@ pub(super) fn build_skin_pipeline(
         pipeline,
         descriptor_pool: vk::DescriptorPool::null(),
         sets: Vec::new(),
-        morph_dummy,
-        morph_dummy_memory,
+        morph_dummy: morph_dummy_pooled.buffer(),
+        _morph_dummy_pooled: morph_dummy_pooled,
     })
 }
 
@@ -846,6 +782,7 @@ fn scratch_alignment(instance: &ash::Instance, pd: vk::PhysicalDevice) -> u64 {
 // rather than three loose handles.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RtDeviceCtx<'a> {
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) instance: &'a ash::Instance,
     pub(in crate::vulkan) device: &'a Device,
     pub(in crate::vulkan) pd: vk::PhysicalDevice,
@@ -886,6 +823,7 @@ pub(super) fn build_rt_accel(
     hot_reload: bool,
 ) -> Result<Option<RtAccelData>, String> {
     let RtDeviceCtx {
+        alloc,
         instance,
         device,
         pd,
@@ -965,9 +903,7 @@ pub(super) fn build_rt_accel(
             );
         }
         blas.push(create_accel(
-            instance,
-            device,
-            pd,
+            alloc,
             &as_loader,
             sizes.acceleration_structure_size,
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
@@ -1011,18 +947,14 @@ pub(super) fn build_rt_accel(
     let instance_count = instances.len() as u32;
 
     let instance_buffer = create_host_buffer(
-        instance,
-        device,
-        pd,
+        alloc,
         &instances,
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
         "RT instance buffer",
     )?;
     let geom_table = create_host_buffer(
-        instance,
-        device,
-        pd,
+        alloc,
         &geom_entries,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         "RT geometry table",
@@ -1046,9 +978,7 @@ pub(super) fn build_rt_accel(
     }
     max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
     let tlas = create_accel(
-        instance,
-        device,
-        pd,
+        alloc,
         &as_loader,
         tlas_sizes.acceleration_structure_size,
         vk::AccelerationStructureTypeKHR::TOP_LEVEL,
@@ -1058,15 +988,12 @@ pub(super) fn build_rt_accel(
     // device address still leaves room for the largest scratch requirement.
     let align = scratch_alignment(instance, pd);
     let scratch_capacity = max_scratch + align;
-    let (scratch_buffer, scratch_memory) = create_buffer(
-        instance,
-        device,
-        pd,
+    let scratch = alloc.create_buffer(
         scratch_capacity,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    let scratch_addr = align_up(buffer_address(device, scratch_buffer), align);
+    let scratch_addr = align_up(buffer_address(device, scratch.buffer()), align);
 
     // Record every BLAS build (build-barrier-serialised over the shared scratch),
     // then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
@@ -1135,12 +1062,12 @@ pub(super) fn build_rt_accel(
     // Metal), so the init build is static-only. Allocate a 1-element dummy
     // deformed-vertex buffer so the trace's skinned-verts SSBO always binds a
     // valid resource; the first `rebuild_skinned` replaces it with the real one.
-    let deformed_verts = create_device_buffer(instance, device, pd, VERTEX_STRIDE)?;
+    let deformed_verts = create_device_buffer(alloc, device, VERTEX_STRIDE)?;
 
     // The compute-skinning pipeline (gated on RT, which is the only path that
     // reaches `build_rt_accel`). A build failure is non-fatal: the RT pass still
     // runs for static geometry, just without skinned hits.
-    let skin = match build_skin_pipeline(instance, device, pd, hot_reload) {
+    let skin = match build_skin_pipeline(alloc, device, hot_reload) {
         Ok(s) => Some(s),
         Err(e) => {
             tracing::warn!(
@@ -1157,11 +1084,9 @@ pub(super) fn build_rt_accel(
         tlas,
         geom_table,
         instance_buffer,
-        scratch_buffer,
-        scratch_memory,
+        scratch,
         scratch_addr,
         scratch_capacity,
-        retired_scratch: Vec::new(),
         tlas_size: tlas_sizes.acceleration_structure_size,
         instance_count,
         frames_in_flight: (frames_in_flight.max(1)) as u64,
@@ -1235,11 +1160,7 @@ impl RtAccelData {
             mode,
             topology_dirty,
         } = policy;
-        let RtDeviceCtx {
-            instance,
-            device,
-            pd,
-        } = ctx;
+        let device = ctx.device;
         self.frame_counter += 1;
         let now = self.frame_counter;
         // Free any retired resources whose frames-in-flight window has elapsed.
@@ -1248,18 +1169,6 @@ impl RtAccelData {
             if self.retire[i].free_at <= now {
                 let r = self.retire.swap_remove(i);
                 r.destroy(device, &self.as_loader);
-            } else {
-                i += 1;
-            }
-        }
-        let mut i = 0;
-        while i < self.retired_scratch.len() {
-            if self.retired_scratch[i].free_at <= now {
-                let s = self.retired_scratch.swap_remove(i);
-                unsafe {
-                    device.destroy_buffer(s.buffer, None);
-                    device.free_memory(s.memory, None);
-                }
             } else {
                 i += 1;
             }
@@ -1286,9 +1195,7 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty
-            && let Err(e) = self.refresh_topology(instance, device, pd, cmd, draw_objects, now)
-        {
+        if topology_dirty && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, now) {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1391,13 +1298,17 @@ impl RtAccelData {
     // need more than the current capacity.
     fn refresh_topology(
         &mut self,
-        instance: &ash::Instance,
-        device: &Device,
-        pd: vk::PhysicalDevice,
+        ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         now: u64,
     ) -> Result<(), String> {
+        let RtDeviceCtx {
+            alloc,
+            instance,
+            device,
+            pd,
+        } = ctx;
         // Current participating draw set (same predicate as `build_rt_accel`).
         let new_indices: Vec<usize> = draw_objects
             .iter()
@@ -1487,9 +1398,7 @@ impl RtAccelData {
                         );
                     }
                     let blas = create_accel(
-                        instance,
-                        device,
-                        pd,
+                        alloc,
                         &self.as_loader,
                         sizes.acceleration_structure_size,
                         vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
@@ -1531,9 +1440,7 @@ impl RtAccelData {
         let mut slot = std::mem::take(&mut self.static_ring[self.static_cursor]);
         let instance_buffer = write_or_recreate_host(
             slot.instance.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &instances,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
@@ -1541,9 +1448,7 @@ impl RtAccelData {
         )?;
         let geom_table = write_or_recreate_host(
             slot.geom.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &geom_entries,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
@@ -1570,26 +1475,23 @@ impl RtAccelData {
         // Ensure the shared scratch covers every fresh BLAS build + this TLAS.
         let align = scratch_alignment(instance, pd);
         if max_scratch + align > self.scratch_capacity {
-            self.grow_scratch(instance, device, pd, max_scratch, align, now)?;
+            self.grow_scratch(alloc, device, max_scratch, align)?;
         }
         let scratch_addr = self.scratch_addr;
         let tlas = match slot.tlas.take() {
             Some(b) if b.size >= tlas_sizes.acceleration_structure_size => b,
             Some(b) => {
                 b.destroy(device, &self.as_loader);
+                drop(b);
                 create_accel(
-                    instance,
-                    device,
-                    pd,
+                    alloc,
                     &self.as_loader,
                     tlas_sizes.acceleration_structure_size,
                     vk::AccelerationStructureTypeKHR::TOP_LEVEL,
                 )?
             }
             None => create_accel(
-                instance,
-                device,
-                pd,
+                alloc,
                 &self.as_loader,
                 tlas_sizes.acceleration_structure_size,
                 vk::AccelerationStructureTypeKHR::TOP_LEVEL,
@@ -1736,9 +1638,10 @@ impl RtAccelData {
         now: u64,
     ) -> Result<(), String> {
         let RtDeviceCtx {
-            instance,
+            alloc,
             device,
-            pd,
+            instance: _,
+            pd: _,
         } = ctx;
         // Freshly-transformed draw-object instances, then the cluster instances
         // re-appended verbatim. The geometry table mirrors this order.
@@ -1770,9 +1673,7 @@ impl RtAccelData {
         let mut slot = std::mem::take(&mut self.static_ring[self.static_cursor]);
         let instance_buffer = write_or_recreate_host(
             slot.instance.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &instances,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
@@ -1780,9 +1681,7 @@ impl RtAccelData {
         )?;
         let geom_table = write_or_recreate_host(
             slot.geom.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &geom_entries,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
@@ -1791,19 +1690,16 @@ impl RtAccelData {
             Some(b) if b.size >= self.tlas_size => b,
             Some(b) => {
                 b.destroy(device, &self.as_loader);
+                drop(b);
                 create_accel(
-                    instance,
-                    device,
-                    pd,
+                    alloc,
                     &self.as_loader,
                     self.tlas_size,
                     vk::AccelerationStructureTypeKHR::TOP_LEVEL,
                 )?
             }
             None => create_accel(
-                instance,
-                device,
-                pd,
+                alloc,
                 &self.as_loader,
                 self.tlas_size,
                 vk::AccelerationStructureTypeKHR::TOP_LEVEL,
@@ -1902,6 +1798,7 @@ impl RtAccelData {
             objects: skinned_objects,
         } = pose;
         let RtDeviceCtx {
+            alloc,
             instance,
             device,
             pd,
@@ -1930,10 +1827,10 @@ impl RtAccelData {
         let deformed = match slot.deformed.take() {
             Some(buf) if buf.size >= deformed_bytes => buf,
             Some(buf) => {
-                buf.destroy(device);
-                create_device_buffer(instance, device, pd, deformed_bytes)?
+                drop(buf);
+                create_device_buffer(alloc, device, deformed_bytes)?
             }
-            None => create_device_buffer(instance, device, pd, deformed_bytes)?,
+            None => create_device_buffer(alloc, device, deformed_bytes)?,
         };
 
         // Ensure per-(frame, object) compute descriptor sets exist for this
@@ -2119,19 +2016,16 @@ impl RtAccelData {
                 Some(b) if b.size >= needed => b,
                 Some(b) => {
                     b.destroy(device, &self.as_loader);
+                    drop(b);
                     create_accel(
-                        instance,
-                        device,
-                        pd,
+                        alloc,
                         &self.as_loader,
                         needed,
                         vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
                     )?
                 }
                 None => create_accel(
-                    instance,
-                    device,
-                    pd,
+                    alloc,
                     &self.as_loader,
                     needed,
                     vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
@@ -2184,9 +2078,7 @@ impl RtAccelData {
         // still fit, else grow.
         let instance_buffer = write_or_recreate_host(
             slot.instance.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &instances,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
@@ -2194,9 +2086,7 @@ impl RtAccelData {
         )?;
         let geom_table = write_or_recreate_host(
             slot.geom.take(),
-            instance,
-            device,
-            pd,
+            alloc,
             &geom_entries,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
@@ -2226,19 +2116,16 @@ impl RtAccelData {
             Some(b) if b.size >= tlas_sizes.acceleration_structure_size => b,
             Some(b) => {
                 b.destroy(device, &self.as_loader);
+                drop(b);
                 create_accel(
-                    instance,
-                    device,
-                    pd,
+                    alloc,
                     &self.as_loader,
                     tlas_sizes.acceleration_structure_size,
                     vk::AccelerationStructureTypeKHR::TOP_LEVEL,
                 )?
             }
             None => create_accel(
-                instance,
-                device,
-                pd,
+                alloc,
                 &self.as_loader,
                 tlas_sizes.acceleration_structure_size,
                 vk::AccelerationStructureTypeKHR::TOP_LEVEL,
@@ -2249,7 +2136,7 @@ impl RtAccelData {
         // this frame's TLAS may need more. Grow it (retire the old) if so.
         let align = scratch_alignment(instance, pd);
         if max_scratch + align > self.scratch_size() {
-            self.grow_scratch(instance, device, pd, max_scratch, align, self.frame_counter)?;
+            self.grow_scratch(alloc, device, max_scratch, align)?;
         }
         let scratch_addr = self.scratch_addr;
 
@@ -2358,32 +2245,23 @@ impl RtAccelData {
     // scratch device address.
     fn grow_scratch(
         &mut self,
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        pd: vk::PhysicalDevice,
         required: u64,
         align: u64,
-        now: u64,
     ) -> Result<(), String> {
         let new_capacity = required + align;
-        let (buffer, memory) = create_buffer(
-            instance,
-            device,
-            pd,
+        let buffer = alloc.create_buffer(
             new_capacity,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let addr = align_up(buffer_address(device, buffer), align);
-        let old_buffer = std::mem::replace(&mut self.scratch_buffer, buffer);
-        let old_memory = std::mem::replace(&mut self.scratch_memory, memory);
+        let addr = align_up(buffer_address(device, buffer.buffer()), align);
+        // The replaced scratch retires through the allocator once no in-flight
+        // build can reference it.
+        self.scratch = buffer;
         self.scratch_addr = addr;
         self.scratch_capacity = new_capacity;
-        self.retired_scratch.push(RetiredScratch {
-            free_at: now + self.frames_in_flight,
-            buffer: old_buffer,
-            memory: old_memory,
-        });
         Ok(())
     }
 
@@ -2405,12 +2283,6 @@ impl RtAccelData {
         for r in self.retire.drain(..) {
             r.destroy(device, &self.as_loader);
         }
-        for s in self.retired_scratch.drain(..) {
-            unsafe {
-                device.destroy_buffer(s.buffer, None);
-                device.free_memory(s.memory, None);
-            }
-        }
         for slot in &mut self.skinned_ring {
             slot.destroy(device, &self.as_loader);
         }
@@ -2421,15 +2293,8 @@ impl RtAccelData {
             b.destroy(device, &self.as_loader);
         }
         self.tlas.destroy(device, &self.as_loader);
-        self.geom_table.destroy(device);
-        self.instance_buffer.destroy(device);
-        self.deformed_verts.destroy(device);
         if let Some(skin) = &self.skin {
             skin.destroy(device);
-        }
-        unsafe {
-            device.destroy_buffer(self.scratch_buffer, None);
-            device.free_memory(self.scratch_memory, None);
         }
     }
 }
@@ -2496,23 +2361,19 @@ pub(super) fn ensure_skin_sets(
 // acceleration-structure / device-address usage (the main pass binds it as a vertex
 // buffer, not by address), so this stays independent of the RT feature being enabled.
 pub(super) fn create_main_deformed_buffer(
-    instance: &ash::Instance,
-    device: &Device,
-    pd: vk::PhysicalDevice,
+    alloc: &DeviceAllocator,
     size: u64,
 ) -> Result<DeviceBuffer, String> {
     let size = size.max(VERTEX_STRIDE);
-    let (buffer, memory) = create_buffer(
-        instance,
-        device,
-        pd,
+    let pooled = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
+    let buffer = pooled.buffer();
     Ok(DeviceBuffer {
         buffer,
-        memory,
+        _pooled: pooled,
         address: 0,
         size,
     })
@@ -2531,6 +2392,7 @@ impl super::context::VkContext {
     pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) {
         let fresh = match build_rt_accel(
             RtDeviceCtx {
+                alloc: &self.alloc,
                 instance: &self.instance,
                 device: &self.device,
                 pd: self.physical_device,
@@ -2538,8 +2400,8 @@ impl super::context::VkContext {
             self.commands.command_pool,
             self.graphics_queue,
             RtSceneGeometry {
-                vertex_buffer: self.geometry.vertex_buffer,
-                index_buffer: self.geometry.index_buffer,
+                vertex_buffer: self.geometry.vertex_buffer.buffer(),
+                index_buffer: self.geometry.index_buffer.buffer(),
                 draw_objects: &self.draw_objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
@@ -2563,8 +2425,10 @@ impl super::context::VkContext {
         // directly (the trace fetches attributes at hit points), so they must
         // follow the swap even when the BVH itself was dropped.
         let device = self.device.clone();
-        let (vertex_buffer, index_buffer) =
-            (self.geometry.vertex_buffer, self.geometry.index_buffer);
+        let (vertex_buffer, index_buffer) = (
+            self.geometry.vertex_buffer.buffer(),
+            self.geometry.index_buffer.buffer(),
+        );
         if let Some(rt) = self.rt_reflections.as_ref() {
             rt.rewire_geometry(&device, vertex_buffer, index_buffer);
         }
@@ -2590,32 +2454,22 @@ impl super::context::VkContext {
             return Ok(());
         }
 
-        let mut skin = build_skin_pipeline(
-            &self.instance,
-            &device,
-            self.physical_device,
-            self.hot_reload,
-        )?;
+        let mut skin = build_skin_pipeline(&self.alloc, &device, self.hot_reload)?;
         ensure_skin_sets(&device, &mut skin, frames, n)?;
 
         let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            deformed.push(create_main_deformed_buffer(
-                &self.instance,
-                &device,
-                self.physical_device,
-                deformed_bytes,
-            )?);
+            deformed.push(create_main_deformed_buffer(&self.alloc, deformed_bytes)?);
         }
 
         // Point every set at its buffers once: binding 0 = the shared bind-pose
         // skinned VB, binding 1 = this object's joint buffer for that frame,
         // binding 2 = that frame's deformed output.
-        let src_buffer = self.skinned.vertex_buffer;
+        let src_buffer = self.skinned.vertex_buffer.buffer();
         for (f, deformed_buf) in deformed.iter().enumerate() {
             for o in 0..n {
-                let joint_buffer = self.skinned.joint_buffers[f][o];
+                let joint_buffer = self.skinned.joint_buffers[f][o].buffer();
                 let set = skin.sets[f][o];
                 let src_info = vk::DescriptorBufferInfo::default()
                     .buffer(src_buffer)

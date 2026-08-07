@@ -24,7 +24,7 @@ use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::LodSlice;
 
 use super::super::context::VkContext;
-use super::super::texture::{create_buffer, one_shot_submit};
+use super::super::texture::one_shot_submit;
 
 impl VkContext {
     // Rebuild the shared static-mesh vertex + index buffers, swapping in
@@ -60,8 +60,9 @@ impl VkContext {
         let old_v_bytes = self.geometry.vertex_buffer_bytes;
         let old_i_bytes = self.geometry.index_buffer_bytes;
         let old_vertices: Vec<Vertex> =
-            readback_typed(self, self.geometry.vertex_buffer, old_v_bytes)?;
-        let old_indices: Vec<u32> = readback_typed(self, self.geometry.index_buffer, old_i_bytes)?;
+            readback_typed(self, self.geometry.vertex_buffer.buffer(), old_v_bytes)?;
+        let old_indices: Vec<u32> =
+            readback_typed(self, self.geometry.index_buffer.buffer(), old_i_bytes)?;
 
         // Build rebuilt buffers + per-draw layouts CPU-side. Byte-for-byte
         // mirror of the DirectX walk; the read-only walk avoids aliasing
@@ -214,45 +215,28 @@ impl VkContext {
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         let shared = super::shared_geometry_usage(self.rt_capable);
-        let (new_vbuf, new_vmem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_vbuf = self.alloc.create_buffer(
             new_v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let (new_ibuf, new_imem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_ibuf = self.alloc.create_buffer(
             new_i_bytes,
             vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let vert_bytes = bytemuck::cast_slice(&new_vertices);
         let idx_bytes = bytemuck::cast_slice(&new_indices);
-        self.write_geometry_region(new_vbuf, 0, vert_bytes)?;
-        self.write_geometry_region(new_ibuf, 0, idx_bytes)?;
+        self.write_geometry_region(new_vbuf.buffer(), 0, vert_bytes)?;
+        self.write_geometry_region(new_ibuf.buffer(), 0, idx_bytes)?;
 
         // Commit the swap: destroy old buffers + memory, apply per-draw
         // layouts, and reset the streaming sub-allocators (the rebuilt
         // buffer leaves no headroom). `wait_idle` above gated every
         // in-flight read.
-        unsafe {
-            self.device
-                .destroy_buffer(self.geometry.vertex_buffer, None);
-            self.device
-                .free_memory(self.geometry.vertex_buffer_memory, None);
-            self.device.destroy_buffer(self.geometry.index_buffer, None);
-            self.device
-                .free_memory(self.geometry.index_buffer_memory, None);
-        }
         self.geometry.vertex_buffer = new_vbuf;
-        self.geometry.vertex_buffer_memory = new_vmem;
         self.geometry.vertex_buffer_bytes = new_v_bytes;
         self.geometry.index_buffer = new_ibuf;
-        self.geometry.index_buffer_memory = new_imem;
         self.geometry.index_buffer_bytes = new_i_bytes;
         self.geometry.mesh_vtx_alloc = crate::gfx::range_alloc::RangeAllocator::new();
         self.geometry.mesh_idx_alloc = crate::gfx::range_alloc::RangeAllocator::new();
@@ -306,9 +290,7 @@ impl VkContext {
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
     ) -> Result<Vec<SkinnedSlotLayout>, String> {
-        if self.skinned.vertex_buffer == vk::Buffer::null()
-            || self.skinned.index_buffer == vk::Buffer::null()
-        {
+        if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(
                 "rebuild_skinned_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
@@ -325,8 +307,9 @@ impl VkContext {
         let old_v_bytes = self.skinned.vertex_buffer_bytes;
         let old_i_bytes = self.skinned.index_buffer_bytes;
         let old_vertices: Vec<SkinnedVertex> =
-            readback_typed(self, self.skinned.vertex_buffer, old_v_bytes)?;
-        let old_indices: Vec<u16> = readback_typed(self, self.skinned.index_buffer, old_i_bytes)?;
+            readback_typed(self, self.skinned.vertex_buffer.buffer(), old_v_bytes)?;
+        let old_indices: Vec<u16> =
+            readback_typed(self, self.skinned.index_buffer.buffer(), old_i_bytes)?;
 
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u16> = Vec::new();
@@ -467,43 +450,27 @@ impl VkContext {
         } else {
             vk::BufferUsageFlags::empty()
         };
-        let (new_vbuf, new_vmem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_vbuf = self.alloc.create_buffer(
             new_v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let (new_ibuf, new_imem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let new_ibuf = self.alloc.create_buffer(
             new_i_bytes,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let vert_bytes = bytemuck::cast_slice(&new_vertices);
         let idx_bytes = bytemuck::cast_slice(&new_indices);
-        self.write_geometry_region(new_vbuf, 0, vert_bytes)?;
-        self.write_geometry_region(new_ibuf, 0, idx_bytes)?;
+        self.write_geometry_region(new_vbuf.buffer(), 0, vert_bytes)?;
+        self.write_geometry_region(new_ibuf.buffer(), 0, idx_bytes)?;
 
-        // Commit: destroy old buffers, apply per-slot layouts.
-        unsafe {
-            self.device.destroy_buffer(self.skinned.vertex_buffer, None);
-            self.device
-                .free_memory(self.skinned.vertex_buffer_memory, None);
-            self.device.destroy_buffer(self.skinned.index_buffer, None);
-            self.device
-                .free_memory(self.skinned.index_buffer_memory, None);
-        }
+        // Commit: the replaced buffers retire through the allocator.
         self.skinned.vertex_buffer = new_vbuf;
-        self.skinned.vertex_buffer_memory = new_vmem;
         self.skinned.vertex_buffer_bytes = new_v_bytes;
         self.skinned.index_buffer = new_ibuf;
-        self.skinned.index_buffer_memory = new_imem;
         self.skinned.index_buffer_bytes = new_i_bytes;
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
             let obj = &mut self.skinned.draw_objects[skinned_index];
@@ -536,15 +503,12 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Resu
         ));
     }
     let count = (bytes / stride) as usize;
-    let (staging, staging_mem) = create_buffer(
-        &ctx.instance,
-        &ctx.device,
-        ctx.physical_device,
+    let staging = ctx.alloc.create_buffer(
         bytes,
         vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    let result = one_shot_submit(
+    one_shot_submit(
         &ctx.device,
         ctx.commands.command_pool,
         ctx.graphics_queue,
@@ -555,36 +519,15 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Resu
                 .size(bytes);
             unsafe {
                 ctx.device
-                    .cmd_copy_buffer(cmd, src, staging, std::slice::from_ref(&copy))
+                    .cmd_copy_buffer(cmd, src, staging.buffer(), std::slice::from_ref(&copy))
             };
         },
-    );
-    if let Err(e) = result {
-        unsafe {
-            ctx.device.destroy_buffer(staging, None);
-            ctx.device.free_memory(staging_mem, None);
-        }
-        return Err(e);
-    }
+    )?;
 
     let mut out: Vec<T> = Vec::with_capacity(count);
     unsafe {
-        let ptr = match ctx
-            .device
-            .map_memory(staging_mem, 0, bytes, vk::MemoryMapFlags::empty())
-        {
-            Ok(ptr) => ptr as *const T,
-            Err(e) => {
-                ctx.device.destroy_buffer(staging, None);
-                ctx.device.free_memory(staging_mem, None);
-                return Err(format!("readback_typed map: {e}"));
-            }
-        };
-        std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), count);
+        std::ptr::copy_nonoverlapping(staging.mapped_ptr() as *const T, out.as_mut_ptr(), count);
         out.set_len(count);
-        ctx.device.unmap_memory(staging_mem);
-        ctx.device.destroy_buffer(staging, None);
-        ctx.device.free_memory(staging_mem, None);
     }
     Ok(out)
 }

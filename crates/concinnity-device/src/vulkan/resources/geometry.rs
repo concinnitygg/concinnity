@@ -10,7 +10,7 @@ use ash::vk;
 use crate::gfx::mesh_payload::Vertex;
 
 use super::super::context::*;
-use super::super::texture::{self, create_buffer};
+use super::super::texture::{self};
 
 impl VkContext {
     // Copy `data` into a sub-region of a DEVICE_LOCAL geometry buffer.
@@ -30,39 +30,30 @@ impl VkContext {
             return Ok(());
         }
         let size = data.len() as u64;
-        let (staging, staging_mem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let staging = self.alloc.create_buffer(
             size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         unsafe {
-            let ptr = self
-                .device
-                .map_memory(staging_mem, 0, size, vk::MemoryMapFlags::empty())
-                .map_err(|e| format!("map mesh staging: {e}"))? as *mut u8;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            self.device.unmap_memory(staging_mem);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), data.len());
         }
-        let result = texture::one_shot_submit(
+        texture::one_shot_submit(
             &self.device,
             self.commands.command_pool,
             self.graphics_queue,
             |cmd| {
                 let copy = vk::BufferCopy::default().dst_offset(offset).size(size);
                 unsafe {
-                    self.device
-                        .cmd_copy_buffer(cmd, staging, dest, std::slice::from_ref(&copy))
+                    self.device.cmd_copy_buffer(
+                        cmd,
+                        staging.buffer(),
+                        dest,
+                        std::slice::from_ref(&copy),
+                    )
                 };
             },
-        );
-        unsafe {
-            self.device.destroy_buffer(staging, None);
-            self.device.free_memory(staging_mem, None);
-        }
-        result
+        )
     }
 
     // Upload a streamed mesh's geometry into the shared vertex and index
@@ -126,11 +117,15 @@ impl VkContext {
         self.wait_idle();
 
         let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(self.geometry.vertex_buffer, v_off as u64, vert_bytes)?;
+        self.write_geometry_region(
+            self.geometry.vertex_buffer.buffer(),
+            v_off as u64,
+            vert_bytes,
+        )?;
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.geometry.index_buffer, i_off as u64, idx_bytes)?;
+        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off as u64, idx_bytes)?;
 
         let obj = &mut self.draw_objects[draw_idx];
         obj.vertex_offset = v_off;
@@ -228,17 +223,21 @@ impl VkContext {
         self.wait_idle();
 
         let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(self.geometry.vertex_buffer, v_off, vert_bytes)?;
+        self.write_geometry_region(self.geometry.vertex_buffer.buffer(), v_off, vert_bytes)?;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.geometry.index_buffer, i_off_bytes, idx_bytes)?;
+        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off_bytes, idx_bytes)?;
         // LOD alternates were laid out at init alongside LOD0 in the same
         // shared IB; each alternate shares LOD0's vertex region, so rebase
         // onto the same `base`.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
             let alt_bytes = bytemuck::cast_slice(&alt_rebased);
-            self.write_geometry_region(self.geometry.index_buffer, alt_off_bytes, alt_bytes)?;
+            self.write_geometry_region(
+                self.geometry.index_buffer.buffer(),
+                alt_off_bytes,
+                alt_bytes,
+            )?;
         }
         // Refresh per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.

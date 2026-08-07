@@ -24,6 +24,7 @@
 
 use ash::vk;
 
+use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
 use super::draw::ViewUniforms;
@@ -31,8 +32,7 @@ use super::hiz::CullHizParams;
 use super::probe_uniforms::{MAX_PROBES, ProbeSet, ProbeUniforms};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
-    GpuAllocContext, GpuImage, ImageSpec, create_buffer, create_image, create_image_view,
-    upload_probe_prefilter_cube,
+    GpuImage, ImageSpec, create_image, create_image_view, upload_probe_prefilter_cube,
 };
 use crate::gfx::frustum::Frustum;
 use crate::gfx::image_decode::f16_to_f32;
@@ -119,9 +119,7 @@ impl VkContext {
         self.probe_converting = None;
         if !self.probe_maps.is_empty() {
             self.reset_probe_cube_slots_to_sky();
-            for cube in self.probe_maps.drain(..) {
-                cube.destroy(&device);
-            }
+            self.probe_maps.clear();
         }
         self.probe_placements = placements;
         self.probe_set = ProbeSet::EMPTY;
@@ -322,11 +320,11 @@ impl VkContext {
         let args_size =
             self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>();
         unsafe {
-            std::ptr::write_bytes(bake.object_ptr, 0, object_size);
-            std::ptr::write_bytes(bake.draw_args_ptr, 0, args_size);
+            std::ptr::write_bytes(bake.object_buf.mapped_ptr(), 0, object_size);
+            std::ptr::write_bytes(bake.draw_args_buf.mapped_ptr(), 0, args_size);
         }
-        self.build_object_records_into(bake.object_ptr);
-        self.build_draw_args_records_into(bake.draw_args_ptr, eye);
+        self.build_object_records_into(bake.object_buf.mapped_ptr());
+        self.build_draw_args_records_into(bake.draw_args_buf.mapped_ptr(), eye);
 
         // Per-face view uniforms (the only per-face binding), all six filled once.
         // reflections_enabled stays 0: no resolve runs over a probe face, so the bake
@@ -353,7 +351,7 @@ impl VkContext {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &view as *const ViewUniforms as *const u8,
-                    bake.view_ptrs[face],
+                    bake.view_bufs[face].mapped_ptr(),
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
@@ -437,9 +435,9 @@ impl VkContext {
                 b.framebuffer,
                 b.global_sets[r.cursor],
                 b.bindless_sets[r.cursor],
-                b.indirect_buf,
+                b.indirect_buf.buffer(),
                 b.copy_source(),
-                b.readback_bufs[r.cursor],
+                b.readback_bufs[r.cursor].buffer(),
             )
         };
 
@@ -603,16 +601,12 @@ impl VkContext {
         // Decode the six readbacks (tightly packed RGBA16F) to f32.
         let mut faces: [Vec<f32>; PROBE_FACE_COUNT] = std::array::from_fn(|_| Vec::new());
         let face_bytes = (PROBE_FACE_SIZE as u64) * (PROBE_FACE_SIZE as u64) * 8;
-        for (slot, &mem) in faces.iter_mut().zip(rendering.bake.readback_mems.iter()) {
-            let ptr = unsafe { device.map_memory(mem, 0, face_bytes, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map probe readback: {e}"))?
-                as *const u8;
+        for (slot, buf) in faces.iter_mut().zip(rendering.bake.readback_bufs.iter()) {
             // SAFETY: the buffer is HOST_COHERENT and `face_bytes` long; the last
             // face's fence is signalled, so on the single graphics queue all six copies
             // completed.
-            let raw = unsafe { std::slice::from_raw_parts(ptr, face_bytes as usize) };
+            let raw = unsafe { std::slice::from_raw_parts(buf.mapped_ptr(), face_bytes as usize) };
             *slot = decode_probe_face_rgba16f(raw, PROBE_FACE_SIZE);
-            unsafe { device.unmap_memory(mem) };
         }
         let index = rendering.index;
         let placement = rendering.placement;
@@ -672,11 +666,12 @@ impl VkContext {
             return Err("probe payload has no prefilter mips".into());
         }
         let cube = upload_probe_prefilter_cube(
-            &self.instance,
-            &self.device,
-            self.physical_device,
-            self.commands.command_pool,
-            self.graphics_queue,
+            &super::texture::GpuUploadContext {
+                alloc: &self.alloc,
+                device: &self.device,
+                command_pool: self.commands.command_pool,
+                queue: self.graphics_queue,
+            },
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
@@ -848,13 +843,13 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -933,19 +928,14 @@ pub(super) struct ConvertingBake {
 // frees it after the faces read back.
 struct BakeResources {
     color: GpuImage,
-    depth: GpuImage,
+    // Held for the bake's lifetime; the framebuffer and sets alias them.
+    _depth: GpuImage,
     resolve: Option<GpuImage>,
     framebuffer: vk::Framebuffer,
-    object_buf: vk::Buffer,
-    object_mem: vk::DeviceMemory,
-    object_ptr: *mut u8,
-    draw_args_buf: vk::Buffer,
-    draw_args_mem: vk::DeviceMemory,
-    draw_args_ptr: *mut u8,
-    indirect_buf: vk::Buffer,
-    indirect_mem: vk::DeviceMemory,
-    status_buf: vk::Buffer,
-    status_mem: vk::DeviceMemory,
+    object_buf: PooledBuffer,
+    draw_args_buf: PooledBuffer,
+    indirect_buf: PooledBuffer,
+    _status_buf: PooledBuffer,
     pool: vk::DescriptorPool,
     cull_set: vk::DescriptorSet,
     // One texture-pool set per face, written from the live pool right before
@@ -954,16 +944,13 @@ struct BakeResources {
     // device drain): the next face simply snapshots the current pool.
     bindless_sets: Vec<vk::DescriptorSet>,
     hiz_set: Option<vk::DescriptorSet>,
-    hiz_ubo: Option<(vk::Buffer, vk::DeviceMemory, *mut u8)>,
+    _hiz_ubo: Option<PooledBuffer>,
     global_sets: Vec<vk::DescriptorSet>,
-    view_bufs: Vec<vk::Buffer>,
-    view_mems: Vec<vk::DeviceMemory>,
-    view_ptrs: Vec<*mut u8>,
-    light: (vk::Buffer, vk::DeviceMemory, *mut u8),
-    shadow: (vk::Buffer, vk::DeviceMemory, *mut u8),
-    probeset: (vk::Buffer, vk::DeviceMemory, *mut u8),
-    readback_bufs: Vec<vk::Buffer>,
-    readback_mems: Vec<vk::DeviceMemory>,
+    view_bufs: Vec<PooledBuffer>,
+    _light: PooledBuffer,
+    _shadow: PooledBuffer,
+    _probeset: PooledBuffer,
+    readback_bufs: Vec<PooledBuffer>,
 }
 
 impl BakeResources {
@@ -980,20 +967,14 @@ impl BakeResources {
     fn new(ctx: &VkContext) -> Result<BakeResources, String> {
         use crate::gfx::render_types::{GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms};
         let device = &ctx.device;
-        let instance = &ctx.instance;
-        let pd = ctx.physical_device;
-        let alloc = GpuAllocContext {
-            instance,
-            device,
-            physical_device: pd,
-        };
+        let alloc = &ctx.alloc;
         let msaa = ctx.msaa_samples != vk::SampleCountFlags::TYPE_1;
         let size = PROBE_FACE_SIZE;
 
         // Colour + depth (+ single-sample resolve when MSAA), then a framebuffer
         // compatible with `main_render_pass`.
-        let (color_img, color_mem) = create_image(
-            &alloc,
+        let color_pooled = create_image(
+            alloc,
             &ImageSpec {
                 width: size,
                 height: size,
@@ -1006,16 +987,15 @@ impl BakeResources {
                 samples: ctx.msaa_samples,
             },
         )?;
-        let color_view =
-            create_image_view(device, color_img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        let color = GpuImage {
-            image: color_img,
-            memory: color_mem,
-            view: color_view,
-            aux_views: Vec::new(),
-        };
-        let (depth_img, depth_mem) = create_image(
-            &alloc,
+        let color_view = create_image_view(
+            device,
+            color_pooled.image(),
+            HDR_FORMAT,
+            vk::ImageAspectFlags::COLOR,
+        )?;
+        let color = GpuImage::from_pooled(color_pooled, color_view);
+        let depth_pooled = create_image(
+            alloc,
             &ImageSpec {
                 width: size,
                 height: size,
@@ -1028,19 +1008,14 @@ impl BakeResources {
         )?;
         let depth_view = create_image_view(
             device,
-            depth_img,
+            depth_pooled.image(),
             PROBE_DEPTH_FORMAT,
             vk::ImageAspectFlags::DEPTH,
         )?;
-        let depth = GpuImage {
-            image: depth_img,
-            memory: depth_mem,
-            view: depth_view,
-            aux_views: Vec::new(),
-        };
+        let depth = GpuImage::from_pooled(depth_pooled, depth_view);
         let resolve = if msaa {
-            let (img, mem) = create_image(
-                &alloc,
+            let resolve_pooled = create_image(
+                alloc,
                 &ImageSpec {
                     width: size,
                     height: size,
@@ -1053,13 +1028,13 @@ impl BakeResources {
                     samples: vk::SampleCountFlags::TYPE_1,
                 },
             )?;
-            let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-            Some(GpuImage {
-                image: img,
-                memory: mem,
-                view,
-                aux_views: Vec::new(),
-            })
+            let view = create_image_view(
+                device,
+                resolve_pooled.image(),
+                HDR_FORMAT,
+                vk::ImageAspectFlags::COLOR,
+            )?;
+            Some(GpuImage::from_pooled(resolve_pooled, view))
         } else {
             None
         };
@@ -1084,36 +1059,16 @@ impl BakeResources {
         let indirect_size = (n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
         let status_size = (n * std::mem::size_of::<u32>()) as u64;
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let (object_buf, object_mem) = create_buffer(
-            instance,
-            device,
-            pd,
-            object_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            host,
-        )?;
-        let object_ptr = map(device, object_mem, object_size)?;
-        let (draw_args_buf, draw_args_mem) = create_buffer(
-            instance,
-            device,
-            pd,
-            args_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            host,
-        )?;
-        let draw_args_ptr = map(device, draw_args_mem, args_size)?;
-        let (indirect_buf, indirect_mem) = create_buffer(
-            instance,
-            device,
-            pd,
+        let object_buf =
+            alloc.create_buffer(object_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
+        let draw_args_buf =
+            alloc.create_buffer(args_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
+        let indirect_buf = alloc.create_buffer(
             indirect_size,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let (status_buf, status_mem) = create_buffer(
-            instance,
-            device,
-            pd,
+        let status_buf = alloc.create_buffer(
             status_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -1121,37 +1076,23 @@ impl BakeResources {
 
         // Snapshot lighting (so all faces share one set), an EMPTY ProbeSet (count 0
         // so a probe face reflects only the sky), and six per-face view UBOs.
-        let light = make_ubo_bytes(
-            instance,
-            device,
-            pd,
-            light_bytes(&ctx.uniforms.light_uniforms),
-        )?;
-        let shadow = make_ubo_bytes(instance, device, pd, shadow_bytes(&ctx.shadow.uniforms))?;
-        let probeset = make_ubo_bytes(instance, device, pd, probeset_bytes(&ProbeSet::EMPTY))?;
+        let light = make_ubo_bytes(alloc, light_bytes(&ctx.uniforms.light_uniforms))?;
+        let shadow = make_ubo_bytes(alloc, shadow_bytes(&ctx.shadow.uniforms))?;
+        let probeset = make_ubo_bytes(alloc, probeset_bytes(&ProbeSet::EMPTY))?;
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(PROBE_FACE_COUNT);
-        let mut view_mems = Vec::with_capacity(PROBE_FACE_COUNT);
-        let mut view_ptrs = Vec::with_capacity(PROBE_FACE_COUNT);
         for _ in 0..PROBE_FACE_COUNT {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                pd,
+            view_bufs.push(alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 host,
-            )?;
-            let ptr = map(device, mem, view_size)?;
-            view_bufs.push(buf);
-            view_mems.push(mem);
-            view_ptrs.push(ptr);
+            )?);
         }
 
         // A bake Hi-Z set (cull set 1) only when the world runs Hi-Z; written with
         // hiz_enabled = 0 so the pyramid is never sampled. The UBO is kept so it can
         // be freed in `destroy`.
-        let mut hiz_ubo: Option<(vk::Buffer, vk::DeviceMemory, *mut u8)> = None;
+        let mut hiz_ubo: Option<PooledBuffer> = None;
 
         // One dedicated descriptor pool for the bake's cull + per-face bindless +
         // global + Hi-Z sets.
@@ -1196,10 +1137,10 @@ impl BakeResources {
             pool,
             std::slice::from_ref(&ctx.cull.cull_set_layout.unwrap()),
         )?[0];
-        write_storage(device, cull_set, 0, object_buf, object_size);
-        write_storage(device, cull_set, 1, draw_args_buf, args_size);
-        write_storage(device, cull_set, 2, indirect_buf, indirect_size);
-        write_storage(device, cull_set, 3, status_buf, status_size);
+        write_storage(device, cull_set, 0, object_buf.buffer(), object_size);
+        write_storage(device, cull_set, 1, draw_args_buf.buffer(), args_size);
+        write_storage(device, cull_set, 2, indirect_buf.buffer(), indirect_size);
+        write_storage(device, cull_set, 3, status_buf.buffer(), status_size);
 
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
         // array. Only the SSBO is written here; each face's pool array is
@@ -1210,7 +1151,7 @@ impl BakeResources {
         let bindless_sets = alloc_descriptor_sets(device, pool, &bindless_layouts)?;
         {
             let obj_info = vk::DescriptorBufferInfo::default()
-                .buffer(object_buf)
+                .buffer(object_buf.buffer())
                 .offset(0)
                 .range(object_size);
             let writes: Vec<vk::WriteDescriptorSet> = bindless_sets
@@ -1234,7 +1175,7 @@ impl BakeResources {
                 hiz_mip_count: 1,
                 hiz_enabled: 0,
             };
-            let ubo = make_ubo_bytes(instance, device, pd, hiz_params_bytes(&params))?;
+            let ubo = make_ubo_bytes(alloc, hiz_params_bytes(&params))?;
             let (view, sampler) = hiz.read_set_sources();
             let layout = hiz.read_set_layout;
             let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&layout))?[0];
@@ -1243,7 +1184,7 @@ impl BakeResources {
                 .image_view(view)
                 .sampler(sampler);
             let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(ubo.0)
+                .buffer(ubo.buffer())
                 .offset(0)
                 .range(std::mem::size_of::<CullHizParams>() as u64);
             let writes = [
@@ -1281,10 +1222,13 @@ impl BakeResources {
             })
             .collect();
         for (face, &set) in global_sets.iter().enumerate() {
-            let view_info = buf_info(view_bufs[face], view_size);
-            let light_info = buf_info(light.0, std::mem::size_of::<LightUniforms>() as u64);
-            let shadow_info = buf_info(shadow.0, std::mem::size_of::<ShadowUniforms>() as u64);
-            let probeset_info = buf_info(probeset.0, std::mem::size_of::<ProbeSet>() as u64);
+            let view_info = buf_info(view_bufs[face].buffer(), view_size);
+            let light_info = buf_info(light.buffer(), std::mem::size_of::<LightUniforms>() as u64);
+            let shadow_info = buf_info(
+                shadow.buffer(),
+                std::mem::size_of::<ShadowUniforms>() as u64,
+            );
+            let probeset_info = buf_info(probeset.buffer(), std::mem::size_of::<ProbeSet>() as u64);
             let shadow_img = img_info(ctx.shadow.map.view, ctx.shadow.sampler);
             let irr_img = img_info(ctx.env_map.irradiance.view, ctx.cube_sampler);
             let pre_img = img_info(ctx.env_map.prefilter.view, ctx.cube_sampler);
@@ -1311,14 +1255,14 @@ impl BakeResources {
                 device,
                 set,
                 LOCAL_LIGHT_SSBO_BINDING,
-                ctx.uniforms.local_light_buffer,
+                ctx.uniforms.local_light_buffer.buffer(),
                 ctx.uniforms.local_light_size,
             );
             // Bindings 10 + 11: the `use_clusters = 0` ClusterParams (a cube face
             // does not match the main camera's grid) + the cluster lists, bound
             // because the forward shader references them unconditionally.
             let cluster_params_info = vk::DescriptorBufferInfo::default()
-                .buffer(ctx.light_cull.unclustered_buffer)
+                .buffer(ctx.light_cull.unclustered_buffer.buffer())
                 .offset(0)
                 .range(std::mem::size_of::<crate::gfx::render_types::ClusterParams>() as u64);
             let cluster_write = vk::WriteDescriptorSet::default()
@@ -1331,7 +1275,7 @@ impl BakeResources {
                 device,
                 set,
                 super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING,
-                ctx.light_cull.cluster_buffer,
+                ctx.light_cull.cluster_buffer.buffer(),
                 super::light_cull::cluster_list_size(),
             );
             // Bindings 12 + 13: the spot shadow depth array + its per-slice
@@ -1347,7 +1291,7 @@ impl BakeResources {
                 device,
                 set,
                 super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING,
-                ctx.spot_shadow.data_buffer,
+                ctx.spot_shadow.data_buffer.buffer(),
                 vk::WHOLE_SIZE,
             );
             // Bindings 14..16: the area-light table and its two LTC lookups.
@@ -1355,7 +1299,7 @@ impl BakeResources {
                 device,
                 set,
                 super::descriptor_layout::AREA_LIGHT_SSBO_BINDING,
-                ctx.area_light.buffer,
+                ctx.area_light.buffer.buffer(),
                 vk::WHOLE_SIZE,
             );
             let ltc_m = img_info(ctx.area_light.ltc_matrix.view, ctx.area_light.sampler);
@@ -1370,124 +1314,61 @@ impl BakeResources {
         // Six readback buffers (one RGBA16F face each, tightly packed).
         let readback_size = (size as u64) * (size as u64) * 8;
         let mut readback_bufs = Vec::with_capacity(PROBE_FACE_COUNT);
-        let mut readback_mems = Vec::with_capacity(PROBE_FACE_COUNT);
         for _ in 0..PROBE_FACE_COUNT {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                pd,
+            readback_bufs.push(alloc.create_buffer(
                 readback_size,
                 vk::BufferUsageFlags::TRANSFER_DST,
                 host,
-            )?;
-            readback_bufs.push(buf);
-            readback_mems.push(mem);
+            )?);
         }
 
         Ok(BakeResources {
             color,
-            depth,
+            _depth: depth,
             resolve,
             framebuffer,
             object_buf,
-            object_mem,
-            object_ptr,
             draw_args_buf,
-            draw_args_mem,
-            draw_args_ptr,
             indirect_buf,
-            indirect_mem,
-            status_buf,
-            status_mem,
+            _status_buf: status_buf,
             pool,
             cull_set,
             bindless_sets,
             hiz_set,
-            hiz_ubo,
+            _hiz_ubo: hiz_ubo,
             global_sets,
             view_bufs,
-            view_mems,
-            view_ptrs,
-            light,
-            shadow,
-            probeset,
+            _light: light,
+            _shadow: shadow,
+            _probeset: probeset,
             readback_bufs,
-            readback_mems,
         })
     }
 
     fn destroy(self, device: &ash::Device) {
-        let mut bufs: Vec<vk::Buffer> = vec![
-            self.object_buf,
-            self.draw_args_buf,
-            self.indirect_buf,
-            self.status_buf,
-            self.light.0,
-            self.shadow.0,
-            self.probeset.0,
-        ];
-        bufs.extend(self.readback_bufs.iter().copied());
-        bufs.extend(self.view_bufs.iter().copied());
-        let mut mems: Vec<vk::DeviceMemory> = vec![
-            self.object_mem,
-            self.draw_args_mem,
-            self.indirect_mem,
-            self.status_mem,
-            self.light.1,
-            self.shadow.1,
-            self.probeset.1,
-        ];
-        mems.extend(self.readback_mems.iter().copied());
-        mems.extend(self.view_mems.iter().copied());
-        if let Some((buf, mem, _)) = self.hiz_ubo {
-            bufs.push(buf);
-            mems.push(mem);
-        }
+        // The images and pooled buffers retire through the allocator when this
+        // drops; only the framebuffer and the descriptor pool are destroyed by
+        // hand (the pool frees every set allocated from it).
         unsafe {
             device.destroy_framebuffer(self.framebuffer, None);
-            self.color.destroy(device);
-            self.depth.destroy(device);
-            if let Some(r) = &self.resolve {
-                r.destroy(device);
-            }
-            for buf in bufs {
-                device.destroy_buffer(buf, None);
-            }
-            for mem in mems {
-                device.free_memory(mem, None);
-            }
-            // The pool frees every set allocated from it.
             device.destroy_descriptor_pool(self.pool, None);
         }
     }
 }
 
-// Map a freshly created HOST_VISIBLE buffer's whole range.
-fn map(device: &ash::Device, mem: vk::DeviceMemory, size: u64) -> Result<*mut u8, String> {
-    unsafe { device.map_memory(mem, 0, size, vk::MemoryMapFlags::empty()) }
-        .map(|p| p as *mut u8)
-        .map_err(|e| format!("map bake buffer: {e}"))
-}
-
 // Create a HOST_VISIBLE uniform buffer holding `bytes`, persistently mapped.
 fn make_ubo_bytes(
-    instance: &ash::Instance,
-    device: &ash::Device,
-    pd: vk::PhysicalDevice,
+    alloc: &super::allocator::DeviceAllocator,
     bytes: &[u8],
-) -> Result<(vk::Buffer, vk::DeviceMemory, *mut u8), String> {
+) -> Result<PooledBuffer, String> {
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let (buf, mem) = create_buffer(
-        instance,
-        device,
-        pd,
+    let buf = alloc.create_buffer(
         bytes.len() as u64,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         host,
     )?;
-    let ptr = map(device, mem, bytes.len() as u64)?;
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
-    Ok((buf, mem, ptr))
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.mapped_ptr(), bytes.len()) };
+    Ok(buf)
 }
 
 fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {

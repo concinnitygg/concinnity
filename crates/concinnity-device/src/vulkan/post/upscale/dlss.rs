@@ -160,11 +160,11 @@ fn create_cleared_input(
     spec: ClearedInputSpec,
 ) -> Result<GpuImage, String> {
     let super::UpscalerGpu {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
+        ..
     } = gpu;
     let ClearedInputSpec {
         width,
@@ -172,12 +172,8 @@ fn create_cleared_input(
         format,
         clear,
     } = spec;
-    let (image, memory) = create_image(
-        &crate::vulkan::texture::GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &crate::vulkan::texture::ImageSpec {
             width: width.max(1),
             height: height.max(1),
@@ -190,6 +186,7 @@ fn create_cleared_input(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
     let range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -241,12 +238,7 @@ fn create_cleared_input(
             },
         );
     })?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // NGX entry points, exported (unmangled, C linkage) from nvsdk_ngx_d.lib. The
@@ -387,6 +379,7 @@ impl DlssUpscaler {
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
         let super::UpscalerGpu {
+            alloc,
             instance,
             device,
             physical_device,
@@ -492,9 +485,8 @@ impl DlssUpscaler {
         }
 
         let output = match super::create_output_image(
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
             output_width,
@@ -516,6 +508,7 @@ impl DlssUpscaler {
         // built so far.
         let exposure = match create_cleared_input(
             super::UpscalerGpu {
+                alloc,
                 instance,
                 device,
                 physical_device,
@@ -538,7 +531,7 @@ impl DlssUpscaler {
                     NVSDK_NGX_VULKAN_DestroyParameters(params);
                     NVSDK_NGX_VULKAN_Shutdown1(device.handle());
                 }
-                output.destroy(device);
+                drop(output);
                 return Err(e);
             }
         };
@@ -705,7 +698,7 @@ impl VkUpscaleBackend for DlssUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, device: &Device) {
+    fn destroy(&mut self, _device: &Device) {
         unsafe {
             if !self.handle.is_null() {
                 NVSDK_NGX_VULKAN_ReleaseFeature(self.handle);
@@ -717,8 +710,8 @@ impl VkUpscaleBackend for DlssUpscaler {
             }
             NVSDK_NGX_VULKAN_Shutdown1(self.device);
         }
-        self.output.destroy(device);
-        self.exposure.destroy(device);
+        self.output = GpuImage::null();
+        self.exposure = GpuImage::null();
     }
 }
 

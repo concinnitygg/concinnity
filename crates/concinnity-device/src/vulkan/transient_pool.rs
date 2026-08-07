@@ -25,8 +25,20 @@
 use ash::{Device, vk};
 
 use super::texture::{
-    GpuUploadContext, create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
+    create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
 };
+
+// The raw device handles the pool allocates with. The pool deliberately stays
+// off the device allocator: its slots alias images on purpose, which the
+// general pool must never do.
+#[derive(Clone, Copy)]
+pub(super) struct TransientPoolGpu<'a> {
+    pub instance: &'a ash::Instance,
+    pub device: &'a Device,
+    pub physical_device: vk::PhysicalDevice,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
+}
 
 // One managed transient image: the graph label plus the concrete Vulkan
 // parameters the pool needs to allocate it. The label is the same string the
@@ -81,11 +93,11 @@ impl TransientImagePool {
     // from `UNDEFINED` and discard, so this costs nothing after the first frame.
     // Matches the committed bloom mips and the TAA history images.
     pub(super) fn build(
-        ctx: &GpuUploadContext,
+        ctx: &TransientPoolGpu,
         frames: usize,
         slots: &[SlotSpec],
     ) -> Result<Self, String> {
-        let &GpuUploadContext {
+        let &TransientPoolGpu {
             instance,
             device,
             physical_device,
@@ -246,7 +258,7 @@ impl TransientImagePool {
     // the caller afterward.
     pub(super) fn rebuild(
         &mut self,
-        ctx: &GpuUploadContext,
+        ctx: &TransientPoolGpu,
         frames: usize,
         slots: &[SlotSpec],
     ) -> Result<(), String> {

@@ -28,6 +28,7 @@ use std::ffi::{CStr, CString, c_char};
 use ash::{Device, vk};
 
 use crate::assets::UpscalerBackend;
+use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
 use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
@@ -174,20 +175,15 @@ fn radical_inverse(mut i: u32, base: u32) -> f32 {
 // dispatch finds it in the UNORDERED_ACCESS (GENERAL) state. Shared by all
 // three backends.
 pub(super) fn create_output_image(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &crate::vulkan::texture::GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &crate::vulkan::texture::ImageSpec {
             width: width.max(1),
             height: height.max(1),
@@ -198,6 +194,7 @@ pub(super) fn create_output_image(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
     one_shot_submit(device, command_pool, queue, |cmd| {
         let barrier = vk::ImageMemoryBarrier::default()
@@ -227,12 +224,7 @@ pub(super) fn create_output_image(
             );
         }
     })?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // The layout change one `image_barrier` records.
@@ -359,6 +351,7 @@ fn fsr_available() -> bool {
 // init transitions.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct UpscalerGpu<'a> {
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) instance: &'a ash::Instance,
     pub(in crate::vulkan) device: &'a Device,
     pub(in crate::vulkan) physical_device: vk::PhysicalDevice,

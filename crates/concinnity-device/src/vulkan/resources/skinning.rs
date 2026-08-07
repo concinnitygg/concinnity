@@ -16,7 +16,6 @@ use super::super::pipeline::{
     MeshPipelineTargets, compile_skinned_shaders, create_skinned_pipeline,
     create_skinned_shadow_pipeline,
 };
-use super::super::texture::create_buffer;
 use super::{alloc_descriptor_sets, create_descriptor_set_layout};
 
 impl VkContext {
@@ -124,26 +123,20 @@ impl VkContext {
         } else {
             vk::BufferUsageFlags::empty()
         };
-        let (skinned_vbuf, skinned_vmem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let skinned_vbuf = self.alloc.create_buffer(
             vtx_bytes.len() as u64,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let (skinned_ibuf, skinned_imem) = create_buffer(
-            &self.instance,
-            &self.device,
-            self.physical_device,
+        let skinned_ibuf = self.alloc.create_buffer(
             idx_bytes.len() as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        self.write_geometry_region(skinned_vbuf, 0, vtx_bytes)?;
-        self.write_geometry_region(skinned_ibuf, 0, idx_bytes)?;
+        self.write_geometry_region(skinned_vbuf.buffer(), 0, vtx_bytes)?;
+        self.write_geometry_region(skinned_ibuf.buffer(), 0, idx_bytes)?;
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -194,45 +187,31 @@ impl VkContext {
         // matrices so any not-yet-overwritten slot reads as identity.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY4; MAX_JOINTS];
-        let mut joint_buffers: Vec<Vec<vk::Buffer>> = Vec::with_capacity(frames);
-        let mut joint_memories: Vec<Vec<vk::DeviceMemory>> = Vec::with_capacity(frames);
-        let mut joint_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(frames);
+        let mut joint_buffers: Vec<Vec<super::super::allocator::PooledBuffer>> =
+            Vec::with_capacity(frames);
         let mut joint_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let mut bufs: Vec<vk::Buffer> = Vec::with_capacity(n);
-            let mut mems: Vec<vk::DeviceMemory> = Vec::with_capacity(n);
-            let mut ptrs: Vec<*mut u8> = Vec::with_capacity(n);
+            let mut bufs: Vec<super::super::allocator::PooledBuffer> = Vec::with_capacity(n);
             for _ in 0..n {
-                let (buf, mem) = create_buffer(
-                    &self.instance,
-                    &self.device,
-                    self.physical_device,
+                let buf = self.alloc.create_buffer(
                     joint_buf_bytes,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )?;
-                let ptr = unsafe {
-                    self.device
-                        .map_memory(mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                }
-                .map_err(|e| format!("map skinned joint buffer: {e}"))?
-                    as *mut u8;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         identity_seed.as_ptr() as *const u8,
-                        ptr,
+                        buf.mapped_ptr(),
                         joint_buf_bytes as usize,
                     );
                 }
                 bufs.push(buf);
-                mems.push(mem);
-                ptrs.push(ptr);
             }
             let layouts: Vec<_> = (0..n).map(|_| joint_set_layout).collect();
             let sets = alloc_descriptor_sets(&self.device, pool, &layouts)?;
             for (i, &set) in sets.iter().enumerate() {
                 let info = vk::DescriptorBufferInfo::default()
-                    .buffer(bufs[i])
+                    .buffer(bufs[i].buffer())
                     .offset(0)
                     .range(vk::WHOLE_SIZE);
                 let write = vk::WriteDescriptorSet::default()
@@ -246,8 +225,6 @@ impl VkContext {
                 };
             }
             joint_buffers.push(bufs);
-            joint_memories.push(mems);
-            joint_ptrs.push(ptrs);
             joint_sets.push(sets);
         }
 
@@ -266,15 +243,11 @@ impl VkContext {
         self.skinned.joint_set_layout = Some(joint_set_layout);
         self.skinned.descriptor_pool = Some(pool);
         self.skinned.vertex_buffer = skinned_vbuf;
-        self.skinned.vertex_buffer_memory = skinned_vmem;
         self.skinned.vertex_buffer_bytes = vtx_bytes.len() as u64;
         self.skinned.index_buffer = skinned_ibuf;
-        self.skinned.index_buffer_memory = skinned_imem;
         self.skinned.index_buffer_bytes = idx_bytes.len() as u64;
         self.skinned.object_sets = object_sets;
         self.skinned.joint_buffers = joint_buffers;
-        self.skinned.joint_memories = joint_memories;
-        self.skinned.joint_ptrs = joint_ptrs;
         self.skinned.joint_sets = joint_sets;
         self.skinned.draw_objects = draw_objects;
 
@@ -285,8 +258,6 @@ impl VkContext {
         self.skinned.morph_target_counts = vec![0; n];
         self.skinned.morph_weights = vec![Vec::new(); n];
         self.skinned.morph_weight_buffers = Vec::new();
-        self.skinned.morph_weight_memories = Vec::new();
-        self.skinned.morph_weight_ptrs = Vec::new();
 
         // GPU-driven main-pass skinning fold: when the bindless cull path is active,
         // build the `rt_skin` compute pipeline + per-frame deformed-vertex buffers +
@@ -349,9 +320,7 @@ impl VkContext {
                 indices.len()
             ));
         }
-        if self.skinned.vertex_buffer == vk::Buffer::null()
-            || self.skinned.index_buffer == vk::Buffer::null()
-        {
+        if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(
                 "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
@@ -387,9 +356,13 @@ impl VkContext {
         self.wait_idle();
 
         let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(self.skinned.vertex_buffer, v_byte_off as u64, vert_bytes)?;
+        self.write_geometry_region(
+            self.skinned.vertex_buffer.buffer(),
+            v_byte_off as u64,
+            vert_bytes,
+        )?;
         let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.skinned.index_buffer, i_byte_off, idx_bytes)?;
+        self.write_geometry_region(self.skinned.index_buffer.buffer(), i_byte_off, idx_bytes)?;
         Ok(())
     }
 
@@ -498,11 +471,11 @@ impl VkContext {
 
     // Copy this frame's skinning matrices into the per-frame joint buffers.
     pub(in crate::vulkan) fn upload_joint_matrices(&self, frame_idx: usize) {
-        let Some(frame_bufs) = self.skinned.joint_ptrs.get(frame_idx) else {
+        let Some(frame_bufs) = self.skinned.joint_buffers.get(frame_idx) else {
             return;
         };
         for (i, mats) in self.skinned.joint_matrices.iter().enumerate() {
-            let Some(&dst) = frame_bufs.get(i) else {
+            let Some(dst) = frame_bufs.get(i).map(|b| b.mapped_ptr()) else {
                 continue;
             };
             let count = mats.len().min(MAX_JOINTS);
@@ -532,7 +505,7 @@ impl VkContext {
         let device = self.device.clone();
         let frames = self.frames_in_flight.max(1);
 
-        let mut delta_unique: Vec<(vk::Buffer, vk::DeviceMemory)> = Vec::new();
+        let mut delta_unique: Vec<super::super::allocator::PooledBuffer> = Vec::new();
         let mut delta_buffers: Vec<vk::Buffer> = vec![vk::Buffer::null(); n];
         let mut target_counts: Vec<u32> = vec![0; n];
         let mut weights: Vec<Vec<f32>> = vec![Vec::new(); n];
@@ -545,17 +518,15 @@ impl VkContext {
                 Some(e) => *e,
                 None => {
                     let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
-                    let (buf, mem) = create_buffer(
-                        &self.instance,
-                        &device,
-                        self.physical_device,
+                    let pooled = self.alloc.create_buffer(
                         bytes.len().max(4) as u64,
                         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                         vk::MemoryPropertyFlags::DEVICE_LOCAL,
                     )?;
+                    let buf = pooled.buffer();
                     self.write_geometry_region(buf, 0, bytes)?;
                     let count = data.target_count() as u32;
-                    delta_unique.push((buf, mem));
+                    delta_unique.push(pooled);
                     by_source.insert(key, (buf, count));
                     (buf, count)
                 }
@@ -568,38 +539,22 @@ impl VkContext {
         // Per-(frame, object) host-mapped weight buffers, one f32 per target
         // (>= 1 so every binding has a valid buffer), zero-seeded. Only allocated
         // when some object carries morphs.
-        let mut weight_buffers: Vec<Vec<vk::Buffer>> = Vec::new();
-        let mut weight_memories: Vec<Vec<vk::DeviceMemory>> = Vec::new();
-        let mut weight_ptrs: Vec<Vec<*mut u8>> = Vec::new();
+        let mut weight_buffers: Vec<Vec<super::super::allocator::PooledBuffer>> = Vec::new();
         if target_counts.iter().any(|&c| c > 0) {
             for _ in 0..frames {
                 let mut bufs = Vec::with_capacity(n);
-                let mut mems = Vec::with_capacity(n);
-                let mut ptrs = Vec::with_capacity(n);
                 for &count in &target_counts {
                     let size = (count.max(1) as u64) * std::mem::size_of::<f32>() as u64;
-                    let (buf, mem) = create_buffer(
-                        &self.instance,
-                        &device,
-                        self.physical_device,
+                    let buf = self.alloc.create_buffer(
                         size,
                         vk::BufferUsageFlags::STORAGE_BUFFER,
                         vk::MemoryPropertyFlags::HOST_VISIBLE
                             | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )?;
-                    let ptr = unsafe {
-                        device.map_memory(mem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                    }
-                    .map_err(|e| format!("map morph weight buffer: {e}"))?
-                        as *mut u8;
-                    unsafe { std::ptr::write_bytes(ptr, 0, size as usize) };
+                    unsafe { std::ptr::write_bytes(buf.mapped_ptr(), 0, size as usize) };
                     bufs.push(buf);
-                    mems.push(mem);
-                    ptrs.push(ptr);
                 }
                 weight_buffers.push(bufs);
-                weight_memories.push(mems);
-                weight_ptrs.push(ptrs);
             }
         }
 
@@ -615,7 +570,7 @@ impl VkContext {
                         _ => dummy,
                     };
                     let weight_buf = match weight_buffers.get(f).and_then(|fb| fb.get(o)) {
-                        Some(&b) => b,
+                        Some(b) => b.buffer(),
                         None => dummy,
                     };
                     let delta_info = vk::DescriptorBufferInfo::default()
@@ -648,8 +603,6 @@ impl VkContext {
         self.skinned.morph_target_counts = target_counts;
         self.skinned.morph_weights = weights;
         self.skinned.morph_weight_buffers = weight_buffers;
-        self.skinned.morph_weight_memories = weight_memories;
-        self.skinned.morph_weight_ptrs = weight_ptrs;
         Ok(())
     }
 
@@ -667,11 +620,12 @@ impl VkContext {
     // fold reads. Called alongside `upload_joint_matrices`. A no-op when no
     // object carries morphs (the buffers are empty).
     pub(in crate::vulkan) fn upload_morph_weights(&self, frame_idx: usize) {
-        let Some(frame_bufs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
+        let Some(frame_bufs) = self.skinned.morph_weight_buffers.get(frame_idx) else {
             return;
         };
         for (i, w) in self.skinned.morph_weights.iter().enumerate() {
-            let (Some(&dst), false) = (frame_bufs.get(i), w.is_empty()) else {
+            let (Some(dst), false) = (frame_bufs.get(i).map(|b| b.mapped_ptr()), w.is_empty())
+            else {
                 continue;
             };
             unsafe {
@@ -686,6 +640,9 @@ impl VkContext {
 
     // Bind the skinned vertex + index buffers for the skinned passes.
     pub(in crate::vulkan) fn skinned_geometry(&self) -> (vk::Buffer, vk::Buffer) {
-        (self.skinned.vertex_buffer, self.skinned.index_buffer)
+        (
+            self.skinned.vertex_buffer.buffer(),
+            self.skinned.index_buffer.buffer(),
+        )
     }
 }

@@ -17,9 +17,9 @@ use ash::{Device, vk};
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::vulkan::uniforms::{AUTO_EXPOSURE_PUSH_BYTES, AutoExposureParams};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
-use super::texture::create_buffer;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
 // and by shader hot-reload to rebuild the two compute pipelines.
@@ -59,29 +59,24 @@ pub(in crate::vulkan) struct AutoExposureResources {
 
     // Device-local 256-bin u32 histogram. The build kernel atomically
     // increments bins into it; the average kernel reads and clears them.
-    histogram_buffer: vk::Buffer,
-    histogram_memory: vk::DeviceMemory,
+    histogram_buffer: PooledBuffer,
     // Device-local single f32 the average kernel writes; copied into the
     // per-frame readback after each dispatch.
-    output_buffer: vk::Buffer,
-    output_memory: vk::DeviceMemory,
+    output_buffer: PooledBuffer,
 
     // Per-frame HOST_VISIBLE readback buffers. Each holds 4 bytes (one
     // f32). Persistently mapped; the CPU reads `readback_ptrs[frame_idx]`
     // at the top of a later frame after the fence wait gates this slot's
     // previous copy.
-    readback_buffers: Vec<vk::Buffer>,
-    readback_memories: Vec<vk::DeviceMemory>,
-    readback_ptrs: Vec<*const f32>,
+    readback_buffers: Vec<PooledBuffer>,
 }
 
 impl AutoExposureResources {
     // Build all auto-exposure resources. Called from `VkContext::new` only
     // when `PostProcessConfig.auto_exposure` is enabled.
     pub(in crate::vulkan) fn new(
-        instance: &ash::Instance,
+        alloc: &DeviceAllocator,
         device: &Device,
-        physical_device: vk::PhysicalDevice,
         frames: usize,
         hdr_resolve_views: &[vk::ImageView],
         linear_sampler: vk::Sampler,
@@ -125,19 +120,13 @@ impl AutoExposureResources {
 
         // Histogram + output buffers (device-local).
         let histogram_bytes = (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as vk::DeviceSize;
-        let (histogram_buffer, histogram_memory) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        let histogram_buffer = alloc.create_buffer(
             histogram_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let output_bytes = std::mem::size_of::<f32>() as vk::DeviceSize;
-        let (output_buffer, output_memory) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        let output_buffer = alloc.create_buffer(
             output_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -145,24 +134,12 @@ impl AutoExposureResources {
 
         // Per-frame HOST_VISIBLE readback buffers (persistently mapped).
         let mut readback_buffers = Vec::with_capacity(frames);
-        let mut readback_memories = Vec::with_capacity(frames);
-        let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            readback_buffers.push(alloc.create_buffer(
                 output_bytes,
                 vk::BufferUsageFlags::TRANSFER_DST,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr =
-                unsafe { device.map_memory(mem, 0, output_bytes, vk::MemoryMapFlags::empty()) }
-                    .map_err(|e| format!("map auto-exposure readback: {e}"))?
-                    as *const f32;
-            readback_buffers.push(buf);
-            readback_memories.push(mem);
-            readback_ptrs.push(ptr);
+            )?);
         }
 
         // Descriptor pool: enough for `frames` build sets + 1 average set.
@@ -210,10 +187,15 @@ impl AutoExposureResources {
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
         for (i, &set) in build_sets.iter().enumerate() {
             let view = hdr_resolve_views[i.min(last_view_idx)];
-            write_build_set(device, set, view, linear_sampler, histogram_buffer);
+            write_build_set(device, set, view, linear_sampler, histogram_buffer.buffer());
         }
         // Write the average set's histogram + output bindings.
-        write_average_set(device, average_set, histogram_buffer, output_buffer);
+        write_average_set(
+            device,
+            average_set,
+            histogram_buffer.buffer(),
+            output_buffer.buffer(),
+        );
 
         Ok(Self {
             build_pipeline,
@@ -226,12 +208,8 @@ impl AutoExposureResources {
             average_set,
             descriptor_pool,
             histogram_buffer,
-            histogram_memory,
             output_buffer,
-            output_memory,
             readback_buffers,
-            readback_memories,
-            readback_ptrs,
         })
     }
 
@@ -289,7 +267,13 @@ impl AutoExposureResources {
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
         for (i, &set) in self.build_sets.iter().enumerate() {
             let view = hdr_resolve_views[i.min(last_view_idx)];
-            write_build_set(device, set, view, linear_sampler, self.histogram_buffer);
+            write_build_set(
+                device,
+                set,
+                view,
+                linear_sampler,
+                self.histogram_buffer.buffer(),
+            );
         }
     }
 
@@ -297,24 +281,6 @@ impl AutoExposureResources {
     // `device_wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         unsafe {
-            for (&mem, &_buf) in self
-                .readback_memories
-                .iter()
-                .zip(self.readback_buffers.iter())
-            {
-                device.unmap_memory(mem);
-            }
-            for &buf in &self.readback_buffers {
-                device.destroy_buffer(buf, None);
-            }
-            for &mem in &self.readback_memories {
-                device.free_memory(mem, None);
-            }
-            device.destroy_buffer(self.output_buffer, None);
-            device.free_memory(self.output_memory, None);
-            device.destroy_buffer(self.histogram_buffer, None);
-            device.free_memory(self.histogram_memory, None);
-
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_pipeline(self.build_pipeline, None);
             device.destroy_pipeline(self.average_pipeline, None);
@@ -323,6 +289,9 @@ impl AutoExposureResources {
             device.destroy_descriptor_set_layout(self.build_set_layout, None);
             device.destroy_descriptor_set_layout(self.average_set_layout, None);
         }
+        self.histogram_buffer = PooledBuffer::null();
+        self.output_buffer = PooledBuffer::null();
+        self.readback_buffers.clear();
     }
 }
 
@@ -482,9 +451,10 @@ impl VkContext {
         let Some(state) = self.auto_exposure_state.as_mut() else {
             return;
         };
-        let Some(&ptr) = resources.readback_ptrs.get(frame_idx) else {
+        let Some(readback) = resources.readback_buffers.get(frame_idx) else {
             return;
         };
+        let ptr = readback.mapped_ptr() as *const f32;
 
         // Read the previous frame's average log-luminance for this slot. The
         // fence wait above this call already gated the GPU work that wrote
@@ -641,8 +611,7 @@ impl VkContext {
             let readback = resources
                 .readback_buffers
                 .get(frame_idx)
-                .copied()
-                .unwrap_or_else(|| resources.readback_buffers[0]);
+                .unwrap_or(&resources.readback_buffers[0]);
             let copy = vk::BufferCopy {
                 src_offset: 0,
                 dst_offset: 0,
@@ -650,8 +619,8 @@ impl VkContext {
             };
             device.cmd_copy_buffer(
                 cmd,
-                resources.output_buffer,
-                readback,
+                resources.output_buffer.buffer(),
+                readback.buffer(),
                 std::slice::from_ref(&copy),
             );
 

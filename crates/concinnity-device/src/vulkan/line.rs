@@ -17,9 +17,9 @@ use std::ffi::CString;
 
 use ash::{Device, vk};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::spv_module;
-use super::texture::create_buffer;
 use crate::gfx::render_types::LineVertex;
 
 // How much of a line still shows where scene geometry is in front of it. A
@@ -57,9 +57,7 @@ impl LineState {
 // The frame fence (waited before a slot is reused) proves the GPU has finished
 // reading a slot's buffer before it is overwritten or replaced.
 struct VertexSlot {
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    ptr: *mut u8,
+    buffer: PooledBuffer,
     capacity: u64,
 }
 
@@ -79,9 +77,7 @@ pub(in crate::vulkan) struct LineResources {
     descriptor_pool: vk::DescriptorPool,
 
     // Per-frame view UBO (LineView, 80 bytes). Persistently mapped.
-    view_ubos: Vec<vk::Buffer>,
-    view_ubo_memories: Vec<vk::DeviceMemory>,
-    view_ubo_ptrs: Vec<*mut u8>,
+    view_ubos: Vec<PooledBuffer>,
 
     // Per-frame ribbon vertices.
     vertex_slots: Vec<VertexSlot>,
@@ -100,9 +96,8 @@ pub(in crate::vulkan) struct LineResources {
 // the duration of `LineResources::new`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct LineDeviceContext<'a> {
-    pub(in crate::vulkan) instance: &'a ash::Instance,
+    pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a Device,
-    pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
 }
 
 // Render-target inputs the line pass writes into / samples from: the resolved
@@ -125,11 +120,7 @@ impl LineResources {
         msaa: bool,
         hot_reload: bool,
     ) -> Result<Self, String> {
-        let LineDeviceContext {
-            instance,
-            device,
-            physical_device,
-        } = ctx;
+        let LineDeviceContext { alloc, device } = ctx;
         let LinePassTargets {
             hdr_format,
             hdr_resolve_views,
@@ -147,29 +138,14 @@ impl LineResources {
 
         let view_size = std::mem::size_of::<LineView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs = Vec::with_capacity(frames);
         let mut vertex_slots = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            view_ubos.push(alloc.create_buffer(
                 view_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
-            let ptr = unsafe { device.map_memory(mem, 0, view_size, vk::MemoryMapFlags::empty()) }
-                .map_err(|e| format!("map line view ubo: {e}"))? as *mut u8;
-            view_ubos.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
-            vertex_slots.push(new_vertex_slot(
-                instance,
-                device,
-                physical_device,
-                MIN_VERTEX_CAPACITY,
             )?);
+            vertex_slots.push(new_vertex_slot(alloc, MIN_VERTEX_CAPACITY)?);
         }
 
         let descriptor_pool = create_line_descriptor_pool(device, frames)?;
@@ -183,7 +159,7 @@ impl LineResources {
             write_view_set(
                 device,
                 set,
-                view_ubos[i],
+                view_ubos[i].buffer(),
                 depth_views[i.min(depth_views.len().saturating_sub(1))],
                 sampler,
             );
@@ -201,8 +177,6 @@ impl LineResources {
             view_set_layout,
             descriptor_pool,
             view_ubos,
-            view_ubo_memories,
-            view_ubo_ptrs,
             vertex_slots,
             view_sets,
             framebuffers,
@@ -254,16 +228,6 @@ impl LineResources {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
             }
-            for (&buf, &mem) in self.view_ubos.iter().zip(self.view_ubo_memories.iter()) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
-            for slot in &self.vertex_slots {
-                device.unmap_memory(slot.memory);
-                device.destroy_buffer(slot.buffer, None);
-                device.free_memory(slot.memory, None);
-            }
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.view_set_layout, None);
             device.destroy_pipeline(self.pipeline, None);
@@ -272,35 +236,18 @@ impl LineResources {
         }
         self.framebuffers.clear();
         self.view_ubos.clear();
-        self.view_ubo_memories.clear();
-        self.view_ubo_ptrs.clear();
         self.vertex_slots.clear();
     }
 }
 
 // Allocate one persistently-mapped host-visible vertex slot of `capacity` bytes.
-fn new_vertex_slot(
-    instance: &ash::Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    capacity: u64,
-) -> Result<VertexSlot, String> {
-    let (buffer, memory) = create_buffer(
-        instance,
-        device,
-        physical_device,
+fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> Result<VertexSlot, String> {
+    let buffer = alloc.create_buffer(
         capacity,
         vk::BufferUsageFlags::VERTEX_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    let ptr = unsafe { device.map_memory(memory, 0, capacity, vk::MemoryMapFlags::empty()) }
-        .map_err(|e| format!("map line vertex buffer: {e}"))? as *mut u8;
-    Ok(VertexSlot {
-        buffer,
-        memory,
-        ptr,
-        capacity,
-    })
+    Ok(VertexSlot { buffer, capacity })
 }
 
 // New capacity for a slot that must hold at least `needed` bytes, given its
@@ -620,9 +567,8 @@ impl VkContext {
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
             let built = LineResources::new(
                 LineDeviceContext {
-                    instance: &self.instance,
+                    alloc: &self.alloc,
                     device: &self.device,
-                    physical_device: self.physical_device,
                 },
                 LinePassTargets {
                     hdr_format: super::context::HDR_FORMAT,
@@ -667,13 +613,7 @@ impl VkContext {
             return Ok(());
         }
         let capacity = grow_capacity(slot.capacity, needed);
-        let fresh = new_vertex_slot(&self.instance, &self.device, self.physical_device, capacity)?;
-        unsafe {
-            self.device.unmap_memory(slot.memory);
-            self.device.destroy_buffer(slot.buffer, None);
-            self.device.free_memory(slot.memory, None);
-        }
-        *slot = fresh;
+        *slot = new_vertex_slot(&self.alloc, capacity)?;
         Ok(())
     }
 
@@ -713,10 +653,14 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const LineView as *const u8,
-                lines.view_ubo_ptrs[frame_idx],
+                lines.view_ubos[frame_idx].mapped_ptr(),
                 std::mem::size_of::<LineView>(),
             );
-            std::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, slot.ptr, bytes as usize);
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr() as *const u8,
+                slot.buffer.mapped_ptr(),
+                bytes as usize,
+            );
         }
 
         // Transition main depth -> SHADER_READ_ONLY so the fragment can sample
@@ -779,7 +723,7 @@ impl VkContext {
                 std::slice::from_ref(&lines.view_sets[frame_idx]),
                 &[],
             );
-            device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&slot.buffer), &[0]);
+            device.cmd_bind_vertex_buffers(cmd, 0, &[slot.buffer.buffer()], &[0]);
             device.cmd_draw(cmd, vertices.len() as u32, 1, 0, 0);
             device.cmd_end_render_pass(cmd);
 

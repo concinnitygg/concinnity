@@ -15,6 +15,7 @@ use ash::{Device, vk};
 
 use crate::gfx::render_types::SsaoParams;
 
+use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -241,18 +242,13 @@ fn create_blur_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
 // texture. No pre-transition: the render pass declares an `UNDEFINED`
 // initial layout.
 fn create_ao_target(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &super::super::texture::GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &super::super::texture::ImageSpec {
             width,
             height,
@@ -265,16 +261,11 @@ fn create_ao_target(
     )?;
     let view = create_image_view(
         device,
-        image,
+        pooled.image(),
         SSAO_OCCLUSION_FORMAT,
         vk::ImageAspectFlags::COLOR,
     )?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Build a fullscreen kernel/blur pipeline. No vertex input (the
@@ -359,9 +350,8 @@ fn create_fullscreen_pipeline(
 // because they always travel together through `new` / `build_targets` / `rebuild`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct SsaoDeviceCtx<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
 }
 
 impl SsaoResources {
@@ -487,12 +477,7 @@ impl SsaoResources {
             sampler,
             // Placeholder GpuImage; replaced by build_targets below. The
             // blurred `ao_output` lives in the transient pool, not here.
-            ao_raw: GpuImage {
-                image: vk::Image::null(),
-                memory: vk::DeviceMemory::null(),
-                view: vk::ImageView::null(),
-                aux_views: Vec::new(),
-            },
+            ao_raw: GpuImage::null(),
             kernel_framebuffer: vk::Framebuffer::null(),
             blur_framebuffers: Vec::new(),
         };
@@ -515,14 +500,10 @@ impl SsaoResources {
         height: u32,
         ao_views: &[vk::ImageView],
     ) -> Result<(), String> {
-        let &SsaoDeviceCtx {
-            instance,
-            device,
-            physical_device,
-        } = ctx;
+        let SsaoDeviceCtx { alloc, device } = ctx;
         let w = width.max(1);
         let h = height.max(1);
-        self.ao_raw = create_ao_target(instance, device, physical_device, w, h)?;
+        self.ao_raw = create_ao_target(alloc, device, w, h)?;
 
         self.kernel_framebuffer = unsafe {
             device.create_framebuffer(
@@ -625,7 +606,7 @@ impl SsaoResources {
             }
             self.kernel_framebuffer = vk::Framebuffer::null();
             self.blur_framebuffers.clear();
-            self.ao_raw.destroy(device);
+            self.ao_raw = GpuImage::null();
             // `ao_output` is pool-owned (per frame); the pool frees it.
         }
     }

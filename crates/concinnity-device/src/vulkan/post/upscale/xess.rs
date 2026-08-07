@@ -372,6 +372,7 @@ impl XessUpscaler {
         upscale_scale: f32,
     ) -> Result<Option<Self>, String> {
         let super::UpscalerGpu {
+            alloc,
             instance,
             device,
             physical_device,
@@ -450,9 +451,8 @@ impl XessUpscaler {
         }
 
         let output = match super::create_output_image(
-            instance,
+            alloc,
             device,
-            physical_device,
             command_pool,
             queue,
             output_width,
@@ -575,14 +575,14 @@ impl VkUpscaleBackend for XessUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, device: &Device) {
+    fn destroy(&mut self, _device: &Device) {
         if !self.ctx.is_null() {
             unsafe {
                 let _ = (self.xess.destroy_context)(self.ctx);
             }
             self.ctx = ptr::null_mut();
         }
-        self.output.destroy(device);
+        self.output = GpuImage::null();
     }
 }
 

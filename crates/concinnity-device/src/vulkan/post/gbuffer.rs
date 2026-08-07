@@ -26,6 +26,7 @@ use ash::{Device, vk};
 
 use crate::vulkan::uniforms::{GBUFFER_PREPASS_PUSH_BYTES, GbModelPush, GbViewUniforms};
 
+use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
 use super::super::math::IDENTITY4;
 use super::super::pipeline::*;
@@ -170,19 +171,14 @@ fn create_prepass_render_pass(device: &Device) -> Result<vk::RenderPass, String>
 // sampled texture. No pre-transition: the render pass declares an `UNDEFINED`
 // initial layout.
 fn create_color_target(
-    instance: &ash::Instance,
+    alloc: &DeviceAllocator,
     device: &Device,
-    physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
     format: vk::Format,
 ) -> Result<GpuImage, String> {
-    let (image, memory) = create_image(
-        &GpuAllocContext {
-            instance,
-            device,
-            physical_device,
-        },
+    let pooled = create_image(
+        alloc,
         &ImageSpec {
             width,
             height,
@@ -193,13 +189,9 @@ fn create_color_target(
             samples: vk::SampleCountFlags::TYPE_1,
         },
     )?;
+    let image = pooled.image();
     let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage {
-        image,
-        memory,
-        view,
-        aux_views: Vec::new(),
-    })
+    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Render pass + pipeline layout a pre-pass pipeline binds against.
@@ -442,18 +434,15 @@ pub(in crate::vulkan) struct GbufferBindless {
     pub(in crate::vulkan) pipeline_layout: vk::PipelineLayout,
     pub(in crate::vulkan) set_layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
-    pub(in crate::vulkan) prev_model_buffers: Vec<vk::Buffer>,
-    pub(in crate::vulkan) prev_model_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) prev_model_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) prev_model_buffers: Vec<PooledBuffer>,
 }
 
 // Vulkan device handles every G-buffer builder threads through: the instance,
 // logical device, and physical device used to allocate images / buffers.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GbufferDeviceCtx<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
 }
 
 // Descriptor wiring the GPU-driven pre-pass allocates against: the shared pool
@@ -492,11 +481,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
 ) -> Result<GbufferBindless, String> {
     use super::super::builtins;
 
-    let GbufferDeviceCtx {
-        instance,
-        device,
-        physical_device,
-    } = ctx;
+    let GbufferDeviceCtx { alloc, device } = ctx;
     let GbufferBindlessDescriptors {
         descriptor_pool,
         bindless_set_layout,
@@ -556,19 +541,13 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     // `n_cull` column-major `float4x4` records, parallel to the object buffer.
     let buf_size = (n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
     let mut prev_model_buffers = Vec::with_capacity(frames);
-    let mut prev_model_memories = Vec::with_capacity(frames);
-    let mut prev_model_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let (buf, mem) = create_buffer(
-            instance,
-            device,
-            physical_device,
+        let buf = alloc.create_buffer(
             buf_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        let ptr = unsafe { device.map_memory(mem, 0, buf_size, vk::MemoryMapFlags::empty()) }
-            .map_err(|e| format!("map prev_model buffer: {e}"))? as *mut u8;
+        let ptr = buf.mapped_ptr();
         // Instance region: the instances' current models (immutable, camera-only
         // motion). Written once into every frame buffer after the static prefix;
         // the per-frame fill rewrites only the static + skinned regions.
@@ -585,8 +564,6 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
             }
         }
         prev_model_buffers.push(buf);
-        prev_model_memories.push(mem);
-        prev_model_ptrs.push(ptr);
     }
 
     // One set 0 per frame: binding 0 = that frame's GbView UBO, binding 1 = that
@@ -596,11 +573,11 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
         let view_info = vk::DescriptorBufferInfo::default()
-            .buffer(gb.view_ubo_buffers[f])
+            .buffer(gb.view_ubo_buffers[f].buffer())
             .offset(0)
             .range(GBUFFER_VIEW_UBO_SIZE);
         let pm_info = vk::DescriptorBufferInfo::default()
-            .buffer(prev_model_buffers[f])
+            .buffer(prev_model_buffers[f].buffer())
             .offset(0)
             .range(buf_size);
         let writes = [
@@ -624,8 +601,6 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         set_layout,
         sets,
         prev_model_buffers,
-        prev_model_memories,
-        prev_model_ptrs,
     })
 }
 
@@ -648,9 +623,7 @@ pub(in crate::vulkan) struct GbufferResources {
 
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat),
     // host-mapped + descriptor set.
-    pub(in crate::vulkan) view_ubo_buffers: Vec<vk::Buffer>,
-    pub(in crate::vulkan) view_ubo_memories: Vec<vk::DeviceMemory>,
-    pub(in crate::vulkan) view_ubo_ptrs: Vec<*mut u8>,
+    pub(in crate::vulkan) view_ubo_buffers: Vec<PooledBuffer>,
     pub(in crate::vulkan) prepass_sets: Vec<vk::DescriptorSet>,
     pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
 
@@ -795,11 +768,7 @@ impl GbufferResources {
         object_count: usize,
         hot_reload: bool,
     ) -> Result<Self, String> {
-        let GbufferDeviceCtx {
-            instance,
-            device,
-            physical_device,
-        } = ctx;
+        let GbufferDeviceCtx { alloc, device } = ctx;
         // Only the frame count is needed here (for the view-UBO ring); the
         // sized targets are built by `build_targets`, which takes the full
         // `extent` below and reads width/height itself.
@@ -931,24 +900,13 @@ impl GbufferResources {
 
         // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat).
         let mut view_ubo_buffers = Vec::with_capacity(frames);
-        let mut view_ubo_memories = Vec::with_capacity(frames);
-        let mut view_ubo_ptrs = Vec::with_capacity(frames);
         for _ in 0..frames {
-            let (buf, mem) = create_buffer(
-                instance,
-                device,
-                physical_device,
+            let buf = alloc.create_buffer(
                 GBUFFER_VIEW_UBO_SIZE,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-            let ptr = unsafe {
-                device.map_memory(mem, 0, GBUFFER_VIEW_UBO_SIZE, vk::MemoryMapFlags::empty())
-            }
-            .map_err(|e| format!("map gbuffer view UBO: {e}"))? as *mut u8;
             view_ubo_buffers.push(buf);
-            view_ubo_memories.push(mem);
-            view_ubo_ptrs.push(ptr);
         }
 
         // Descriptor pool: `frames` prepass sets (1 UBO each).
@@ -969,7 +927,7 @@ impl GbufferResources {
         let prepass_sets = alloc_descriptor_sets(device, descriptor_pool, &prepass_layouts)?;
         for (i, &set) in prepass_sets.iter().enumerate() {
             let buf_info = vk::DescriptorBufferInfo::default()
-                .buffer(view_ubo_buffers[i])
+                .buffer(view_ubo_buffers[i].buffer())
                 .offset(0)
                 .range(GBUFFER_VIEW_UBO_SIZE);
             let write = vk::WriteDescriptorSet::default()
@@ -990,8 +948,6 @@ impl GbufferResources {
             prepass_pso_instanced,
             prepass_pso_skinned,
             view_ubo_buffers,
-            view_ubo_memories,
-            view_ubo_ptrs,
             prepass_sets,
             descriptor_pool,
             normal_depth_images: Vec::new(),
@@ -1015,11 +971,7 @@ impl GbufferResources {
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
     ) -> Result<(), String> {
-        let GbufferDeviceCtx {
-            instance,
-            device,
-            physical_device,
-        } = ctx;
+        let GbufferDeviceCtx { alloc, device } = ctx;
         let GbufferQueueCtx {
             command_pool,
             queue,
@@ -1032,35 +984,14 @@ impl GbufferResources {
         let w = width.max(1);
         let h = height.max(1);
         for _ in 0..frames {
-            let normal_depth = create_color_target(
-                instance,
-                device,
-                physical_device,
-                w,
-                h,
-                GBUFFER_NORMAL_DEPTH_FORMAT,
-            )?;
-            let roughness = create_color_target(
-                instance,
-                device,
-                physical_device,
-                w,
-                h,
-                GBUFFER_ROUGHNESS_FORMAT,
-            )?;
-            let velocity = create_color_target(
-                instance,
-                device,
-                physical_device,
-                w,
-                h,
-                GBUFFER_VELOCITY_FORMAT,
-            )?;
+            let normal_depth =
+                create_color_target(alloc, device, w, h, GBUFFER_NORMAL_DEPTH_FORMAT)?;
+            let roughness = create_color_target(alloc, device, w, h, GBUFFER_ROUGHNESS_FORMAT)?;
+            let velocity = create_color_target(alloc, device, w, h, GBUFFER_VELOCITY_FORMAT)?;
             let depth = create_depth_image(
                 &GpuUploadContext {
-                    instance,
+                    alloc,
                     device,
-                    physical_device,
                     command_pool,
                     queue,
                 },
@@ -1172,7 +1103,7 @@ impl GbufferResources {
             .chain(&self.velocity_images)
             .chain(&self.depth_images)
         {
-            img.destroy(device);
+            let _ = img;
         }
         self.framebuffers.clear();
         self.normal_depth_images.clear();
@@ -1292,11 +1223,6 @@ impl GbufferResources {
             }
             device.destroy_descriptor_set_layout(self.prepass_set_layout, None);
             device.destroy_render_pass(self.prepass_render_pass, None);
-            for (&buf, &mem) in self.view_ubo_buffers.iter().zip(&self.view_ubo_memories) {
-                device.unmap_memory(mem);
-                device.destroy_buffer(buf, None);
-                device.free_memory(mem, None);
-            }
         }
     }
 }
@@ -1358,7 +1284,7 @@ impl VkContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const GbViewUniforms as *const u8,
-                gb.view_ubo_ptrs[frame_idx],
+                gb.view_ubo_buffers[frame_idx].mapped_ptr(),
                 std::mem::size_of::<GbViewUniforms>(),
             );
         }
@@ -1431,13 +1357,13 @@ impl VkContext {
         }
 
         unsafe {
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, gb.prepass_pso_static);
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -1669,12 +1595,12 @@ impl VkContext {
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,
-                    std::slice::from_ref(&self.geometry.vertex_buffer),
+                    &[self.geometry.vertex_buffer.buffer()],
                     &[0],
                 );
                 device.cmd_bind_index_buffer(
                     cmd,
-                    self.geometry.index_buffer,
+                    self.geometry.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
@@ -1710,7 +1636,12 @@ impl VkContext {
         ) else {
             return;
         };
-        let Some(indirect) = self.cull.indirect_buffers.get(frame_idx).copied() else {
+        let Some(indirect) = self
+            .cull
+            .indirect_buffers
+            .get(frame_idx)
+            .map(|b| b.buffer())
+        else {
             return;
         };
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {
@@ -1740,10 +1671,18 @@ impl VkContext {
             device.cmd_bind_vertex_buffers(
                 cmd,
                 0,
-                &[self.geometry.vertex_buffer, self.geometry.vertex_buffer],
+                &[
+                    self.geometry.vertex_buffer.buffer(),
+                    self.geometry.vertex_buffer.buffer(),
+                ],
                 &[0, 0],
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
+            device.cmd_bind_index_buffer(
+                cmd,
+                self.geometry.index_buffer.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
             if prefix > 0 {
                 device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride);
                 self.inc_draw_calls(1);
@@ -1783,7 +1722,7 @@ impl VkContext {
                 device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]);
                 device.cmd_bind_index_buffer(
                     cmd,
-                    self.skinned.index_buffer,
+                    self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT16,
                 );
@@ -1837,13 +1776,13 @@ impl VkContext {
                 std::slice::from_ref(&gb.prepass_sets[frame_idx]),
                 &[],
             );
-            device.cmd_bind_vertex_buffers(
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+            device.cmd_bind_index_buffer(
                 cmd,
+                self.geometry.index_buffer.buffer(),
                 0,
-                std::slice::from_ref(&self.geometry.vertex_buffer),
-                &[0],
+                vk::IndexType::UINT32,
             );
-            device.cmd_bind_index_buffer(cmd, self.geometry.index_buffer, 0, vk::IndexType::UINT32);
         }
         for &draw_idx in visible {
             let i = draw_idx as usize;
@@ -1910,7 +1849,12 @@ impl VkContext {
         frame_idx: usize,
         velocity_active: bool,
     ) {
-        let Some(&ptr) = self.cull.prev_model_ptrs.get(frame_idx) else {
+        let Some(ptr) = self
+            .cull
+            .prev_model_buffers
+            .get(frame_idx)
+            .map(|b| b.mapped_ptr())
+        else {
             return;
         };
         let stride = std::mem::size_of::<[[f32; 4]; 4]>();

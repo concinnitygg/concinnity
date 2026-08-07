@@ -17,8 +17,6 @@ use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 use crate::vulkan::uniforms::TextPush;
 
 use super::context::VkContext;
-use super::draw::DeferredBuffer;
-use super::texture::create_buffer;
 
 // Per-invocation binding context for the composite pass. `pub` because it is the
 // `Args` associated type of the (cross-crate) `render::fullscreen::CompositeEncoder`
@@ -126,7 +124,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     fn text_draw(
         &self,
         cmd: &Self::Rec,
-        args: &Self::Args,
+        _args: &Self::Args,
         call: &TextDrawCall,
     ) -> Result<(), String> {
         if call.vertices.is_empty() || self.descriptors.text_atlas_sets.is_empty() {
@@ -177,45 +175,34 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         let vert_size = (call.vertices.len() * std::mem::size_of::<TextVertex>()) as u64;
         let idx_size = (call.indices.len() * std::mem::size_of::<u16>()) as u64;
 
-        let (tvbuf, tvmem) = create_buffer(
-            &self.instance,
-            device,
-            self.physical_device,
-            vert_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .map_err(|e| format!("text vtx buf: {e}"))?;
-        let (tibuf, timem) = create_buffer(
-            &self.instance,
-            device,
-            self.physical_device,
-            idx_size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .map_err(|e| format!("text idx buf: {e}"))?;
+        let tvbuf = self
+            .alloc
+            .create_buffer(
+                vert_size,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .map_err(|e| format!("text vtx buf: {e}"))?;
+        let tibuf = self
+            .alloc
+            .create_buffer(
+                idx_size,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .map_err(|e| format!("text idx buf: {e}"))?;
 
         unsafe {
-            let vptr = device
-                .map_memory(tvmem, 0, vert_size, vk::MemoryMapFlags::empty())
-                .map_err(|e| format!("map text vtx: {e}"))? as *mut u8;
             std::ptr::copy_nonoverlapping(
                 call.vertices.as_ptr() as *const u8,
-                vptr,
+                tvbuf.mapped_ptr(),
                 vert_size as usize,
             );
-            device.unmap_memory(tvmem);
-
-            let iptr = device
-                .map_memory(timem, 0, idx_size, vk::MemoryMapFlags::empty())
-                .map_err(|e| format!("map text idx: {e}"))? as *mut u8;
             std::ptr::copy_nonoverlapping(
                 call.indices.as_ptr() as *const u8,
-                iptr,
+                tibuf.mapped_ptr(),
                 idx_size as usize,
             );
-            device.unmap_memory(timem);
 
             device.cmd_bind_descriptor_sets(
                 *cmd,
@@ -236,24 +223,14 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                 ),
             );
             device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(*cmd, 0, std::slice::from_ref(&tvbuf), &[0]);
-            device.cmd_bind_index_buffer(*cmd, tibuf, 0, vk::IndexType::UINT16);
+            device.cmd_bind_vertex_buffers(*cmd, 0, &[tvbuf.buffer()], &[0]);
+            device.cmd_bind_index_buffer(*cmd, tibuf.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_draw_indexed(*cmd, call.indices.len() as u32, 1, 0, 0, 0);
         }
         self.inc_draw_calls(1);
 
-        // Stash buffers for deferred destruction once this frame slot's fence is
-        // waited on again.
-        self.deferred_destroy.borrow_mut().push(DeferredBuffer {
-            buffer: tvbuf,
-            memory: tvmem,
-            frame: args.frame_idx,
-        });
-        self.deferred_destroy.borrow_mut().push(DeferredBuffer {
-            buffer: tibuf,
-            memory: timem,
-            frame: args.frame_idx,
-        });
+        // Dropping the buffers here is safe: the allocator withholds their
+        // ranges until every in-flight frame has retired.
         Ok(())
     }
 

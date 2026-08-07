@@ -9,6 +9,7 @@ use ash::{Device, vk};
 
 use crate::gfx::render_types::PostProcessParams;
 
+use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
 use super::super::pipeline::spv_module;
 use super::super::resources::alloc_descriptor_sets;
@@ -164,9 +165,8 @@ pub(in crate::vulkan) fn bloom_mip_count(width: u32, height: u32) -> u32 {
 // physical device, command pool, and queue used to create images and submit
 // the one-shot layout transitions.
 pub(in crate::vulkan) struct BloomDeviceContext<'a> {
-    pub instance: &'a ash::Instance,
+    pub alloc: &'a DeviceAllocator,
     pub device: &'a Device,
-    pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -185,9 +185,8 @@ pub(in crate::vulkan) fn create_bloom_mips(
     mip0_override: Option<(vk::Image, vk::ImageView)>,
 ) -> Result<(Vec<GpuImage>, Vec<vk::Extent2D>), String> {
     let &BloomDeviceContext {
-        instance,
+        alloc,
         device,
-        physical_device,
         command_pool,
         queue,
     } = ctx;
@@ -204,23 +203,13 @@ pub(in crate::vulkan) fn create_bloom_mips(
             && let Some((image, view)) = mip0_override
         {
             // Pooled `bloom_top`: the transient pool owns image + view + memory.
-            // Wrap it as a borrowed `GpuImage` (null memory) so the chain indexes
-            // it uniformly; the prefilter re-establishes its layout from
-            // UNDEFINED each frame, so no pre-transition is done here. Teardown
-            // (`destroy_swapchain_resources`) skips null-memory mips.
-            GpuImage {
-                image,
-                memory: vk::DeviceMemory::null(),
-                view,
-                aux_views: Vec::new(),
-            }
+            // Wrap it borrowed so the chain indexes it uniformly; the prefilter
+            // re-establishes its layout from UNDEFINED each frame, so no
+            // pre-transition is done here.
+            GpuImage::borrowed(image, view)
         } else {
-            let (image, memory) = create_image(
-                &GpuAllocContext {
-                    instance,
-                    device,
-                    physical_device,
-                },
+            let pooled = create_image(
+                alloc,
                 &ImageSpec {
                     width: mw,
                     height: mh,
@@ -231,6 +220,7 @@ pub(in crate::vulkan) fn create_bloom_mips(
                     samples: vk::SampleCountFlags::TYPE_1,
                 },
             )?;
+            let image = pooled.image();
             one_shot_submit(device, command_pool, queue, |cmd| {
                 transition_image_layout(
                     device,
@@ -242,12 +232,7 @@ pub(in crate::vulkan) fn create_bloom_mips(
                 );
             })?;
             let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-            GpuImage {
-                image,
-                memory,
-                view,
-                aux_views: Vec::new(),
-            }
+            GpuImage::from_pooled(pooled, view)
         };
         mips.push(gpu_image);
         extents.push(vk::Extent2D {
