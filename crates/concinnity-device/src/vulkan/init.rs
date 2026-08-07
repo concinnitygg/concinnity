@@ -192,6 +192,7 @@ impl VkContext {
             debug_filter,
             timestamp_query_pool,
             timestamp_period,
+            alloc,
         } = match reuse {
             Some(r) => r.into_shared()?,
             None => {
@@ -529,6 +530,18 @@ impl VkContext {
                 let swapchain_image_views =
                     create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
 
+                // The device allocator every pooled buffer / image is placed
+                // through, built before any resource creation so init-time
+                // resources can pool. A reload inherits the outgoing
+                // context's instead (the other match arm), so the rebuilt
+                // world places into the blocks the old world releases.
+                let alloc = super::allocator::DeviceAllocator::new(
+                    &instance,
+                    physical_device,
+                    &device,
+                    frames,
+                );
+
                 SharedHardware {
                     window,
                     entry,
@@ -557,14 +570,10 @@ impl VkContext {
                     debug_filter,
                     timestamp_query_pool,
                     timestamp_period,
+                    alloc,
                 }
             }
         };
-
-        // The device allocator every pooled buffer / image is placed through.
-        // Built before any resource creation so init-time resources can pool.
-        let alloc =
-            super::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
 
         // Drive the composite shader's `hdr_output > 0.5` branch and its
         // in-branch `pq_output` encode flag from the resolved HDR mode (freshly
@@ -4006,6 +4015,7 @@ impl VkContext {
             // A freshly built context owns its hardware outright; only
             // `apply_world_reload` flips this on the outgoing context.
             reused_by_successor: false,
+            world_content_destroyed: false,
         };
         // Push every world-authored `DecalRecord` through `add_decal` so
         // its albedo descriptor lands in the reserved slot before the
@@ -4042,12 +4052,16 @@ impl VkContext {
     // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
     // EDR) is guaranteed unchanged. Mirrors `DxContext::apply_world_reload`.
     //
+    // The old world's content is freed BEFORE the successor builds, into the
+    // allocator the two contexts share, so the rebuild fills the released
+    // blocks instead of holding both worlds' memory for the reload's duration.
+    //
     // On a content-build failure (essentially impossible for a pre-validated
     // editor edit built from the engine's built-in shaders) the moved window is
-    // closed with the dropped reuse bundle; `self` still owns the shared
-    // hardware (the flag was not yet set) and tears it down in a normal Drop, so
-    // the caller can drop this backend and mark the session failed without a
-    // leak.
+    // closed with the dropped reuse bundle and the old world is already gone;
+    // `self` keeps the shared hardware (the flag is unset on the failure path)
+    // and tears it down in a normal Drop, so the caller can drop this backend
+    // and mark the session failed without a leak.
     pub(in crate::vulkan) fn apply_world_reload(
         &mut self,
         init: crate::gfx::backend_init::BackendInit<'_>,
@@ -4087,14 +4101,41 @@ impl VkContext {
             debug_filter: self.debug_filter.take(),
             timestamp_query_pool: self.timestamp_query_pool.take(),
             timestamp_period: self.timestamp_period_ns,
+            alloc: self.alloc.clone(),
         };
-        let rebuilt = VkContext::build(init, Some(reuse))?;
-        // Build succeeded: the successor owns the shared hardware now. Mark the
-        // outgoing self so its Drop (triggered by the assignment below) skips the
-        // shared instance / device / surface / swapchain.
+        // Free the old world into the shared allocator BEFORE the successor
+        // builds, and make the released ranges placeable now (`wait_idle`
+        // above gated everything in flight): the rebuild then fills the same
+        // blocks instead of doubling the device footprint for the reload's
+        // duration. The flag is set first so the content pass keeps the
+        // swapchain for the successor; a build failure unsets it (and frees
+        // the swapchain here, since the skipped content pass in `Drop` is
+        // what would have destroyed it) so the failed-session `Drop` still
+        // tears the shared hardware down.
         self.reused_by_successor = true;
-        *self = rebuilt;
-        Ok(())
+        self.destroy_world_content();
+        self.alloc.reclaim_idle();
+        let s = self.alloc.stats();
+        tracing::debug!(
+            "reload: old world freed: {} block(s) retained, {} KiB reserved, {} KiB in use",
+            s.block_count,
+            s.reserved_bytes / 1024,
+            s.in_use_bytes / 1024,
+        );
+        match VkContext::build(init, Some(reuse)) {
+            Ok(rebuilt) => {
+                *self = rebuilt;
+                Ok(())
+            }
+            Err(e) => {
+                self.reused_by_successor = false;
+                unsafe {
+                    self.swapchain_loader
+                        .destroy_swapchain(self.swapchain, None);
+                }
+                Err(e)
+            }
+        }
     }
 }
 
@@ -4129,6 +4170,9 @@ struct SharedHardware {
     debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
     timestamp_query_pool: Option<vk::QueryPool>,
     timestamp_period: f32,
+    // Fresh on a launch; the outgoing context's on a reload, so the rebuilt
+    // world places into the blocks the old world's leases released.
+    alloc: super::allocator::DeviceAllocator,
 }
 
 // The shared hardware an outgoing context hands to its successor on a live
@@ -4136,8 +4180,9 @@ struct SharedHardware {
 // `ash::{Entry,Instance,Device}` are cheap dispatch-table clones over the same
 // underlying objects; the raw `vk::*` handles are `Copy`; the window and the
 // (already-`Option`) debug + timestamp handles are moved out of the outgoing
-// context so its `Drop` leaves them alone. Vulkan handles are not refcounted, so
-// the outgoing `Drop` also skips destroying the shared instance / device /
+// context so its `Drop` leaves them alone; the device allocator is a shared
+// handle (clones share one pool). Vulkan handles are not refcounted, so the
+// outgoing `Drop` also skips destroying the shared instance / device /
 // surface / swapchain (gated on `reused_by_successor`).
 pub(in crate::vulkan) struct VkReuse {
     window: super::PlatformWindow,
@@ -4166,6 +4211,7 @@ pub(in crate::vulkan) struct VkReuse {
     debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
     timestamp_query_pool: Option<vk::QueryPool>,
     timestamp_period: f32,
+    alloc: super::allocator::DeviceAllocator,
 }
 
 impl VkReuse {
@@ -4206,6 +4252,7 @@ impl VkReuse {
             debug_filter: self.debug_filter,
             timestamp_query_pool: self.timestamp_query_pool,
             timestamp_period: self.timestamp_period,
+            alloc: self.alloc,
         })
     }
 }

@@ -302,6 +302,10 @@ struct Reservation {
 }
 
 // The allocator behind every pooled buffer and image. See the module comment.
+// Clone is handle semantics: clones share one pool, so a live editor reload
+// hands the outgoing context's allocator to its successor and the rebuilt
+// world places into the blocks the old world's leases release.
+#[derive(Clone)]
 pub(super) struct DeviceAllocator {
     device: Device,
     inner: Rc<RefCell<Inner>>,
@@ -424,7 +428,7 @@ impl DeviceAllocator {
     // make retired frees placeable again, and release any block that now holds
     // nothing back to the driver.
     pub(super) fn begin_frame(&self) {
-        self.advance(1);
+        self.advance(1, true);
     }
 
     // Retire everything pending at once. Only sound right after a queue or
@@ -432,13 +436,17 @@ impl DeviceAllocator {
     // wait leaves none. The synchronous upload helpers call this as their
     // staging drops so an init upload loop peaks at about one staging buffer,
     // instead of accumulating every upload's until `draw_frame` starts ticking
-    // `begin_frame`.
+    // `begin_frame`. Emptied blocks are RETAINED, unlike `begin_frame`: the
+    // callers are about to allocate again (the next upload's staging, a
+    // reload's successor world), and refilling a kept block beats a
+    // free-memory / allocate-memory round trip. Whatever stays empty is
+    // released by `begin_frame` once frames run.
     pub(super) fn reclaim_idle(&self) {
         let depth = self.inner.borrow().retire_depth;
-        self.advance(depth);
+        self.advance(depth, false);
     }
 
-    fn advance(&self, ticks: u64) {
+    fn advance(&self, ticks: u64, release_empties: bool) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
         let frame = inner.frame;
@@ -453,8 +461,12 @@ impl DeviceAllocator {
         }
         for pool in inner.pools.values_mut() {
             pool.placement.reclaim(frame);
+            if !release_empties {
+                continue;
+            }
             for block_index in pool.placement.take_empty_blocks() {
                 if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
+                    tracing::debug!("allocator: released empty block {block_index}");
                     unsafe { self.device.free_memory(block.memory, None) };
                 }
             }
@@ -624,6 +636,10 @@ impl DeviceAllocator {
         }
         let memory = unsafe { device.allocate_memory(&info, None) }
             .map_err(|e| format!("allocator: block of {size} bytes: {e}"))?;
+        tracing::debug!(
+            "allocator: new {} KiB block (memory type {memory_type}, device_address {device_address})",
+            size / 1024,
+        );
 
         let host_visible = memory_props.memory_types[memory_type as usize]
             .property_flags

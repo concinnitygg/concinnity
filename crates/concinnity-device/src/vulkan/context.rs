@@ -1448,6 +1448,11 @@ pub struct VkContext {
     // COM device / swapchain, where the outgoing context's release just drops a
     // reference). See `apply_world_reload` + `destroy_swapchain_resources`.
     pub(super) reused_by_successor: bool,
+    // Set once `destroy_world_content` has run, so `Drop` never runs the
+    // content teardown twice. True early on the outgoing context of a
+    // `reload_world`, which frees its world before the successor builds (the
+    // reload then places into the blocks the old world's leases released).
+    pub(super) world_content_destroyed: bool,
 }
 
 // The host-mapped uniform pointers and the RefCell device allocator behind
@@ -1566,6 +1571,18 @@ impl VkContext {
         // what guarantees a range freed `retire_depth` ticks ago is no longer
         // referenced.
         self.alloc.begin_frame();
+
+        // Periodic footprint readout, for measuring the pool under streaming
+        // churn at scale. Inert unless debug logging is enabled.
+        if self.stream_frame.is_multiple_of(1024) && tracing::enabled!(tracing::Level::DEBUG) {
+            let s = self.alloc.stats();
+            tracing::debug!(
+                "device allocator: {} block(s), {} KiB reserved for {} KiB of resources",
+                s.block_count,
+                s.reserved_bytes / 1024,
+                s.in_use_bytes / 1024,
+            );
+        }
 
         // Advance the staggered reflection-probe bake one step. Runs here -- after
         // this frame's slot fence wait, before `record_frame` -- so any cube it
@@ -2188,9 +2205,20 @@ impl crate::gfx::scene_flow::SceneControl for VkContext {
     }
 }
 
-impl Drop for VkContext {
-    fn drop(&mut self) {
-        self.wait_idle();
+impl VkContext {
+    // Free every per-world resource: pipelines, descriptor pools, feature
+    // states, and all pooled buffers / images (whose leases retire through the
+    // allocator as their holders drop or clear). Shared hardware, the
+    // allocator itself, and the surface / device / instance are NOT touched;
+    // `Drop` owns those. Called from `Drop` on a normal shutdown, and early by
+    // `apply_world_reload` so the successor build places into the blocks this
+    // world releases instead of doubling the footprint. Guarded so the `Drop`
+    // after an early call is a no-op; the caller has idled the device.
+    pub(super) fn destroy_world_content(&mut self) {
+        if self.world_content_destroyed {
+            return;
+        }
+        self.world_content_destroyed = true;
         let device = self.device.clone();
         let device = &device;
 
@@ -2415,12 +2443,24 @@ impl Drop for VkContext {
         self.normal_map_textures.clear();
         self.text_atlas_textures.clear();
         self.probe_maps.clear();
+    }
+}
+
+impl Drop for VkContext {
+    fn drop(&mut self) {
+        self.wait_idle();
+
+        // No-op on the outgoing context of a `reload_world`, which already
+        // freed its world before the successor built.
+        self.destroy_world_content();
 
         // Device allocator: destroy every handle its dropped leases queued and
-        // free the blocks. After every pooled holder above so all leases have
+        // free the blocks. After the content pass above so all leases have
         // dropped, before the device teardown below. On a reload the successor
-        // built its own allocator, so the outgoing one drains unconditionally.
-        self.alloc.destroy();
+        // shares this allocator, so only a context that still owns it drains.
+        if !self.reused_by_successor {
+            self.alloc.destroy();
+        }
 
         // Surface / device / instance are the shared hardware. On a
         // `reload_world` the successor context inherited them (Vulkan handles are
