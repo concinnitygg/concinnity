@@ -24,6 +24,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
@@ -312,19 +313,19 @@ pub(in crate::directx) struct ParticleResources {
     pub(in crate::directx) render_pso: ID3D12PipelineState,
 
     // Per-frame view UBO (single 96-byte block), persistently mapped.
-    pub(in crate::directx) view_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
 
     // Per-frame, per-emitter `ParticleParams` ring. Each slot is
     // `align256(sizeof(ParticleParams))` so the per-emitter CBV GPU address is
     // naturally 256-aligned.
-    pub(in crate::directx) params_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) params_ubo_ptrs: Vec<*mut u8>,
     pub(in crate::directx) params_stride: u64,
 
     // Per-frame upload ring for the integer spawn budgets. One u32 per slot;
     // copied into each emitter's atomic counter at the top of `encode_particles`.
-    pub(in crate::directx) budget_upload_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) budget_upload_resources: Vec<PooledBuffer>,
     pub(in crate::directx) budget_upload_ptrs: Vec<*mut u8>,
     pub(in crate::directx) budget_stride: u64,
 
@@ -338,11 +339,12 @@ impl ParticleResources {
     // uniform rings. Called from `DxContext::new` (when the world declared
     // any emitter) or from the first runtime `add_emitter`.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         emitter_srv_base_slot: usize,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let (cs, vs, ps) = compile_particle_shaders(hot_reload)?;
 
         let simulate_root_sig = dump_on_err(info_queue, create_simulate_root_signature(device))?;
@@ -358,11 +360,11 @@ impl ParticleResources {
 
         // Per-frame view UBO.
         let view_size = align256(std::mem::size_of::<ParticleView>() as u64);
-        let mut view_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -378,11 +380,11 @@ impl ParticleResources {
         // each slot to align256(sizeof(ParticleParams)).
         let params_stride = align256(std::mem::size_of::<ParticleParams>() as u64);
         let params_total = params_stride * MAX_EMITTERS as u64;
-        let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -399,11 +401,11 @@ impl ParticleResources {
         // satisfies. No align256 needed here; this buffer is never bound as a CBV.
         let budget_stride: u64 = std::mem::size_of::<u32>() as u64;
         let budget_total = budget_stride * MAX_EMITTERS as u64;
-        let mut budget_upload_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut budget_upload_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut budget_upload_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 budget_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -436,10 +438,10 @@ impl ParticleResources {
 // Allocate the per-emitter GPU state: a zero-initialised pool buffer (UAV)
 // and a 4-byte atomic spawn counter (UAV). Both resting in UNORDERED_ACCESS.
 pub(in crate::directx) fn build_emitter_gpu_state(
-    device: &ID3D12Device,
-    command_queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     record: &ParticleEmitterRecord,
 ) -> Result<ParticleEmitterGpuState, String> {
+    let device = alloc.device();
     let slots = record.max_particles as u64;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
 
@@ -448,7 +450,7 @@ pub(in crate::directx) fn build_emitter_gpu_state(
     // buffer leaves it in its UNORDERED_ACCESS resting state, then the encoder flips
     // it to NON_PIXEL_SHADER_RESOURCE around the render pass and back.
     let pool = create_uav_buffer(device, pool_bytes, D3D12_RESOURCE_STATE_COMMON)?;
-    zero_default_buffer(device, command_queue, &pool, pool_bytes)?;
+    zero_default_buffer(alloc, &pool, pool_bytes)?;
 
     // 4-byte default-heap UAV counter, initial value 0. The encoder copies the
     // per-frame integer budget into it before each compute dispatch.
@@ -457,12 +459,7 @@ pub(in crate::directx) fn build_emitter_gpu_state(
         std::mem::size_of::<u32>() as u64,
         D3D12_RESOURCE_STATE_COMMON,
     )?;
-    zero_default_buffer(
-        device,
-        command_queue,
-        &spawn_counter,
-        std::mem::size_of::<u32>() as u64,
-    )?;
+    zero_default_buffer(alloc, &spawn_counter, std::mem::size_of::<u32>() as u64)?;
 
     Ok(ParticleEmitterGpuState {
         pool,
@@ -476,13 +473,13 @@ pub(in crate::directx) fn build_emitter_gpu_state(
 // is transitioned COMMON → COPY_DEST for the copy and then to UNORDERED_ACCESS,
 // its resting state for the per-frame compute passes.
 fn zero_default_buffer(
-    device: &ID3D12Device,
-    command_queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     target: &ID3D12Resource,
     bytes: u64,
 ) -> Result<(), String> {
+    let device = alloc.device();
     let upload = create_buffer(
-        device,
+        alloc,
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -495,11 +492,11 @@ fn zero_default_buffer(
     unsafe { upload.Unmap(0, None) };
 
     // One-shot copy command list. Pattern matches `upload_buffer` in texture.rs.
-    let alloc: ID3D12CommandAllocator =
+    let cmd_alloc: ID3D12CommandAllocator =
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .map_err(|e| format!("zero_default_buffer: alloc: {e}"))?;
     let list: ID3D12GraphicsCommandList =
-        unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None) }
+        unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &cmd_alloc, None) }
             .map_err(|e| format!("zero_default_buffer: list: {e}"))?;
 
     let to_copy_dest = transition_barrier(
@@ -508,7 +505,7 @@ fn zero_default_buffer(
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
     unsafe { list.ResourceBarrier(&[to_copy_dest]) };
-    unsafe { list.CopyBufferRegion(target, 0, &upload, 0, bytes) };
+    unsafe { list.CopyBufferRegion(target, 0, &*upload, 0, bytes) };
     let back_to_uav = transition_barrier(
         target,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -518,14 +515,14 @@ fn zero_default_buffer(
     unsafe { list.Close() }.map_err(|e| format!("zero_default_buffer: close: {e}"))?;
     let cmd: ID3D12CommandList = windows::core::Interface::cast(&list)
         .map_err(|e| format!("zero_default_buffer: cast: {e}"))?;
-    unsafe { command_queue.ExecuteCommandLists(&[Some(cmd)]) };
+    unsafe { alloc.queue().ExecuteCommandLists(&[Some(cmd)]) };
 
     // Wait for completion before returning so the upload buffer (about to go
     // out of scope) is not freed while still referenced. One-shot init only,
     // not on the hot path.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("zero_default_buffer: fence: {e}"))?;
-    unsafe { command_queue.Signal(&fence, 1) }
+    unsafe { alloc.queue().Signal(&fence, 1) }
         .map_err(|e| format!("zero_default_buffer: signal: {e}"))?;
     if unsafe { fence.GetCompletedValue() } < 1 {
         let event =
@@ -724,7 +721,7 @@ impl DxContext {
                     cmd.CopyBufferRegion(
                         &gpu.spawn_counter,
                         0,
-                        budget_upload,
+                        &**budget_upload,
                         i as u64 * resources.budget_stride,
                         std::mem::size_of::<u32>() as u64,
                     );
@@ -925,7 +922,7 @@ impl DxContext {
     pub fn add_emitter(&mut self, record: ParticleEmitterRecord) -> Result<usize, String> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
-                &self.device,
+                &self.alloc,
                 self.particle.srv_base_slot,
                 self.info_queue.as_ref(),
                 self.hot_reload.enabled,
@@ -939,7 +936,7 @@ impl DxContext {
             .map(|r| r.emitter_srv_base_slot)
             .ok_or_else(|| "add_emitter: particle pipeline unavailable".to_string())?;
 
-        let gpu_state = build_emitter_gpu_state(&self.device, &self.command_queue, &record)?;
+        let gpu_state = build_emitter_gpu_state(&self.alloc, &record)?;
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 

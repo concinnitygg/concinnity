@@ -15,6 +15,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
@@ -274,18 +275,18 @@ pub(in crate::directx) struct DecalResources {
     // Resources held to keep the GPU memory alive while the views below
     // reference them; the encoder binds through the views.
     #[allow(dead_code)]
-    pub(in crate::directx) vertex_buffer: ID3D12Resource,
+    pub(in crate::directx) vertex_buffer: PooledBuffer,
     pub(in crate::directx) vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     #[allow(dead_code)]
-    pub(in crate::directx) index_buffer: ID3D12Resource,
+    pub(in crate::directx) index_buffer: PooledBuffer,
     pub(in crate::directx) index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 
     // Per-frame view UBO (single 144-byte block), persistently mapped.
-    pub(in crate::directx) view_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
     // Per-frame `MAX_DECALS`-slot params ring. Each slot is `align256(160)`
     // = 256 bytes wide so the per-decal CBV GPU address is naturally aligned.
-    pub(in crate::directx) params_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) params_ubo_ptrs: Vec<*mut u8>,
     pub(in crate::directx) params_stride: u64,
 
@@ -304,14 +305,14 @@ impl DecalResources {
     // `Decal` OR unconditionally so runtime `add_decal` works from a world
     // that started empty; the cost is one PSO + a few small buffers.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
-        command_queue: &ID3D12CommandQueue,
+        alloc: &DeviceAllocator,
         msaa_samples: u32,
         decal_srv_base_slot: usize,
         depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let (vs, ps) = compile_decal_shaders(msaa_samples, hot_reload)?;
 
         let root_sig = dump_on_err(info_queue, create_decal_root_signature(device))?;
@@ -321,17 +322,11 @@ impl DecalResources {
         let vbytes = bytemuck::cast_slice(CUBE_VERTS.as_slice());
         let ibytes = bytemuck::cast_slice(CUBE_INDICES.as_slice());
         let vertex_buffer = upload_buffer(
-            device,
-            command_queue,
+            alloc,
             vbytes,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
         )?;
-        let index_buffer = upload_buffer(
-            device,
-            command_queue,
-            ibytes,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER,
-        )?;
+        let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vbytes.len() as u32,
@@ -345,11 +340,11 @@ impl DecalResources {
 
         // Per-frame view UBO.
         let view_size = align256(std::mem::size_of::<DecalView>() as u64);
-        let mut view_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -365,11 +360,11 @@ impl DecalResources {
         // each slot to align256(sizeof(DecalParams)).
         let params_stride = align256(std::mem::size_of::<DecalParams>() as u64);
         let params_total = params_stride * MAX_DECALS as u64;
-        let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

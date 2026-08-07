@@ -6,12 +6,16 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
+
 // GPU resource handle
 
-// Opaque handle to a committed D3D12 resource (buffer or texture).
+// A D3D12 texture plus the descriptors it binds through. `R` is how the texture
+// is held: pooled textures carry their placement lease, while the GPU-written
+// depth arrays that stay committed carry a bare resource.
 #[allow(dead_code)]
-pub(super) struct GpuResource {
-    pub resource: ID3D12Resource,
+pub(super) struct GpuResource<R = PooledTexture> {
+    pub resource: R,
     // CPU descriptor handle for the SRV (zero/invalid for buffers that don't need one).
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     // GPU descriptor handle for the SRV.
@@ -79,43 +83,16 @@ where
 
 // Buffer helpers
 
-// Create a committed buffer in the given heap type.
+// Place a buffer of the given heap type inside a pooled heap. Buffers are never
+// GPU-written through this path (`create_uav_buffer` is the compute-writable
+// one), so they suballocate; see `directx/allocator.rs`.
 pub(super) fn create_buffer(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     size: u64,
     heap_type: D3D12_HEAP_TYPE,
     initial_state: D3D12_RESOURCE_STATES,
-) -> Result<ID3D12Resource, String> {
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: heap_type,
-        ..Default::default()
-    };
-    let desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-        Width: size,
-        Height: 1,
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-        ..Default::default()
-    };
-    let mut resource: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            initial_state,
-            None,
-            &mut resource,
-        )
-    }
-    .map_err(|e| format!("create_buffer: {e}"))?;
-    resource.ok_or_else(|| "create_buffer returned None".to_string())
+) -> Result<PooledBuffer, String> {
+    alloc.alloc_buffer(size, heap_type, initial_state)
 }
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a
@@ -162,15 +139,14 @@ pub(super) fn create_uav_buffer(
 // Upload raw bytes to a GPU-local buffer via a temporary upload heap.
 // Returns the device-local buffer.
 pub(super) fn upload_buffer(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     data: &[u8],
     usage_state: D3D12_RESOURCE_STATES,
-) -> Result<ID3D12Resource, String> {
+) -> Result<PooledBuffer, String> {
     let size = data.len().max(4) as u64;
 
     let upload = create_buffer(
-        device,
+        alloc,
         size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -187,14 +163,14 @@ pub(super) fn upload_buffer(
     // Buffers are always created in COMMON regardless of requested state, so
     // pass COMMON explicitly to avoid the debug layer warning.
     let dest = create_buffer(
-        device,
+        alloc,
         size,
         D3D12_HEAP_TYPE_DEFAULT,
         D3D12_RESOURCE_STATE_COMMON,
     )?;
 
-    one_shot_submit(device, queue, |cmd| unsafe {
-        cmd.CopyBufferRegion(&dest, 0, &upload, 0, size);
+    one_shot_submit(alloc.device(), alloc.queue(), |cmd| unsafe {
+        cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size);
         // CopyBufferRegion implicitly promotes the buffer COMMON -> COPY_DEST,
         // so the transition barrier's before-state must be COPY_DEST.
         let barrier = transition_barrier(&dest, D3D12_RESOURCE_STATE_COPY_DEST, usage_state);
@@ -215,9 +191,9 @@ pub(super) fn upload_buffer(
 // releases them (COM refcounts), hence never read.
 pub(super) struct StreamedUploadRetire {
     #[allow(dead_code)]
-    pub texture: ID3D12Resource,
+    pub texture: PooledTexture,
     #[allow(dead_code)]
-    pub upload: ID3D12Resource,
+    pub upload: PooledBuffer,
     #[allow(dead_code)]
     pub allocator: ID3D12CommandAllocator,
     #[allow(dead_code)]
@@ -227,7 +203,7 @@ pub(super) struct StreamedUploadRetire {
 
 // The transient resources a deferred texture upload leaves in flight.
 pub(super) struct UploadInFlight {
-    pub upload: ID3D12Resource,
+    pub upload: PooledBuffer,
     pub allocator: ID3D12CommandAllocator,
     pub cmd: ID3D12GraphicsCommandList,
 }
@@ -241,12 +217,11 @@ pub(super) struct UploadInFlight {
 // Returns just the resource; call `write_texture_srv` to bind it into a slot.
 // Multiple SRVs may reference the same resource (one per object using it).
 pub(super) fn upload_texture_resource_deferred(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<(ID3D12Resource, UploadInFlight), String> {
+) -> Result<(PooledTexture, UploadInFlight), String> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -269,7 +244,7 @@ pub(super) fn upload_texture_resource_deferred(
             data: &m.pixels,
         })
         .collect();
-    upload_texture_levels_deferred(device, queue, DXGI_FORMAT_R8G8B8A8_UNORM, &levels)
+    upload_texture_levels_deferred(alloc, DXGI_FORMAT_R8G8B8A8_UNORM, &levels)
 }
 
 // One mip level handed to `upload_texture_levels_deferred`: its texel
@@ -298,17 +273,16 @@ fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -
 // their container mip chain verbatim. Call `write_texture_srv` to bind the
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     image: &concinnity_core::build::texture::TextureImage,
-) -> Result<(ID3D12Resource, UploadInFlight), String> {
+) -> Result<(PooledTexture, UploadInFlight), String> {
     use concinnity_core::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
             .first()
             .ok_or("RGBA8 texture image has no mip level")?;
-        return upload_texture_resource_deferred(device, queue, mip.width, mip.height, &mip.data);
+        return upload_texture_resource_deferred(alloc, mip.width, mip.height, &mip.data);
     }
     let levels: Vec<TextureLevel<'_>> = image
         .mips
@@ -319,17 +293,16 @@ pub(super) fn upload_texture_image_deferred(
             data: &m.data,
         })
         .collect();
-    upload_texture_levels_deferred(device, queue, dxgi_texture_format(image.format), &levels)
+    upload_texture_levels_deferred(alloc, dxgi_texture_format(image.format), &levels)
 }
 
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     image: &concinnity_core::build::texture::TextureImage,
-) -> Result<ID3D12Resource, String> {
-    let (texture, in_flight) = upload_texture_image_deferred(device, queue, image)?;
-    wait_for_upload(device, queue)?;
+) -> Result<PooledTexture, String> {
+    let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
+    wait_for_upload(alloc.device(), alloc.queue())?;
     drop(in_flight);
     Ok(texture)
 }
@@ -339,20 +312,16 @@ pub(super) fn upload_texture_image(
 // so the per-row copy below is format-agnostic: for block-compressed formats a
 // "row" is a row of 4x4 blocks and the row count is the block-row count.
 fn upload_texture_levels_deferred(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     format: DXGI_FORMAT,
     levels: &[TextureLevel<'_>],
-) -> Result<(ID3D12Resource, UploadInFlight), String> {
+) -> Result<(PooledTexture, UploadInFlight), String> {
+    let device = alloc.device();
     let base = levels.first().ok_or("texture upload has no mip level")?;
     let (width, height) = (base.width, base.height);
     let mip_count = levels.len() as u32;
 
-    // Texture resource (default heap, copy-dest initially), full mip chain.
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
+    // Texture resource (pooled default heap, copy-dest initially), full mip chain.
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: width as u64,
@@ -366,19 +335,11 @@ fn upload_texture_levels_deferred(
         },
         ..Default::default()
     };
-    let mut tex_opt: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut tex_opt,
-        )
-    }
-    .map_err(|e| format!("create texture: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create texture returned None".to_string())?;
+    let texture = alloc.alloc_texture(
+        &desc,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    )?;
 
     // Footprints for every subresource (one per mip).
     let mut layouts = vec![D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); mip_count as usize];
@@ -400,7 +361,7 @@ fn upload_texture_levels_deferred(
 
     // Upload heap holding every mip packed at its footprint offset.
     let upload = create_buffer(
-        device,
+        alloc,
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -442,16 +403,16 @@ fn upload_texture_levels_deferred(
     // under streaming eviction) on every upload. Both outlive the recorded
     // `CopyTextureRegion` calls (the upload buffer rides the returned in-flight
     // handle until the GPU retires the copy).
-    let (allocator, cmd) = one_shot_submit_nowait(device, queue, |cmd| {
+    let (allocator, cmd) = one_shot_submit_nowait(device, alloc.queue(), |cmd| {
         let mut src = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&upload) },
+            pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layouts[0],
             },
         };
         let mut dst = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -487,15 +448,13 @@ fn upload_texture_levels_deferred(
 // Synchronous `upload_texture_resource_deferred`: waits for the copy, then
 // drops the transient upload resources. The init-time upload paths use this.
 pub(super) fn upload_texture_resource(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<ID3D12Resource, String> {
-    let (texture, in_flight) =
-        upload_texture_resource_deferred(device, queue, width, height, pixels)?;
-    wait_for_upload(device, queue)?;
+) -> Result<PooledTexture, String> {
+    let (texture, in_flight) = upload_texture_resource_deferred(alloc, width, height, pixels)?;
+    wait_for_upload(alloc.device(), alloc.queue())?;
     drop(in_flight);
     Ok(texture)
 }
@@ -548,16 +507,15 @@ pub(super) fn write_texture_srv(
 // (text atlases, etc.). Per-object scene textures use `upload_texture_resource`
 // + `write_texture_srv` directly so one resource can feed multiple per-object slots.
 pub(super) fn upload_texture(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     width: u32,
     height: u32,
     pixels: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
-    let texture = upload_texture_resource(device, queue, width, height, pixels)?;
-    write_texture_srv(device, &texture, srv_cpu);
+    let texture = upload_texture_resource(alloc, width, height, pixels)?;
+    write_texture_srv(alloc.device(), &texture, srv_cpu);
     Ok(GpuResource {
         resource: texture,
         srv_cpu,
@@ -567,18 +525,16 @@ pub(super) fn upload_texture(
 
 // Create a 1×1 opaque white RGBA texture (no SRV write; caller binds it).
 pub(super) fn create_fallback_white_resource(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
-) -> Result<ID3D12Resource, String> {
-    upload_texture_resource(device, queue, 1, 1, &[255u8, 255, 255, 255])
+    alloc: &DeviceAllocator,
+) -> Result<PooledTexture, String> {
+    upload_texture_resource(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1×1 flat-normal RGBA texture (tangent-space no-op 128,128,255,255).
 pub(super) fn create_fallback_flat_normal_resource(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
-) -> Result<ID3D12Resource, String> {
-    upload_texture_resource(device, queue, 1, 1, &[128u8, 128, 255, 255])
+    alloc: &DeviceAllocator,
+) -> Result<PooledTexture, String> {
+    upload_texture_resource(alloc, 1, 1, &[128u8, 128, 255, 255])
 }
 
 // Create a 1×1×1 R32_FLOAT Texture2DArray fallback for when no shadow pass is
@@ -587,11 +543,11 @@ pub(super) fn create_fallback_flat_normal_resource(
 // The SRV is declared as Texture2DArray (ArraySize=1) so the fragment shader's
 // binding type stays identical between the disabled and CSM-enabled cases.
 pub(super) fn create_fallback_shadow_array(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> Result<GpuResource<ID3D12Resource>, String> {
+    let device = alloc.device();
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -630,7 +586,7 @@ pub(super) fn create_fallback_shadow_array(
     }
 
     let upload = create_buffer(
-        device,
+        alloc,
         layout.Footprint.RowPitch as u64,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -648,9 +604,9 @@ pub(super) fn create_fallback_shadow_array(
     // field is a `ManuallyDrop`, so a `clone()` would never be released and would
     // leak a reference to the transient upload buffer and the destination texture
     // on every upload. Both outlive the synchronous `CopyTextureRegion` call.
-    one_shot_submit(device, queue, |cmd| {
+    one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&upload) },
+            pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
@@ -786,7 +742,13 @@ pub(super) fn create_shadow_map_array(
     dsv_stride: usize,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<(GpuResource, Vec<D3D12_CPU_DESCRIPTOR_HANDLE>), String> {
+) -> Result<
+    (
+        GpuResource<ID3D12Resource>,
+        Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    ),
+    String,
+> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1289,8 +1251,7 @@ pub(super) fn write_cube_srv_mips(
 // `prefilter_mip_count == 0` and skips IBL math, but the cube SRV must still
 // resolve to a valid texture.
 pub(super) fn create_fallback_cubemap(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     value: [f32; 4],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -1305,8 +1266,8 @@ pub(super) fn create_fallback_cubemap(
             all_faces.extend_from_slice(&v[3].to_le_bytes());
         }
     }
-    let resource = upload_cube_resource(device, queue, 1, 1, &all_faces)?;
-    write_cube_srv_single_mip(device, &resource, srv_cpu);
+    let resource = upload_cube_resource(alloc, 1, 1, &all_faces)?;
+    write_cube_srv_single_mip(alloc.device(), &resource, srv_cpu);
     Ok(GpuResource {
         resource,
         srv_cpu,
@@ -1319,15 +1280,14 @@ pub(super) fn create_fallback_cubemap(
 // 6 * face_size² * 16 bytes in face order +X, -X, +Y, -Y, +Z, -Z. Single-mip.
 #[allow(dead_code)]
 pub(super) fn upload_cubemap(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     face_size: u32,
     bytes: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
-    let resource = upload_cube_resource(device, queue, face_size, 1, bytes)?;
-    write_cube_srv_single_mip(device, &resource, srv_cpu);
+    let resource = upload_cube_resource(alloc, face_size, 1, bytes)?;
+    write_cube_srv_single_mip(alloc.device(), &resource, srv_cpu);
     Ok(GpuResource {
         resource,
         srv_cpu,
@@ -1342,12 +1302,6 @@ pub(super) fn upload_cubemap(
 // `irradiance_face` / `prefilter_face` are the mip-0 face sizes. `mip_bytes`
 // is one slice per mip in order 0..mip_count; `mip_count` must equal
 // `mip_bytes.len()`.
-// The DirectX device + command queue for a one-shot GPU upload.
-#[derive(Clone, Copy)]
-pub(super) struct GpuUploadContext<'a> {
-    pub device: &'a ID3D12Device,
-    pub queue: &'a ID3D12CommandQueue,
-}
 
 // The two IBL cubes for an EnvironmentMap upload: the irradiance cube and the
 // multi-mip prefiltered radiance cube (both RGBA32F).
@@ -1372,11 +1326,11 @@ pub(super) struct EnvironmentMapDescriptors {
 }
 
 pub(super) fn upload_environment_map(
-    ctx: GpuUploadContext,
+    alloc: &DeviceAllocator,
     payload: EnvironmentMapPayload,
     descriptors: EnvironmentMapDescriptors,
 ) -> Result<EnvironmentMapTextures, String> {
-    let GpuUploadContext { device, queue } = ctx;
+    let device = alloc.device();
     let EnvironmentMapPayload {
         irradiance_face,
         irradiance_bytes,
@@ -1392,11 +1346,11 @@ pub(super) fn upload_environment_map(
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }
-    let irradiance_res = upload_cube_resource(device, queue, irradiance_face, 1, irradiance_bytes)
+    let irradiance_res = upload_cube_resource(alloc, irradiance_face, 1, irradiance_bytes)
         .map_err(|e| format!("envmap irradiance: {e}"))?;
     write_cube_srv_single_mip(device, &irradiance_res, irr_srv_cpu);
 
-    let prefilter_res = upload_prefilter_cube_resource(device, queue, prefilter_face, mip_bytes)
+    let prefilter_res = upload_prefilter_cube_resource(alloc, prefilter_face, mip_bytes)
         .map_err(|e| format!("envmap prefilter: {e}"))?;
     write_cube_srv_mips(device, &prefilter_res, mip_bytes.len() as u32, pre_srv_cpu);
 
@@ -1421,23 +1375,21 @@ pub(super) fn upload_environment_map(
 // cube array are written separately when the array is bound to the shaders.
 // `mip_bytes[m]` is `6 * (face_size >> m)² * 16` bytes in face-major order.
 pub(super) fn upload_probe_prefilter_cube(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<ID3D12Resource, String> {
-    upload_prefilter_cube_resource(device, queue, face_size, mip_bytes)
+) -> Result<PooledTexture, String> {
+    upload_prefilter_cube_resource(alloc, face_size, mip_bytes)
 }
 
 // Create a single-mip RGBA32F TextureCube resource and upload `bytes` (six
 // faces in +X,-X,+Y,-Y,+Z,-Z order). Transitions to PIXEL_SHADER_RESOURCE.
 fn upload_cube_resource(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     face_size: u32,
     mip_count: u32,
     bytes: &[u8],
-) -> Result<ID3D12Resource, String> {
+) -> Result<PooledTexture, String> {
     let face_bytes_mip0 = (face_size as usize) * (face_size as usize) * 16;
     let needed = 6 * face_bytes_mip0 * mip_count as usize;
     if mip_count == 1 && bytes.len() < needed {
@@ -1449,10 +1401,6 @@ fn upload_cube_resource(
         ));
     }
 
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: face_size as u64,
@@ -1466,45 +1414,24 @@ fn upload_cube_resource(
         },
         ..Default::default()
     };
-    let mut tex_opt: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut tex_opt,
-        )
-    }
-    .map_err(|e| format!("create cube texture: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create cube texture returned None".to_string())?;
-
-    upload_face_major_into_cube(
-        device,
-        queue,
-        &texture,
+    let texture = alloc.alloc_texture(
         &desc,
-        face_size,
-        mip_count,
-        &[bytes],
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST,
     )?;
+
+    upload_face_major_into_cube(alloc, &texture, &desc, face_size, mip_count, &[bytes])?;
     Ok(texture)
 }
 
 // Upload a multi-mip prefilter cube. `mip_bytes[m]` is 6 * (face_size >> m)² * 16 bytes
 // in face-major order. Mip 0 corresponds to `face_size`; each subsequent mip halves.
 fn upload_prefilter_cube_resource(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<ID3D12Resource, String> {
+) -> Result<PooledTexture, String> {
     let mip_count = mip_bytes.len() as u32;
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: face_size as u64,
@@ -1518,23 +1445,13 @@ fn upload_prefilter_cube_resource(
         },
         ..Default::default()
     };
-    let mut tex_opt: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut tex_opt,
-        )
-    }
-    .map_err(|e| format!("create prefilter cube: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create prefilter cube returned None".to_string())?;
-
-    upload_face_major_into_cube(
-        device, queue, &texture, &desc, face_size, mip_count, mip_bytes,
+    let texture = alloc.alloc_texture(
+        &desc,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST,
     )?;
+
+    upload_face_major_into_cube(alloc, &texture, &desc, face_size, mip_count, mip_bytes)?;
     Ok(texture)
 }
 
@@ -1543,14 +1460,14 @@ fn upload_prefilter_cube_resource(
 // `6 * (face_size >> m)² * 16` bytes in face order +X,-X,+Y,-Y,+Z,-Z.
 // Transitions the resource to PIXEL_SHADER_RESOURCE at the end.
 fn upload_face_major_into_cube(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     texture: &ID3D12Resource,
     desc: &D3D12_RESOURCE_DESC,
     face_size: u32,
     mip_count: u32,
     mip_bytes: &[&[u8]],
 ) -> Result<(), String> {
+    let device = alloc.device();
     let num_subresources = 6 * mip_count;
     let mut layouts: Vec<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> =
         vec![D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); num_subresources as usize];
@@ -1571,7 +1488,7 @@ fn upload_face_major_into_cube(
     }
 
     let upload = create_buffer(
-        device,
+        alloc,
         total_bytes.max(4),
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1618,10 +1535,10 @@ fn upload_face_major_into_cube(
     // leak a reference to the transient upload buffer and the destination texture
     // on every subresource copy. Both outlive the synchronous `CopyTextureRegion`
     // calls (`texture` is borrowed from the caller).
-    one_shot_submit(device, queue, |cmd| {
+    one_shot_submit(device, alloc.queue(), |cmd| {
         for subres in 0..num_subresources {
             let src = D3D12_TEXTURE_COPY_LOCATION {
-                pResource: unsafe { std::mem::transmute_copy(&upload) },
+                pResource: unsafe { std::mem::transmute_copy(&*upload) },
                 Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     PlacedFootprint: layouts[subres as usize],
@@ -1676,13 +1593,13 @@ fn write_lut_srv(
 // composite shader samples with the display-referred `(r, g, b)` colour as the
 // coordinate. Mirrors `vulkan/texture.rs::upload_color_lut`.
 pub(super) fn upload_color_lut(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     size: u32,
     data: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
+    let device = alloc.device();
     let n = size as usize;
     let needed = n * n * n * 4;
     if data.len() < needed {
@@ -1694,11 +1611,7 @@ pub(super) fn upload_color_lut(
         ));
     }
 
-    // 3D texture resource (default heap, copy-dest initially).
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
+    // 3D texture resource (pooled default heap, copy-dest initially).
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
         Width: size as u64,
@@ -1712,19 +1625,11 @@ pub(super) fn upload_color_lut(
         },
         ..Default::default()
     };
-    let mut tex_opt: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut tex_opt,
-        )
-    }
-    .map_err(|e| format!("create color LUT texture: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create color LUT texture returned None".to_string())?;
+    let texture = alloc.alloc_texture(
+        &desc,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    )?;
 
     // Query upload size/layout. A 3D texture is one subresource.
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
@@ -1743,7 +1648,7 @@ pub(super) fn upload_color_lut(
     }
 
     let upload = create_buffer(
-        device,
+        alloc,
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1775,16 +1680,16 @@ pub(super) fn upload_color_lut(
     // so a `clone()` would never be released and would leak a reference to the
     // transient upload buffer and the destination texture on every upload. Both
     // outlive the synchronous `CopyTextureRegion` call.
-    one_shot_submit(device, queue, |cmd| {
+    one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&upload) },
+            pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -1813,14 +1718,14 @@ pub(super) fn upload_color_lut(
 // format: 4 -> RGBA32F, 2 -> RG32F. Used for the two area-light LTC tables,
 // which are scene-independent (fitted at build time) and uploaded once at init.
 pub(super) fn upload_float_lut(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     size: u32,
     components: u32,
     texels: &[f32],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
+    let device = alloc.device();
     let n = size as usize;
     let comp = components as usize;
     let needed = n * n * comp;
@@ -1836,10 +1741,6 @@ pub(super) fn upload_float_lut(
         other => return Err(format!("unsupported float LUT component count {other}")),
     };
 
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: size as u64,
@@ -1853,19 +1754,11 @@ pub(super) fn upload_float_lut(
         },
         ..Default::default()
     };
-    let mut tex_opt: Option<ID3D12Resource> = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut tex_opt,
-        )
-    }
-    .map_err(|e| format!("create float LUT texture: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create float LUT texture returned None".to_string())?;
+    let texture = alloc.alloc_texture(
+        &desc,
+        D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    )?;
 
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
     let mut total_size: u64 = 0;
@@ -1883,7 +1776,7 @@ pub(super) fn upload_float_lut(
     }
 
     let upload = create_buffer(
-        device,
+        alloc,
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1905,16 +1798,16 @@ pub(super) fn upload_float_lut(
 
     // `pResource` borrows without an AddRef; both resources outlive the
     // synchronous copy (see `upload_color_lut`).
-    one_shot_submit(device, queue, |cmd| {
+    one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&upload) },
+            pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -1942,7 +1835,7 @@ pub(super) fn upload_float_lut(
             },
         },
     };
-    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&*texture, Some(&srv_desc), srv_cpu) };
     Ok(GpuResource {
         resource: texture,
         srv_cpu,
@@ -1955,8 +1848,7 @@ pub(super) fn upload_float_lut(
 // the grade is a no-op at any `lut_strength`. Mirrors
 // `vulkan/texture.rs::create_fallback_color_lut`.
 pub(super) fn create_fallback_color_lut(
-    device: &ID3D12Device,
-    queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 ) -> Result<GpuResource, String> {
@@ -1969,5 +1861,5 @@ pub(super) fn create_fallback_color_lut(
             }
         }
     }
-    upload_color_lut(device, queue, 2, &data, srv_cpu, srv_gpu)
+    upload_color_lut(alloc, 2, &data, srv_cpu, srv_gpu)
 }

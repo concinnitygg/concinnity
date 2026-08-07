@@ -12,6 +12,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
 
@@ -306,7 +307,7 @@ pub(in crate::directx) struct SsrResolve {
     pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
     // Per-frame resolve params UBO (96-byte SsrParams), persistently mapped.
-    pub(in crate::directx) params_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) params_ubo_ptrs: Vec<*mut u8>,
 
     // Resolve fullscreen pass.
@@ -342,13 +343,14 @@ impl SsrResources {
     // SSGI-only build) the resolve output, its params UBO, and its pipeline are
     // skipped and the reserved output slot goes unwritten.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         width: u32,
         height: u32,
         inputs: SsrInitInputs,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let SsrInitInputs {
             resolve_settings,
             output_rtv,
@@ -360,11 +362,11 @@ impl SsrResources {
             write_format_srv(device, &output, output_srv.0, SSR_OUTPUT_FORMAT);
 
             let params_size = align256(SSR_PARAMS_UBO_SIZE);
-            let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+            let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
             let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
             for _ in 0..FRAMES {
                 let buf = create_buffer(
-                    device,
+                    alloc,
                     params_size,
                     D3D12_HEAP_TYPE_UPLOAD,
                     D3D12_RESOURCE_STATE_GENERIC_READ,

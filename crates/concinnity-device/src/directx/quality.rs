@@ -117,7 +117,7 @@ impl DxContext {
         if gbuffer_needed && self.gbuffer.is_none() {
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
-                    device: &self.device,
+                    alloc: &self.alloc,
                     info_queue: self.info_queue.as_ref(),
                 },
                 super::post::gbuffer::GbufferExtent {
@@ -154,7 +154,7 @@ impl DxContext {
         // RT-only build the pre-pass but no resolve), matching init.
         if ssr_needed && self.ssr.is_none() {
             let ssr = super::post::ssr::SsrResources::new(
-                &self.device,
+                &self.alloc,
                 render_w,
                 render_h,
                 super::post::ssr::SsrInitInputs {
@@ -175,7 +175,7 @@ impl DxContext {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
             let ssgi = super::post::ssgi::SsgiResources::new(
                 super::post::ssgi::SsgiDevice {
-                    device: &self.device,
+                    alloc: &self.alloc,
                     info_queue: self.info_queue.as_ref(),
                 },
                 render_w,
@@ -236,7 +236,7 @@ impl DxContext {
         // after this call), so only the GPU + adaptation state is swapped here.
         if desired_ae && self.auto_exposure.resources.is_none() {
             let resources =
-                super::auto_exposure::AutoExposureResources::new(&self.device, hot_reload)?;
+                super::auto_exposure::AutoExposureResources::new(&self.alloc, hot_reload)?;
             self.auto_exposure.resources = Some(resources);
             self.auto_exposure.state = q
                 .auto_exposure
@@ -307,8 +307,7 @@ impl DxContext {
     ) -> Result<(), String> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
-            device: &self.device,
-            queue: &self.command_queue,
+            alloc: &self.alloc,
             vertex_buffer: &self.geometry.vertex_buffer,
             index_buffer: &self.geometry.index_buffer,
             draw_objects: &self.draw_objects,
@@ -337,7 +336,7 @@ impl DxContext {
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {
-                device: &self.device,
+                alloc: &self.alloc,
                 width: self.render_width,
                 height: self.render_height,
             },

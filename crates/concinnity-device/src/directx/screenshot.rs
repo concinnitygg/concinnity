@@ -89,7 +89,7 @@ impl DxContext {
         // Host-readable buffer sized for the padded footprint. READBACK heap
         // resources start in COPY_DEST and never need a barrier.
         let readback = create_buffer(
-            &self.device,
+            &self.alloc,
             total_size,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,

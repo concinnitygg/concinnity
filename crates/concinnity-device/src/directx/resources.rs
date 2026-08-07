@@ -7,6 +7,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::PooledBuffer;
 use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
@@ -441,7 +442,7 @@ impl DxContext {
         }
         if self.streamed_slot_needs_drain(slot) {
             self.wait_idle();
-            let texture = upload_texture_image(&self.device, &self.command_queue, image)?;
+            let texture = upload_texture_image(&self.alloc, image)?;
             self.descriptors.textures[slot] = texture;
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every flat-pool copy, so any propagation
@@ -449,8 +450,7 @@ impl DxContext {
             self.pool_rewrites.remove(slot);
             return Ok(());
         }
-        let (texture, in_flight) =
-            upload_texture_image_deferred(&self.device, &self.command_queue, image)?;
+        let (texture, in_flight) = upload_texture_image_deferred(&self.alloc, image)?;
         let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
         self.rewrite_legacy_object_pairs(slot);
         self.pool_rewrites.queue(slot);
@@ -518,14 +518,7 @@ impl DxContext {
         self.wait_idle();
         let srv_cpu = self.color_lut.srv_cpu;
         let srv_gpu = self.color_lut.srv_gpu;
-        let new_lut = upload_color_lut(
-            &self.device,
-            &self.command_queue,
-            size,
-            data,
-            srv_cpu,
-            srv_gpu,
-        )?;
+        let new_lut = upload_color_lut(&self.alloc, size, data, srv_cpu, srv_gpu)?;
         self.color_lut = new_lut;
         Ok(())
     }
@@ -554,10 +547,7 @@ impl DxContext {
         let pre_srv_cpu = self.env_map.prefilter.srv_cpu;
         let pre_srv_gpu = self.env_map.prefilter.srv_gpu;
         let new_env = upload_environment_map(
-            GpuUploadContext {
-                device: &self.device,
-                queue: &self.command_queue,
-            },
+            &self.alloc,
             EnvironmentMapPayload {
                 irradiance_face: view.irradiance_face,
                 irradiance_bytes: view.irradiance_bytes,
@@ -740,7 +730,7 @@ impl DxContext {
             return Ok(());
         }
         let upload = create_buffer(
-            &self.device,
+            &self.alloc,
             data.len() as u64,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -755,7 +745,7 @@ impl DxContext {
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let to_dst = transition_barrier(dest, usage_state, D3D12_RESOURCE_STATE_COPY_DEST);
             cmd.ResourceBarrier(&[to_dst]);
-            cmd.CopyBufferRegion(dest, offset, &upload, 0, data.len() as u64);
+            cmd.CopyBufferRegion(dest, offset, &*upload, 0, data.len() as u64);
             let back = transition_barrier(dest, D3D12_RESOURCE_STATE_COPY_DEST, usage_state);
             cmd.ResourceBarrier(&[back]);
         })
@@ -1103,13 +1093,13 @@ impl DxContext {
         // Buffers are created in COMMON; the CopyBufferRegion below implicitly
         // promotes the destination COMMON -> COPY_DEST.
         let new_vbuf = create_buffer(
-            &self.device,
+            &self.alloc,
             new_v_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let new_ibuf = create_buffer(
-            &self.device,
+            &self.alloc,
             new_i_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
@@ -1129,8 +1119,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
             cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(&new_vbuf, 0, &self.geometry.vertex_buffer, 0, old_v_len);
-            cmd.CopyBufferRegion(&new_ibuf, 0, &self.geometry.index_buffer, 0, old_i_len);
+            cmd.CopyBufferRegion(&*new_vbuf, 0, &*self.geometry.vertex_buffer, 0, old_v_len);
+            cmd.CopyBufferRegion(&*new_ibuf, 0, &*self.geometry.index_buffer, 0, old_i_len);
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1437,18 +1427,10 @@ impl DxContext {
         // skin compute dispatch (bind-pose VB) and the RT reflection trace (u16
         // IB). GENERIC_READ is a superset of both, so no per-frame transition on
         // these shared resources is needed.
-        let skinned_vertex_buffer = upload_buffer(
-            &self.device,
-            &self.command_queue,
-            vtx_bytes,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
-        let skinned_index_buffer = upload_buffer(
-            &self.device,
-            &self.command_queue,
-            idx_bytes,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
+        let skinned_vertex_buffer =
+            upload_buffer(&self.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
+        let skinned_index_buffer =
+            upload_buffer(&self.alloc, idx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: unsafe { skinned_vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vtx_bytes.len() as u32,
@@ -1474,14 +1456,14 @@ impl DxContext {
         // arrives: every joint is identity, so the mesh shows in bind pose.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY4; MAX_JOINTS];
-        let mut joint_buffers: Vec<Vec<ID3D12Resource>> = Vec::with_capacity(FRAMES);
+        let mut joint_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(FRAMES);
         let mut joint_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let mut frame_bufs: Vec<ID3D12Resource> = Vec::with_capacity(draw_objects.len());
+            let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(draw_objects.len());
             let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(draw_objects.len());
             for _ in 0..draw_objects.len() {
                 let buf = create_buffer(
-                    &self.device,
+                    &self.alloc,
                     joint_buf_bytes,
                     D3D12_HEAP_TYPE_UPLOAD,
                     D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1669,10 +1651,10 @@ impl DxContext {
                 indices.len()
             ));
         }
-        let v_buf = self.skinned.vertex_buffer.as_ref().cloned().ok_or(
+        let v_buf = self.skinned.vertex_buffer.clone().ok_or(
             "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)",
         )?;
-        let i_buf = self.skinned.index_buffer.as_ref().cloned().ok_or(
+        let i_buf = self.skinned.index_buffer.clone().ok_or(
             "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)",
         )?;
         // Check the vertex region fits inside the live buffer. The shared
@@ -1875,10 +1857,10 @@ impl DxContext {
         use std::collections::HashMap;
 
         let n = self.skinned.draw_objects.len();
-        let mut delta_buffers: Vec<Option<ID3D12Resource>> = Vec::with_capacity(n);
+        let mut delta_buffers: Vec<Option<PooledBuffer>> = Vec::with_capacity(n);
         let mut target_counts: Vec<u32> = Vec::with_capacity(n);
         let mut weights: Vec<Vec<f32>> = Vec::with_capacity(n);
-        let mut by_source: HashMap<usize, (ID3D12Resource, u32)> = HashMap::new();
+        let mut by_source: HashMap<usize, (PooledBuffer, u32)> = HashMap::new();
 
         for m in morphs.iter().take(n) {
             match m {
@@ -1894,8 +1876,7 @@ impl DxContext {
                         None => {
                             let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
                             let buf = upload_buffer(
-                                &self.device,
-                                &self.command_queue,
+                                &self.alloc,
                                 bytes,
                                 D3D12_RESOURCE_STATE_GENERIC_READ,
                             )?;
@@ -1923,12 +1904,12 @@ impl DxContext {
         let (mut weight_buffers, mut weight_ptrs) = (Vec::new(), Vec::new());
         if target_counts.iter().any(|&c| c > 0) {
             for _ in 0..FRAMES {
-                let mut frame_bufs: Vec<ID3D12Resource> = Vec::with_capacity(n);
+                let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(n);
                 let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(n);
                 for count in &target_counts {
                     let bytes = ((*count).max(1) as u64) * std::mem::size_of::<f32>() as u64;
                     let buf = create_buffer(
-                        &self.device,
+                        &self.alloc,
                         bytes,
                         D3D12_HEAP_TYPE_UPLOAD,
                         D3D12_RESOURCE_STATE_GENERIC_READ,

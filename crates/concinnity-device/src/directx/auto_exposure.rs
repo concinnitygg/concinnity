@@ -11,6 +11,7 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 
 use crate::directx::builtins::{self, Ctx};
@@ -91,7 +92,7 @@ pub(super) struct AutoExposureResources {
     // top of a later frame (after the fence wait gates this slot's previous
     // use) the CPU reads its pointer for the EMA update.
     #[allow(dead_code)]
-    readback_bufs: Vec<ID3D12Resource>,
+    readback_bufs: Vec<PooledBuffer>,
     readback_ptrs: Vec<*const f32>,
 }
 
@@ -120,7 +121,8 @@ impl AutoExposureResources {
 
     // Build all auto-exposure resources. Called from `DxContext::new` only
     // when `PostProcessConfig.auto_exposure` is enabled.
-    pub(super) fn new(device: &ID3D12Device, hot_reload: bool) -> Result<Self, String> {
+    pub(super) fn new(alloc: &DeviceAllocator, hot_reload: bool) -> Result<Self, String> {
+        let device = alloc.device();
         let (build_cs, average_cs) = compile_auto_exposure_shaders(hot_reload)?;
 
         let build_root_sig = create_build_root_signature(device)?;
@@ -153,11 +155,11 @@ impl AutoExposureResources {
 
         // Per-frame readback buffers. READBACK heap resources start in
         // COPY_DEST and never need a barrier.
-        let mut readback_bufs: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut readback_bufs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 std::mem::size_of::<f32>() as u64,
                 D3D12_HEAP_TYPE_READBACK,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -466,7 +468,7 @@ impl DxContext {
         if let Some(readback) = resources.readback_bufs.get(frame_idx) {
             unsafe {
                 cmd.CopyBufferRegion(
-                    readback,
+                    &**readback,
                     0,
                     &resources.output_buf,
                     0,

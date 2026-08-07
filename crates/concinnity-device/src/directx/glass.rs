@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::assets::GlassPanel;
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
@@ -42,14 +43,14 @@ pub(in crate::directx) use crate::directx::uniforms::{GlassParamsGpu, Transparen
 // change at runtime, so there is no per-frame work beyond projection.
 struct GlassPanelRecord {
     #[allow(dead_code)]
-    vertex_buffer: ID3D12Resource,
+    vertex_buffer: PooledBuffer,
     vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     #[allow(dead_code)]
-    index_buffer: ID3D12Resource,
+    index_buffer: PooledBuffer,
     index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     index_count: u32,
     #[allow(dead_code)]
-    params_cbuffer: ID3D12Resource,
+    params_cbuffer: PooledBuffer,
     params_cbuffer_gva: u64,
     visible: bool,
     // World-space centre, used for the back-to-front camera-distance sort.
@@ -72,7 +73,7 @@ pub(in crate::directx) struct GlassResources {
     panels: Vec<GlassPanelRecord>,
 
     // Per-frame view UBO (single 160-byte block), persistently mapped.
-    view_ubo_resources: Vec<ID3D12Resource>,
+    view_ubo_resources: Vec<PooledBuffer>,
     view_ubo_ptrs: Vec<*mut u8>,
 
     // Pre-transparent scene snapshot. `encode_transparent` copies the scene
@@ -94,7 +95,7 @@ pub(in crate::directx) struct GlassResources {
     rt_root_sig: Option<ID3D12RootSignature>,
     flat_rt_pso: Option<ID3D12PipelineState>,
     textured_rt_pso: Option<ID3D12PipelineState>,
-    rt_params_ubo_resources: Vec<ID3D12Resource>,
+    rt_params_ubo_resources: Vec<PooledBuffer>,
     rt_params_ubo_ptrs: Vec<*mut u8>,
 }
 
@@ -574,16 +575,17 @@ type GlassRtPipeline = (
     ID3D12RootSignature,
     ID3D12PipelineState,
     ID3D12PipelineState,
-    Vec<ID3D12Resource>,
+    Vec<PooledBuffer>,
     Vec<*mut u8>,
 );
 
 fn build_glass_rt(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     msaa_samples: u32,
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> Result<GlassRtPipeline, String> {
+    let device = alloc.device();
     let shaders = compile_glass_rt_shaders(msaa_samples, hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_glass_rt_root_signature(device))?;
     let flat_pso = dump_on_err(
@@ -596,11 +598,11 @@ fn build_glass_rt(
     )?;
 
     let params_size = align256(RT_PARAMS_UBO_SIZE);
-    let mut rt_params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+    let mut rt_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
     let mut rt_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
         let buf = create_buffer(
-            device,
+            alloc,
             params_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -647,8 +649,7 @@ fn write_scene_copy_srv(
 // The device + queue handles glass build submits against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GlassDeviceCtx<'a> {
-    pub device: &'a ID3D12Device,
-    pub command_queue: &'a ID3D12CommandQueue,
+    pub alloc: &'a DeviceAllocator,
 }
 
 // Render-target build config: MSAA sample count, render dimensions, and the
@@ -684,10 +685,8 @@ impl GlassResources {
         planar_slots: &[Option<usize>],
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> Result<Self, String> {
-        let GlassDeviceCtx {
-            device,
-            command_queue,
-        } = device_ctx;
+        let GlassDeviceCtx { alloc } = device_ctx;
+        let device = alloc.device();
         let GlassBuildConfig {
             msaa_samples,
             width,
@@ -713,7 +712,7 @@ impl GlassResources {
             rt_params_ubo_resources,
             rt_params_ubo_ptrs,
         ) = if crate::directx::raytrace::raytracing_supported(device) {
-            match build_glass_rt(device, msaa_samples, info_queue, hot_reload) {
+            match build_glass_rt(alloc, msaa_samples, info_queue, hot_reload) {
                 Ok((sig, flat, tex, res, ptrs)) => (Some(sig), Some(flat), Some(tex), res, ptrs),
                 Err(e) => {
                     tracing::warn!(
@@ -750,17 +749,11 @@ impl GlassResources {
             let vbytes = bytemuck::cast_slice(&packed);
             let ibytes = bytemuck::cast_slice(&idxs);
             let vertex_buffer = upload_buffer(
-                device,
-                command_queue,
+                alloc,
                 vbytes,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             )?;
-            let index_buffer = upload_buffer(
-                device,
-                command_queue,
-                ibytes,
-                D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            )?;
+            let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
             let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
                 BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
                 SizeInBytes: vbytes.len() as u32,
@@ -778,7 +771,7 @@ impl GlassResources {
             params.planar = if planar_slot.is_some() { 1.0 } else { 0.0 };
             let cb_size = align256(std::mem::size_of::<GlassParamsGpu>() as u64);
             let params_cbuffer = create_buffer(
-                device,
+                alloc,
                 cb_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -812,11 +805,11 @@ impl GlassResources {
 
         // Per-frame view UBO ring.
         let view_size = align256(std::mem::size_of::<TransparentViewGpu>() as u64);
-        let mut view_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

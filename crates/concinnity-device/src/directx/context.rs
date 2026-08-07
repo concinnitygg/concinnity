@@ -14,6 +14,7 @@ use windows::core::Interface;
 use crate::gfx::backend::FrameParams;
 use crate::gfx::render_types::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureResources;
 use super::decal::*;
 use super::fog::*;
@@ -81,15 +82,15 @@ pub(super) struct InstanceBucketLayout {
 // mapped (READBACK-heap pointers stay valid for the resource's lifetime,
 // matching the auto-exposure readback pattern).
 pub(super) fn build_timestamp_resources(
-    device: &ID3D12Device,
-    command_queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
 ) -> (
     Option<ID3D12QueryHeap>,
-    Option<ID3D12Resource>,
+    Option<PooledBuffer>,
     *const u64,
     u64,
 ) {
-    let frequency = unsafe { command_queue.GetTimestampFrequency() }.unwrap_or(0);
+    let device = alloc.device();
+    let frequency = unsafe { alloc.queue().GetTimestampFrequency() }.unwrap_or(0);
     if frequency == 0 {
         return (None, None, std::ptr::null(), 0);
     }
@@ -109,7 +110,7 @@ pub(super) fn build_timestamp_resources(
         return (None, None, std::ptr::null(), 0);
     }
     let readback = match super::texture::create_buffer(
-        device,
+        alloc,
         super::pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
         D3D12_HEAP_TYPE_READBACK,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -139,7 +140,7 @@ pub(super) struct TimestampState {
     pub query_heap: Option<ID3D12QueryHeap>,
     // Persistently-mapped READBACK buffer paired with `query_heap`, holding
     // `FRAMES` blocks of `SLOTS_PER_FRAME` `u64` ticks each.
-    pub readback: Option<ID3D12Resource>,
+    pub readback: Option<PooledBuffer>,
     pub readback_ptr: *const u64,
     // Ticks per second from `ID3D12CommandQueue::GetTimestampFrequency`; zero
     // when timestamps are unsupported.
@@ -174,16 +175,16 @@ pub(super) struct SkinnedState {
     // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
     // through `vertex_buffer_view` / `index_buffer_view`.
     #[allow(dead_code)]
-    pub vertex_buffer: Option<ID3D12Resource>,
+    pub vertex_buffer: Option<PooledBuffer>,
     #[allow(dead_code)]
-    pub index_buffer: Option<ID3D12Resource>,
+    pub index_buffer: Option<PooledBuffer>,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     pub draw_objects: Vec<SkinnedDrawObject>,
     // Per-frame, per-object joint-matrix upload buffers, indexed
     // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
     // persistently mapped; rewritten each frame from `joint_matrices`.
-    pub joint_buffers: Vec<Vec<ID3D12Resource>>,
+    pub joint_buffers: Vec<Vec<PooledBuffer>>,
     pub joint_ptrs: Vec<Vec<*mut u8>>,
     // Current skinning matrices per skinned object, parallel to `draw_objects`.
     pub joint_matrices: Vec<Vec<[[f32; 4]; 4]>>,
@@ -211,10 +212,10 @@ pub(super) struct SkinnedState {
     // ([frame_idx][skinned_idx], one f32 per target, persistently mapped) by
     // `upload_morph_weights`. `morph_weight_buffers` is empty when no skinned
     // object carries morphs.
-    pub morph_delta_buffers: Vec<Option<ID3D12Resource>>,
+    pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
     pub morph_target_counts: Vec<u32>,
     pub morph_weights: Vec<Vec<f32>>,
-    pub morph_weight_buffers: Vec<Vec<ID3D12Resource>>,
+    pub morph_weight_buffers: Vec<Vec<PooledBuffer>>,
     pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
     // `false` until the deformed-vertex ring has been posed at least one full
     // frame; `true` once a prior frame's `encode_skin` has filled the slot the
@@ -254,7 +255,7 @@ pub(super) struct CullState {
     pub bucket_stride: usize,
     // Per-frame `StructuredBuffer<GpuObjectData>` upload buffers, one per
     // frame-in-flight, persistently mapped. Rebuilt each frame.
-    pub object_buffer_resources: Vec<ID3D12Resource>,
+    pub object_buffer_resources: Vec<PooledBuffer>,
     pub object_buffer_ptrs: Vec<*mut u8>,
     // Flat-pool SRV region bases, one per frame in flight, bound to bindless
     // root param [5] as the texture pool for the frame being recorded. The
@@ -270,7 +271,7 @@ pub(super) struct CullState {
     pub cull_command_signature: Option<ID3D12CommandSignature>,
     // Per-frame `StructuredBuffer<GpuDrawArgs>` upload buffers (indexed-draw
     // args + per-frame cull-decision bits the kernel reads).
-    pub draw_args_buffer_resources: Vec<ID3D12Resource>,
+    pub draw_args_buffer_resources: Vec<PooledBuffer>,
     pub draw_args_buffer_ptrs: Vec<*mut u8>,
     // Per-frame indirect-command buffers the cull kernel writes (UAV) and the
     // main pass consumes (`ExecuteIndirect`). Resting `INDIRECT_ARGUMENT`.
@@ -313,7 +314,7 @@ pub(super) struct CullState {
     // per cull record), persistently mapped. The static + skinned regions are
     // rewritten each frame in `build_gbuffer_prev_models`; the instance region is
     // init-written + immutable (camera-only motion).
-    pub prev_model_buffers: Vec<ID3D12Resource>,
+    pub prev_model_buffers: Vec<PooledBuffer>,
     pub prev_model_buffer_ptrs: Vec<*mut u8>,
     // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
     pub occlusion_two_pass: bool,
@@ -397,7 +398,7 @@ pub(super) struct HdrState {
 pub(super) struct SsaoState {
     pub resources: Option<SsaoResources>,
     #[allow(dead_code)]
-    pub white: ID3D12Resource,
+    pub white: PooledTexture,
     pub white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
 
@@ -488,7 +489,7 @@ pub(super) struct AutoExposureState {
 // vector pointing toward the first directional light, captured at init from
 // `light_uniforms` and used by per-frame CSM updates.
 pub(super) struct ShadowState {
-    pub resource: Option<GpuResource>,
+    pub resource: Option<GpuResource<ID3D12Resource>>,
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub map_size: u32,
     pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -524,18 +525,18 @@ pub(super) struct ShadowState {
 // shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
 // the main pass's descriptors are always valid.
 pub(super) struct SpotShadowState {
-    pub resource: Option<GpuResource>,
+    pub resource: Option<GpuResource<ID3D12Resource>>,
     // One DSV per shadowed spot; empty when the world has none.
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     // `SpotShadowData` per slice, uploaded once at init.
-    pub buffer: ID3D12Resource,
+    pub buffer: PooledBuffer,
     // One `ShadowUniforms` per slice, carrying that spot's matrix in
     // `light_vps[0]` so the shared shadow vertex shader can render a spot slice
     // without a second pipeline or a second uniform layout. Written once at
     // init: the projections are fixed for the world's lifetime, so unlike the
     // cascade UBO this needs no per-frame copy.
-    pub ubo: ID3D12Resource,
+    pub ubo: PooledBuffer,
     // 256-byte-aligned distance between consecutive slices in `ubo`.
     pub ubo_stride: u64,
     pub slice_size: u32,
@@ -574,7 +575,7 @@ impl SpotShadowState {
 // scene-independent (fitted at build time), so they are uploaded even with no
 // area light declared -- the shader simply never samples them.
 pub(super) struct AreaLightState {
-    pub buffer: ID3D12Resource,
+    pub buffer: PooledBuffer,
     #[allow(dead_code)] // owns the resources the LTC table descriptors point at
     pub ltc_matrix: GpuResource,
     #[allow(dead_code)]
@@ -603,20 +604,20 @@ pub(super) struct FogState {
 // uploaded once at init. The COM resources auto-release on drop; only the
 // persistent mappings need an explicit `unmap`.
 pub(super) struct DxUniforms {
-    pub view_ubo_resources: Vec<ID3D12Resource>,
+    pub view_ubo_resources: Vec<PooledBuffer>,
     pub view_ubo_ptrs: Vec<*mut u8>,
-    pub light_ubo: ID3D12Resource,
+    pub light_ubo: PooledBuffer,
     // Per-scene local-light storage buffer bound as a root SRV by the main
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
-    pub local_light_buffer: ID3D12Resource,
+    pub local_light_buffer: PooledBuffer,
     // CPU-side copy of the values in `light_ubo`, kept so a live Ambient-slider
     // change can mutate `ambient_intensity` and re-upload. The light buffer is a
     // single (not per-frame) UPLOAD resource, so `set_ambient_intensity`
     // `wait_idle`s before the rewrite to avoid racing an in-flight read; ambient
     // changes only on a slider drag, so the stall is rare.
     pub light_uniforms: crate::gfx::render_types::LightUniforms,
-    pub shadow_ubo_resources: Vec<ID3D12Resource>,
+    pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
 }
 
@@ -688,8 +689,8 @@ pub(super) struct DxFrameSync {
 // `DxContext`. Mirrors Vulkan's `VkGeometry`. The streamed-mesh + chunk
 // sub-allocators stay in their own `MeshStreamState` / `ChunkStreamState`.
 pub(super) struct DxGeometry {
-    pub vertex_buffer: ID3D12Resource,
-    pub index_buffer: ID3D12Resource,
+    pub vertex_buffer: PooledBuffer,
+    pub index_buffer: PooledBuffer,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 }
@@ -705,7 +706,7 @@ pub(super) struct DxInstanced {
     // Per-frame upload buffers holding the per-instance matrices for each
     // cluster, indexed [frame_idx][cluster_idx]. Each row owns one buffer
     // per cluster, sized to hold its instance count. Persistently mapped.
-    pub upload_buffers: Vec<Vec<ID3D12Resource>>,
+    pub upload_buffers: Vec<Vec<PooledBuffer>>,
     pub upload_ptrs: Vec<Vec<*mut u8>>,
     // Per-cluster LOD-bucket layout for the current frame. Filled at the top of
     // `record_frame` by `build_instance_upload`. `RwLock` (not `RefCell`)
@@ -756,8 +757,8 @@ pub(super) struct DxDescriptors {
     // index directly into it. `normal_map_textures` holds only the single
     // flat-normal fallback a normal-less draw samples (its pool slot is one past
     // the last real texture); real normal maps are entries in `textures`.
-    pub textures: Vec<ID3D12Resource>,
-    pub normal_map_textures: Vec<ID3D12Resource>,
+    pub textures: Vec<PooledTexture>,
+    pub normal_map_textures: Vec<PooledTexture>,
     // Held only to keep the text-atlas textures resident; the SRV handles
     // below are what the text pass actually binds.
     #[allow(dead_code)]
@@ -778,6 +779,10 @@ pub struct DxContext {
     // D3D12 core
     pub(super) device: ID3D12Device,
     pub(super) command_queue: ID3D12CommandQueue,
+    // Placement pool every persistent buffer and CPU-uploaded texture is
+    // suballocated from, rather than one committed resource each. See
+    // `directx/allocator.rs`.
+    pub(super) alloc: DeviceAllocator,
 
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
@@ -1248,12 +1253,12 @@ pub struct DxContext {
     // Per-frame CBVs holding `probe_set` (the parallax boxes + live count) bound at
     // root param [11] by the main pass. A `FRAMES` ring so a frame writes its own
     // slot without racing a prior frame's in-flight GPU read.
-    pub(super) probe_set_cbvs: Vec<ID3D12Resource>,
+    pub(super) probe_set_cbvs: Vec<PooledBuffer>,
     pub(super) probe_set_cbv_ptrs: Vec<*mut u8>,
     // A static count-0 ProbeSet CBV the asynchronous capture binds at [11], so a
     // probe face render samples the sky (no probe feedback) and never reads the live
     // ring while `record_frame` rewrites it.
-    pub(super) probe_set_empty_cbv: ID3D12Resource,
+    pub(super) probe_set_empty_cbv: PooledBuffer,
 }
 
 // uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
@@ -1367,6 +1372,11 @@ impl DxContext {
         // every list that binds this copy), and release the old resources /
         // upload transients whose covering fence has signalled.
         self.apply_streamed_texture_rewrites(frame);
+
+        // Tick the placement pool: the same fence wait retired every list that
+        // could still reference a range freed `FRAMES + 1` ticks ago, so those
+        // bytes become placeable again here.
+        self.alloc.begin_frame();
 
         // Advance the staggered reflection-probe bake. Called after the frame-slot
         // fence wait (so any in-flight capture resources are safe to recycle) and
@@ -1718,7 +1728,7 @@ impl DxContext {
                     D3D12_QUERY_TYPE_TIMESTAMP,
                     super::pass_timing::frame_resolve_start(frame),
                     super::pass_timing::SLOTS_PER_FRAME as u32,
-                    readback,
+                    &**readback,
                     super::pass_timing::frame_readback_byte_offset(frame),
                 );
             }

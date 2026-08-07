@@ -32,6 +32,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
 use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
@@ -199,13 +200,13 @@ fn create_scratch(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, St
 // build) and the geometry table (read as a `StructuredBuffer` root SRV by the
 // trace).
 fn upload_slice<T: Copy>(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     data: &[T],
     label: &str,
-) -> Result<ID3D12Resource, String> {
+) -> Result<PooledBuffer, String> {
     let bytes = std::mem::size_of_val(data).max(16) as u64;
     let buf = create_buffer(
-        device,
+        alloc,
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -450,9 +451,9 @@ struct SkinnedFrameRing {
     tlas_cap: u64,
     scratch: Option<ID3D12Resource>,
     scratch_cap: u64,
-    instance: Option<ID3D12Resource>,
+    instance: Option<PooledBuffer>,
     instance_cap: u64,
-    geom: Option<ID3D12Resource>,
+    geom: Option<PooledBuffer>,
     geom_cap: u64,
 }
 
@@ -472,9 +473,9 @@ struct SkinnedFrameRing {
 struct StaticFrameRing {
     tlas: Option<ID3D12Resource>,
     tlas_cap: u64,
-    instance: Option<ID3D12Resource>,
+    instance: Option<PooledBuffer>,
     instance_cap: u64,
-    geom: Option<ID3D12Resource>,
+    geom: Option<PooledBuffer>,
     geom_cap: u64,
 }
 
@@ -507,9 +508,9 @@ struct RetiredBlas {
 // right home; reuse avoids the per-frame committed-resource churn the skinned
 // rebuild used to do via `upload_slice`.
 fn write_upload_ring<T: Copy>(
-    slot: &mut Option<ID3D12Resource>,
+    slot: &mut Option<PooledBuffer>,
     cap: &mut u64,
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     data: &[T],
     label: &str,
 ) -> Result<(), String> {
@@ -518,7 +519,7 @@ fn write_upload_ring<T: Copy>(
     if ring_slot_needs_grow(slot.is_some(), *cap, needed) {
         *slot = Some(
             create_buffer(
-                device,
+                alloc,
                 needed,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -556,10 +557,10 @@ pub(super) struct RtAccelData {
     tlas: ID3D12Resource,
     // `[RtGeomEntry; instance_count]` (UPLOAD heap), bound as a `StructuredBuffer`
     // root SRV; indexed by the trace's instance id.
-    geom_table: ID3D12Resource,
+    geom_table: PooledBuffer,
     // The TLAS instance-descriptor buffer (UPLOAD heap). Only the TLAS *build*
     // reads it; a clone of the live `static_ring` / `skinned_ring` slot's buffer.
-    instance_buffer: ID3D12Resource,
+    instance_buffer: PooledBuffer,
     // Scratch sized for the largest of every BLAS build and the TLAS build;
     // reused by the per-frame TLAS rebuild (the instance count is fixed).
     scratch: ID3D12Resource,
@@ -613,7 +614,7 @@ pub(super) struct RtAccelData {
     // + trace address the deformed buffer with. A dummy buffer's GVA when there
     // is no skinned geometry, so the t9 binding is always valid. Cloned here so
     // the trace encoder can bind it.
-    skinned_indices: ID3D12Resource,
+    skinned_indices: PooledBuffer,
     // Whether any skinned object is currently live in the BVH (drives whether the
     // per-frame update runs `rebuild_skinned` or the static `rebuild_tlas`).
     has_skinned: bool,
@@ -688,10 +689,9 @@ pub(super) fn build_rt_skin_pipeline(
 // Geometry + counts the RT acceleration-structure build reads.
 #[derive(Clone, Copy)]
 pub(super) struct RtInitGeometry<'a> {
-    // Device where the build allocates and records.
-    pub device: &'a ID3D12Device,
-    // Command queue where the build submits and fences.
-    pub queue: &'a ID3D12CommandQueue,
+    // Placement pool the build allocates through; also carries the device and
+    // the command queue the build records and fences on.
+    pub alloc: &'a DeviceAllocator,
     // Shared static vertex buffer (positions at VERTEX_STRIDE).
     pub vertex_buffer: &'a ID3D12Resource,
     // Shared static u32 index buffer.
@@ -741,8 +741,7 @@ pub(super) struct RtSkinnedRebuildInputs<'a> {
 // indices (the flat-normal fallback sits at `albedo_count`) for the RT hit shader.
 pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelData>, String> {
     let RtInitGeometry {
-        device,
-        queue,
+        alloc,
         vertex_buffer,
         index_buffer,
         draw_objects,
@@ -750,6 +749,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         total_vertices,
         albedo_count,
     } = geometry;
+    let device = alloc.device();
+    let queue = alloc.queue();
     let device5: ID3D12Device5 = device
         .cast()
         .map_err(|e| format!("ID3D12Device5 cast (DXR unsupported?): {e}"))?;
@@ -833,8 +834,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     instance_descs.extend_from_slice(&cluster_instances);
     geom_entries.extend_from_slice(&cluster_geom);
 
-    let instance_buffer = upload_slice(device, &instance_descs, "RT instance descriptors")?;
-    let geom_table = upload_slice(device, &geom_entries, "RT geometry table")?;
+    let instance_buffer = upload_slice(alloc, &instance_descs, "RT instance descriptors")?;
+    let geom_table = upload_slice(alloc, &geom_entries, "RT geometry table")?;
 
     // Size + allocate the TLAS + the shared scratch (>= the largest BLAS/TLAS).
     let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_descs.len() as u32, 0));
@@ -846,7 +847,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     // Record every BLAS build (UAV-barrier-serialised over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
     // ready before the first trace.
-    record_builds(device, queue, |cmd4| unsafe {
+    record_builds(alloc, queue, |cmd4| unsafe {
         for (slot, geo) in geo_descs.iter().enumerate() {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
                 DestAccelerationStructureData: blas[slot].GetGPUVirtualAddress(),
@@ -888,7 +889,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     // first t8/t9 access, so the dummies need no transition.
     let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE, D3D12_RESOURCE_STATE_COMMON)?;
     let skinned_indices = create_buffer(
-        device,
+        alloc,
         4,
         D3D12_HEAP_TYPE_DEFAULT,
         D3D12_RESOURCE_STATE_COMMON,
@@ -945,13 +946,14 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
 // fence-wait. A self-contained variant of `texture::one_shot_submit` that adds
 // the List4 cast + error propagation. Mirrors the AS-build commit+wait Metal does.
 fn record_builds<F>(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     queue: &ID3D12CommandQueue,
     record: F,
 ) -> Result<(), String>
 where
     F: FnOnce(&ID3D12GraphicsCommandList4),
 {
+    let device = alloc.device();
     let alloc: ID3D12CommandAllocator =
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .map_err(|e| format!("RT build allocator: {e}"))?;
@@ -1002,7 +1004,7 @@ impl RtAccelData {
     // (the `Auto` dirty check only watches the transforms of the prior set).
     pub(super) fn dynamic_update(
         &mut self,
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
         inputs: RtDynamicInputs,
@@ -1048,7 +1050,7 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty && let Err(e) = self.refresh_topology(device, cmd, draw_objects, now) {
+        if topology_dirty && let Err(e) = self.refresh_topology(alloc, cmd, draw_objects, now) {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1060,7 +1062,7 @@ impl RtAccelData {
                 return;
             };
             if let Err(e) = self.rebuild_skinned(
-                device,
+                alloc,
                 cmd,
                 draw_objects,
                 RtSkinnedRebuildInputs {
@@ -1102,7 +1104,7 @@ impl RtAccelData {
             return;
         }
 
-        if let Err(e) = self.rebuild_tlas(device, cmd, draw_objects, &current) {
+        if let Err(e) = self.rebuild_tlas(alloc, cmd, draw_objects, &current) {
             tracing::warn!("RT dynamic TLAS rebuild failed (keeping live BVH): {e}");
         }
     }
@@ -1150,11 +1152,12 @@ impl RtAccelData {
     // leaves the live BVH untouched (`?` returns with `self` unchanged).
     fn refresh_topology(
         &mut self,
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
         now: u64,
     ) -> Result<(), String> {
+        let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
             .map_err(|e| format!("ID3D12Device5 cast (topology refresh): {e}"))?;
@@ -1280,14 +1283,14 @@ impl RtAccelData {
         write_upload_ring(
             &mut slot.instance,
             &mut slot.instance_cap,
-            device,
+            alloc,
             &instance_descs,
             "RT instance descriptors",
         )?;
         write_upload_ring(
             &mut slot.geom,
             &mut slot.geom_cap,
-            device,
+            alloc,
             &geom_entries,
             "RT geometry table",
         )?;
@@ -1356,11 +1359,12 @@ impl RtAccelData {
     // The BLAS are kept (rigid transforms leave object-space geometry unchanged).
     fn rebuild_tlas(
         &mut self,
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
         current: &[[[f32; 4]; 4]],
     ) -> Result<(), String> {
+        let device = alloc.device();
         // Freshly-transformed draw-object instances, then the cluster instances
         // re-appended verbatim. The geometry table mirrors this order.
         let mut instance_descs: Vec<D3D12_RAYTRACING_INSTANCE_DESC> =
@@ -1388,14 +1392,14 @@ impl RtAccelData {
         write_upload_ring(
             &mut slot.instance,
             &mut slot.instance_cap,
-            device,
+            alloc,
             &instance_descs,
             "RT instance descriptors",
         )?;
         write_upload_ring(
             &mut slot.geom,
             &mut slot.geom_cap,
-            device,
+            alloc,
             &geom_entries,
             "RT geometry table",
         )?;
@@ -1467,7 +1471,7 @@ impl RtAccelData {
     // ordered by submission too.
     fn rebuild_skinned(
         &mut self,
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
         inputs: RtSkinnedRebuildInputs,
@@ -1478,6 +1482,7 @@ impl RtAccelData {
             skinned,
             objects: skinned_objects,
         } = inputs;
+        let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
             .map_err(|e| format!("ID3D12Device5 cast (skinned rebuild): {e}"))?;
@@ -1647,14 +1652,14 @@ impl RtAccelData {
         write_upload_ring(
             &mut ring.instance,
             &mut ring.instance_cap,
-            device,
+            alloc,
             &instance_descs,
             "RT instance descriptors",
         )?;
         write_upload_ring(
             &mut ring.geom,
             &mut ring.geom_cap,
-            device,
+            alloc,
             &geom_entries,
             "RT geometry table",
         )?;
@@ -1875,7 +1880,7 @@ impl super::context::DxContext {
             joint_gvas: gvas,
         });
         accel.dynamic_update(
-            &self.device,
+            &self.alloc,
             cmd,
             &self.draw_objects,
             RtDynamicInputs {
@@ -1916,8 +1921,7 @@ impl super::context::DxContext {
     fn build_scene_accel(&self) -> Option<RtAccelData> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match build_rt_accel(RtInitGeometry {
-            device: &self.device,
-            queue: &self.command_queue,
+            alloc: &self.alloc,
             vertex_buffer: &self.geometry.vertex_buffer,
             index_buffer: &self.geometry.index_buffer,
             draw_objects: &self.draw_objects,

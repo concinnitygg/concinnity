@@ -19,6 +19,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
@@ -263,7 +264,7 @@ pub(in crate::directx) struct RtReflectionsResources {
     pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
     // Per-frame `RtParams` UBO (144-byte), persistently mapped.
-    params_ubo_resources: Vec<ID3D12Resource>,
+    params_ubo_resources: Vec<PooledBuffer>,
     params_ubo_ptrs: Vec<*mut u8>,
 
     // One root signature shared by both PSOs; flat-tint + textured (bindless).
@@ -274,7 +275,7 @@ pub(in crate::directx) struct RtReflectionsResources {
 
 // Device + output target extent for building the RT-reflection resources.
 pub(in crate::directx) struct RtBuildContext<'a> {
-    pub device: &'a ID3D12Device,
+    pub alloc: &'a DeviceAllocator,
     pub width: u32,
     pub height: u32,
 }
@@ -304,10 +305,11 @@ impl RtReflectionsResources {
         init: RtBuildInit,
     ) -> Result<Self, String> {
         let RtBuildContext {
-            device,
+            alloc,
             width,
             height,
         } = ctx;
+        let device = alloc.device();
         let RtOutputDescriptors {
             output_rtv,
             output_srv,
@@ -321,11 +323,11 @@ impl RtReflectionsResources {
         write_format_srv(device, &output, output_srv.0, HDR_FORMAT);
 
         let params_size = align256(RT_PARAMS_UBO_SIZE);
-        let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 params_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

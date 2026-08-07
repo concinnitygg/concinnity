@@ -17,6 +17,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
@@ -58,7 +59,7 @@ pub(in crate::directx) struct LineResources {
     pub(in crate::directx) pso: ID3D12PipelineState,
 
     // Per-frame view CBV (single 80-byte block), persistently mapped.
-    view_ubo_resources: Vec<ID3D12Resource>,
+    view_ubo_resources: Vec<PooledBuffer>,
     view_ubo_ptrs: Vec<*mut u8>,
 
     // Per-frame ribbon vertices. Sized to the frame's expanded line set.
@@ -71,22 +72,23 @@ pub(in crate::directx) struct LineResources {
 
 impl LineResources {
     fn new(
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         msaa_samples: u32,
         depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let (vs, ps) = compile_line_shaders(msaa_samples, hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_line_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_line_pso(device, &root_sig, &vs, &ps))?;
 
         let view_size = align256(std::mem::size_of::<LineView>() as u64);
-        let mut view_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -308,7 +310,7 @@ impl DxContext {
         }
         let info_queue = self.info_queue.clone();
         match LineResources::new(
-            &self.device,
+            &self.alloc,
             self.hdr.msaa_samples,
             self.main_depth_srv_gpu,
             info_queue.as_ref(),
@@ -359,7 +361,7 @@ impl DxContext {
         // that read it last trip.
         let vertex_bytes: &[u8] = bytemuck::cast_slice(vertices);
         lines.vertices.reserve(
-            &self.device,
+            &self.alloc,
             frame_idx,
             align_up(vertex_bytes.len() as u64, UPLOAD_ALIGN),
         )?;

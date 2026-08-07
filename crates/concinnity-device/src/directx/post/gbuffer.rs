@@ -22,6 +22,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::math::IDENTITY4;
@@ -495,7 +496,7 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view), mapped.
-    pub(in crate::directx) view_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
 
     // Pipelines. Instanced / skinned are `Some` only when the world declares
@@ -519,7 +520,7 @@ pub(in crate::directx) struct GbufferResources {
 // The device + optional debug info queue the G-buffer builder submits against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferDeviceCtx<'a> {
-    pub device: &'a ID3D12Device,
+    pub alloc: &'a DeviceAllocator,
     pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
@@ -542,7 +543,8 @@ impl GbufferResources {
         extent: GbufferExtent,
         slots: GbufferSlots,
     ) -> Result<Self, String> {
-        let GbufferDeviceCtx { device, info_queue } = ctx;
+        let GbufferDeviceCtx { alloc, info_queue } = ctx;
+        let device = alloc.device();
         let GbufferExtent {
             width,
             height,
@@ -602,11 +604,11 @@ impl GbufferResources {
 
         // Per-frame view UBO.
         let view_size = align256(GBUFFER_VIEW_UBO_SIZE);
-        let mut view_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

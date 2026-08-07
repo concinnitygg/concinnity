@@ -18,6 +18,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
@@ -236,7 +237,7 @@ pub(in crate::directx) struct SsgiResources {
     gi_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
     // Per-frame params UBO (32-byte SsgiParams), persistently mapped.
-    params_ubo_resources: Vec<ID3D12Resource>,
+    params_ubo_resources: Vec<PooledBuffer>,
     params_ubo_ptrs: Vec<*mut u8>,
 
     // One root signature shared by both PSOs; gather (plain write) + composite
@@ -250,7 +251,7 @@ pub(in crate::directx) struct SsgiResources {
 // info queue. They always travel together through `new`.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct SsgiDevice<'a> {
-    pub device: &'a ID3D12Device,
+    pub alloc: &'a DeviceAllocator,
     pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
@@ -273,7 +274,8 @@ impl SsgiResources {
         descriptors: SsgiDescriptors,
         hot_reload: bool,
     ) -> Result<Self, String> {
-        let SsgiDevice { device, info_queue } = dev;
+        let SsgiDevice { alloc, info_queue } = dev;
+        let device = alloc.device();
         let SsgiDescriptors { gi_rtv, gi_srv } = descriptors;
         // The gather runs at `gi_scale`-reduced resolution; the composite
         // bilateral-upsamples it back to full resolution (it reads the gi
@@ -284,11 +286,11 @@ impl SsgiResources {
         write_format_srv(device, &gi, gi_srv.0, HDR_FORMAT);
 
         let params_size = align256(SSGI_PARAMS_UBO_SIZE);
-        let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 params_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

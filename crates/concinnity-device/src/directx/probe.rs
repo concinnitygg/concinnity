@@ -41,6 +41,7 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::context::{DxContext, FRAMES};
 use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
@@ -67,7 +68,7 @@ const PROBE_FACE_COUNT: usize = 6;
 // is written when the array is bound to the shaders.
 pub(in crate::directx) struct ProbeCube {
     #[allow(dead_code)] // bound to the forward shader (next slice)
-    pub(in crate::directx) prefilter: ID3D12Resource,
+    pub(in crate::directx) prefilter: PooledTexture,
     #[allow(dead_code)] // bound to the forward shader (next slice)
     pub(in crate::directx) mip_count: u32,
 }
@@ -95,15 +96,15 @@ pub(in crate::directx) struct RenderingBake {
     dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     // Per-face: a 160-byte ViewUniforms CBV (kept mapped) + its GVA, and a READBACK
     // buffer the resolved face is copied into.
-    _view_cbvs: Vec<ID3D12Resource>,
+    _view_cbvs: Vec<PooledBuffer>,
     view_gvas: Vec<u64>,
     // Per-capture light + shadow snapshots (so the six faces share one consistent
     // lighting set, decoupled from the frame's per-frame CBV writes).
     light_gva: u64,
     shadow_gva: u64,
-    _light_cbv: ID3D12Resource,
-    _shadow_cbv: ID3D12Resource,
-    readbacks: Vec<ID3D12Resource>,
+    _light_cbv: PooledBuffer,
+    _shadow_cbv: PooledBuffer,
+    readbacks: Vec<PooledBuffer>,
     readback_layout: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
     // One fresh allocator + list per submitted face, held until readback.
     cmd_allocs: Vec<ID3D12CommandAllocator>,
@@ -387,6 +388,7 @@ impl DxContext {
         self.build_object_buffer(slot);
         self.build_draw_args_buffer(slot, eye);
 
+        let alloc = &self.alloc;
         let device = &self.device;
         let sample_count = self.hdr.msaa_samples.max(1);
         let size = PROBE_FACE_SIZE;
@@ -418,7 +420,7 @@ impl DxContext {
                 std::mem::size_of::<crate::gfx::render_types::LightUniforms>(),
             )
         };
-        let (light_cbv, light_gva) = make_snapshot_cbv(device, light_bytes)?;
+        let (light_cbv, light_gva) = make_snapshot_cbv(alloc, light_bytes)?;
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
                 &self.shadow.uniforms as *const crate::gfx::render_types::ShadowUniforms
@@ -426,7 +428,7 @@ impl DxContext {
                 std::mem::size_of::<crate::gfx::render_types::ShadowUniforms>(),
             )
         };
-        let (shadow_cbv, shadow_gva) = make_snapshot_cbv(device, shadow_bytes)?;
+        let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
 
         // Per-face ViewUniforms CBVs (the only per-face binding) + readback buffers.
         // The capture renders with the real env IBL (so the scene carries ambient
@@ -453,7 +455,7 @@ impl DxContext {
                 _ep1: 0.0,
             };
             let cbv = create_buffer(
-                device,
+                alloc,
                 256,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -504,7 +506,7 @@ impl DxContext {
         let mut readbacks = Vec::with_capacity(PROBE_FACE_COUNT);
         for _ in 0..PROBE_FACE_COUNT {
             readbacks.push(create_buffer(
-                device,
+                alloc,
                 readback_total,
                 D3D12_HEAP_TYPE_READBACK,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -784,8 +786,7 @@ impl DxContext {
         }
         let mip_count = view.prefilter_mip_bytes.len() as u32;
         let prefilter = upload_probe_prefilter_cube(
-            &self.device,
-            &self.command_queue,
+            &self.alloc,
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
@@ -980,10 +981,10 @@ fn read_face_rgba_f32(
 // and return it with its GPU virtual address. Used for the bake's per-capture light
 // + shadow snapshots, so the six faces share one lighting set decoupled from the
 // frame's per-frame CBV writes.
-fn make_snapshot_cbv(device: &ID3D12Device, bytes: &[u8]) -> Result<(ID3D12Resource, u64), String> {
+fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuffer, u64), String> {
     let size = (((bytes.len() as u64) + 255) & !255).max(256);
     let cbv = create_buffer(
-        device,
+        alloc,
         size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,

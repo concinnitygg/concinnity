@@ -23,6 +23,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
@@ -448,11 +449,11 @@ pub(in crate::directx) struct FogResources {
     pub(in crate::directx) froxel_pso: ID3D12PipelineState,
 
     // Per-frame FogParams ring (176-byte block, persistently mapped).
-    pub(in crate::directx) params_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) params_ubo_ptrs: Vec<*mut u8>,
 
     // Per-frame FogFroxelParams ring (96-byte block, persistently mapped).
-    pub(in crate::directx) froxel_params_ubo_resources: Vec<ID3D12Resource>,
+    pub(in crate::directx) froxel_params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) froxel_params_ubo_ptrs: Vec<*mut u8>,
 
     // 3D `RGBA16Float` volume the kernel writes and the fragment shader
@@ -512,12 +513,13 @@ impl FogResources {
     // same descriptor. `volume.uav_cpu` / `volume.srv_cpu` are dedicated
     // SRV-heap slots reserved by init for the froxel volume.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         volume: FogVolumeDescriptors,
         shader_resources: FogShaderResourceHandles,
         params: FogDeviceParams,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let FogVolumeDescriptors {
             uav_cpu: volume_uav_cpu,
             uav_gpu: volume_uav_gpu,
@@ -548,11 +550,11 @@ impl FogResources {
 
         // Per-frame FogParams ring.
         let params_ubo_size = align256(std::mem::size_of::<FogParams>() as u64);
-        let mut params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 params_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -566,11 +568,11 @@ impl FogResources {
 
         // Per-frame FogFroxelParams ring.
         let froxel_ubo_size = align256(std::mem::size_of::<FogFroxelParams>() as u64);
-        let mut froxel_params_ubo_resources: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 froxel_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

@@ -7,6 +7,7 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledTexture};
 use crate::directx::context::dump_on_err;
 use crate::directx::post::bloom::{
     bloom_top_extent, compile_bloom_shaders, create_bloom_mips, create_bloom_pso,
@@ -39,7 +40,7 @@ pub(super) struct EffectsBundle {
     pub bloom_pso_upsample: ID3D12PipelineState,
     pub taa: Option<TaaResources>,
     pub ssao: Option<SsaoResources>,
-    pub ssao_white: ID3D12Resource,
+    pub ssao_white: PooledTexture,
     pub ssao_white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub ssr: Option<SsrResources>,
     pub ssgi: Option<SsgiResources>,
@@ -126,14 +127,14 @@ pub(super) struct EffectDescriptorSlots<'a> {
 }
 
 pub(super) fn build_effects(
-    device: &ID3D12Device,
-    command_queue: &ID3D12CommandQueue,
+    alloc: &DeviceAllocator,
     info_queue: Option<&ID3D12InfoQueue>,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
     slots: EffectDescriptorSlots<'_>,
 ) -> Result<EffectsBundle, String> {
+    let device = alloc.device();
     let EffectDimensions {
         width,
         height,
@@ -166,7 +167,7 @@ pub(super) fn build_effects(
     // placed resources back by label.
     let transient_pool = TransientResourcePool::build(
         device,
-        command_queue,
+        alloc.queue(),
         &transient_slots(
             ssao_settings.is_some(),
             (render_width, render_height),
@@ -251,7 +252,7 @@ pub(super) fn build_effects(
     // SSAO: 1x1 white fallback always populated so the main pass binds a
     // pass-through occlusion when SSAO is off. The real SSAO targets sit in
     // the three slots before it.
-    let ssao_white = create_fallback_white_resource(device, command_queue)?;
+    let ssao_white = create_fallback_white_resource(alloc)?;
     write_texture_srv(device, &ssao_white, ssao_slots.white_srv.0);
     let ssao_white_srv_gpu = ssao_slots.white_srv.1;
     let ssao = if let Some(settings) = ssao_settings {
@@ -283,7 +284,7 @@ pub(super) fn build_effects(
     let ssr =
         if ssr_settings.is_some() || ssgi_settings.is_some() || rt_reflection_settings.is_some() {
             Some(SsrResources::new(
-                device,
+                alloc,
                 render_width,
                 render_height,
                 SsrInitInputs {
@@ -303,7 +304,7 @@ pub(super) fn build_effects(
     // into the scene.
     let ssgi = if let Some(settings) = ssgi_settings {
         Some(SsgiResources::new(
-            SsgiDevice { device, info_queue },
+            SsgiDevice { alloc, info_queue },
             render_width,
             render_height,
             settings,
@@ -326,7 +327,7 @@ pub(super) fn build_effects(
     let rt_reflections = match (rt_reflection_settings, rt_supported) {
         (Some(settings), true) => match RtReflectionsResources::new(
             RtBuildContext {
-                device,
+                alloc,
                 width: render_width,
                 height: render_height,
             },

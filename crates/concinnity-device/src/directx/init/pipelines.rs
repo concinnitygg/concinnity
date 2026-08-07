@@ -17,6 +17,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
@@ -1318,7 +1319,7 @@ pub(super) struct MainPipelines {
     // scene warms mid-session. Empty when the world authored its own main shader
     // (there is no bindless path to warm into).
     pub bindless_main_shaders: BindlessMainShaders,
-    pub object_buffer_resources: Vec<ID3D12Resource>,
+    pub object_buffer_resources: Vec<PooledBuffer>,
     pub object_buffer_ptrs: Vec<*mut u8>,
     pub cull_root_sig: Option<ID3D12RootSignature>,
     pub cull_pso: Option<ID3D12PipelineState>,
@@ -1327,7 +1328,7 @@ pub(super) struct MainPipelines {
     // `occlusion_two_pass` AND the bindless cull path is active.
     pub cull_pso_phase2: Option<ID3D12PipelineState>,
     pub cull_command_signature: Option<ID3D12CommandSignature>,
-    pub draw_args_buffer_resources: Vec<ID3D12Resource>,
+    pub draw_args_buffer_resources: Vec<PooledBuffer>,
     pub draw_args_buffer_ptrs: Vec<*mut u8>,
     pub indirect_cmd_buffers: Vec<ID3D12Resource>,
     // Per-frame per-object cull-status buffers (one u32 each). Phase-1 cull
@@ -1357,7 +1358,7 @@ pub(super) struct MainPipelines {
     pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
     pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
     pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    pub prev_model_buffer_resources: Vec<ID3D12Resource>,
+    pub prev_model_buffer_resources: Vec<PooledBuffer>,
     pub prev_model_buffer_ptrs: Vec<*mut u8>,
 }
 
@@ -1417,12 +1418,13 @@ pub(super) struct MainPipelineFeatures {
 }
 
 pub(super) fn build_main_pipelines(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     info_queue: Option<&ID3D12InfoQueue>,
     pipeline_shaders: MainPipelineShaders<'_>,
     config: MainPipelineConfig,
     features: MainPipelineFeatures,
 ) -> Result<MainPipelines, String> {
+    let device = alloc.device();
     let MainPipelineShaders {
         shaders,
         vert_bytes,
@@ -1518,7 +1520,7 @@ pub(super) fn build_main_pipelines(
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
     // when the bindless pass is active and the world has build-time static
     // geometry; rebuilt each frame in `build_object_buffer`.
-    let mut object_buffer_resources: Vec<ID3D12Resource> = Vec::new();
+    let mut object_buffer_resources: Vec<PooledBuffer> = Vec::new();
     let mut object_buffer_ptrs: Vec<*mut u8> = Vec::new();
     if main_bindless_pso.is_some() && n_cull > 0 {
         let object_buffer_size = align256(
@@ -1530,7 +1532,7 @@ pub(super) fn build_main_pipelines(
         // `[0, FRAMES)`). See `directx/probe.rs::bake_ring_slot`.
         for _ in 0..FRAMES + 1 {
             let buf = create_buffer(
-                device,
+                alloc,
                 object_buffer_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1550,7 +1552,7 @@ pub(super) fn build_main_pipelines(
     let mut cull_pso: Option<ID3D12PipelineState> = None;
     let mut cull_pso_phase2: Option<ID3D12PipelineState> = None;
     let mut cull_command_signature: Option<ID3D12CommandSignature> = None;
-    let mut draw_args_buffer_resources: Vec<ID3D12Resource> = Vec::new();
+    let mut draw_args_buffer_resources: Vec<PooledBuffer> = Vec::new();
     let mut draw_args_buffer_ptrs: Vec<*mut u8> = Vec::new();
     let mut indirect_cmd_buffers: Vec<ID3D12Resource> = Vec::new();
     let mut cull_status_buffers: Vec<ID3D12Resource> = Vec::new();
@@ -1564,7 +1566,7 @@ pub(super) fn build_main_pipelines(
     let mut gbuffer_bindless_root_sig: Option<ID3D12RootSignature> = None;
     let mut gbuffer_bindless_pso: Option<ID3D12PipelineState> = None;
     let mut gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature> = None;
-    let mut prev_model_buffer_resources: Vec<ID3D12Resource> = Vec::new();
+    let mut prev_model_buffer_resources: Vec<PooledBuffer> = Vec::new();
     let mut prev_model_buffer_ptrs: Vec<*mut u8> = Vec::new();
     if let (Some(bindless_root), true) = (
         main_bindless_root_sig.as_ref(),
@@ -1607,7 +1609,7 @@ pub(super) fn build_main_pipelines(
         // `draw_args_buffer_resources[FRAMES]`, a slot the frame never overwrites.
         for _ in 0..FRAMES + 1 {
             let da = create_buffer(
-                device,
+                alloc,
                 draw_args_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1693,7 +1695,7 @@ pub(super) fn build_main_pipelines(
             let prev_model_size = align256((n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
             for _ in 0..FRAMES {
                 let buf = create_buffer(
-                    device,
+                    alloc,
                     prev_model_size,
                     D3D12_HEAP_TYPE_UPLOAD,
                     D3D12_RESOURCE_STATE_GENERIC_READ,

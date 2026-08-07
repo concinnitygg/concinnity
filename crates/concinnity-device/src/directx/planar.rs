@@ -29,6 +29,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{DxContext, FRAMES, align256};
 use super::cull::INDIRECT_COMMAND_STRIDE;
 use super::draw::ViewUniforms;
@@ -96,7 +97,7 @@ pub(in crate::directx) struct PlanarReflectionSet {
     // Per-(plane, frame) reflected `ViewUniforms` CBV ring, persistently mapped.
     // Indexed `plane * FRAMES + frame_idx`, so each frame writes its own slot and
     // never races the GPU reading a prior frame's reflected view.
-    _view_cbvs: Vec<ID3D12Resource>,
+    _view_cbvs: Vec<PooledBuffer>,
     view_ptrs: Vec<*mut u8>,
     view_gvas: Vec<u64>,
 
@@ -149,11 +150,12 @@ impl PlanarReflectionSet {
     // `resolve_srv_cpu` / `resolve_srv_gpu` are the reserved heap descriptors, one
     // per plane in `planes`.
     pub(in crate::directx) fn new(
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         config: PlanarConfig,
         planes: &[[f32; 4]],
         targets: PlanarTargets,
     ) -> Result<Self, String> {
+        let device = alloc.device();
         let PlanarConfig {
             sample_count,
             width,
@@ -193,7 +195,7 @@ impl PlanarReflectionSet {
         let mut view_gvas = Vec::with_capacity(planes.len() * FRAMES);
         for _ in 0..planes.len() * FRAMES {
             let cbv = create_buffer(
-                device,
+                alloc,
                 256,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

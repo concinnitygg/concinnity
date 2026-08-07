@@ -81,12 +81,19 @@ pub fn emit_check_cfgs() {
     }
 }
 
+// Resolve the backend from the Cargo-provided environment, emitting nothing.
+// For a package that needs the backend only to pick its SDK setup and never
+// gates its own source on one, so has no reason to carry the cfg.
+pub fn backend_from_cargo() -> Backend {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
+    resolve_backend(&target_os, vulkan)
+}
+
 // Resolve the backend from the Cargo-provided environment and emit the
 // `rustc-cfg` for it, returning the choice so the caller can branch.
 pub fn emit_backend_cfg() -> Backend {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
-    let backend = resolve_backend(&target_os, vulkan);
+    let backend = backend_from_cargo();
     println!("{}", sdks::backend_cfg_directive(backend));
     backend
 }

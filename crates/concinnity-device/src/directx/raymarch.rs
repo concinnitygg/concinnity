@@ -49,6 +49,7 @@ use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::assets::sdf_volume::SdfVolume;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{
@@ -104,7 +105,7 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     // build time, never modified: the asset's centre / extent / params
     // are static).
     #[allow(dead_code)]
-    volume_cbuffer: ID3D12Resource,
+    volume_cbuffer: PooledBuffer,
     pub(in crate::directx) volume_cbuffer_gva: u64,
     pub(in crate::directx) visible: bool,
     pub(in crate::directx) cast_shadows: bool,
@@ -128,15 +129,15 @@ pub(in crate::directx) struct RaymarchResources {
     // shader scales by `vol_extent`). Held only to keep the resources
     // resident; the encoder binds them through the `_view` siblings.
     #[allow(dead_code)]
-    cube_vb: ID3D12Resource,
+    cube_vb: PooledBuffer,
     #[allow(dead_code)]
-    cube_ib: ID3D12Resource,
+    cube_ib: PooledBuffer,
     cube_vbv: D3D12_VERTEX_BUFFER_VIEW,
     cube_ibv: D3D12_INDEX_BUFFER_VIEW,
     // Per-frame `RaymarchView` cbuffer ring. Persistently mapped; the
     // encoder memcpys this frame's view into `view_ptrs[frame_idx]`
     // before binding `view_cbuffers[frame_idx]` at b0.
-    view_cbuffers: Vec<ID3D12Resource>,
+    view_cbuffers: Vec<PooledBuffer>,
     view_ptrs: Vec<*mut u8>,
     // 1×1 white fallback for the `scene_color` SRV slot, kept around
     // only to hold a resource open while init runs; the live SRV at
@@ -145,7 +146,7 @@ pub(in crate::directx) struct RaymarchResources {
     // "no refraction needed" opt-out wants to re-point the slot at a
     // constant tap.
     #[allow(dead_code)]
-    scene_color_fallback: ID3D12Resource,
+    scene_color_fallback: PooledTexture,
     // Pre-raymarch HDR scene snapshot. At the top of `encode_raymarch`
     // we `CopyResource` from `hdr_resolve` (or `hdr_color` when MSAA
     // is off) into this resource, so refractive user shaders that
@@ -689,11 +690,11 @@ fn compile_volume_shadow_pso(
 // AABB corners, matching the asset semantic where `extent` is the
 // half-widths.
 fn build_cube_buffers(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
 ) -> Result<
     (
-        ID3D12Resource,
-        ID3D12Resource,
+        PooledBuffer,
+        PooledBuffer,
         D3D12_VERTEX_BUFFER_VIEW,
         D3D12_INDEX_BUFFER_VIEW,
     ),
@@ -730,13 +731,13 @@ fn build_cube_buffers(
     let ib_bytes = std::mem::size_of_val(&indices) as u64;
 
     let vb = create_buffer(
-        device,
+        alloc,
         vb_bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let ib = create_buffer(
-        device,
+        alloc,
         ib_bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -931,9 +932,8 @@ fn write_raymarch_samplers(
 // DirectX device / queue / info handles the raymarch build submits against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RaymarchDeviceContext<'a> {
-    pub device: &'a ID3D12Device,
+    pub alloc: &'a DeviceAllocator,
     pub info_queue: Option<&'a ID3D12InfoQueue>,
-    pub command_queue: &'a ID3D12CommandQueue,
 }
 
 // Render-target configuration for the raymarch pass.
@@ -982,11 +982,8 @@ impl RaymarchResources {
         sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
         hot_reload: bool,
     ) -> Result<Option<Self>, String> {
-        let RaymarchDeviceContext {
-            device,
-            info_queue,
-            command_queue,
-        } = ctx;
+        let RaymarchDeviceContext { alloc, info_queue } = ctx;
+        let device = alloc.device();
         let RaymarchTargetConfig {
             width,
             height,
@@ -1034,15 +1031,15 @@ impl RaymarchResources {
         let shadow_root_sig =
             dump_on_err(info_queue, create_raymarch_shadow_root_signature(device))?;
 
-        let (cube_vb, cube_ib, cube_vbv, cube_ibv) = build_cube_buffers(device)?;
+        let (cube_vb, cube_ib, cube_vbv, cube_ibv) = build_cube_buffers(alloc)?;
 
         // Per-frame view cbuffer ring.
         let view_size = align256(std::mem::size_of::<RaymarchView>() as u64);
-        let mut view_cbuffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+        let mut view_cbuffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let buf = create_buffer(
-                device,
+                alloc,
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1057,7 +1054,7 @@ impl RaymarchResources {
         // 1×1 white fallback retained for the resource lifetime (would
         // be needed again if a per-volume opt-out re-points the SRV
         // slot away from the snapshot).
-        let scene_color_fallback = create_fallback_white_resource(device, command_queue)?;
+        let scene_color_fallback = create_fallback_white_resource(alloc)?;
 
         // Pre-raymarch HDR scene snapshot; `encode_raymarch` copies
         // `hdr_resolve` / `hdr_color` into this resource each frame
@@ -1104,7 +1101,7 @@ impl RaymarchResources {
             let uniforms = volume_uniforms_from(vol);
             let cb_size = align256(std::mem::size_of::<RaymarchVolumeUniforms>() as u64);
             let cb = create_buffer(
-                device,
+                alloc,
                 cb_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,

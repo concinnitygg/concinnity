@@ -17,3 +17,6 @@ vulkan = ["concinnity-engine/vulkan", "concinnity-shader/vulkan"]
 concinnity-engine = { path = "../../crates/concinnity-engine" }
 concinnity-cook = { path = "../../crates/concinnity-cook" }
 concinnity-shader = { path = "../../crates/concinnity-shader" }
+
+[build-dependencies]
+concinnity-toolchain = { path = "../../crates/concinnity-toolchain" }

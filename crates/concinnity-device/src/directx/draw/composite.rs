@@ -277,7 +277,7 @@ impl DxContext {
         // slot, so resetting / growing it now is race-free.
         let text_bytes = super::text_upload::text_calls_byte_size(text_calls);
         self.text_upload
-            .reserve(&self.device, frame_idx, text_bytes)?;
+            .reserve(&self.alloc, frame_idx, text_bytes)?;
 
         let args = DxCompositeArgs {
             back_buffer: back_buffer.clone(),

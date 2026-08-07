@@ -18,6 +18,7 @@ use std::cell::RefCell;
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::texture::create_buffer;
 
 // Sub-allocation alignment. 16 bytes satisfies the index-buffer address
@@ -49,7 +50,7 @@ fn grow_capacity(capacity: u64, needed: u64) -> u64 {
 // pointer (null until the first allocation) and `gpu_va` its GPU virtual
 // address; both are re-read whenever the buffer is grown.
 struct Slot {
-    buffer: Option<ID3D12Resource>,
+    buffer: Option<PooledBuffer>,
     base: *mut u8,
     gpu_va: u64,
     capacity: u64,
@@ -88,7 +89,7 @@ impl UploadRing {
     // frame fence has confirmed the GPU is done with this slot.
     pub(in crate::directx) fn reserve(
         &self,
-        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
         frame: usize,
         needed: u64,
     ) -> Result<(), String> {
@@ -99,7 +100,7 @@ impl UploadRing {
         }
         let new_cap = grow_capacity(slot.capacity, needed);
         let buffer = create_buffer(
-            device,
+            alloc,
             new_cap,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,

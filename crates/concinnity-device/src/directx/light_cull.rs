@@ -8,6 +8,7 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
@@ -36,7 +37,7 @@ pub(in crate::directx) struct LightCullState {
     // Rests in `PIXEL_SHADER_RESOURCE`; the dispatch flips it to UAV and back.
     pub cluster_buffer: ID3D12Resource,
     // Per-frame `ClusterParams` upload buffers, two 256-byte slots each.
-    pub params_resources: Vec<ID3D12Resource>,
+    pub params_resources: Vec<PooledBuffer>,
     pub params_ptrs: Vec<*mut u8>,
 }
 
@@ -143,15 +144,15 @@ pub(in crate::directx) fn build_cluster_light_buffer(
 // `use_clusters = 0`; the planar / probe re-renders bind it so they fall back
 // to iterating every local light, and nothing else in it is read.
 pub(in crate::directx) fn build_cluster_params_buffers(
-    device: &ID3D12Device,
+    alloc: &DeviceAllocator,
     frames: usize,
-) -> Result<(Vec<ID3D12Resource>, Vec<*mut u8>), String> {
+) -> Result<(Vec<PooledBuffer>, Vec<*mut u8>), String> {
     let size = CLUSTER_PARAMS_SLOT_STRIDE * 2;
     let mut resources = Vec::with_capacity(frames);
     let mut ptrs = Vec::with_capacity(frames);
     for _ in 0..frames {
         let res = create_buffer(
-            device,
+            alloc,
             size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
