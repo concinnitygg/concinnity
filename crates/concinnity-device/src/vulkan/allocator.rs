@@ -1,6 +1,6 @@
 // src/vulkan/allocator.rs
 //
-// The device-memory allocator every persistent Vulkan resource is placed
+// The device-memory allocator every persistent Vulkan resource is created
 // through. Buffers and images are suballocated out of a few large
 // `VkDeviceMemory` blocks instead of each owning one.
 //
@@ -30,38 +30,52 @@
 //
 // Host-visible blocks are mapped once, at block creation, and stay mapped.
 // Vulkan forbids mapping one allocation twice, so a per-resource map is not
-// even available once resources share a block; each allocation reads its own
-// bytes at its own offset into the block's pointer. This is also faster than
-// the map/unmap pair it replaces.
+// even available once resources share a block; each resource carries a pointer
+// to its own bytes at its own offset into the block's mapping. Every
+// host-visible memory type this backend allocates is coherent, so the pointers
+// need no flush discipline.
 //
-// Frees are deferred. A dedicated allocation freed while the GPU still reads it
-// is merely undefined; a suballocation freed early is handed to a different
-// resource almost immediately, so the retire discipline is load-bearing here in
-// a way it was not before. `free` never releases bytes for reuse until
-// `frames_in_flight + 1` frame ticks have passed, which covers any command
-// buffer that could still reference them.
+// Lifetime is RAII, like the Metal and D3D12 pools. Dropping a `PooledBuffer` /
+// `PooledImage` returns its range to the pool and queues its Vulkan handles for
+// destruction, both withheld until `frames_in_flight + 1` frame ticks have
+// passed, which covers any command buffer that could still reference them. A
+// caller therefore never destroys, frees, or reasons about GPU progress on
+// teardown; assignment and drop are the whole discipline. The leases are
+// cloneable so a resource can be held by a ring slot and the live field that
+// reads it at once.
+//
+// The `Rc` behind the leases is main-thread state, on the same invariant as
+// `unsafe impl Send for VkContext`: the context migrates between threads but is
+// only ever used from one at a time, and workers given `&VkContext` only read
+// handles, never drop or allocate.
 
-// Removed once `create_buffer` and `create_image` allocate through this module:
-// until they do, nothing constructs a `DeviceAllocator` and every item here
-// reads as dead.
+// Removed once `create_buffer` and `create_image` in texture.rs construct
+// through this module: until they do, nothing builds a `DeviceAllocator` and
+// every item here reads as dead.
 #![allow(dead_code)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use ash::{Device, vk};
 
 use crate::gfx::block_alloc::{BlockAllocator, Placement};
 
-// Standard block size. Large enough that a normal world holds its whole
-// resource set in a handful of blocks, small enough that a block is not an
-// absurd commitment on a small device. A resource too large for one gets a
-// dedicated block of its own size.
-const BLOCK_BYTES: u64 = 64 * 1024 * 1024;
+// Largest block the pool asks for. Big enough that a heavy world holds its
+// persistent set in a handful of blocks, small enough that one block is not an
+// absurd commitment. A resource too large for one gets a dedicated block sized
+// to itself.
+const MAX_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
 
-// Whether a resource is laid out linearly (buffers) or in an
-// implementation-defined tiling (images). Kept apart so `bufferImageGranularity`
-// never applies.
+// Size of a pool's first block. Blocks double from here to `MAX_BLOCK_BYTES` as
+// a pool fills, so a small world commits megabytes rather than a full-size
+// block per pool for a handful of resources.
+const FIRST_BLOCK_BYTES: u64 = 4 * 1024 * 1024;
+
+// Whether a resource is laid out linearly (buffers, LINEAR-tiled images) or in
+// an implementation-defined tiling (OPTIMAL images). Kept apart so
+// `bufferImageGranularity` never applies.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum ResourceKind {
     Linear,
@@ -93,62 +107,168 @@ struct Pool {
 impl Pool {
     fn new() -> Self {
         Self {
-            placement: BlockAllocator::new(BLOCK_BYTES),
+            placement: BlockAllocator::new(MAX_BLOCK_BYTES),
             blocks: Vec::new(),
+        }
+    }
+
+    // How large the next block should be to host `size` bytes at `align`. The
+    // standard size doubles with the pool's block count up to `MAX_BLOCK_BYTES`,
+    // and any request too large for that gets a block of its own size (which
+    // `BlockAllocator::add_block` then marks dedicated).
+    fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
+        let grown = FIRST_BLOCK_BYTES
+            .saturating_mul(1 << self.placement.block_count().min(4))
+            .min(MAX_BLOCK_BYTES);
+        size.saturating_add(align.max(1).saturating_sub(1))
+            .max(grown)
+    }
+}
+
+// The Vulkan object a lease owns, destroyed when the lease retires.
+enum PooledHandle {
+    Buffer(vk::Buffer),
+    Image(vk::Image),
+}
+
+// A dropped resource's handles, awaiting destruction once no in-flight command
+// buffer can reference them.
+struct Retired {
+    handle: PooledHandle,
+    views: Vec<vk::ImageView>,
+    retire_at: u64,
+}
+
+struct Inner {
+    pools: HashMap<PoolKey, Pool>,
+    retired: Vec<Retired>,
+    // Monotonic frame tick driving the deferred frees. Not the frame-in-flight
+    // index, which wraps.
+    frame: u64,
+    retire_depth: u64,
+}
+
+impl Inner {
+    // Return a lease's range to its pool and queue its handles, both withheld
+    // until enough frames have ticked that no in-flight command buffer can
+    // reference them.
+    fn release(&mut self, lease: &mut Lease) {
+        let retire = self.frame + self.retire_depth;
+        if let Some(pool) = self.pools.get_mut(&lease.key) {
+            pool.placement.free(lease.placement, lease.size, retire);
+        }
+        self.retired.push(Retired {
+            handle: std::mem::replace(&mut lease.handle, PooledHandle::Buffer(vk::Buffer::null())),
+            views: std::mem::take(&mut *lease.views.borrow_mut()),
+            retire_at: retire,
+        });
+    }
+}
+
+// A pooled resource's claim on its range and its Vulkan handles. The last
+// holder dropping is what releases both, so a pooled resource is replaced by
+// plain assignment. Shared, because a resource can be held by a ring slot and
+// the live field that reads it at once; a cloned handle keeps the resource
+// alive rather than outliving it.
+struct Lease {
+    owner: Weak<RefCell<Inner>>,
+    key: PoolKey,
+    placement: Placement,
+    size: u64,
+    handle: PooledHandle,
+    // Views onto a pooled image, destroyed with it (views first). Interior
+    // mutability because views are created after the image exists.
+    views: RefCell<Vec<vk::ImageView>>,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        // If the allocator is already gone the device is being torn down and
+        // `destroy` has run; there is nothing left to return the range to.
+        if let Some(inner) = self.owner.upgrade() {
+            inner.borrow_mut().release(self);
         }
     }
 }
 
-// A placed resource. Plain data: it names its block and where in it the
-// resource sits, and is what `bind_buffer_memory` / `bind_image_memory` and
-// every later free are given in place of a bare `vk::DeviceMemory`.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Allocation {
-    memory: vk::DeviceMemory,
-    offset: u64,
-    size: u64,
-    key: PoolKey,
-    placement: Placement,
+// A buffer suballocated from a pooled block. Owns the `VkBuffer` and its bytes;
+// dropping the last clone queues both for destruction.
+#[derive(Clone)]
+pub(super) struct PooledBuffer {
+    buffer: vk::Buffer,
+    mapped: *mut u8,
+    _lease: Option<Rc<Lease>>,
 }
 
-impl Allocation {
-    // The block's device memory. What a bind call binds against, paired with
-    // `offset`; never what a free call is given, since the block outlives any
-    // one resource in it.
-    pub(super) fn memory(&self) -> vk::DeviceMemory {
-        self.memory
+impl PooledBuffer {
+    pub(super) fn buffer(&self) -> vk::Buffer {
+        self.buffer
     }
 
-    // Where this resource starts inside its block.
-    pub(super) fn offset(&self) -> u64 {
-        self.offset
+    // A pointer to this buffer's own bytes, or null when its memory type is not
+    // host-visible. The block is mapped for its whole life, so this neither
+    // maps nor needs a matching unmap.
+    pub(super) fn mapped_ptr(&self) -> *mut u8 {
+        self.mapped
     }
 
-    pub(super) fn size(&self) -> u64 {
-        self.size
-    }
-
-    // A placeholder naming no memory, for a slot filled before its real
-    // allocation exists. Freeing it is a no-op.
+    // A placeholder naming no buffer, for a slot filled before its real
+    // resource exists. Dropping it is a no-op.
     pub(super) fn null() -> Self {
         Self {
-            memory: vk::DeviceMemory::null(),
-            offset: 0,
-            size: 0,
-            key: PoolKey {
-                memory_type: 0,
-                kind: ResourceKind::Linear,
-                device_address: false,
-            },
-            placement: Placement {
-                block: usize::MAX,
-                offset: 0,
-            },
+            buffer: vk::Buffer::null(),
+            mapped: std::ptr::null_mut(),
+            _lease: None,
         }
     }
 
     pub(super) fn is_null(&self) -> bool {
-        self.memory == vk::DeviceMemory::null()
+        self.buffer == vk::Buffer::null()
+    }
+}
+
+// An image suballocated from a pooled block. Owns the `VkImage`, its bytes, and
+// any views attached to it; dropping the last clone queues them all for
+// destruction, views first.
+#[derive(Clone)]
+pub(super) struct PooledImage {
+    image: vk::Image,
+    mapped: *mut u8,
+    _lease: Option<Rc<Lease>>,
+}
+
+impl PooledImage {
+    pub(super) fn image(&self) -> vk::Image {
+        self.image
+    }
+
+    // A pointer to this image's own bytes, or null when its memory type is not
+    // host-visible. Only meaningful for LINEAR-tiled images.
+    pub(super) fn mapped_ptr(&self) -> *mut u8 {
+        self.mapped
+    }
+
+    // Tie `view` to this image's lifetime: it is destroyed just before the
+    // image, at the same retirement.
+    pub(super) fn attach_view(&self, view: vk::ImageView) {
+        debug_assert!(self._lease.is_some(), "attach_view on a null PooledImage");
+        if let Some(lease) = &self._lease {
+            lease.views.borrow_mut().push(view);
+        }
+    }
+
+    // A placeholder naming no image, for a slot filled before its real resource
+    // exists. Dropping it is a no-op.
+    pub(super) fn null() -> Self {
+        Self {
+            image: vk::Image::null(),
+            mapped: std::ptr::null_mut(),
+            _lease: None,
+        }
+    }
+
+    pub(super) fn is_null(&self) -> bool {
+        self.image == vk::Image::null()
     }
 }
 
@@ -165,18 +285,22 @@ pub(super) struct AllocatorStats {
     pub(super) block_count: usize,
 }
 
-struct Inner {
-    pools: HashMap<PoolKey, Pool>,
-    // Monotonic frame tick driving the deferred frees. Not the frame-in-flight
-    // index, which wraps.
-    frame: u64,
-    retire_depth: u64,
+// A reserved range plus the block it lives in, handed from `reserve` to the
+// bind calls.
+struct Reservation {
+    memory: vk::DeviceMemory,
+    // Base of the block's mapping, or null; the resource's own pointer is this
+    // plus the placement offset.
+    mapped: *mut u8,
+    key: PoolKey,
+    placement: Placement,
+    size: u64,
 }
 
-// The allocator behind every persistent buffer and image. See the module
-// comment.
+// The allocator behind every pooled buffer and image. See the module comment.
 pub(super) struct DeviceAllocator {
-    inner: RefCell<Inner>,
+    device: Device,
+    inner: Rc<RefCell<Inner>>,
     memory_props: vk::PhysicalDeviceMemoryProperties,
     max_allocations: u32,
 }
@@ -185,6 +309,7 @@ impl DeviceAllocator {
     pub(super) fn new(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
+        device: &Device,
         frames_in_flight: usize,
     ) -> Self {
         let memory_props =
@@ -193,129 +318,132 @@ impl DeviceAllocator {
             .limits
             .max_memory_allocation_count;
         Self {
-            inner: RefCell::new(Inner {
+            device: device.clone(),
+            inner: Rc::new(RefCell::new(Inner {
                 pools: HashMap::new(),
+                retired: Vec::new(),
                 frame: 0,
                 // One tick beyond the frames in flight, matching the streamed
                 // upload retire discipline: a resource replaced between frames
                 // must outlive the submission that was already in flight.
                 retire_depth: frames_in_flight as u64 + 1,
-            }),
+            })),
             memory_props,
             max_allocations,
         }
     }
 
-    // Place a resource with `reqs` in memory satisfying `props`. `kind` is the
-    // resource's tiling class and `device_address` whether its block must
-    // permit `vkGetBufferDeviceAddress`.
-    pub(super) fn alloc(
+    // The device the pooled blocks are allocated on. Lets a caller that already
+    // holds an allocator create the objects that stay outside it (views,
+    // samplers, pipelines) without carrying a second handle.
+    pub(super) fn device(&self) -> &Device {
+        &self.device
+    }
+
+    // Create a `size`-byte buffer with `usage`, placed in memory satisfying
+    // `props`. A buffer created with SHADER_DEVICE_ADDRESS usage (the
+    // ray-tracing acceleration-structure buffers and their build inputs) is
+    // placed in a block allocated with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+    // or `get_buffer_device_address` would be invalid.
+    pub(super) fn create_buffer(
         &self,
-        device: &Device,
-        reqs: vk::MemoryRequirements,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
         props: vk::MemoryPropertyFlags,
-        kind: ResourceKind,
-        device_address: bool,
-    ) -> Result<Allocation, String> {
-        let memory_type = self.find_memory_type(reqs.memory_type_bits, props)?;
-        let key = PoolKey {
-            memory_type,
-            kind,
-            device_address,
+    ) -> Result<PooledBuffer, String> {
+        let info = vk::BufferCreateInfo::default()
+            .size(size.max(1))
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer = unsafe { self.device.create_buffer(&info, None) }
+            .map_err(|e| format!("create_buffer: {e}"))?;
+        let reqs = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+        let device_address = usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
+        let reservation = match self.reserve(reqs, props, ResourceKind::Linear, device_address) {
+            Ok(r) => r,
+            Err(e) => {
+                unsafe { self.device.destroy_buffer(buffer, None) };
+                return Err(e);
+            }
         };
-        let align = reqs.alignment.max(1);
-        let mut inner = self.inner.borrow_mut();
-        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
-
-        // An existing block first; only open a new one when none can host it.
-        if let Some(placement) = pool.placement.alloc(reqs.size, align) {
-            let block = pool.blocks[placement.block]
-                .as_ref()
-                .ok_or("allocator: placement named a released block")?;
-            return Ok(Allocation {
-                memory: block.memory,
-                offset: placement.offset,
-                size: reqs.size,
-                key,
-                placement,
-            });
+        if let Err(e) = unsafe {
+            self.device
+                .bind_buffer_memory(buffer, reservation.memory, reservation.placement.offset)
+        } {
+            unsafe { self.device.destroy_buffer(buffer, None) };
+            self.release(reservation);
+            return Err(format!("bind_buffer_memory: {e}"));
         }
-
-        let block_bytes = pool.placement.block_size_for(reqs.size, align);
-        let (memory, mapped) = Self::create_block(
-            device,
-            &self.memory_props,
-            memory_type,
-            block_bytes,
-            device_address,
-        )?;
-        let index = pool.placement.add_block(block_bytes);
-        if index == pool.blocks.len() {
-            pool.blocks.push(Some(Block { memory, mapped }));
-        } else {
-            pool.blocks[index] = Some(Block { memory, mapped });
-        }
-        let placement = pool
-            .placement
-            .alloc_in(index, reqs.size, align)
-            .ok_or("allocator: a block sized for a request failed to host it")?;
-        Ok(Allocation {
-            memory,
-            offset: placement.offset,
-            size: reqs.size,
-            key,
-            placement,
+        let mapped = resource_ptr(&reservation);
+        Ok(PooledBuffer {
+            buffer,
+            mapped,
+            _lease: Some(Rc::new(
+                self.lease(reservation, PooledHandle::Buffer(buffer)),
+            )),
         })
     }
 
-    // A pointer to this allocation's own bytes, or null when its memory type is
-    // not host-visible. The block is mapped for its whole life, so this neither
-    // maps nor needs a matching unmap.
-    pub(super) fn mapped_ptr(&self, alloc: &Allocation) -> *mut u8 {
-        if alloc.is_null() {
-            return std::ptr::null_mut();
-        }
-        let inner = self.inner.borrow();
-        let Some(pool) = inner.pools.get(&alloc.key) else {
-            return std::ptr::null_mut();
+    // Create an image from `info`, placed in memory satisfying `props`. The
+    // tiling in `info` picks the pool: a LINEAR image shares blocks with
+    // buffers, an OPTIMAL one never does.
+    pub(super) fn create_image(
+        &self,
+        info: &vk::ImageCreateInfo,
+        props: vk::MemoryPropertyFlags,
+    ) -> Result<PooledImage, String> {
+        let image = unsafe { self.device.create_image(info, None) }
+            .map_err(|e| format!("create_image: {e}"))?;
+        let reqs = unsafe { self.device.get_image_memory_requirements(image) };
+        let kind = if info.tiling == vk::ImageTiling::LINEAR {
+            ResourceKind::Linear
+        } else {
+            ResourceKind::Optimal
         };
-        match pool
-            .blocks
-            .get(alloc.placement.block)
-            .and_then(Option::as_ref)
-        {
-            Some(block) if !block.mapped.is_null() => unsafe {
-                block.mapped.add(alloc.offset as usize)
-            },
-            _ => std::ptr::null_mut(),
+        let reservation = match self.reserve(reqs, props, kind, false) {
+            Ok(r) => r,
+            Err(e) => {
+                unsafe { self.device.destroy_image(image, None) };
+                return Err(e);
+            }
+        };
+        if let Err(e) = unsafe {
+            self.device
+                .bind_image_memory(image, reservation.memory, reservation.placement.offset)
+        } {
+            unsafe { self.device.destroy_image(image, None) };
+            self.release(reservation);
+            return Err(format!("bind_image_memory: {e}"));
         }
+        let mapped = resource_ptr(&reservation);
+        Ok(PooledImage {
+            image,
+            mapped,
+            _lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
+        })
     }
 
-    // Release `alloc`. Its bytes are withheld until enough frames have ticked
-    // that no in-flight command buffer can still reference them, so a caller
-    // does not have to reason about whether the GPU is done with it.
-    pub(super) fn free(&self, alloc: Allocation) {
-        if alloc.is_null() {
-            return;
-        }
-        let mut inner = self.inner.borrow_mut();
-        let retire = inner.frame + inner.retire_depth;
-        if let Some(pool) = inner.pools.get_mut(&alloc.key) {
-            pool.placement.free(alloc.placement, alloc.size, retire);
-        }
-    }
-
-    // Advance the frame tick, make retired frees placeable again, and release
-    // any block that now holds nothing back to the driver.
-    pub(super) fn begin_frame(&self, device: &Device) {
+    // Advance the frame tick, destroy the handles whose retirement has passed,
+    // make retired frees placeable again, and release any block that now holds
+    // nothing back to the driver.
+    pub(super) fn begin_frame(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += 1;
         let frame = inner.frame;
+        let mut index = 0;
+        while index < inner.retired.len() {
+            if inner.retired[index].retire_at <= frame {
+                let retired = inner.retired.swap_remove(index);
+                self.destroy_retired(retired);
+            } else {
+                index += 1;
+            }
+        }
         for pool in inner.pools.values_mut() {
             pool.placement.reclaim(frame);
-            for index in pool.placement.take_empty_blocks() {
-                if let Some(block) = pool.blocks.get_mut(index).and_then(Option::take) {
-                    unsafe { device.free_memory(block.memory, None) };
+            for block_index in pool.placement.take_empty_blocks() {
+                if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
+                    unsafe { self.device.free_memory(block.memory, None) };
                 }
             }
         }
@@ -338,16 +466,115 @@ impl DeviceAllocator {
         self.max_allocations
     }
 
-    // Free every block. The caller has already idled the device and destroyed
-    // every buffer and image bound into them.
-    pub(super) fn destroy(&self, device: &Device) {
+    // Destroy everything still queued and free every block. The caller has
+    // already idled the device and dropped every pooled resource; this is the
+    // last allocator call before `destroy_device`.
+    pub(super) fn destroy(&self) {
         let mut inner = self.inner.borrow_mut();
+        for retired in std::mem::take(&mut inner.retired) {
+            self.destroy_retired(retired);
+        }
         for pool in inner.pools.values_mut() {
             for block in pool.blocks.iter_mut().filter_map(Option::take) {
-                unsafe { device.free_memory(block.memory, None) };
+                unsafe { self.device.free_memory(block.memory, None) };
             }
         }
         inner.pools.clear();
+    }
+
+    fn destroy_retired(&self, retired: Retired) {
+        unsafe {
+            for view in retired.views {
+                self.device.destroy_image_view(view, None);
+            }
+            match retired.handle {
+                PooledHandle::Buffer(buffer) => self.device.destroy_buffer(buffer, None),
+                PooledHandle::Image(image) => self.device.destroy_image(image, None),
+            }
+        }
+    }
+
+    // Reserve a range for `reqs` in memory satisfying `props`, opening a block
+    // when no existing one can host it.
+    fn reserve(
+        &self,
+        reqs: vk::MemoryRequirements,
+        props: vk::MemoryPropertyFlags,
+        kind: ResourceKind,
+        device_address: bool,
+    ) -> Result<Reservation, String> {
+        let memory_type = self.find_memory_type(reqs.memory_type_bits, props)?;
+        let key = PoolKey {
+            memory_type,
+            kind,
+            device_address,
+        };
+        let align = reqs.alignment.max(1);
+        let mut inner = self.inner.borrow_mut();
+        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
+
+        // An existing block first; only open a new one when none can host it.
+        if let Some(placement) = pool.placement.alloc(reqs.size, align) {
+            let block = pool.blocks[placement.block]
+                .as_ref()
+                .ok_or("allocator: placement named a released block")?;
+            return Ok(Reservation {
+                memory: block.memory,
+                mapped: block.mapped,
+                key,
+                placement,
+                size: reqs.size,
+            });
+        }
+
+        let block_bytes = pool.next_block_bytes(reqs.size, align);
+        let (memory, mapped) = Self::create_block(
+            &self.device,
+            &self.memory_props,
+            memory_type,
+            block_bytes,
+            device_address,
+        )?;
+        let index = pool.placement.add_block(block_bytes);
+        if index == pool.blocks.len() {
+            pool.blocks.push(Some(Block { memory, mapped }));
+        } else {
+            pool.blocks[index] = Some(Block { memory, mapped });
+        }
+        let placement = pool
+            .placement
+            .alloc_in(index, reqs.size, align)
+            .ok_or("allocator: a block sized for a request failed to host it")?;
+        Ok(Reservation {
+            memory,
+            mapped,
+            key,
+            placement,
+            size: reqs.size,
+        })
+    }
+
+    // Return a reservation whose bind failed. The range was never visible to
+    // the GPU, so it goes back through the normal deferred path for simplicity,
+    // not because it needs the delay.
+    fn release(&self, reservation: Reservation) {
+        let mut inner = self.inner.borrow_mut();
+        let retire = inner.frame + inner.retire_depth;
+        if let Some(pool) = inner.pools.get_mut(&reservation.key) {
+            pool.placement
+                .free(reservation.placement, reservation.size, retire);
+        }
+    }
+
+    fn lease(&self, reservation: Reservation, handle: PooledHandle) -> Lease {
+        Lease {
+            owner: Rc::downgrade(&self.inner),
+            key: reservation.key,
+            placement: reservation.placement,
+            size: reservation.size,
+            handle,
+            views: RefCell::new(Vec::new()),
+        }
     }
 
     fn find_memory_type(
@@ -403,5 +630,295 @@ impl DeviceAllocator {
             std::ptr::null_mut()
         };
         Ok((memory, mapped))
+    }
+}
+
+// The resource's own pointer into its block's mapping, or null when the block
+// is not host-visible.
+fn resource_ptr(reservation: &Reservation) -> *mut u8 {
+    if reservation.mapped.is_null() {
+        std::ptr::null_mut()
+    } else {
+        unsafe {
+            reservation
+                .mapped
+                .add(reservation.placement.offset as usize)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_double_from_first_to_max() {
+        let mut pool = Pool::new();
+        let mut expected = FIRST_BLOCK_BYTES;
+        for _ in 0..6 {
+            let bytes = pool.next_block_bytes(1024, 256);
+            assert_eq!(bytes, expected);
+            pool.placement.add_block(bytes);
+            expected = (expected * 2).min(MAX_BLOCK_BYTES);
+        }
+        assert_eq!(pool.next_block_bytes(1024, 256), MAX_BLOCK_BYTES);
+    }
+
+    #[test]
+    fn an_oversized_request_sizes_its_own_block() {
+        let pool = Pool::new();
+        let size = MAX_BLOCK_BYTES * 2;
+        assert_eq!(pool.next_block_bytes(size, 1), size);
+        // Alignment slack is included so the block can place the request at
+        // whatever offset it lands on.
+        assert_eq!(pool.next_block_bytes(size, 4096), size + 4095);
+    }
+
+    #[test]
+    fn null_resources_are_inert() {
+        let buffer = PooledBuffer::null();
+        assert!(buffer.is_null());
+        assert!(buffer.mapped_ptr().is_null());
+        let image = PooledImage::null();
+        assert!(image.is_null());
+        assert!(image.mapped_ptr().is_null());
+        drop(buffer);
+        drop(image);
+    }
+
+    // A headless instance and device for the allocation tests, or None where no
+    // Vulkan driver is present (CI). Field order is drop order for the explicit
+    // teardown in `Drop`.
+    struct TestGpu {
+        device: Device,
+        instance: ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        _entry: ash::Entry,
+    }
+
+    impl Drop for TestGpu {
+        fn drop(&mut self) {
+            unsafe {
+                self.device.destroy_device(None);
+                self.instance.destroy_instance(None);
+            }
+        }
+    }
+
+    fn test_gpu() -> Option<TestGpu> {
+        let entry = crate::vulkan::loader::load_entry().ok()?;
+        let instance =
+            unsafe { entry.create_instance(&vk::InstanceCreateInfo::default(), None) }.ok()?;
+        let physical_device = match unsafe { instance.enumerate_physical_devices() } {
+            Ok(devices) if !devices.is_empty() => devices[0],
+            _ => {
+                unsafe { instance.destroy_instance(None) };
+                return None;
+            }
+        };
+        let queue_infos = [vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(0)
+            .queue_priorities(&[1.0])];
+        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_infos);
+        let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
+            Ok(device) => device,
+            Err(_) => {
+                unsafe { instance.destroy_instance(None) };
+                return None;
+            }
+        };
+        Some(TestGpu {
+            device,
+            instance,
+            physical_device,
+            _entry: entry,
+        })
+    }
+
+    fn test_allocator(gpu: &TestGpu) -> DeviceAllocator {
+        DeviceAllocator::new(&gpu.instance, gpu.physical_device, &gpu.device, 2)
+    }
+
+    const HOST: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
+        vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
+            | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw(),
+    );
+
+    #[test]
+    fn small_buffers_share_one_block_and_map_at_their_offsets() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let a = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let b = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_ne!(a.buffer(), b.buffer());
+        assert_eq!(alloc.stats().block_count, 1);
+
+        // Each maps at its own offset, and the ranges do not overlap.
+        assert!(!a.mapped_ptr().is_null());
+        assert!(!b.mapped_ptr().is_null());
+        unsafe {
+            std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024);
+            std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024);
+            assert_eq!(*a.mapped_ptr(), 0xAA);
+            assert_eq!(*a.mapped_ptr().add(1023), 0xAA);
+            assert_eq!(*b.mapped_ptr(), 0xBB);
+        }
+
+        drop(a);
+        drop(b);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn a_dropped_buffer_frees_its_range_after_the_retire_window() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let buffer = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let held = alloc.stats();
+        assert!(held.in_use_bytes >= 1024);
+        assert_eq!(held.block_count, 1);
+
+        // The drop returns the bytes immediately but the block holds until the
+        // retire window has passed, then goes back to the driver.
+        drop(buffer);
+        assert_eq!(alloc.stats().in_use_bytes, 0);
+        assert_eq!(alloc.stats().block_count, 1);
+        // frames_in_flight = 2, so the window is 3 ticks: still held mid-way.
+        alloc.begin_frame();
+        assert_eq!(alloc.stats().block_count, 1);
+        alloc.begin_frame();
+        alloc.begin_frame();
+        assert_eq!(alloc.stats().block_count, 0);
+        assert_eq!(alloc.stats().reserved_bytes, 0);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn a_clone_keeps_the_resource_alive() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let a = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let b = a.clone();
+        drop(a);
+        // The clone still holds the range: nothing has been freed.
+        assert!(alloc.stats().in_use_bytes >= 1024);
+        drop(b);
+        assert_eq!(alloc.stats().in_use_bytes, 0);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn an_image_and_its_views_retire_together() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width: 4,
+                height: 4,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+        let image = alloc
+            .create_image(&info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            .unwrap();
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image.image())
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let view = unsafe { gpu.device.create_image_view(&view_info, None) }.unwrap();
+        image.attach_view(view);
+
+        drop(image);
+        for _ in 0..3 {
+            alloc.begin_frame();
+        }
+        assert_eq!(alloc.stats().block_count, 0);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn linear_and_optimal_images_never_share_a_block() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let base = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width: 4,
+                height: 4,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+        let optimal = alloc
+            .create_image(
+                &base
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(vk::ImageUsageFlags::SAMPLED),
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .unwrap();
+        let linear = alloc
+            .create_image(
+                &base
+                    .tiling(vk::ImageTiling::LINEAR)
+                    .usage(vk::ImageUsageFlags::TRANSFER_DST),
+                HOST,
+            )
+            .unwrap();
+        // Different tiling class and different memory type both force the
+        // split; either alone would.
+        assert_eq!(alloc.stats().block_count, 2);
+        drop(optimal);
+        drop(linear);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn an_oversized_buffer_gets_a_dedicated_block() {
+        let Some(gpu) = test_gpu() else { return };
+        let alloc = test_allocator(&gpu);
+        let big = alloc
+            .create_buffer(
+                MAX_BLOCK_BYTES + 1024,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                HOST,
+            )
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 1);
+        // A dedicated block is never shared: the next resource opens its own.
+        let small = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 2);
+        drop(big);
+        drop(small);
+        alloc.destroy();
     }
 }
