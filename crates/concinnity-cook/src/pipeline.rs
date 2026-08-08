@@ -466,7 +466,9 @@ pub fn build_compiled_with_progress(
     )?;
 
     // Lock-file provenance for the resource stream: `compiled.resources` is
-    // emitted in `resource_jobs` order, so the two zip index-aligned.
+    // emitted in `resource_jobs` order, so the two zip index-aligned. Texture
+    // and Mesh records also carry their hot-reload source info so a blob boot
+    // can reconstruct the catalogues without the authored args.
     let resource_locks: Vec<crate::blob::LockedResource> = resource_jobs
         .iter()
         .zip(compiled.resources.iter())
@@ -481,6 +483,22 @@ pub fn build_compiled_with_progress(
                 handle: *handle,
                 args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),
                 payload_blob: record.payload.as_ref().map(|p| p.blob_index),
+                texture_source: (*rt == ResourceAssetType::Texture).then(|| {
+                    let t = &texture_sources[*handle as usize];
+                    crate::blob::LockedTextureSource {
+                        source: t.source.clone(),
+                        image_index: t.image_index,
+                    }
+                }),
+                mesh_source: (*rt == ResourceAssetType::Mesh).then(|| {
+                    let m = &mesh_sources[*handle as usize];
+                    crate::blob::LockedMeshSource {
+                        source: m.source.clone(),
+                        primitive_index: m.primitive_index,
+                        lod_levels: m.lod_levels,
+                        lod_distances: m.lod_distances.clone(),
+                    }
+                }),
             }
         })
         .collect();
@@ -3644,7 +3662,7 @@ mod tests {
             result.texture_sources[1],
             TextureSourceInfo {
                 name_id: 1,
-                source: tga,
+                source: tga.clone(),
                 image_index: 3,
             }
         );
@@ -3663,12 +3681,38 @@ mod tests {
         assert_eq!(
             result.mesh_sources[1],
             MeshSourceInfo {
-                source: glb,
+                source: glb.clone(),
                 primitive_index: 0,
                 lod_levels: 3,
                 lod_distances: vec![10.0, 20.0],
             }
         );
+
+        // The lock records mirror the catalogues so a blob boot can rebuild
+        // them without the authored args.
+        let lock_tex: Vec<_> = result
+            .resource_locks
+            .iter()
+            .filter(|r| r.kind == "Texture")
+            .collect();
+        assert_eq!(lock_tex.len(), 2);
+        assert_eq!(lock_tex[0].texture_source.as_ref().unwrap().source, "");
+        let wall = lock_tex[1].texture_source.as_ref().unwrap();
+        assert_eq!(wall.source, tga);
+        assert_eq!(wall.image_index, 3);
+        assert!(lock_tex[1].mesh_source.is_none());
+
+        let lock_mesh: Vec<_> = result
+            .resource_locks
+            .iter()
+            .filter(|r| r.kind == "Mesh")
+            .collect();
+        assert_eq!(lock_mesh.len(), 2);
+        assert!(lock_mesh[0].texture_source.is_none());
+        let file_mesh = lock_mesh[1].mesh_source.as_ref().unwrap();
+        assert_eq!(file_mesh.source, glb);
+        assert_eq!(file_mesh.lod_levels, 3);
+        assert_eq!(file_mesh.lod_distances, vec![10.0, 20.0]);
     }
 
     // A data resource carries its bytes inline in the record rather than in a

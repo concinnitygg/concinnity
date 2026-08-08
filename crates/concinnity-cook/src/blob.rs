@@ -101,7 +101,7 @@ pub struct LockedShadow {
 // left the component def table, so they are recorded with their per-kind handle
 // instead of a component discriminant. `payload_blob` is None for a data
 // resource (bytes ride inline in the record).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LockedResource {
     pub name: String,
     // The dense interned id the build assigned this name (the same id space
@@ -114,6 +114,30 @@ pub struct LockedResource {
     pub args_hash: String,
     // which blob holds this resource's payload, if any
     pub payload_blob: Option<u32>,
+    // Dev source info mirrored from the build's hot-reload catalogues, so a
+    // blob boot can reconstruct them without the asset's args (a SceneImport
+    // product has none the boot can see). Present for every Texture / Mesh
+    // resource; an empty `source` means nothing to watch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_source: Option<LockedTextureSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<LockedMeshSource>,
+}
+
+// A texture resource's watchable file source as recorded in the lock file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LockedTextureSource {
+    pub source: String,
+    pub image_index: u32,
+}
+
+// A mesh resource's re-import inputs as recorded in the lock file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LockedMeshSource {
+    pub source: String,
+    pub primitive_index: u32,
+    pub lod_levels: u32,
+    pub lod_distances: Vec<f32>,
 }
 
 // The result of a build pack: the blobs written and the path of each
@@ -499,6 +523,7 @@ mod tests {
             handle: 2,
             args_hash: "ff".to_string(),
             payload_blob: None,
+            ..Default::default()
         }];
         let injected = vec![crate::world::InjectedAsset {
             name: "debug_hud".to_string(),
@@ -689,14 +714,30 @@ mod tests {
                 payload_bytes: 4,
             }],
             assets: vec![],
-            resources: vec![LockedResource {
-                name: "clip".to_string(),
-                id: Some(0),
-                kind: "AudioClip".to_string(),
-                handle: 0,
-                args_hash: "00".to_string(),
-                payload_blob: Some(0),
-            }],
+            resources: vec![
+                LockedResource {
+                    name: "clip".to_string(),
+                    id: Some(0),
+                    kind: "AudioClip".to_string(),
+                    handle: 0,
+                    args_hash: "00".to_string(),
+                    payload_blob: Some(0),
+                    ..Default::default()
+                },
+                LockedResource {
+                    name: "wall_tex".to_string(),
+                    id: Some(1),
+                    kind: "Texture".to_string(),
+                    handle: 0,
+                    args_hash: "00".to_string(),
+                    payload_blob: Some(0),
+                    texture_source: Some(LockedTextureSource {
+                        source: "wall.png".to_string(),
+                        image_index: 2,
+                    }),
+                    ..Default::default()
+                },
+            ],
             injected: vec![LockedInjection {
                 name: "debug_hud".to_string(),
                 asset_type: "DebugHud".to_string(),
@@ -716,10 +757,19 @@ mod tests {
         assert_eq!(json["shadowed"][0]["type"], "Material");
         assert_eq!(json["shadowed"][0]["generated_by"], "bistro");
 
+        // Source info serializes only where present, and round-trips.
+        assert!(json["resources"][0].get("texture_source").is_none());
+        assert!(json["resources"][0].get("mesh_source").is_none());
+        assert_eq!(json["resources"][1]["texture_source"]["source"], "wall.png");
+
         let back: BlobLock = serde_json::from_value(json).unwrap();
         assert_eq!(back.injected[0].asset_type, "DebugHud");
         assert_eq!(back.blobs[0].payload_bytes, 4);
         assert_eq!(back.resources[0].kind, "AudioClip");
+        assert!(back.resources[0].texture_source.is_none());
+        let tex = back.resources[1].texture_source.as_ref().unwrap();
+        assert_eq!(tex.source, "wall.png");
+        assert_eq!(tex.image_index, 2);
         assert_eq!(back.shadowed[0].name, "bistro_mat_wood");
     }
 
@@ -737,5 +787,21 @@ mod tests {
         let back: BlobLock = serde_json::from_value(json).unwrap();
         assert!(back.resources.is_empty());
         assert!(back.shadowed.is_empty());
+
+        // A resource recorded before source info landed parses with none.
+        let json = serde_json::json!({
+            "engine_version": "0.0.0",
+            "built_at": "2026-01-01T00:00:00Z",
+            "blobs": [],
+            "assets": [],
+            "resources": [{
+                "name": "tex", "kind": "Texture", "handle": 0,
+                "args_hash": "", "payload_blob": null,
+            }],
+            "injected": [],
+        });
+        let back: BlobLock = serde_json::from_value(json).unwrap();
+        assert!(back.resources[0].texture_source.is_none());
+        assert!(back.resources[0].mesh_source.is_none());
     }
 }

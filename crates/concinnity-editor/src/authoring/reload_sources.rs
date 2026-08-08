@@ -5,13 +5,10 @@
 // file path) as world resources so `GraphicsSystem::init` can seed the
 // hot-reload watcher; a process that only LOADS prebuilt blobs would start
 // without them, leaving file-backed assets invisible to the watcher. The
-// world-lock records each resource's name, kind, and handle, and the args
-// live in the authored entries plus the lock's injected list, so the
-// catalogues can be reconstructed by a name join. Assets whose args are not
-// recorded (a SceneImport's generated products carry no args in the lock)
-// are skipped; they join the catalogue on the next in-memory rebuild.
-
-use std::collections::HashMap;
+// world-lock records each Texture / Mesh resource's source info directly, so
+// those catalogues read straight off the lock, SceneImport products included.
+// The ColorLut / EnvironmentMap singletons are components, not lock resources,
+// so their sources still come from the authored entries.
 
 use concinnity_cook::blob::BlobLock;
 
@@ -37,31 +34,41 @@ pub(crate) fn install_from_lock(
 }
 
 fn install(world: &mut World, entries: &[serde_json::Value], lock: &BlobLock) -> usize {
-    let args_by_name = args_by_name(entries, lock);
-
     let mut textures: Vec<TextureSource> = Vec::new();
     let mut meshes: Vec<MeshSource> = Vec::new();
     let mut installed = 0usize;
     for res in &lock.resources {
-        let Some(args) = args_by_name.get(res.name.as_str()) else {
-            continue;
-        };
-        match res.kind.as_str() {
-            "Texture" => {
-                let entry = texture_source(res.id, &res.name, args);
-                if !entry.source.is_empty() {
-                    installed += 1;
-                }
-                place(&mut textures, res.handle as usize, entry);
+        if let Some(tex) = &res.texture_source {
+            if !tex.source.is_empty() {
+                installed += 1;
             }
-            "Mesh" => {
-                let entry = mesh_source(args);
-                if !entry.source.is_empty() {
-                    installed += 1;
-                }
-                place(&mut meshes, res.handle as usize, entry);
+            let name_id = res
+                .id
+                .unwrap_or_else(|| crate::ecs::asset_id::intern(&res.name).0);
+            place(
+                &mut textures,
+                res.handle as usize,
+                TextureSource {
+                    name_id,
+                    source: tex.source.clone(),
+                    image_index: tex.image_index,
+                },
+            );
+        }
+        if let Some(mesh) = &res.mesh_source {
+            if !mesh.source.is_empty() {
+                installed += 1;
             }
-            _ => {}
+            place(
+                &mut meshes,
+                res.handle as usize,
+                MeshSource {
+                    source: mesh.source.clone(),
+                    primitive_index: mesh.primitive_index,
+                    lod_levels: mesh.lod_levels,
+                    lod_distances: mesh.lod_distances.clone(),
+                },
+            );
         }
     }
 
@@ -74,30 +81,8 @@ fn install(world: &mut World, entries: &[serde_json::Value], lock: &BlobLock) ->
     installed
 }
 
-// Args for every asset whose declaration the boot can see: the authored
-// entries plus the lock's injected companions. An authored entry wins a name
-// collision (it is the override the build honored).
-fn args_by_name<'a>(
-    entries: &'a [serde_json::Value],
-    lock: &'a BlobLock,
-) -> HashMap<&'a str, &'a serde_json::Value> {
-    let mut map: HashMap<&str, &serde_json::Value> = HashMap::new();
-    for inj in &lock.injected {
-        map.insert(inj.name.as_str(), &inj.args);
-    }
-    for entry in entries {
-        if let (Some(name), Some(args)) = (
-            entry.get("name").and_then(|v| v.as_str()),
-            entry.get("args"),
-        ) {
-            map.insert(name, args);
-        }
-    }
-    map
-}
-
 // Grow `vec` with defaults so `slot` is addressable, then write the entry.
-// Handles are dense from 0, but the args join can visit them out of order.
+// Handles are dense from 0 but can arrive out of order.
 fn place<T: Default>(vec: &mut Vec<T>, slot: usize, entry: T) {
     if vec.len() <= slot {
         vec.resize_with(slot + 1, T::default);
@@ -116,38 +101,6 @@ fn u32_arg(args: &serde_json::Value, key: &str, default: u32) -> u32 {
     args.get(key)
         .and_then(|v| v.as_u64())
         .unwrap_or(default as u64) as u32
-}
-
-// A texture's watchable source: the authored `source` path unless a
-// `generator` makes it procedural (nothing to watch). Mirrors the cook's
-// catalogue pass over the same args.
-fn texture_source(id: Option<u32>, name: &str, args: &serde_json::Value) -> TextureSource {
-    if !str_arg(args, "generator").is_empty() {
-        return TextureSource::default();
-    }
-    TextureSource {
-        name_id: id.unwrap_or_else(|| crate::ecs::asset_id::intern(name).0),
-        source: str_arg(args, "source"),
-        image_index: u32_arg(args, "image_index", 0),
-    }
-}
-
-fn mesh_source(args: &serde_json::Value) -> MeshSource {
-    MeshSource {
-        source: str_arg(args, "source"),
-        primitive_index: u32_arg(args, "primitive_index", 0),
-        lod_levels: u32_arg(args, "lod_levels", 1),
-        lod_distances: args
-            .get("lod_distances")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|d| d.as_f64())
-                    .map(|d| d as f32)
-                    .collect()
-            })
-            .unwrap_or_default(),
-    }
 }
 
 // Normalized type match (lowercase, underscores stripped), the convention the
@@ -197,29 +150,32 @@ fn scan_environment_map(entries: &[serde_json::Value]) -> Option<EnvironmentMapS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cook::blob::{LockedInjection, LockedResource};
+    use concinnity_cook::blob::{LockedMeshSource, LockedResource, LockedTextureSource};
 
-    fn lock_with(resources: Vec<LockedResource>, injected: Vec<LockedInjection>) -> BlobLock {
+    fn lock_with(resources: Vec<LockedResource>) -> BlobLock {
         serde_json::from_value(serde_json::json!({
             "engine_version": "0",
             "built_at": "",
             "blobs": [],
             "assets": [],
             "resources": serde_json::to_value(&resources).unwrap(),
-            "injected": serde_json::to_value(&injected).unwrap(),
+            "injected": [],
             "shadowed": [],
         }))
         .unwrap()
     }
 
-    fn resource(name: &str, kind: &str, handle: u32) -> LockedResource {
+    fn tex_resource(name: &str, handle: u32, source: &str, image_index: u32) -> LockedResource {
         LockedResource {
             name: name.to_string(),
             id: Some(handle + 100),
-            kind: kind.to_string(),
+            kind: "Texture".to_string(),
             handle,
-            args_hash: String::new(),
-            payload_blob: None,
+            texture_source: Some(LockedTextureSource {
+                source: source.to_string(),
+                image_index,
+            }),
+            ..Default::default()
         }
     }
 
@@ -228,70 +184,66 @@ mod tests {
     }
 
     #[test]
-    fn authored_texture_sources_reconstruct_by_handle() {
-        let lock = lock_with(
-            vec![
-                resource("tex_b", "Texture", 1),
-                resource("tex_a", "Texture", 0),
-            ],
-            Vec::new(),
-        );
-        let entries = vec![
-            entry("tex_a", "Texture", serde_json::json!({"source": "a.png"})),
-            entry(
-                "tex_b",
-                "Texture",
-                serde_json::json!({"source": "pack.glb", "image_index": 3}),
-            ),
-        ];
+    fn texture_sources_reconstruct_by_handle_from_the_lock_alone() {
+        // Out-of-order handles, and no authored entries at all: a SceneImport
+        // product's source rides in the lock, not in world.jsonl.
+        let lock = lock_with(vec![
+            tex_resource("tex_b", 1, "pack.glb", 3),
+            tex_resource("tex_a", 0, "a.png", 0),
+        ]);
         let mut world = World::new_empty();
-        let installed = install(&mut world, &entries, &lock);
+        let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 2);
         let tex = world.resource::<TextureSources>().unwrap();
         assert_eq!(tex.0.len(), 2);
         assert_eq!(tex.0[0].source, "a.png");
+        assert_eq!(tex.0[0].name_id, 100);
         assert_eq!(tex.0[1].source, "pack.glb");
         assert_eq!(tex.0[1].image_index, 3);
     }
 
     #[test]
-    fn generated_textures_without_recorded_args_are_skipped() {
-        // A SceneImport product is in the lock's resources but nowhere carries
-        // args; its catalogue slot stays empty rather than mis-joining.
-        let lock = lock_with(vec![resource("import_tex", "Texture", 0)], Vec::new());
+    fn resources_without_source_info_are_skipped() {
+        // An old-format lock (or a non-source kind) carries no source info;
+        // its catalogue slot stays empty rather than guessing.
+        let lock = lock_with(vec![LockedResource {
+            name: "old_tex".to_string(),
+            kind: "Texture".to_string(),
+            ..Default::default()
+        }]);
         let mut world = World::new_empty();
         let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 0);
         assert!(world.resource::<TextureSources>().unwrap().0.is_empty());
+        assert!(world.resource::<MeshSources>().unwrap().0.is_empty());
     }
 
     #[test]
     fn procedural_texture_leaves_an_empty_source() {
-        let lock = lock_with(vec![resource("noise", "Texture", 0)], Vec::new());
-        let entries = vec![entry(
-            "noise",
-            "Texture",
-            serde_json::json!({"generator": "noise", "source": "ignored.png"}),
-        )];
+        let lock = lock_with(vec![tex_resource("noise", 0, "", 0)]);
         let mut world = World::new_empty();
-        let installed = install(&mut world, &entries, &lock);
+        let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 0);
         assert_eq!(world.resource::<TextureSources>().unwrap().0[0].source, "");
     }
 
     #[test]
     fn mesh_sources_carry_lod_shape() {
-        let lock = lock_with(vec![resource("rock", "Mesh", 0)], Vec::new());
-        let entries = vec![entry(
-            "rock",
-            "Mesh",
-            serde_json::json!({
-                "source": "rock.glb", "primitive_index": 2,
-                "lod_levels": 3, "lod_distances": [10.0, 30.0]
+        let lock = lock_with(vec![LockedResource {
+            name: "rock".to_string(),
+            kind: "Mesh".to_string(),
+            handle: 0,
+            mesh_source: Some(LockedMeshSource {
+                source: "rock.glb".to_string(),
+                primitive_index: 2,
+                lod_levels: 3,
+                lod_distances: vec![10.0, 30.0],
             }),
-        )];
+            ..Default::default()
+        }]);
         let mut world = World::new_empty();
-        install(&mut world, &entries, &lock);
+        let installed = install(&mut world, &[], &lock);
+        assert_eq!(installed, 1);
         let meshes = world.resource::<MeshSources>().unwrap();
         assert_eq!(meshes.0[0].source, "rock.glb");
         assert_eq!(meshes.0[0].primitive_index, 2);
@@ -300,28 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn injected_args_join_when_no_authored_entry_exists() {
-        let lock = lock_with(
-            vec![resource("companion_tex", "Texture", 0)],
-            vec![LockedInjection {
-                name: "companion_tex".to_string(),
-                asset_type: "Texture".to_string(),
-                args: serde_json::json!({"source": "chip.png"}),
-                injected_by: "companion".to_string(),
-            }],
-        );
+    fn texture_without_a_lock_id_interns_its_name() {
+        let mut resource = tex_resource("late_tex", 0, "late.png", 0);
+        resource.id = None;
+        let lock = lock_with(vec![resource]);
         let mut world = World::new_empty();
-        let installed = install(&mut world, &[], &lock);
-        assert_eq!(installed, 1);
-        assert_eq!(
-            world.resource::<TextureSources>().unwrap().0[0].source,
-            "chip.png"
-        );
+        install(&mut world, &[], &lock);
+        let tex = world.resource::<TextureSources>().unwrap();
+        assert_eq!(tex.0[0].name_id, crate::ecs::asset_id::intern("late_tex").0);
     }
 
     #[test]
     fn singleton_scans_read_the_authored_entries() {
-        let lock = lock_with(Vec::new(), Vec::new());
+        let lock = lock_with(Vec::new());
         let entries = vec![
             entry("grade", "ColorLut", serde_json::json!({"source": "g.cube"})),
             entry(
@@ -345,7 +288,7 @@ mod tests {
 
     #[test]
     fn procedural_environment_map_is_not_watchable() {
-        let lock = lock_with(Vec::new(), Vec::new());
+        let lock = lock_with(Vec::new());
         let entries = vec![entry(
             "sky",
             "EnvironmentMap",

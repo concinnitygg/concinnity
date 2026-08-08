@@ -407,11 +407,9 @@ mod tests {
     fn lock(name: &str, kind: &str) -> crate::blob::LockedResource {
         crate::blob::LockedResource {
             name: name.to_string(),
-            id: None,
             kind: kind.to_string(),
-            handle: 0,
-            args_hash: String::new(),
             payload_blob: Some(0),
+            ..Default::default()
         }
     }
 
