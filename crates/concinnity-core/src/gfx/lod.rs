@@ -1,5 +1,4 @@
-// Build-time mesh decimator and runtime-side helpers for the multi-LOD
-// pipeline. The decimator that lives here:
+// Build-time mesh decimator for the multi-LOD pipeline:
 //
 //   * `decimate_by_qem`: half-edge collapse driven by the Garland-Heckbert
 //     quadric error metric. Each candidate edge is scored by the squared
@@ -14,77 +13,13 @@
 // vertex buffer stays untouched and a LOD swap is a pure
 // `(index_offset, index_count)` change.
 
-// Whether an AABB encodes valid finite bounds suitable for frustum / distance
-// culling. A degenerate box (non-finite corner) disables culling.
-pub fn bounds_finite(bb_min: [f32; 3], bb_max: [f32; 3]) -> bool {
-    bb_min.iter().chain(bb_max.iter()).all(|c| c.is_finite())
-}
+// The runtime slice selection these alternates are chosen between at draw time
+// lives in concinnity-types; re-exported here under its historical path.
+use std::collections::{BTreeSet, BinaryHeap};
 
-// The LOD level active at `distance`: 0 for LOD0, or `i + 1` for the
-// highest-indexed alternate whose `switch_distance` is at or below it.
-// `alternates` is in ascending threshold order, so the scan stops early.
-pub fn pick_lod_level(alternates: &[crate::gfx::render_types::LodSlice], distance: f32) -> usize {
-    let mut level = 0usize;
-    for (i, slice) in alternates.iter().enumerate() {
-        if distance >= slice.switch_distance {
-            level = i + 1;
-        } else {
-            break;
-        }
-    }
-    level
-}
-
-// The `(index_offset, index_count)` slice active at `distance`, given the LOD0
-// pair and the alternates. Returns `lod0` when no alternate applies.
-pub fn pick_lod_slice(
-    lod0: (usize, usize),
-    alternates: &[crate::gfx::render_types::LodSlice],
-    distance: f32,
-) -> (usize, usize) {
-    match pick_lod_level(alternates, distance) {
-        0 => lod0,
-        level => {
-            let slice = &alternates[level - 1];
-            (slice.index_offset, slice.index_count)
-        }
-    }
-}
-
-// Distance from `cam_pos` to a skinned object's authored placement (the
-// column-3 translation of its model matrix). Skinned objects deform every
-// frame, so they have no static AABB: this is the cheap stand-in the
-// per-frame LOD picks use.
-pub fn skinned_camera_distance(
-    obj: &crate::gfx::render_types::SkinnedDrawObject,
-    cam_pos: [f32; 3],
-) -> f32 {
-    let centre = obj.translation();
-    let dx = centre[0] - cam_pos[0];
-    let dy = centre[1] - cam_pos[1];
-    let dz = centre[2] - cam_pos[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-// Distance from `cam_pos` to the centre of `obj`'s world AABB, used to pick
-// the active LOD slice each frame. Dynamic props (sentinel non-finite AABB)
-// fall back to the model-matrix translation so they still LOD by their
-// authored placement.
-pub fn camera_distance(obj: &crate::gfx::render_types::DrawObject, cam_pos: [f32; 3]) -> f32 {
-    let centre = if obj.cullable() {
-        [
-            0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-            0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-            0.5 * (obj.bb_min[2] + obj.bb_max[2]),
-        ]
-    } else {
-        [obj.model[3][0], obj.model[3][1], obj.model[3][2]]
-    };
-    let dx = centre[0] - cam_pos[0];
-    let dy = centre[1] - cam_pos[1];
-    let dz = centre[2] - cam_pos[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
+pub use concinnity_types::gfx::lod_select::{
+    bounds_finite, camera_distance, pick_lod_level, pick_lod_slice, skinned_camera_distance,
+};
 
 // Decimate `indices` to at most `target_tri_count` triangles using
 // half-edge collapse driven by the Garland-Heckbert quadric error metric.
@@ -169,7 +104,7 @@ pub fn decimate_by_qem(
     }
 
     // 2. Unique undirected edges + initial half-edge collapse cost.
-    let mut edges: alloc::collections::BTreeSet<(u32, u32)> = alloc::collections::BTreeSet::new();
+    let mut edges: BTreeSet<(u32, u32)> = BTreeSet::new();
     for tri in &tris {
         for k in 0..3 {
             let a = tri[k];
@@ -179,8 +114,7 @@ pub fn decimate_by_qem(
         }
     }
 
-    let mut heap: alloc::collections::BinaryHeap<HeapEdge> =
-        alloc::collections::BinaryHeap::with_capacity(edges.len());
+    let mut heap: BinaryHeap<HeapEdge> = BinaryHeap::with_capacity(edges.len());
     for (lo, hi) in edges {
         let q = quadrics[lo as usize].add(quadrics[hi as usize]);
         let cost_lo = q.eval(positions[lo as usize]);

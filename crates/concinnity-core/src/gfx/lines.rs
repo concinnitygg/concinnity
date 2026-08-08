@@ -1,13 +1,9 @@
 // src/gfx/lines.rs
 //
-// World-space line geometry: the segment any system can submit for a frame
-// (a trajectory arc, a tether or beam, a patrol path, the editor's origin
-// axes) and the CPU expansion that turns each one into a camera-facing ribbon
-// the line pass rasterises.
+// The CPU expansion that turns a world-space `Line` into the camera-facing
+// ribbon the line pass rasterises.
 //
-// Lines are scene geometry, not overlay: they sit in the world, so the
-// depth-tested pass occludes them behind whatever is in front of them. A
-// hardware line primitive cannot carry a pixel width portably, so each segment
+// A hardware line primitive cannot carry a pixel width portably, so each segment
 // expands into a quad whose corners are offset perpendicular to the line and
 // perpendicular to the eye vector, scaled by the world-per-pixel size at that
 // corner's depth. Both edges of the ribbon are straight world-space lines, so
@@ -18,21 +14,10 @@ use crate::geometry::vec3::{cross, dot, lerp as lerp3, sub};
 
 use super::render_types::LineVertex;
 
+pub use concinnity_types::gfx::lines::Line;
+
 // Vertices emitted per expanded segment: two triangles, unindexed.
 const VERTS_PER_SEGMENT: usize = 6;
-
-// One world-space line to draw this frame. Colour is per endpoint, so a line
-// that fades out with distance is a single request with a transparent far end.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Line {
-    pub start: [f32; 3],
-    pub end: [f32; 3],
-    // Linear-space RGBA at `start` / `end`, interpolated along the run.
-    pub start_color: [f32; 4],
-    pub end_color: [f32; 4],
-    // On-screen thickness in pixels, held constant at any distance.
-    pub width_px: f32,
-}
 
 // The camera the expansion projects against. `view` is the world-to-view matrix
 // the frame renders with (column-major, `view[col][row]`) and `cam_pos` its

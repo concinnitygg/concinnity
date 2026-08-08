@@ -20,8 +20,6 @@
 // via `add_block`, and retries -- which is what keeps the device call out of
 // this layer.
 
-use alloc::vec::Vec;
-
 use super::range_alloc::RangeAllocator;
 
 // Where a resource was placed: which block, and the byte offset within it.
@@ -320,7 +318,7 @@ mod tests {
         // the frees have not retired yet, so the block is still held
         assert!(pool.take_empty_blocks().is_empty());
         pool.reclaim(0);
-        assert_eq!(pool.take_empty_blocks(), alloc::vec![0]);
+        assert_eq!(pool.take_empty_blocks(), vec![0]);
         assert_eq!(pool.block_count(), 0);
         assert_eq!(pool.reserved_bytes(), 0);
     }
@@ -331,7 +329,7 @@ mod tests {
         let first = place(&mut pool, 1024, 1);
         pool.free(first, 1024, 0);
         pool.reclaim(0);
-        assert_eq!(pool.take_empty_blocks(), alloc::vec![0]);
+        assert_eq!(pool.take_empty_blocks(), vec![0]);
         // the vacated slot is refilled rather than the block list growing
         let next = place(&mut pool, 256, 1);
         assert_eq!(next.block, 0);

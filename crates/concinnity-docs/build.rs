@@ -3,8 +3,8 @@
 //
 // The asset sources are split across two crates: the plain data schema
 // (structs, their rustdoc, `Default`s, and enums) lives in concinnity-asset,
-// while the `impl Component` blocks (carrying NAME / ORIGIN / Args) stay in
-// concinnity-core. Both are parsed into one file set so a struct and its impl
+// while the `impl Component` blocks (carrying NAME / ORIGIN / Args) live in
+// concinnity-types. Both are parsed into one file set so a struct and its impl
 // rejoin by name.
 //
 // For each asset (and each nested value type) the entry contains:
@@ -44,7 +44,7 @@ use std::io;
 use std::path::Path;
 
 const ASSET_SCHEMA_DIR: &str = "../concinnity-asset/src";
-const ASSET_IMPL_DIR: &str = "../concinnity-core/src/assets";
+const ASSET_IMPL_DIR: &str = "../concinnity-types/src/assets";
 
 fn main() {
     println!("cargo:rerun-if-changed={ASSET_SCHEMA_DIR}");

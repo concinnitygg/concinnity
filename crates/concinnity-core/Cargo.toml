@@ -12,26 +12,19 @@ path = "src/lib.rs"
 doctest = false
 
 [features]
-# Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so
-# the backend-conditional gfx data layouts and Platform::current() compile for
-# the same backend the client picks. Activates no extra dependency: the shader
-# compiler that used to live behind this feature moved to the concinnity-cook
-# crate. Inert on Linux (always vk) and macOS (always metal).
-vulkan = []
+# Forwarded to concinnity-types, whose build script resolves the backend cfg the
+# gfx data layouts and Platform::current() compile against. Activates no extra
+# dependency. Inert on Linux (always vk) and macOS (always metal).
+vulkan = ["concinnity-types/vulkan"]
 
 [dependencies]
-concinnity-eas = { path = "../concinnity-eas" }
+concinnity-types = { path = "../concinnity-types" }
 concinnity-asset = { path = "../concinnity-asset" }
-concinnity-blob = { path = "../concinnity-blob" }
 concinnity-memory = { path = "../concinnity-memory" }
 
 bytemuck = { version = "1", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
-thiserror = "2.0.18"
-tracing = "0.1.44"
-postcard = { version = "1", default-features = false, features = ["use-std"] }
 rayon = "1"
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -14,7 +14,8 @@
 | `concinnity-physics`   | lib       |                    | Physics system (wraps [rapier3d]).                                   |
 | `concinnity-audio`     | lib       |                    | Audio system (wraps [kira]).                                         |
 | `concinnity-store`     | lib       |                    | State tree on disk: paths, source lookup, blob reads.                |
-| `concinnity-core`      | lib       |                    | Shared ECS, assets, resources, and math foundation.                  |
+| `concinnity-core`      | lib       |                    | CPU compute over the runtime vocabulary: skinning, LOD, raster, IBL. |
+| `concinnity-types`     | lib       | :white_check_mark: | Runtime vocabulary: GPU layouts, ECS components, registry, settings. |
 | `concinnity-blob`      | lib       | :white_check_mark: | Packed asset blob format; `write` feature gated to cook.             |
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).          |
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                            |
@@ -84,6 +85,12 @@ space:3
 
 space:7
 
+space:3
+types
+space:3
+
+space:7
+
 space:4
 blob
 space:2
@@ -104,10 +111,12 @@ cli --> engine
 cli --> world
 cli --> docs
 
-core --> eas
-core --> asset
-core --> blob
-core --> memory
+core --> types
+
+types --> eas
+types --> asset
+types --> blob
+types --> memory
 
 store --> core
 store --> blob

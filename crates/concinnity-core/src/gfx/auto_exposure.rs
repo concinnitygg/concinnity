@@ -1,12 +1,11 @@
 // src/gfx/auto_exposure.rs
 //
-// Auto-exposure (EV adaptation) configuration and EMA state. Backend-agnostic
-// resolve of the authored `PostProcessConfig` auto-exposure fields into clamped
-// settings, plus the per-frame exponential-moving-average update that takes a
-// GPU-measured average log-luminance and produces the next frame's exposure
-// multiplier. The histogram itself is built in the backend's compute shader;
-// this module owns only the parameter math and the EMA so it can be unit-tested
-// without a GPU.
+// Auto-exposure (EV adaptation) state. The per-frame exponential-moving-average
+// update takes a GPU-measured average log-luminance and produces the next
+// frame's exposure multiplier. The histogram itself is built in the backend's
+// compute shader; this module owns only the reduction and the EMA so both can
+// be unit-tested without a GPU. The resolved settings the EMA reads live in
+// concinnity-types, re-exported here under their historical path.
 
 // Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
 // in bin 0. Roughly matches a moonlit interior at the dim end.
@@ -23,65 +22,7 @@ pub const LUM_LOG2_MAX: f32 = 12.0;
 // (1 KiB at u32) and big enough that the per-bin log-luminance step is fine.
 pub const HISTOGRAM_BINS: usize = 256;
 
-// Smallest legal EMA speed. A zero or negative speed would freeze adaptation
-// at the initial EV, so the authored value is floored here.
-const MIN_SPEED: f32 = 1.0e-3;
-
-// Largest legal EMA speed. Anything higher snaps in under a single frame and
-// is indistinguishable from "no adaptation" visually, just noisier.
-const MAX_SPEED: f32 = 20.0;
-
-// Clamp range for `min_ev` / `max_ev` so a stray value cannot push exposure to
-// `inf` / `0`. Matches the `EXPOSURE_EV_LIMIT` in [`PostProcessConfig`].
-const EV_LIMIT: f32 = 16.0;
-
-// `log2(0.18)`: perceptual middle-grey in linear light. AE shifts the
-// scene's geometric-mean luminance to this value on the HDR output path so
-// the average pixel reads as a comfortable mid-tone instead of "scene
-// white = SDR reference white = bright" (which only worked on the SDR path
-// because the ACES tonemap implicitly compressed scene-white back down).
-pub const HDR_MIDDLE_GREY_LOG2: f32 = -2.473;
-
-// Clamped auto-exposure tunables resolved from the authored asset fields. Held
-// by the backend; the per-frame EMA in [`AutoExposureState::update`] reads them
-// to clamp the adapted EV and drive its adaptation rate.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AutoExposureSettings {
-    // Lower bound on the adapted EV. Caps how bright a dim scene can ramp.
-    pub min_ev: f32,
-    // Upper bound on the adapted EV. Caps how dark a bright scene can ramp.
-    pub max_ev: f32,
-    // EMA rate (per second). The exponential `1 - exp(-speed * dt)` step pulls
-    // the current EV toward the target each frame; higher = faster adaptation.
-    pub speed: f32,
-    // Log2 of the linear value AE aims the scene's geometric-mean luminance
-    // at. `0.0` = scene-white (legacy SDR + ACES default, ACES then squishes
-    // scene-white back down to a comfortable display mid-tone).
-    // `HDR_MIDDLE_GREY_LOG2` ≈ -2.47 = perceptual middle-grey, the correct
-    // target on the HDR path where there is no ACES compression. Resolved
-    // from `PostProcessConfig.hdr_display` at asset time.
-    pub target_log_lum: f32,
-}
-
-impl AutoExposureSettings {
-    // Clamp the authored fields into a safe range. `min_ev` is forced to stay
-    // at-or-below `max_ev` so the adapted EV's clamp interval is non-empty.
-    // `hdr_aware` shifts AE's middle-grey pivot down so the average pixel
-    // reads at perceptual middle-grey on the HDR output path; SDR worlds
-    // keep the legacy scene-white pivot to preserve existing exposure
-    // authoring.
-    pub fn resolve(min_ev: f32, max_ev: f32, speed: f32, hdr_aware: bool) -> Self {
-        let min = min_ev.clamp(-EV_LIMIT, EV_LIMIT);
-        let max = max_ev.clamp(-EV_LIMIT, EV_LIMIT);
-        let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
-        Self {
-            min_ev: lo,
-            max_ev: hi,
-            speed: speed.clamp(MIN_SPEED, MAX_SPEED),
-            target_log_lum: if hdr_aware { HDR_MIDDLE_GREY_LOG2 } else { 0.0 },
-        }
-    }
-}
+pub use concinnity_types::gfx::auto_exposure::{AutoExposureSettings, HDR_MIDDLE_GREY_LOG2};
 
 // Running auto-exposure state. The current adapted EV moves toward the target
 // EV (derived from the GPU-measured average log-luminance) via an exponential
@@ -167,21 +108,6 @@ pub fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resolve_clamps_speed_and_orders_ev_bounds() {
-        let s = AutoExposureSettings::resolve(8.0, -2.0, 0.0, false);
-        // Inverted min/max swap so the clamp interval is non-empty.
-        assert_eq!(s.min_ev, -2.0);
-        assert_eq!(s.max_ev, 8.0);
-        // Zero speed is floored to a tiny positive rate.
-        assert!(s.speed >= MIN_SPEED);
-
-        let s = AutoExposureSettings::resolve(-100.0, 100.0, 1.0e9, false);
-        assert_eq!(s.min_ev, -EV_LIMIT);
-        assert_eq!(s.max_ev, EV_LIMIT);
-        assert_eq!(s.speed, MAX_SPEED);
-    }
 
     #[test]
     fn update_pulls_current_ev_toward_target() {

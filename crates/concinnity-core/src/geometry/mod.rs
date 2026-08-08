@@ -15,10 +15,10 @@
 // path.
 mod chunk_gen;
 pub mod glass_quad;
-pub mod vec3;
 mod voxel;
 pub mod water_grid;
 
+pub use concinnity_types::math::vec3;
 pub use vec3::{vec3_add, vec3_face_normal, vec3_normalise};
 
 pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
