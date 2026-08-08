@@ -49,6 +49,8 @@ static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:hlsl\0";
 static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:glsl\0";
 
 fn main() -> std::io::Result<()> {
+    concinnity_engine::crash::install();
+
     // Keep the backend stamp in the linked binary (its bytes are what `cn
     // export` scans); taking its address defeats any linker dead-stripping.
     std::hint::black_box(&CN_RUNTIME_PLATFORM);

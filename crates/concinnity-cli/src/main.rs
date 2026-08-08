@@ -40,5 +40,6 @@ mod cli;
 mod entry;
 
 fn main() -> std::io::Result<()> {
+    concinnity_engine::crash::install();
     entry::run()
 }

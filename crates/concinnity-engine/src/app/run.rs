@@ -37,10 +37,17 @@ fn log_filter() -> EnvFilter {
 
 // Install the global tracing subscriber. The single place the log level is
 // configured: the CLI entry points call it directly, and the FFI entry point
-// (cn_init) calls it for the macOS app. Safe to call once per process.
+// (cn_init) calls it for the macOS app. Safe to call once per process. The
+// crash ring layer rides along so crash reports carry the recent log lines.
 pub fn init_logging() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(log_filter())
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let fmt = tracing_subscriber::fmt::layer().with_filter(log_filter());
+    let _ = tracing_subscriber::registry()
+        .with(fmt)
+        .with(crate::crash::RingLayer)
         .try_init();
 }
 

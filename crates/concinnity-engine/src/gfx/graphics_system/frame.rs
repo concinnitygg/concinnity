@@ -343,6 +343,7 @@ impl GraphicsSystem {
                             // signal, so stop without draining.
                             super::frame_policy::FrameAction::ShutdownDeviceLost => {
                                 tracing::error!("GraphicsSystem: device lost, stopping: {}", e);
+                                crate::crash::report_device_lost(&e.to_string());
                                 return StepResult::Stop;
                             }
                         }

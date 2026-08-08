@@ -252,6 +252,10 @@ impl GraphicsSystem {
         // panel) can size live VRAM against the device's budget without reaching
         // for the backend itself.
         ctx.insert_resource(self.gpu_profile);
+        crate::crash::note(
+            "gpu",
+            &format!("{:?} {:?}", self.gpu_profile.vendor, self.gpu_profile.tier),
+        );
         // Resolve the master quality preset. An ephemeral `CN_QUALITY_PRESET`
         // env override wins first and is never persisted, so a test / CI / GPU
         // smoke can force a preset (e.g. `custom` for no clamp) without touching

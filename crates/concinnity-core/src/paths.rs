@@ -174,6 +174,14 @@ pub fn settings_path() -> PathBuf {
     writable_state_dir().join("settings")
 }
 
+// Directory holding crash reports (and minidumps) written by the crash
+// reporting machinery. Resolves under the writable-state dir like `saves/`,
+// since a shipped install's content root may be read-only. Created on first
+// write; capped by the writer's retention pruning, never by a build.
+pub fn crashes_dir() -> PathBuf {
+    writable_state_dir().join("crashes")
+}
+
 pub fn worlds_dir() -> PathBuf {
     state_dir().join("worlds")
 }
@@ -327,14 +335,17 @@ mod tests {
         assert_eq!(writable_state_dir(), flat);
         assert_eq!(saves_dir(), flat.join("saves"));
         assert_eq!(settings_path(), flat.join("settings"));
+        assert_eq!(crashes_dir(), flat.join("crashes"));
 
-        // A writable override relocates only `saves/` + `settings`; `data/`
-        // (and cache/assets/worlds) stay at the content root.
+        // A writable override relocates only the runtime-writable state
+        // (`saves/`, `settings`, `crashes/`); `data/` (and
+        // cache/assets/worlds) stay at the content root.
         let writable = Path::new("/tmp/per-user-probe");
         set_writable_state_dir(writable);
         assert_eq!(writable_state_dir(), writable);
         assert_eq!(saves_dir(), writable.join("saves"));
         assert_eq!(settings_path(), writable.join("settings"));
+        assert_eq!(crashes_dir(), writable.join("crashes"));
         assert_eq!(data_dir(), flat.join("data"));
         clear_writable_state_dir();
         assert_eq!(saves_dir(), flat.join("saves"));
