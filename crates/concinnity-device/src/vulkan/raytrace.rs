@@ -2451,36 +2451,20 @@ impl super::context::VkContext {
 
         let mut skin = build_skin_pipeline(&self.alloc, &device, self.hot_reload)?;
         ensure_skin_sets(&device, &mut skin, frames, n)?;
+        let deformed = self.build_deformed_ring(&skin.sets, vertex_total)?;
 
-        let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
-        let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            deformed.push(create_main_deformed_buffer(&self.alloc, deformed_bytes)?);
-        }
-
-        // Point every set at its buffers once: binding 0 = the shared bind-pose
-        // skinned VB, binding 1 = this object's joint buffer for that frame,
-        // binding 2 = that frame's deformed output.
-        let src_buffer = self.skinned.vertex_buffer.buffer();
-        for (f, deformed_buf) in deformed.iter().enumerate() {
+        // Point every set at its stable buffers once: binding 1 = this object's
+        // joint buffer for that frame. Morph bindings 3 (deltas) + 4 (weights)
+        // start on the dummy SSBO; `upload_skinned_morphs` re-points them for
+        // objects that carry morph targets. target_count == 0 leaves them
+        // unread.
+        for f in 0..frames {
             for o in 0..n {
-                let joint_buffer = self.skinned.joint_buffers[f][o].buffer();
                 let set = skin.sets[f][o];
-                let src_info = vk::DescriptorBufferInfo::default()
-                    .buffer(src_buffer)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
                 let pal_info = vk::DescriptorBufferInfo::default()
-                    .buffer(joint_buffer)
+                    .buffer(self.skinned.joint_buffers[f][o].buffer())
                     .offset(0)
                     .range(vk::WHOLE_SIZE);
-                let dst_info = vk::DescriptorBufferInfo::default()
-                    .buffer(deformed_buf.buffer)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                // Morph bindings 3 (deltas) + 4 (weights) start on the dummy
-                // SSBO; `upload_skinned_morphs` re-points them for objects that
-                // carry morph targets. target_count == 0 leaves them unread.
                 let dummy_info = vk::DescriptorBufferInfo::default()
                     .buffer(skin.morph_dummy)
                     .offset(0)
@@ -2488,19 +2472,9 @@ impl super::context::VkContext {
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&src_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
                         .dst_binding(1)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&pal_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(2)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&dst_info)),
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
                         .dst_binding(3)
@@ -2518,12 +2492,6 @@ impl super::context::VkContext {
 
         self.skinned.skin = Some(skin);
         self.skinned.deformed = deformed;
-        // Fresh ring: no slot has been posed yet, so the G-buffer velocity must
-        // treat the previous deformed buffer as the current one until a full
-        // frame has primed it.
-        self.skinned
-            .deformed_primed
-            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.n_skinned = n;
         Ok(())
     }
@@ -2544,7 +2512,22 @@ impl super::context::VkContext {
         let Some(skin) = self.skinned.skin.as_ref() else {
             return Ok(());
         };
-        let device = self.device.clone();
+        let deformed = self.build_deformed_ring(&skin.sets, vertex_total)?;
+        self.skinned.deformed = deformed;
+        Ok(())
+    }
+
+    // Create the per-frame deformed ring sized for `vertex_total` and point
+    // every (frame, object) set's geometry bindings at it: binding 0 = the
+    // shared bind-pose skinned VB, binding 2 = that frame's deformed output.
+    // The caller installs the returned ring. Marks the ring unposed: no slot
+    // has been posed yet, so the G-buffer velocity must treat the previous
+    // deformed buffer as the current one until a full frame has primed it.
+    fn build_deformed_ring(
+        &self,
+        sets: &[Vec<vk::DescriptorSet>],
+        vertex_total: usize,
+    ) -> Result<Vec<DeviceBuffer>, String> {
         let frames = self.frames_in_flight.max(1);
         let n = self.skinned.draw_objects.len();
 
@@ -2556,8 +2539,7 @@ impl super::context::VkContext {
 
         let src_buffer = self.skinned.vertex_buffer.buffer();
         for (f, deformed_buf) in deformed.iter().enumerate() {
-            for o in 0..n {
-                let set = skin.sets[f][o];
+            for &set in sets[f].iter().take(n) {
                 let src_info = vk::DescriptorBufferInfo::default()
                     .buffer(src_buffer)
                     .offset(0)
@@ -2578,16 +2560,14 @@ impl super::context::VkContext {
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&dst_info)),
                 ];
-                unsafe { device.update_descriptor_sets(&writes, &[]) };
+                unsafe { self.device.update_descriptor_sets(&writes, &[]) };
             }
         }
 
-        self.skinned.deformed = deformed;
-        // The ring is unposed again; see `build_main_skin`.
         self.skinned
             .deformed_primed
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
+        Ok(deformed)
     }
 
     // Per-frame main-pass skinning compute pass: deform every skinned object's

@@ -907,15 +907,8 @@ impl RenderingBake {
         sampler: vk::Sampler,
     ) {
         let Some(set) = self.bake.hiz_set else { return };
-        let img = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-            .sampler(sampler);
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&img));
+        let img = img_info(view, sampler);
+        let write = sampler_write(set, 0, &img);
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
 

@@ -289,6 +289,18 @@ pub(super) struct AllocatorStats {
     pub(super) block_count: usize,
 }
 
+impl std::fmt::Display for AllocatorStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} block(s), {} KiB reserved for {} KiB of resources",
+            self.block_count,
+            self.reserved_bytes / 1024,
+            self.in_use_bytes / 1024,
+        )
+    }
+}
+
 // A reserved range plus the block it lives in, handed from `reserve` to the
 // bind calls.
 struct Reservation {
@@ -428,7 +440,8 @@ impl DeviceAllocator {
     // make retired frees placeable again, and release any block that now holds
     // nothing back to the driver.
     pub(super) fn begin_frame(&self) {
-        self.advance(1, true);
+        self.advance(1);
+        self.release_empty_blocks();
     }
 
     // Retire everything pending at once. Only sound right after a queue or
@@ -443,10 +456,10 @@ impl DeviceAllocator {
     // released by `begin_frame` once frames run.
     pub(super) fn reclaim_idle(&self) {
         let depth = self.inner.borrow().retire_depth;
-        self.advance(depth, false);
+        self.advance(depth);
     }
 
-    fn advance(&self, ticks: u64, release_empties: bool) {
+    fn advance(&self, ticks: u64) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
         let frame = inner.frame;
@@ -461,9 +474,12 @@ impl DeviceAllocator {
         }
         for pool in inner.pools.values_mut() {
             pool.placement.reclaim(frame);
-            if !release_empties {
-                continue;
-            }
+        }
+    }
+
+    fn release_empty_blocks(&self) {
+        let mut inner = self.inner.borrow_mut();
+        for pool in inner.pools.values_mut() {
             for block_index in pool.placement.take_empty_blocks() {
                 if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
                     tracing::debug!("allocator: released empty block {block_index}");
@@ -734,26 +750,69 @@ mod tests {
     }
 
     fn test_gpu() -> Option<TestGpu> {
+        let gpu = test_gpu_impl(false);
+        if gpu.is_none() {
+            eprintln!("skipped: no Vulkan driver");
+        }
+        gpu
+    }
+
+    // A device with `bufferDeviceAddress` enabled (core 1.2), for the
+    // device-address pool tests, or None where the driver cannot provide one.
+    fn test_gpu_with_device_address() -> Option<TestGpu> {
+        let gpu = test_gpu_impl(true);
+        if gpu.is_none() {
+            eprintln!("skipped: no bufferDeviceAddress-capable Vulkan driver");
+        }
+        gpu
+    }
+
+    fn test_gpu_impl(device_address: bool) -> Option<TestGpu> {
         let entry = crate::vulkan::loader::load_entry().ok()?;
-        let instance =
-            unsafe { entry.create_instance(&vk::InstanceCreateInfo::default(), None) }.ok()?;
+        let app = vk::ApplicationInfo::default().api_version(if device_address {
+            vk::API_VERSION_1_2
+        } else {
+            vk::API_VERSION_1_0
+        });
+        let instance = unsafe {
+            entry.create_instance(
+                &vk::InstanceCreateInfo::default().application_info(&app),
+                None,
+            )
+        }
+        .ok()?;
+        let destroy_instance = |instance: ash::Instance| {
+            unsafe { instance.destroy_instance(None) };
+            None
+        };
         let physical_device = match unsafe { instance.enumerate_physical_devices() } {
             Ok(devices) if !devices.is_empty() => devices[0],
-            _ => {
-                unsafe { instance.destroy_instance(None) };
-                return None;
-            }
+            _ => return destroy_instance(instance),
         };
+        let mut enable = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+        if device_address {
+            let props = unsafe { instance.get_physical_device_properties(physical_device) };
+            if props.api_version < vk::API_VERSION_1_2 {
+                return destroy_instance(instance);
+            }
+            let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+            let mut feats = vk::PhysicalDeviceFeatures2::default().push_next(&mut bda);
+            unsafe { instance.get_physical_device_features2(physical_device, &mut feats) };
+            if bda.buffer_device_address == 0 {
+                return destroy_instance(instance);
+            }
+            enable = enable.buffer_device_address(true);
+        }
         let queue_infos = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(0)
             .queue_priorities(&[1.0])];
-        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_infos);
+        let mut device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_infos);
+        if device_address {
+            device_info = device_info.push_next(&mut enable);
+        }
         let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
             Ok(device) => device,
-            Err(_) => {
-                unsafe { instance.destroy_instance(None) };
-                return None;
-            }
+            Err(_) => return destroy_instance(instance),
         };
         Some(TestGpu {
             device,
@@ -775,7 +834,6 @@ mod tests {
     #[test]
     fn small_buffers_share_one_block_and_map_at_their_offsets() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -807,7 +865,6 @@ mod tests {
     #[test]
     fn a_dropped_buffer_frees_its_range_after_the_retire_window() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -836,7 +893,6 @@ mod tests {
     #[test]
     fn a_clone_keeps_the_resource_alive() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -855,7 +911,6 @@ mod tests {
     #[test]
     fn an_image_and_its_views_retire_together() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -902,7 +957,6 @@ mod tests {
     #[test]
     fn linear_and_optimal_images_never_share_a_block() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -946,7 +1000,6 @@ mod tests {
     #[test]
     fn an_oversized_buffer_gets_a_dedicated_block() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -971,7 +1024,6 @@ mod tests {
     #[test]
     fn a_reclaimed_range_is_reused_by_a_later_allocation() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -1001,7 +1053,6 @@ mod tests {
     #[test]
     fn reclaim_idle_retires_pending_frees_without_frame_ticks() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -1029,7 +1080,6 @@ mod tests {
     #[test]
     fn a_released_reservation_returns_its_range() {
         let Some(gpu) = test_gpu() else {
-            eprintln!("skipped: no Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);
@@ -1076,60 +1126,9 @@ mod tests {
         assert_eq!(pool.next_block_bytes(1024, 1), FIRST_BLOCK_BYTES);
     }
 
-    // A device with `bufferDeviceAddress` enabled (core 1.2), for the
-    // device-address pool tests, or None where the driver cannot provide one.
-    fn test_gpu_with_device_address() -> Option<TestGpu> {
-        let entry = crate::vulkan::loader::load_entry().ok()?;
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
-        let instance = unsafe {
-            entry.create_instance(
-                &vk::InstanceCreateInfo::default().application_info(&app),
-                None,
-            )
-        }
-        .ok()?;
-        let destroy_instance = |instance: ash::Instance| {
-            unsafe { instance.destroy_instance(None) };
-            None
-        };
-        let physical_device = match unsafe { instance.enumerate_physical_devices() } {
-            Ok(devices) if !devices.is_empty() => devices[0],
-            _ => return destroy_instance(instance),
-        };
-        let props = unsafe { instance.get_physical_device_properties(physical_device) };
-        if props.api_version < vk::API_VERSION_1_2 {
-            return destroy_instance(instance);
-        }
-        let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
-        let mut feats = vk::PhysicalDeviceFeatures2::default().push_next(&mut bda);
-        unsafe { instance.get_physical_device_features2(physical_device, &mut feats) };
-        if bda.buffer_device_address == 0 {
-            return destroy_instance(instance);
-        }
-        let mut enable =
-            vk::PhysicalDeviceBufferDeviceAddressFeatures::default().buffer_device_address(true);
-        let queue_infos = [vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(0)
-            .queue_priorities(&[1.0])];
-        let device_info = vk::DeviceCreateInfo::default()
-            .queue_create_infos(&queue_infos)
-            .push_next(&mut enable);
-        let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
-            Ok(device) => device,
-            Err(_) => return destroy_instance(instance),
-        };
-        Some(TestGpu {
-            device,
-            instance,
-            physical_device,
-            _entry: entry,
-        })
-    }
-
     #[test]
     fn device_address_buffers_pool_apart_and_report_addresses() {
         let Some(gpu) = test_gpu_with_device_address() else {
-            eprintln!("skipped: no bufferDeviceAddress-capable Vulkan driver");
             return;
         };
         let alloc = test_allocator(&gpu);

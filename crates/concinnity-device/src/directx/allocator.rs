@@ -231,6 +231,18 @@ pub(super) struct AllocatorStats {
     pub block_count: usize,
 }
 
+impl std::fmt::Display for AllocatorStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} heap(s), {} KiB reserved for {} KiB of resources",
+            self.block_count,
+            self.reserved_bytes / 1024,
+            self.in_use_bytes / 1024,
+        )
+    }
+}
+
 // A reserved range plus the heap to place into, handed from `reserve` to the
 // `CreatePlacedResource` calls.
 struct Reservation {

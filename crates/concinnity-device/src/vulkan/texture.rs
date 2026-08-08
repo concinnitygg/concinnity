@@ -528,15 +528,26 @@ pub(super) fn upload_texture_image(
     image: &concinnity_core::build::texture::TextureImage,
 ) -> Result<GpuImage, String> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
+    finish_upload(ctx, in_flight)?;
+    Ok(img)
+}
+
+// Wait out a deferred upload and free its transient resources: the queue
+// idles, the command buffer returns to the pool, and the dropped staging
+// retires immediately so an upload loop reuses one staging range instead of
+// accumulating every upload's.
+pub(super) fn finish_upload(
+    ctx: &GpuUploadContext,
+    in_flight: UploadInFlight,
+) -> Result<(), String> {
     unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
     unsafe {
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
     }
-    // See `upload_texture`: the queue is idle, so the staging retires now.
     drop(in_flight);
     ctx.alloc.reclaim_idle();
-    Ok(img)
+    Ok(())
 }
 
 // Upload pre-built mip levels of any Vulkan format into a device-local image
@@ -694,16 +705,7 @@ pub(super) fn upload_texture(
     pixels: &[u8],
 ) -> Result<GpuImage, String> {
     let (img, in_flight) = upload_texture_deferred(ctx, width, height, pixels)?;
-    unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
-    unsafe {
-        ctx.device
-            .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
-    }
-    // The wait above idled the queue; drop the staging buffer and retire it
-    // immediately so an upload loop reuses one staging range instead of
-    // accumulating every upload's.
-    drop(in_flight);
-    ctx.alloc.reclaim_idle();
+    finish_upload(ctx, in_flight)?;
     Ok(img)
 }
 

@@ -1575,13 +1575,7 @@ impl VkContext {
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.
         if self.stream_frame.is_multiple_of(1024) && tracing::enabled!(tracing::Level::DEBUG) {
-            let s = self.alloc.stats();
-            tracing::debug!(
-                "device allocator: {} block(s), {} KiB reserved for {} KiB of resources",
-                s.block_count,
-                s.reserved_bytes / 1024,
-                s.in_use_bytes / 1024,
-            );
+            tracing::debug!("device allocator: {}", self.alloc.stats());
         }
 
         // Advance the staggered reflection-probe bake one step. Runs here -- after

@@ -4029,13 +4029,10 @@ impl VkContext {
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.
         me.alloc.reclaim_idle();
-        let alloc_stats = me.alloc.stats();
         tracing::info!(
-            "device allocator: {} block(s) of {} allowed, {} KiB reserved for {} KiB of resources",
-            alloc_stats.block_count,
+            "device allocator: {} ({} allocations allowed)",
+            me.alloc.stats(),
             me.alloc.max_allocations(),
-            alloc_stats.reserved_bytes / 1024,
-            alloc_stats.in_use_bytes / 1024,
         );
         crate::shader_cache::report_init_and_prune();
         Ok(me)
@@ -4108,20 +4105,13 @@ impl VkContext {
         // above gated everything in flight): the rebuild then fills the same
         // blocks instead of doubling the device footprint for the reload's
         // duration. The flag is set first so the content pass keeps the
-        // swapchain for the successor; a build failure unsets it (and frees
-        // the swapchain here, since the skipped content pass in `Drop` is
-        // what would have destroyed it) so the failed-session `Drop` still
-        // tears the shared hardware down.
+        // swapchain for the successor; a build failure unsets it and re-runs
+        // the swapchain teardown the content pass skipped, so the
+        // failed-session `Drop` still tears the shared hardware down.
         self.reused_by_successor = true;
         self.destroy_world_content();
         self.alloc.reclaim_idle();
-        let s = self.alloc.stats();
-        tracing::debug!(
-            "reload: old world freed: {} block(s) retained, {} KiB reserved, {} KiB in use",
-            s.block_count,
-            s.reserved_bytes / 1024,
-            s.in_use_bytes / 1024,
-        );
+        tracing::debug!("reload: old world freed: {}", self.alloc.stats());
         match VkContext::build(init, Some(reuse)) {
             Ok(rebuilt) => {
                 *self = rebuilt;
@@ -4129,10 +4119,7 @@ impl VkContext {
             }
             Err(e) => {
                 self.reused_by_successor = false;
-                unsafe {
-                    self.swapchain_loader
-                        .destroy_swapchain(self.swapchain, None);
-                }
+                self.destroy_swapchain_resources();
                 Err(e)
             }
         }
