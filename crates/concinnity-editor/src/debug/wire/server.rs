@@ -2,8 +2,8 @@
 //
 // The localhost WebSocket debug server: `DebugServer` (the `DebugHook` the run
 // loop ticks), the accept / per-connection threads, and the per-frame drive of
-// the asset / shader / world.jsonl hot-reload passes. The shared snapshot lives
-// in `super::super::state`; the query-command dispatcher is
+// the WS runtime commands plus the owned hot-reload driver. The shared
+// snapshot lives in `super::super::state`; the query-command dispatcher is
 // `super::super::dispatch::handle_request`; spawn / crossfade command handlers
 // live in `super::super::commands`.
 
@@ -29,20 +29,15 @@ const SNAPSHOT_INTERVAL: u64 = 30;
 pub struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
     frame: u64,
-    // Asset / shader / world.jsonl reload state, built lazily on the first
-    // tick that sees a `GraphicsSystem` carrying init-captured sources (i.e.
-    // `cn debug` with a file-backed asset / world.jsonl). Owns the filesystem
-    // watcher + in-flight decode handles. `None` otherwise: `cn run` never
-    // reaches `tick`, and a world with no file-backed asset never builds it.
-    hot_reload: Option<hot_reload::AssetHotReloadState>,
+    // The asset / shader / world.jsonl reload drive. The server owns the
+    // session's one driver so the WS `reload-assets` command can reach its
+    // pending flag; the drive itself is shared with the plain `cn editor`
+    // path (see `crate::debug::hot_reload::HotReloadDriver`).
+    reload: hot_reload::HotReloadDriver,
     // Active camera-move motion installed by a `camera-move` command, advanced
-    // once per frame by `drive_hot_reload` until exhausted or cleared by a
-    // `camera-stop`. `None` when no motion is in progress. Main-thread only.
+    // once per frame by `drive_runtime_commands` until exhausted or cleared by
+    // a `camera-stop`. `None` when no motion is in progress. Main-thread only.
     camera_motion: Option<runtime_spawn::CameraMotion>,
-    // The editor's toast queue, when this server runs alongside an editor
-    // session: the reload passes report apply results through it. `None`
-    // under a bare `cn debug`, which has no toast surface.
-    notifier: Option<crate::editor::notify::Notifier>,
 }
 
 impl DebugServer {
@@ -61,32 +56,25 @@ impl DebugServer {
         Ok(Self {
             shared,
             frame: 0,
-            hot_reload: None,
+            reload: hot_reload::HotReloadDriver::new(),
             camera_motion: None,
-            notifier: None,
         })
     }
 
     // Report reload results through an editor session's toast queue as well as
     // the log.
     pub(crate) fn with_notifier(mut self, notifier: crate::editor::notify::Notifier) -> Self {
-        self.notifier = Some(notifier);
+        self.reload = self.reload.with_notifier(notifier);
         self
     }
 }
 
 impl DebugServer {
-    // Run the asset / shader / world.jsonl hot-reload passes once per frame and
-    // apply their ECS side-effects. `cn debug` only: the matching drive used
-    // to sit at the top of `GraphicsSystem::run_step` / `AnimationSystem::step`.
-    // The reload state is built lazily from the `GraphicsSystem`'s init-captured
-    // sources on the first tick that finds them, then driven against the
-    // backend + Prop-tracking handle (`hot_reload_apply_parts`). The passes
-    // return ECS edits (skeleton-shape changes + added Props) applied here, once
-    // the system borrow is released. A world with no captured sources never
-    // builds `self.hot_reload` and this stays a cheap no-op.
-    fn drive_hot_reload(&mut self, world: &mut World) {
-        let mut effects = None;
+    // Apply the debug WS runtime commands once per frame: decal / emitter
+    // spawn against the backend, plus the deferred ECS-side commands and the
+    // per-frame camera-move advance. The asset / shader / world.jsonl reload
+    // passes live on `self.reload`, driven separately by `tick`.
+    fn drive_runtime_commands(&mut self, world: &mut World) {
         // ECS-side commands (camera-set / camera-move / camera-stop, plus
         // quality-set) mutate the ECS or this server's motion slot, not the
         // backend, so they cannot be applied inside the systems borrow
@@ -98,16 +86,8 @@ impl DebugServer {
         for system in systems {
             match system {
                 SystemAsset::GraphicsSystem(gs) => {
-                    // Lazily build the reload state from the init-captured
-                    // sources (must precede the apply-parts borrow of `gs`).
-                    if self.hot_reload.is_none()
-                        && let Some(sources) = gs.take_hot_reload_sources()
-                    {
-                        self.hot_reload =
-                            Some(hot_reload::AssetHotReloadState::from_sources(sources));
-                    }
                     if let Some(backend) = backend.take() {
-                        let mut apply = gs.hot_reload_apply_parts(backend);
+                        let apply = gs.hot_reload_apply_parts(backend);
                         // Runtime decal / emitter spawn: independent of the
                         // hot-reload state, available in any `cn debug` world.
                         // CameraSet is deferred; everything else hits the
@@ -134,19 +114,9 @@ impl DebugServer {
                                 );
                             }
                         }
-                        // Asset / shader / world.jsonl reload passes, only when
-                        // the reload state was armed at init.
-                        if let Some(state) = self.hot_reload.as_mut() {
-                            effects = Some(hot_reload::run_frame(
-                                state,
-                                &mut apply,
-                                self.notifier.as_ref(),
-                            ));
-                        }
                     }
                 }
                 SystemAsset::AnimationSystem(anim) => {
-                    crate::anim_reload::reload_clips_if_pending(anim);
                     anim.apply_runtime_commands();
                 }
                 _ => {}
@@ -212,43 +182,6 @@ impl DebugServer {
         {
             self.camera_motion = motion.advanced();
         }
-
-        let Some(effects) = effects else {
-            return;
-        };
-
-        // Splice any skeleton-shape changes into the ECS-owned `SkeletonPose`
-        // components so `AnimationSystem` produces right-sized output going
-        // forward.
-        if !effects.skeleton_updates.is_empty() {
-            let index_to_new: std::collections::HashMap<usize, crate::gfx::skinning::Skeleton> =
-                effects
-                    .skeleton_updates
-                    .into_iter()
-                    .map(|u| (u.skinned_index, u.new_skeleton))
-                    .collect();
-            let mut applied = 0usize;
-            for pose in world.query_mut::<crate::assets::SkeletonPose>() {
-                if let Some(new_skel) = index_to_new.get(&pose.skinned_index) {
-                    pose.skeleton = new_skel.clone();
-                    pose.joint_matrices = pose.skeleton.bind_skinning_matrices();
-                    applied += 1;
-                }
-            }
-            tracing::info!(
-                "asset hot-reload: applied skeleton-shape change to {} SkeletonPose component(s)",
-                applied
-            );
-        }
-
-        // Hand freshly re-compiled story graphs to the story system, which
-        // swaps them in while keeping the play position. tick() runs before
-        // the world step, so the swap lands the same frame.
-        for story in effects.story_updates {
-            world
-                .events_mut::<crate::assets::StoryReload>()
-                .send(crate::assets::StoryReload { story });
-        }
     }
 }
 
@@ -256,11 +189,11 @@ impl DebugHook for DebugServer {
     fn tick(&mut self, world: &mut World) {
         self.frame += 1;
 
-        // Drive the asset / shader / world.jsonl hot-reload passes. This is the
-        // `cn debug`-only half of the reload machinery that used to run inside
-        // `GraphicsSystem::run_step` / `AnimationSystem::step`; it lives here so
-        // a `cn run` (no debug hook) never touches it.
-        self.drive_hot_reload(world);
+        // The WS runtime commands, then the asset / shader / world.jsonl
+        // reload passes. Both run only from this hook, so a `cn run` (no
+        // debug hook) never touches them.
+        self.drive_runtime_commands(world);
+        self.reload.drive(world);
 
         let mut state = match self.shared.lock() {
             Ok(s) => s,
@@ -309,14 +242,12 @@ impl DebugHook for DebugServer {
         {
             state.shader_reload = Some(flag);
         }
-        // The asset-reload flag lives on the debug-owned `AssetHotReloadState`
-        // (built lazily by `drive_hot_reload` above), not on `GraphicsSystem`.
-        // Capture its `pending` Arc so the `reload-assets` command thread can
-        // flip it.
-        if state.asset_reload.is_none()
-            && let Some(h) = self.hot_reload.as_ref()
-        {
-            state.asset_reload = Some(std::sync::Arc::clone(&h.pending));
+        // The asset-reload flag lives on the reload driver's state, not on
+        // `GraphicsSystem`. Refresh the `pending` Arc every tick so the
+        // `reload-assets` command thread flips the current flag even after a
+        // world rebuild re-armed the driver with a fresh one.
+        if let Some(pending) = self.reload.pending() {
+            state.asset_reload = Some(pending);
         }
 
         // The profiler snapshot is small (one entry per system + a handful of

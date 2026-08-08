@@ -99,9 +99,9 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // empty world and creates the file on the first SAVE.
     let (world_path, world_exists) = resolve_edit_target(json_path);
 
-    // Hand the resolved path to the engine so its hot-reload watcher (armed only
-    // when a debug port opts in) subscribes to this world.jsonl. The engine no
-    // longer discovers it; world.jsonl lookup is authoring I/O in concinnity-cook.
+    // Hand the resolved path to the engine so the hot-reload watcher
+    // subscribes to this world.jsonl. The engine no longer discovers it;
+    // world.jsonl lookup is authoring I/O in concinnity-cook.
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(world_path.clone()));
 
     // Parse the authored entry list up front so edits patch it directly (empty
@@ -117,13 +117,18 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     // Bring up a renderable world: build the blobs if needed, load them, and
     // seed an empty world when there is nothing renderable to show.
     let mut app = App::new();
-    boot_world(&mut app, &world_path, world_exists)?;
+    boot_world(&mut app, &world_path, world_exists, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's DebugHook
     // tick drives them each frame.
     inject::editor_hud(app.world_mut());
 
+    // Every editor session hot-reloads file-backed assets; with a debug port
+    // the DebugServer owns the reload driver (so the WS `reload-assets`
+    // command reaches its flag), without one the driver runs as its own hook.
+    // Either way the session holds exactly one driver, so a reload is never
+    // applied twice.
     let editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
@@ -131,7 +136,11 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
                 crate::debug::DebugServer::start(port)?.with_notifier(editor_hook.notifier());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
         }
-        None => Box::new(editor_hook),
+        None => {
+            let reload = crate::debug::hot_reload::HotReloadDriver::new()
+                .with_notifier(editor_hook.notifier());
+            MultiHook::boxed(vec![Box::new(editor_hook), Box::new(reload)])
+        }
     };
 
     crate::run::start_app(app, Some(hook))
@@ -158,7 +167,12 @@ fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
 //   * if there is still nothing renderable (no world file, an authored world
 //     with no render marker, or an empty build), boot a minimal in-memory world
 //     seeded with a GraphicsConfig so the editor still opens a window.
-fn boot_world(app: &mut App, world_path: &str, world_exists: bool) -> std::io::Result<()> {
+fn boot_world(
+    app: &mut App,
+    world_path: &str,
+    world_exists: bool,
+    entries: &[serde_json::Value],
+) -> std::io::Result<()> {
     let blobs_present = || concinnity_core::paths::data_dir().join("0").exists();
 
     // Build if the world has content the compiled blobs do not reflect yet.
@@ -182,6 +196,17 @@ fn boot_world(app: &mut App, world_path: &str, world_exists: bool) -> std::io::R
             Ok(n) if n > 0 => tracing::info!("editor: primed {n} asset names from the build lock"),
             Ok(_) => {}
             Err(e) => tracing::warn!("editor: could not prime asset names: {e}"),
+        }
+        // The in-memory build installs the hot-reload source catalogues as it
+        // compiles; a blob boot reconstructs them from the lock + the authored
+        // entries so file-backed assets reload here too. Best effort, like the
+        // name priming above.
+        match crate::authoring::reload_sources::install_from_lock(app.world_mut(), entries) {
+            Ok(n) if n > 0 => {
+                tracing::info!("editor: recovered {n} hot-reload source(s) from the build lock");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("editor: could not recover hot-reload sources: {e}"),
         }
     }
 

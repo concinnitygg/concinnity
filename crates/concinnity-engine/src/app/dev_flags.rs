@@ -6,13 +6,14 @@
 // decal / emitter spawn queue moved fully into the binary-only debug tree
 // (`crate::debug`), since nothing in the library references them.
 //
-//   ENABLED              "are we running under cn debug?" Set once by main.rs's
-//                        `Commands::Debug` arm before world build; read by
-//                        `GraphicsSystem::init` / `AnimationSystem` / the draw
-//                        list builder to enable disk-first shader loading + the
-//                        hot-reload source capture. `cn run` leaves it false so
-//                        production keeps the static `include_str!`-baked path
-//                        with no filesystem dependency.
+//   ENABLED              "are we running under a dev-loop entry point?" Set
+//                        once by main.rs's `Commands::Debug` / `Commands::Editor`
+//                        arms before world build; read by `GraphicsSystem::init`
+//                        / `AnimationSystem` / the draw list builder to enable
+//                        disk-first shader loading + the hot-reload source
+//                        capture. `cn run` leaves it false so production keeps
+//                        the static `include_str!`-baked path with no
+//                        filesystem dependency.
 //   PENDING_ANIMATIONS   "an Animation source changed." Set by the cn debug
 //                        watcher / WS `reload-assets` handler; consumed by the
 //                        editor crate's `anim_reload::reload_clips_if_pending`,
@@ -63,12 +64,12 @@ static WORLD_JSONL_PATH: Mutex<Option<String>> = Mutex::new(None);
 #[cfg(test)]
 static FLAG_ACCESS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
-// Mark this process as running under `cn debug` (or another dev-loop entry
-// point that opts in). Call once before world build.
+// Mark this process as running under a dev-loop entry point (`cn debug` /
+// `cn editor`). Call once before world build.
 //
-// `dead_code` allow: only the binary's `Commands::Debug` arm calls this; the
-// library never sets the flag (it only reads it), so `cargo check --lib`
-// reports it unused.
+// `dead_code` allow: only the binary's `Commands::Debug` / `Commands::Editor`
+// arms call this; the library never sets the flag (it only reads it), so
+// `cargo check --lib` reports it unused.
 pub fn set_enabled(v: bool) {
     ENABLED.store(v, Ordering::SeqCst);
 }

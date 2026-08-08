@@ -10,7 +10,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.17.40"
+version = "0.17.41"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

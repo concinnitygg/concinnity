@@ -474,15 +474,12 @@ pub fn run() -> std::io::Result<()> {
         },
         Commands::Editor(args) => {
             dev_flags::set_validation(args.validation);
-            // A debug port turns the editor into an inspectable dev session, so
-            // arm the same dev flags the `cn debug` host sets (above). This flips
-            // on the backend's frame-capture path (the retained drawable behind
-            // `cn debug screenshot`) and shader hot-reload, so the full probe
-            // surface -- not just `smoke` / `send` -- works against an editor.
-            // Left off for a plain `cn editor`, which keeps production defaults.
-            if args.debug_port.is_some() {
-                dev_flags::set_enabled(true);
-            }
+            // The editor is a dev session: arm the same dev flags the
+            // `cn debug` host sets (above) so init captures hot-reload
+            // sources and the backend takes its disk-first shader path.
+            // Asset + shader hot-reload then works in every editor session;
+            // a debug port only adds the WS probe surface on top.
+            dev_flags::set_enabled(true);
             concinnity_editor::run_editor(args.file.as_deref(), args.debug_port)
         }
         Commands::Add(args) => {

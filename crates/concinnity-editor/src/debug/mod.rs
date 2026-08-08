@@ -109,7 +109,7 @@
 // `state` / `protocol`, which are unit-tested without a running process.
 mod commands;
 mod dispatch;
-mod hot_reload;
+pub(crate) mod hot_reload;
 mod memory;
 mod protocol;
 mod runtime_spawn;

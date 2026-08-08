@@ -2449,3 +2449,113 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
     assert!(last_fog.is_some());
     assert!(!super::pending::take_pending_world());
 }
+
+// -- driver -------------------------------------------------------------
+
+use super::driver::{HotReloadDriver, apply_effects};
+
+#[test]
+fn driver_on_a_world_without_graphics_stays_unarmed() {
+    let mut driver = HotReloadDriver::new();
+    let mut world = crate::ecs::World::new_empty();
+    driver.drive(&mut world);
+    assert!(driver.pending().is_none());
+}
+
+#[test]
+fn driver_rearm_swaps_the_pending_flag() {
+    // A world rebuild re-captures sources; arming again must hand out a fresh
+    // flag (the server refreshes its shared copy every tick for this reason).
+    let mut driver = HotReloadDriver::new();
+    driver.arm(HotReloadSources::default());
+    let first = driver.pending().expect("armed driver exposes a flag");
+    driver.arm(HotReloadSources::default());
+    let second = driver.pending().expect("re-armed driver exposes a flag");
+    assert!(!std::sync::Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn armed_driver_survives_a_drive_over_an_empty_world() {
+    // A backendless world (headless test, or a frame before init finishes)
+    // must not panic or drop the armed state.
+    let mut driver = HotReloadDriver::new();
+    driver.arm(HotReloadSources::default());
+    let mut world = crate::ecs::World::new_empty();
+    driver.drive(&mut world);
+    assert!(driver.pending().is_some());
+}
+
+#[test]
+fn apply_effects_splices_the_matching_skeleton_pose_only() {
+    use crate::assets::SkeletonPose;
+    use crate::gfx::skinning::{Joint, JointPose, Skeleton};
+
+    let mut world = crate::ecs::World::new_empty();
+    world.add_component(SkeletonPose::new(
+        Default::default(),
+        0,
+        Skeleton::new(Vec::new()),
+    ));
+    world.add_component(SkeletonPose::new(
+        Default::default(),
+        1,
+        Skeleton::new(Vec::new()),
+    ));
+
+    let new_skeleton = Skeleton::new(vec![Joint {
+        name: String::new(),
+        parent: None,
+        bind: JointPose::default(),
+    }]);
+    apply_effects(
+        &mut world,
+        FrameHotReloadEffects {
+            skeleton_updates: vec![PendingSkeletonUpdate {
+                skinned_index: 1,
+                new_skeleton,
+            }],
+            story_updates: Vec::new(),
+        },
+    );
+
+    let joints_of = |idx: usize| {
+        world
+            .query::<SkeletonPose>()
+            .find(|p| p.skinned_index == idx)
+            .map(|p| (p.skeleton.len(), p.joint_matrices.len()))
+            .unwrap()
+    };
+    // The targeted pose carries the new 1-joint hierarchy with matching
+    // matrices; the other pose keeps its empty skeleton (its seed matrices,
+    // padded to a 1-identity minimum, are untouched too).
+    assert_eq!(joints_of(1), (1, 1));
+    assert_eq!(joints_of(0).0, 0);
+}
+
+#[test]
+fn apply_effects_sends_a_story_reload_event() {
+    let mut world = crate::ecs::World::new_empty();
+    let story = crate::assets::Story {
+        asset_id: Default::default(),
+        title: "Tale".to_string(),
+        nodes: Vec::new(),
+        text_speed: 0.0,
+        scaffold: Default::default(),
+        save_key: String::new(),
+    };
+    apply_effects(
+        &mut world,
+        FrameHotReloadEffects {
+            skeleton_updates: Vec::new(),
+            story_updates: vec![story],
+        },
+    );
+
+    let mut cursor = crate::ecs::EventCursor::default();
+    let events = world
+        .events::<crate::assets::StoryReload>()
+        .expect("a StoryReload event queue exists after apply");
+    let received: Vec<_> = events.read(&mut cursor).collect();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].story.title, "Tale");
+}
