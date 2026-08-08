@@ -23,6 +23,11 @@ pub struct PropCollider {
     pub radius: f32,
     /// Half the cylinder height in local space. Used by capsule shapes.
     pub half_height: f32,
+    /// Collision layer name. Built-in layers are `world`, `prop`, `character`,
+    /// and `trigger`; extra names come from [PhysicsConfig](#physicsconfig)
+    /// `layers`. Empty derives the layer from the body kind: `world` for a
+    /// static prop, `prop` when a [PropBody](#propbody) makes it dynamic.
+    pub layer: String,
 }
 
 impl Default for PropCollider {
@@ -32,6 +37,7 @@ impl Default for PropCollider {
             half_extents: [0.5, 0.5, 0.5],
             radius: 0.5,
             half_height: 0.5,
+            layer: String::new(),
         }
     }
 }

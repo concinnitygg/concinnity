@@ -10,9 +10,13 @@
 // depends on this crate and constructs `PhysicsSystem` through its system
 // registry; the dependency arrow is concinnity-physics <- concinnity-engine.
 
+// Contact-event shaping: extraction, per-frame batching, per-pair refractory.
+mod contacts;
 mod convert;
 // Prev/curr pose snapshots blended by the frame's accumulator alpha.
 mod interp;
+// Named collision layers over Rapier's 32-bit interaction groups.
+mod layers;
 // Raycast probe answering for animation IK and the follow camera.
 mod probes;
 // Root-motion character rigs: one kinematic capsule per `CharacterRig`.
@@ -21,6 +25,8 @@ mod rig;
 // world's bodies, driven by an optional `PhysicsConfig`.
 mod system;
 
+pub use contacts::ContactHit;
+pub use layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerMask};
 // The physics system the engine registry wraps, plus the shared gravity
 // constant the third-person controller matches its jump takeoff against.
 pub use system::{GRAVITY, PhysicsSystem};
@@ -105,6 +111,23 @@ pub struct DynamicParams {
     pub linear_damping: f32,
 }
 
+// One character-capsule move request, resolved against the scene by
+// [`PhysicsWorld::move_character`].
+#[derive(Debug, Clone, Copy)]
+pub struct CharacterMoveInput {
+    // Capsule cylinder half-height (excludes the hemisphere caps).
+    pub half_height: f32,
+    pub radius: f32,
+    // World-space capsule centre before the move.
+    pub center: [f32; 3],
+    // Desired translation for this tick.
+    pub desired: [f32; 3],
+    pub dt: f32,
+    // The moving capsule's own body, left out of the collision query.
+    pub exclude: BodyHandle,
+    pub mask: LayerMask,
+}
+
 // Result of moving the character capsule for one frame.
 #[derive(Debug, Clone, Copy)]
 pub struct CharacterMove {
@@ -134,16 +157,18 @@ pub struct SensorCrossing {
     pub entered: bool,
 }
 
-// Collects sensor boundary crossings from inside the Rapier pipeline; drained
-// after each step by `drain_sensor_crossings`. Handles resolve to tags and
-// parent bodies here, inside the callback, while the collider set still
-// contains both sides of the pair.
+// Collects sensor boundary crossings and contact hits from inside the Rapier
+// pipeline; drained after each step by `drain_sensor_crossings` /
+// `drain_contact_hits`. Handles resolve to tags and parent bodies here,
+// inside the callbacks, while the collider set still contains both sides of
+// the pair.
 #[derive(Default)]
-struct SensorEventSink {
+struct EventSink {
     crossings: std::sync::Mutex<Vec<SensorCrossing>>,
+    contacts: std::sync::Mutex<Vec<ContactHit>>,
 }
 
-impl EventHandler for SensorEventSink {
+impl EventHandler for EventSink {
     fn handle_collision_event(
         &self,
         _bodies: &RigidBodySet,
@@ -176,14 +201,20 @@ impl EventHandler for SensorEventSink {
         record(h2, h1);
     }
 
+    // Called only for pairs whose total force passed the collider's
+    // contact-force threshold (set from the world's minimum contact impulse).
     fn handle_contact_force_event(
         &self,
-        _dt: Real,
+        dt: Real,
         _bodies: &RigidBodySet,
-        _colliders: &ColliderSet,
-        _contact_pair: &ContactPair,
-        _total_force_magnitude: Real,
+        colliders: &ColliderSet,
+        contact_pair: &ContactPair,
+        total_force_magnitude: Real,
     ) {
+        if let Some(hit) = contacts::extract_hit(dt, colliders, contact_pair, total_force_magnitude)
+        {
+            self.contacts.lock().unwrap().push(hit);
+        }
     }
 }
 
@@ -201,7 +232,10 @@ pub struct PhysicsWorld {
     ccd_solver: CCDSolver,
     gravity: Vector,
     character: KinematicCharacterController,
-    sensor_events: SensorEventSink,
+    events: EventSink,
+    // Total-force threshold below which the pipeline skips contact events;
+    // derived from the world's minimum contact impulse and the fixed tick.
+    contact_force_threshold: f32,
 }
 
 impl std::fmt::Debug for PhysicsWorld {
@@ -230,8 +264,16 @@ impl PhysicsWorld {
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, -gravity, 0.0),
             character: KinematicCharacterController::default(),
-            sensor_events: SensorEventSink::default(),
+            events: EventSink::default(),
+            contact_force_threshold: 60.0,
         }
+    }
+
+    // Set the minimum contact impulse for contact events, converted to the
+    // total-force threshold Rapier gates on at `tick_dt`. Applies to dynamic
+    // bodies added afterwards, so call before populating the world.
+    pub fn set_contact_min_impulse(&mut self, min_impulse: f32, tick_dt: f32) {
+        self.contact_force_threshold = min_impulse.max(0.0) / tick_dt.max(1.0e-6);
     }
 
     // Tune the character controller. `grounded` is true for a gravity-bound
@@ -270,6 +312,14 @@ impl PhysicsWorld {
         }
     }
 
+    fn interaction_groups(mask: LayerMask) -> InteractionGroups {
+        InteractionGroups::new(
+            Group::from_bits_retain(mask.memberships),
+            Group::from_bits_retain(mask.filter),
+            InteractionTestMode::And,
+        )
+    }
+
     // Add an immovable body (terrain, walls, static props).
     pub fn add_fixed(
         &mut self,
@@ -277,24 +327,33 @@ impl PhysicsWorld {
         pos: [f32; 3],
         euler_deg: [f32; 3],
         friction: f32,
+        mask: LayerMask,
     ) -> BodyHandle {
         let body = RigidBodyBuilder::fixed()
             .pose(Pose::from_parts(to_vec(pos), to_rotation(euler_deg)))
             .build();
         let handle = self.bodies.insert(body);
-        let collider = Self::collider_builder(shape).friction(friction).build();
+        let groups = Self::interaction_groups(mask);
+        let collider = Self::collider_builder(shape)
+            .friction(friction)
+            .collision_groups(groups)
+            .solver_groups(groups)
+            .build();
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
         BodyHandle(handle)
     }
 
-    // Add a freely simulated dynamic body.
+    // Add a freely simulated dynamic body. Dynamic bodies are the contact
+    // event sources: any pair whose total force passes the world's threshold
+    // records a `ContactHit`.
     pub fn add_dynamic(
         &mut self,
         shape: &ColliderShape,
         pos: [f32; 3],
         euler_deg: [f32; 3],
         params: DynamicParams,
+        mask: LayerMask,
     ) -> BodyHandle {
         let mut body = RigidBodyBuilder::dynamic()
             .pose(Pose::from_parts(to_vec(pos), to_rotation(euler_deg)))
@@ -305,9 +364,14 @@ impl PhysicsWorld {
             body = body.additional_mass(params.mass);
         }
         let handle = self.bodies.insert(body.build());
+        let groups = Self::interaction_groups(mask);
         let collider = Self::collider_builder(shape)
             .friction(params.friction)
             .restitution(params.restitution)
+            .collision_groups(groups)
+            .solver_groups(groups)
+            .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
+            .contact_force_event_threshold(self.contact_force_threshold)
             .build();
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
@@ -325,6 +389,7 @@ impl PhysicsWorld {
         pos: [f32; 3],
         euler_deg: [f32; 3],
         tag: u64,
+        mask: LayerMask,
     ) -> BodyHandle {
         let body = RigidBodyBuilder::fixed()
             .pose(Pose::from_parts(to_vec(pos), to_rotation(euler_deg)))
@@ -336,6 +401,7 @@ impl PhysicsWorld {
             .active_collision_types(
                 ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
             )
+            .collision_groups(Self::interaction_groups(mask))
             .user_data(tag as u128)
             .build();
         self.colliders
@@ -345,17 +411,33 @@ impl PhysicsWorld {
 
     // The sensor boundary crossings recorded by the last `step`, oldest first.
     pub fn drain_sensor_crossings(&mut self) -> Vec<SensorCrossing> {
-        std::mem::take(&mut *self.sensor_events.crossings.lock().unwrap())
+        std::mem::take(&mut *self.events.crossings.lock().unwrap())
+    }
+
+    // The contact hits recorded by the last `step`, oldest first. Only pairs
+    // whose total force passed the world's contact threshold appear.
+    pub fn drain_contact_hits(&mut self) -> Vec<ContactHit> {
+        std::mem::take(&mut *self.events.contacts.lock().unwrap())
     }
 
     // Add the player character capsule as a position-kinematic body. `center`
     // is the world-space position of the capsule centre.
-    pub fn add_character(&mut self, half_height: f32, radius: f32, center: [f32; 3]) -> BodyHandle {
+    pub fn add_character(
+        &mut self,
+        half_height: f32,
+        radius: f32,
+        center: [f32; 3],
+        mask: LayerMask,
+    ) -> BodyHandle {
         let body = RigidBodyBuilder::kinematic_position_based()
             .translation(to_vec(center))
             .build();
         let handle = self.bodies.insert(body);
-        let collider = ColliderBuilder::capsule_y(half_height, radius).build();
+        let groups = Self::interaction_groups(mask);
+        let collider = ColliderBuilder::capsule_y(half_height, radius)
+            .collision_groups(groups)
+            .solver_groups(groups)
+            .build();
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
         BodyHandle(handle)
@@ -370,12 +452,16 @@ impl PhysicsWorld {
         heights: Vec<f32>,
         scale: [f32; 3],
         pos: [f32; 3],
+        mask: LayerMask,
     ) {
         let grid = Array2::new(rows, cols, heights);
         let body = RigidBodyBuilder::fixed().translation(to_vec(pos)).build();
         let handle = self.bodies.insert(body);
+        let groups = Self::interaction_groups(mask);
         let collider = ColliderBuilder::heightfield(grid, to_vec(scale))
             .friction(1.0)
+            .collision_groups(groups)
+            .solver_groups(groups)
             .build();
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
@@ -464,36 +550,32 @@ impl PhysicsWorld {
             &mut self.multibody_joints,
             &mut self.ccd_solver,
             &(),
-            &self.sensor_events,
+            &self.events,
         );
     }
 
     // Resolve a desired move of a character capsule against the world without
     // mutating it. Apply the result with [`Self::set_kinematic_translation`].
-    // `exclude` is the moving capsule's own body (from [`Self::add_character`]),
-    // left out of the query so the character does not collide with itself;
-    // other characters' capsules stay solid to it.
-    pub fn move_character(
-        &self,
-        half_height: f32,
-        radius: f32,
-        center: [f32; 3],
-        desired: [f32; 3],
-        dt: f32,
-        exclude: BodyHandle,
-    ) -> CharacterMove {
+    // `input.exclude` is the moving capsule's own body (from
+    // [`Self::add_character`]), left out of the query so the character does
+    // not collide with itself; other characters' capsules stay solid to it.
+    // Sensors never block the move.
+    pub fn move_character(&self, input: &CharacterMoveInput) -> CharacterMove {
         let dispatcher = DefaultQueryDispatcher;
-        let filter = QueryFilter::default().exclude_rigid_body(exclude.0);
+        let filter = QueryFilter::default()
+            .exclude_rigid_body(input.exclude.0)
+            .exclude_sensors()
+            .groups(Self::interaction_groups(input.mask));
         let query =
             self.broad_phase
                 .as_query_pipeline(&dispatcher, &self.bodies, &self.colliders, filter);
-        let shape = SharedShape::capsule_y(half_height, radius);
+        let shape = SharedShape::capsule_y(input.half_height, input.radius);
         let movement = self.character.move_shape(
-            dt.max(1.0e-4),
+            input.dt.max(1.0e-4),
             &query,
             &*shape,
-            &Pose::from_translation(to_vec(center)),
-            to_vec(desired),
+            &Pose::from_translation(to_vec(input.center)),
+            to_vec(input.desired),
             |_collision| {},
         );
         CharacterMove {
@@ -506,12 +588,14 @@ impl PhysicsWorld {
     // `max_dist`. `dir` need not be unit length (a zero direction misses).
     // `exclude` leaves one body out of the query -- pass the probing
     // character's own capsule so a ray from inside it reaches the world.
+    // `mask` restricts the hit set to compatible layers; sensors never hit.
     pub fn raycast(
         &self,
         origin: [f32; 3],
         dir: [f32; 3],
         max_dist: f32,
         exclude: Option<BodyHandle>,
+        mask: LayerMask,
     ) -> Option<RayHit> {
         let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
         if len < 1.0e-6 || max_dist <= 0.0 {
@@ -519,7 +603,9 @@ impl PhysicsWorld {
         }
         let unit = [dir[0] / len, dir[1] / len, dir[2] / len];
         let dispatcher = DefaultQueryDispatcher;
-        let mut filter = QueryFilter::default();
+        let mut filter = QueryFilter::default()
+            .exclude_sensors()
+            .groups(Self::interaction_groups(mask));
         if let Some(handle) = exclude {
             filter = filter.exclude_rigid_body(handle.0);
         }
@@ -582,6 +668,13 @@ impl PhysicsWorld {
         self.bodies.len()
     }
 
+    // Number of colliders currently in the world. Test-only observable for
+    // the spawn/despawn leak checks.
+    #[cfg(test)]
+    pub fn collider_count(&self) -> usize {
+        self.colliders.len()
+    }
+
     // Read a body's current world-space position and Euler rotation.
     pub fn body_pose(&self, handle: BodyHandle) -> ([f32; 3], [f32; 3]) {
         match self.bodies.get(handle.0) {
@@ -629,6 +722,7 @@ mod tests {
             [0.0, top_y - 5.0, 0.0],
             [0.0; 3],
             0.8,
+            LayerMask::ALL,
         );
     }
 
@@ -646,6 +740,7 @@ mod tests {
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
             },
+            LayerMask::ALL,
         );
         for _ in 0..30 {
             world.step(1.0 / 60.0);
@@ -671,6 +766,7 @@ mod tests {
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
             },
+            LayerMask::ALL,
         );
         for _ in 0..240 {
             world.step(1.0 / 60.0);
@@ -696,18 +792,20 @@ mod tests {
             [1.5, 2.0, 0.0],
             [0.0; 3],
             0.5,
+            LayerMask::ALL,
         );
-        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0], LayerMask::ALL);
         // The broad-phase BVH the movement query reads is built by step().
         world.step(1.0 / 60.0);
-        let moved = world.move_character(
-            0.6,
-            0.3,
-            [0.0, 1.0, 0.0],
-            [5.0, 0.0, 0.0],
-            1.0 / 60.0,
-            capsule,
-        );
+        let moved = world.move_character(&CharacterMoveInput {
+            half_height: 0.6,
+            radius: 0.3,
+            center: [0.0, 1.0, 0.0],
+            desired: [5.0, 0.0, 0.0],
+            dt: 1.0 / 60.0,
+            exclude: capsule,
+            mask: LayerMask::ALL,
+        });
         // The wall stands at x = 1.25 (1.5 - 0.25); a 0.3-radius capsule from
         // x = 0 cannot advance the full 5 units into it.
         assert!(
@@ -723,16 +821,17 @@ mod tests {
         ground(&mut world, 0.0);
         // Capsule centre at 1.5: with half-height 0.6 + radius 0.3 the bottom
         // sits 0.6 above the floor, so a 10-unit drop should be arrested.
-        let capsule = world.add_character(0.6, 0.3, [0.0, 1.5, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.5, 0.0], LayerMask::ALL);
         world.step(1.0 / 60.0);
-        let moved = world.move_character(
-            0.6,
-            0.3,
-            [0.0, 1.5, 0.0],
-            [0.0, -10.0, 0.0],
-            1.0 / 60.0,
-            capsule,
-        );
+        let moved = world.move_character(&CharacterMoveInput {
+            half_height: 0.6,
+            radius: 0.3,
+            center: [0.0, 1.5, 0.0],
+            desired: [0.0, -10.0, 0.0],
+            dt: 1.0 / 60.0,
+            exclude: capsule,
+            mask: LayerMask::ALL,
+        });
         assert!(
             moved.translation[1] > -1.0 && moved.grounded,
             "fall should be arrested by the floor, dy = {}, grounded = {}",
@@ -747,7 +846,13 @@ mod tests {
         ground(&mut world, 0.0);
         world.step(1.0 / 60.0);
         let hit = world
-            .raycast([0.5, 2.0, -0.25], [0.0, -1.0, 0.0], 5.0, None)
+            .raycast(
+                [0.5, 2.0, -0.25],
+                [0.0, -1.0, 0.0],
+                5.0,
+                None,
+                LayerMask::ALL,
+            )
             .expect("ray hits the floor");
         assert!((hit.point[1] - 0.0).abs() < 1e-3, "{:?}", hit.point);
         assert!((hit.point[0] - 0.5).abs() < 1e-4);
@@ -756,12 +861,18 @@ mod tests {
         // Out of range or pointing away: no hit.
         assert!(
             world
-                .raycast([0.0, 2.0, 0.0], [0.0, -1.0, 0.0], 1.0, None)
+                .raycast([0.0, 2.0, 0.0], [0.0, -1.0, 0.0], 1.0, None, LayerMask::ALL)
                 .is_none()
         );
         assert!(
             world
-                .raycast([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], 100.0, None)
+                .raycast(
+                    [0.0, 2.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    100.0,
+                    None,
+                    LayerMask::ALL
+                )
                 .is_none()
         );
     }
@@ -771,21 +882,33 @@ mod tests {
         let mut world = PhysicsWorld::new(G);
         ground(&mut world, 0.0);
         // A capsule standing between the ray origin and the floor.
-        let capsule = world.add_character(0.5, 0.3, [0.0, 0.8, 0.0]);
+        let capsule = world.add_character(0.5, 0.3, [0.0, 0.8, 0.0], LayerMask::ALL);
         world.step(1.0 / 60.0);
         let through = world
-            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, Some(capsule))
+            .raycast(
+                [0.0, 3.0, 0.0],
+                [0.0, -1.0, 0.0],
+                5.0,
+                Some(capsule),
+                LayerMask::ALL,
+            )
             .expect("ray passes through the excluded capsule");
         assert!((through.point[1] - 0.0).abs() < 1e-3, "{:?}", through.point);
         let blocked = world
-            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, None)
+            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, None, LayerMask::ALL)
             .expect("ray hits the capsule");
         assert!(blocked.point[1] > 1.0, "{:?}", blocked.point);
     }
 
     // Test helper: a tiny zero-volume static body acting as a world anchor.
     fn world_anchor(world: &mut PhysicsWorld, pos: [f32; 3]) -> BodyHandle {
-        world.add_fixed(&ColliderShape::Ball { radius: 0.01 }, pos, [0.0; 3], 0.0)
+        world.add_fixed(
+            &ColliderShape::Ball { radius: 0.01 },
+            pos,
+            [0.0; 3],
+            0.0,
+            LayerMask::ALL,
+        )
     }
 
     fn free_ball(world: &mut PhysicsWorld, pos: [f32; 3]) -> BodyHandle {
@@ -800,6 +923,7 @@ mod tests {
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
             },
+            LayerMask::ALL,
         )
     }
 
@@ -921,6 +1045,7 @@ mod tests {
             [0.0, 2.0, 0.0],
             [0.0; 3],
             7,
+            LayerMask::ALL,
         );
         // A ball dropped from above the sensor falls straight through it (no
         // floor), so the run records one enter and one exit.
@@ -953,8 +1078,9 @@ mod tests {
             [5.0, 1.0, 0.0],
             [0.0; 3],
             9,
+            LayerMask::ALL,
         );
-        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0]);
+        let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0], LayerMask::ALL);
         world.step(1.0 / 60.0);
         let _ = world.drain_sensor_crossings();
 
@@ -996,6 +1122,7 @@ mod tests {
             [0.0, 2.0, 0.0],
             [0.0; 3],
             3,
+            LayerMask::ALL,
         );
         let body = world.add_dynamic(
             &ColliderShape::Cuboid {
@@ -1010,6 +1137,7 @@ mod tests {
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
             },
+            LayerMask::ALL,
         );
         for _ in 0..240 {
             world.step(1.0 / 60.0);
@@ -1020,6 +1148,246 @@ mod tests {
             "box should rest on the floor through the sensor, y = {}",
             pos[1]
         );
+    }
+
+    #[test]
+    fn bodies_in_non_interacting_layers_pass_through_each_other() {
+        // Ground on bit 0; two balls on bits 1 and 2 whose filters exclude
+        // each other but keep the ground. Dropped down the same column, they
+        // must overlap freely and both settle on the floor.
+        let mut world = PhysicsWorld::new(G);
+        world.add_fixed(
+            &ColliderShape::Cuboid {
+                half_extents: [50.0, 5.0, 50.0],
+            },
+            [0.0, -5.0, 0.0],
+            [0.0; 3],
+            0.8,
+            LayerMask {
+                memberships: 0b001,
+                filter: 0b111,
+            },
+        );
+        let params = DynamicParams {
+            mass: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+        };
+        let lower = world.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 0.5, 0.0],
+            [0.0; 3],
+            params,
+            LayerMask {
+                memberships: 0b010,
+                filter: 0b001,
+            },
+        );
+        let upper = world.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 4.0, 0.0],
+            [0.0; 3],
+            params,
+            LayerMask {
+                memberships: 0b100,
+                filter: 0b001,
+            },
+        );
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+        let (lower_pos, _) = world.body_pose(lower);
+        let (upper_pos, _) = world.body_pose(upper);
+        assert!(
+            (lower_pos[1] - 0.5).abs() < 0.1,
+            "lower ball rests on the floor, y = {}",
+            lower_pos[1]
+        );
+        assert!(
+            (upper_pos[1] - 0.5).abs() < 0.1,
+            "upper ball falls through the lower one onto the floor, y = {}",
+            upper_pos[1]
+        );
+    }
+
+    #[test]
+    fn interacting_layers_still_stack() {
+        // Same drop, but the balls' filters include each other: the upper one
+        // stacks on the lower instead of passing through.
+        let mut world = PhysicsWorld::new(G);
+        ground(&mut world, 0.0);
+        let params = DynamicParams {
+            mass: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+        };
+        world.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 0.5, 0.0],
+            [0.0; 3],
+            params,
+            LayerMask::ALL,
+        );
+        let upper = world.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 4.0, 0.0],
+            [0.0; 3],
+            params,
+            LayerMask::ALL,
+        );
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+        let (upper_pos, _) = world.body_pose(upper);
+        assert!(
+            upper_pos[1] > 1.2,
+            "upper ball stacks on the lower one, y = {}",
+            upper_pos[1]
+        );
+    }
+
+    #[test]
+    fn raycast_honors_the_layer_filter() {
+        // Ground on bit 0, a box on bit 1 hanging over it. A ray filtered to
+        // bit 0 passes through the box and reports the floor; an unfiltered
+        // ray reports the box.
+        let mut world = PhysicsWorld::new(G);
+        world.add_fixed(
+            &ColliderShape::Cuboid {
+                half_extents: [50.0, 5.0, 50.0],
+            },
+            [0.0, -5.0, 0.0],
+            [0.0; 3],
+            0.8,
+            LayerMask {
+                memberships: 0b01,
+                filter: 0b11,
+            },
+        );
+        world.add_fixed(
+            &ColliderShape::Cuboid {
+                half_extents: [1.0, 0.25, 1.0],
+            },
+            [0.0, 1.0, 0.0],
+            [0.0; 3],
+            0.8,
+            LayerMask {
+                memberships: 0b10,
+                filter: 0b11,
+            },
+        );
+        world.step(1.0 / 60.0);
+        let floor_only = LayerMask {
+            memberships: u32::MAX,
+            filter: 0b01,
+        };
+        let through = world
+            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, None, floor_only)
+            .expect("filtered ray reaches the floor");
+        assert!((through.point[1] - 0.0).abs() < 1e-3, "{:?}", through.point);
+        let blocked = world
+            .raycast([0.0, 3.0, 0.0], [0.0, -1.0, 0.0], 5.0, None, LayerMask::ALL)
+            .expect("unfiltered ray hits the box");
+        assert!(
+            (blocked.point[1] - 1.25).abs() < 1e-3,
+            "{:?}",
+            blocked.point
+        );
+    }
+
+    #[test]
+    fn raycast_never_hits_sensors() {
+        let mut world = PhysicsWorld::new(G);
+        ground(&mut world, 0.0);
+        world.add_sensor(
+            &ColliderShape::Cuboid {
+                half_extents: [1.0, 1.0, 1.0],
+            },
+            [0.0, 2.0, 0.0],
+            [0.0; 3],
+            5,
+            LayerMask::ALL,
+        );
+        world.step(1.0 / 60.0);
+        let hit = world
+            .raycast(
+                [0.0, 5.0, 0.0],
+                [0.0, -1.0, 0.0],
+                10.0,
+                None,
+                LayerMask::ALL,
+            )
+            .expect("ray reaches the floor");
+        assert!(
+            (hit.point[1] - 0.0).abs() < 1e-3,
+            "sensor volume must be transparent to rays, hit {:?}",
+            hit.point
+        );
+    }
+
+    #[test]
+    fn contact_hit_records_an_impact_but_not_resting_contact() {
+        let mut world = PhysicsWorld::new(G);
+        // Impulse threshold 1.0 at the 60 Hz tick: a 1 kg ball landing at
+        // ~14 m/s is far above it, resting weight (20 N) far below.
+        world.set_contact_min_impulse(1.0, 1.0 / 60.0);
+        ground(&mut world, 0.0);
+        let ball = world.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 5.5, 0.0],
+            [0.0; 3],
+            DynamicParams {
+                mass: 1.0,
+                friction: 0.5,
+                restitution: 0.0,
+                gravity_scale: 1.0,
+                linear_damping: 0.0,
+            },
+            LayerMask::ALL,
+        );
+        let mut impact: Option<ContactHit> = None;
+        for _ in 0..120 {
+            world.step(1.0 / 60.0);
+            for hit in world.drain_contact_hits() {
+                if impact.is_none() {
+                    impact = Some(hit);
+                }
+            }
+        }
+        let impact = impact.expect("the landing records a contact hit");
+        assert!(
+            impact.a == ball || impact.b == ball,
+            "the hit names the ball"
+        );
+        // Falling ~5 m under g = 20 arrives at ~14 m/s; the stop impulse for
+        // 1 kg is ~14 mass-velocity units (solver spread makes it inexact).
+        assert!(
+            impact.impulse > 3.0 && impact.impulse < 50.0,
+            "impulse {} out of the plausible landing range",
+            impact.impulse
+        );
+        assert!(
+            impact.normal[1].abs() > 0.9,
+            "floor contact normal is vertical: {:?}",
+            impact.normal
+        );
+        assert!(
+            impact.point[1].abs() < 0.2,
+            "contact point sits on the floor"
+        );
+
+        // Settled: a long rest window must stay silent.
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+            assert!(
+                world.drain_contact_hits().is_empty(),
+                "resting contact must not record hits"
+            );
+        }
     }
 
     #[test]

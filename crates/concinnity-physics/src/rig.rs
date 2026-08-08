@@ -12,7 +12,7 @@ use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
 
 use super::interp::PointInterp;
-use super::{BodyHandle, PhysicsWorld};
+use super::{BodyHandle, CharacterMoveInput, LayerMask, PhysicsWorld};
 
 // Physics-side state for one rig.
 #[derive(Debug)]
@@ -46,7 +46,11 @@ fn center_of(rig: &CharacterRig) -> [f32; 3] {
 const SPAWN_LIFT: f32 = 0.05;
 
 // Create one kinematic capsule per published `CharacterRig`.
-pub(crate) fn init_rigs(world: &mut PhysicsWorld, ctx: &mut PipelineContext) -> Vec<RigPhysics> {
+pub(crate) fn init_rigs(
+    world: &mut PhysicsWorld,
+    ctx: &mut PipelineContext,
+    mask: LayerMask,
+) -> Vec<RigPhysics> {
     let rigs: Vec<RigPhysics> = ctx
         .query_mut::<CharacterRig>()
         .map(|rig| {
@@ -55,7 +59,7 @@ pub(crate) fn init_rigs(world: &mut PhysicsWorld, ctx: &mut PipelineContext) -> 
             let center = center_of(rig);
             RigPhysics {
                 target: rig.target,
-                handle: world.add_character(rig.half_height, rig.radius, center),
+                handle: world.add_character(rig.half_height, rig.radius, center, mask),
                 vy: 0.0,
                 center: PointInterp::new(center),
                 written_pos: Some(rig.position),
@@ -104,6 +108,7 @@ pub(crate) fn tick_rigs(
     motions: &[RootMotion],
     dt: f32,
     gravity: f32,
+    mask: LayerMask,
 ) {
     for rig_body in rigs.iter_mut() {
         let Some(rig) = ctx
@@ -140,14 +145,15 @@ pub(crate) fn tick_rigs(
             displacement[1] + rig_body.vy * dt,
             displacement[2],
         ];
-        let moved = world.move_character(
-            rig.half_height,
-            rig.radius,
+        let moved = world.move_character(&CharacterMoveInput {
+            half_height: rig.half_height,
+            radius: rig.radius,
             center,
             desired,
             dt,
-            rig_body.handle,
-        );
+            exclude: rig_body.handle,
+            mask,
+        });
         let new_center = add3(center, moved.translation);
         world.set_kinematic_translation(rig_body.handle, new_center);
         if moved.grounded && rig_body.vy < 0.0 {

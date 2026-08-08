@@ -8,7 +8,7 @@ use rapier3d::glamx::EulerRot;
 use rapier3d::math::{Rotation, Vector};
 
 use crate::{ColliderShape, DynamicParams, JointMotor, JointSpec};
-use concinnity_core::assets::{Joint, JointKind, PropBody, PropCollider};
+use concinnity_core::assets::{BodyDynamics, Joint, JointKind, PropCollider};
 
 // Convert an engine `[x, y, z]` array into a Rapier vector.
 pub fn to_vec(v: [f32; 3]) -> Vector {
@@ -115,8 +115,8 @@ pub fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape
     }
 }
 
-// The Rapier dynamic-body parameters a `PropBody` describes.
-pub fn dynamic_params(body: &PropBody) -> DynamicParams {
+// The Rapier dynamic-body parameters a `BodyDynamics` component describes.
+pub fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
     DynamicParams {
         mass: body.mass.max(0.0),
         friction: body.friction.max(0.0),

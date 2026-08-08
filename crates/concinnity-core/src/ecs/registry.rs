@@ -92,6 +92,7 @@ macro_rules! for_each_component {
             MeshRenderer      => $crate::assets::MeshRenderer { runtime },
             ModelRenderer     => $crate::assets::ModelRenderer { runtime },
             Collider          => $crate::assets::Collider { runtime },
+            BodyDynamics      => $crate::assets::BodyDynamics { runtime },
             Interactable      => $crate::assets::Interactable { runtime },
             Pickup            => $crate::assets::Pickup { runtime },
             Parent            => $crate::assets::Parent { runtime },

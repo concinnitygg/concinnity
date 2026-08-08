@@ -16,8 +16,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::assets::{
-    Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup, Prop,
-    SceneMember, Transform,
+    BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
+    Pickup, Prop, PropBody, SceneMember, Transform,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
@@ -94,6 +94,26 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
         if let Some(scene) = prop.scene {
             ctx.insert(*entity, SceneMember(scene));
         }
+    }
+
+    // Each PropBody resolves onto its owning prop's entity as BodyDynamics, so
+    // the physics system (and runtime spawn cloning) reads dynamic parameters
+    // per entity. The source column drains with it.
+    for body in ctx.drain::<PropBody>() {
+        let Some(name) = body.prop_name else { continue };
+        let Some(&entity) = by_name.get(&name) else {
+            continue;
+        };
+        ctx.insert(
+            entity,
+            BodyDynamics {
+                mass: body.mass,
+                friction: body.friction,
+                restitution: body.restitution,
+                gravity_scale: body.gravity_scale,
+                linear_damping: body.linear_damping,
+            },
+        );
     }
 
     // Parent edges resolve once every entity exists; children accumulate so each
@@ -261,5 +281,35 @@ mod tests {
         assert_eq!(world.query::<Transform>().count(), 2, "Transforms survive");
         assert_eq!(world.query::<MeshRenderer>().count(), 1);
         assert_eq!(world.query::<ModelRenderer>().count(), 1);
+    }
+
+    // A PropBody resolves onto its owning prop's entity as BodyDynamics and
+    // its own column drains with the pass.
+    #[test]
+    fn prop_body_decomposes_to_body_dynamics_on_the_owner() {
+        let mut world = World::new_empty();
+        let mut crate_prop = prop(1);
+        crate_prop.mesh = Some(MeshHandle(10));
+        crate_prop.collider = Some(PropCollider::default());
+        world.add_component(crate_prop);
+        let mut wall = prop(2);
+        wall.mesh = Some(MeshHandle(11));
+        wall.collider = Some(PropCollider::default());
+        world.add_component(wall);
+        world.add_component(crate::assets::PropBody {
+            prop_name: Some(AssetId(1)),
+            mass: 4.0,
+            ..Default::default()
+        });
+
+        world.start().expect("start");
+
+        assert_eq!(world.query::<crate::assets::PropBody>().count(), 0);
+        let dynamics: Vec<_> = world
+            .join2::<BodyDynamics, MeshRenderer>()
+            .map(|(_, b, m)| (m.mesh, b.mass))
+            .collect();
+        // Only the PropBody's owner is dynamic, with its authored values.
+        assert_eq!(dynamics, vec![(Some(MeshHandle(10)), 4.0)]);
     }
 }

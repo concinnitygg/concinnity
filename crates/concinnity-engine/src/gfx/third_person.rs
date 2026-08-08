@@ -588,6 +588,7 @@ mod tests {
                 half_extents: [3.0, 1.5, 0.2],
                 radius: 0.0,
                 half_height: 0.0,
+                layer: String::new(),
             }),
             ..Default::default()
         });

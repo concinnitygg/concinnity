@@ -5,11 +5,13 @@
 // `PhysicsConfig`, a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading
 // the optional `PhysicsConfig` for the floor / terrain.
 
+use crate::contacts::{ContactBatch, ContactGate};
 use crate::interp::{PointInterp, PoseInterp};
-use crate::{BodyHandle, ColliderShape, PhysicsWorld};
+use crate::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
+use crate::{BodyHandle, CharacterMoveInput, ColliderShape, LayerMask, PhysicsWorld};
 use concinnity_core::assets::{
-    Camera3D, Collider, Held, Joint, PhysicsConfig, Pickup, PropBody, RigidBody, Transform,
-    TriggerFilter, TriggerVolume, VolumeEvent,
+    BodyDynamics, Camera3D, Collider, ContactEvent, Held, Joint, PhysicsConfig, Pickup, RigidBody,
+    Transform, TriggerFilter, TriggerVolume, VolumeEvent,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -61,11 +63,22 @@ pub struct PhysicsSystem {
     root_cursor: EventCursor,
     // One entry per Prop that carries a collider.
     prop_bodies: Vec<PropPhysics>,
+    // Entities that already own a body, so the per-tick scan for freshly
+    // spawned collider-bearing entities skips everything mapped.
+    tracked: HashSet<Entity>,
     // Index into `prop_bodies` of the prop currently being carried.
     held: Option<usize>,
     // Sensor tag -> the TriggerVolume it senses for, with its filter. Tags are
     // the volume's AssetId, stamped into the sensor collider's user_data.
     sensor_filters: HashMap<u64, (AssetId, TriggerFilter)>,
+    // Layer-name resolution and the collide matrix from the PhysicsConfig.
+    layers: LayerTable,
+    // Minimum contact impulse for publishing a ContactEvent.
+    contact_min_impulse: f32,
+    // Strongest contact per body pair across the frame's ticks.
+    contact_batch: ContactBatch,
+    // Per-pair refractory so sustained contact reports once per impact.
+    contact_gate: ContactGate,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +137,13 @@ impl PhysicsSystem {
         self.world.as_ref().map_or(0, |w| w.body_count())
     }
 
+    // Number of colliders the physics world holds. Test-only observable for
+    // the spawn/despawn leak checks.
+    #[cfg(test)]
+    fn physics_collider_count(&self) -> usize {
+        self.world.as_ref().map_or(0, |w| w.collider_count())
+    }
+
     // Build the simulation from the world's `PhysicsConfig` (floor / terrain).
     // Bodies and colliders are added from the ECS in [`System::init`].
     pub fn new(config: PhysicsConfig) -> Self {
@@ -148,38 +168,35 @@ impl PhysicsSystem {
             rigs: Vec::new(),
             root_cursor: EventCursor::default(),
             prop_bodies: Vec::new(),
+            tracked: HashSet::new(),
             held: None,
             sensor_filters: HashMap::new(),
+            layers: LayerTable::new(&config),
+            contact_min_impulse: config.contact_min_impulse.max(0.0),
+            contact_batch: ContactBatch::default(),
+            contact_gate: ContactGate::default(),
         }
     }
 
-    // Build one body per collider-bearing entity from its per-instance components
-    // (Transform + Collider + the Pickup tag), resolving PropBody owners through
-    // the name index and keying `body_handles` by AssetId (via the name index's
-    // inverse) so the joint wiring resolves.
+    // Build one body per collider-bearing entity from its per-instance
+    // components (Transform + Collider + optional BodyDynamics + the Pickup
+    // tag), keying `body_handles` by AssetId (via the name index's inverse)
+    // so the joint wiring resolves.
     fn build_prop_bodies(
         &mut self,
         ctx: &PipelineContext,
         world: &mut PhysicsWorld,
         body_handles: &mut HashMap<AssetId, BodyHandle>,
     ) {
-        let (propbody_of, entity_name): (HashMap<Entity, PropBody>, HashMap<Entity, AssetId>) = {
-            let name_index = ctx.resource::<EntityByName>();
-            let inverse = name_index
-                .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
-                .unwrap_or_default();
-            let owners = ctx
-                .query::<PropBody>()
-                .filter_map(|b| {
-                    let name = b.prop_name?;
-                    let entity = name_index?.get(name)?;
-                    Some((entity, b.clone()))
-                })
-                .collect();
-            (owners, inverse)
-        };
-
+        let entity_name: HashMap<Entity, AssetId> = ctx
+            .resource::<EntityByName>()
+            .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
+            .unwrap_or_default();
         let pickup: HashSet<Entity> = ctx.query_with_entity::<Pickup>().map(|(e, _)| e).collect();
+        let dynamics: HashMap<Entity, BodyDynamics> = ctx
+            .query_with_entity::<BodyDynamics>()
+            .map(|(e, b)| (e, *b))
+            .collect();
         let snaps: Vec<(Entity, PropCollSnap)> = ctx
             .join2::<Collider, Transform>()
             .map(|(entity, collider, transform)| {
@@ -187,50 +204,25 @@ impl PhysicsSystem {
                     entity,
                     PropCollSnap {
                         shape: crate::collider_shape(&collider.0, transform.scale),
+                        layer: collider.0.layer.clone(),
                         position: transform.position,
                         rotation_deg: transform.rotation_deg,
                         pickup: pickup.contains(&entity),
+                        dynamics: dynamics.get(&entity).copied(),
                     },
                 )
             })
             .collect();
 
         for (entity, snap) in snaps {
-            let pose = PoseInterp::new(
-                snap.position,
-                crate::convert::quat_from_euler_deg(snap.rotation_deg),
+            let handle = add_prop_body(
+                &self.layers,
+                &mut self.prop_bodies,
+                &mut self.tracked,
+                world,
+                entity,
+                snap,
             );
-            let handle = if let Some(prop_body) = propbody_of.get(&entity) {
-                let handle = world.add_dynamic(
-                    &snap.shape,
-                    snap.position,
-                    snap.rotation_deg,
-                    crate::dynamic_params(prop_body),
-                );
-                self.prop_bodies.push(PropPhysics {
-                    entity,
-                    handle,
-                    dynamic: true,
-                    pickup: snap.pickup,
-                    pose,
-                });
-                handle
-            } else {
-                let handle = world.add_fixed(
-                    &snap.shape,
-                    snap.position,
-                    snap.rotation_deg,
-                    STATIC_FRICTION,
-                );
-                self.prop_bodies.push(PropPhysics {
-                    entity,
-                    handle,
-                    dynamic: false,
-                    pickup: false,
-                    pose,
-                });
-                handle
-            };
             if let Some(&id) = entity_name.get(&entity) {
                 body_handles.insert(id, handle);
             }
@@ -238,9 +230,63 @@ impl PhysicsSystem {
     }
 }
 
+// Add one prop body for a collider-bearing entity and record it for pose
+// write-back and reaping. An entity with BodyDynamics simulates freely on the
+// prop layer; anything else is an immovable obstacle on the world layer. An
+// authored collider layer name overrides either default.
+fn add_prop_body(
+    layers: &LayerTable,
+    prop_bodies: &mut Vec<PropPhysics>,
+    tracked: &mut HashSet<Entity>,
+    world: &mut PhysicsWorld,
+    entity: Entity,
+    snap: PropCollSnap,
+) -> BodyHandle {
+    let pose = PoseInterp::new(
+        snap.position,
+        crate::convert::quat_from_euler_deg(snap.rotation_deg),
+    );
+    let layer_or = |default: &'static str| {
+        if snap.layer.is_empty() {
+            layers.mask(default)
+        } else {
+            layers.mask(&snap.layer)
+        }
+    };
+    let dynamic = snap.dynamics.is_some();
+    let handle = if let Some(dynamics) = &snap.dynamics {
+        world.add_dynamic(
+            &snap.shape,
+            snap.position,
+            snap.rotation_deg,
+            crate::dynamic_params(dynamics),
+            layer_or(LAYER_PROP),
+        )
+    } else {
+        world.add_fixed(
+            &snap.shape,
+            snap.position,
+            snap.rotation_deg,
+            STATIC_FRICTION,
+            layer_or(LAYER_WORLD),
+        )
+    };
+    prop_bodies.push(PropPhysics {
+        entity,
+        handle,
+        dynamic,
+        pickup: snap.pickup && dynamic,
+        pose,
+    });
+    tracked.insert(entity);
+    handle
+}
+
 impl System for PhysicsSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         let mut world = PhysicsWorld::new(GRAVITY);
+        world.set_contact_min_impulse(self.contact_min_impulse, SimTiming::TICK_DT);
+        let world_mask = self.layers.mask(LAYER_WORLD);
 
         // floor: heightfield-mesh-driven, procedural noise, or flat slab
         let mut floor_built = false;
@@ -251,7 +297,13 @@ impl System for PhysicsSystem {
                 .cloned();
             match mesh_snap {
                 Some(m) if m.generator == "heightfield" => {
-                    match build_heightfield_collider(&mut world, &m, self.terrain_offset_y, ctx) {
+                    match build_heightfield_collider(
+                        &mut world,
+                        &m,
+                        self.terrain_offset_y,
+                        world_mask,
+                        ctx,
+                    ) {
                         Ok(()) => floor_built = true,
                         Err(e) => tracing::warn!(
                             "physics: heightfield collider load failed ({}); falling back to flat slab",
@@ -276,7 +328,7 @@ impl System for PhysicsSystem {
         }
         if !floor_built {
             if let Some(terrain) = self.terrain.clone() {
-                build_heightfield(&mut world, &terrain);
+                build_heightfield(&mut world, &terrain, world_mask);
             } else {
                 // A large thin slab whose top face sits at Y = 0.
                 world.add_fixed(
@@ -286,17 +338,25 @@ impl System for PhysicsSystem {
                     [0.0, -5.0, 0.0],
                     [0.0; 3],
                     STATIC_FRICTION,
+                    world_mask,
                 );
             }
         }
 
         // Sensor regions: one fixed sensor body per TriggerVolume, tagged with
         // the volume's AssetId so step's crossing drain maps back to it.
+        let trigger_mask = self.layers.mask(LAYER_TRIGGER);
         let volumes: Vec<TriggerVolume> = ctx.query::<TriggerVolume>().cloned().collect();
         for volume in &volumes {
             let shape = crate::collider_shape(&volume.collider, [1.0; 3]);
             let tag = u64::from(volume.asset_id.0);
-            world.add_sensor(&shape, volume.position, volume.rotation_deg, tag);
+            world.add_sensor(
+                &shape,
+                volume.position,
+                volume.rotation_deg,
+                tag,
+                trigger_mask,
+            );
             self.sensor_filters
                 .insert(tag, (volume.asset_id, volume.detects));
         }
@@ -353,6 +413,7 @@ impl System for PhysicsSystem {
                     joint.anchor_b,
                     [0.0; 3],
                     0.0,
+                    world_mask,
                 )
             };
             // When body_b is the implicit world anchor, the anchor sits at the
@@ -408,7 +469,12 @@ impl System for PhysicsSystem {
             };
             let center = [cam_pos[0], cam_pos[1] - eye_offset, cam_pos[2]];
             world.configure_character(rb.max_slope_deg, rb.step_height, has_gravity);
-            let handle = world.add_character(half_height, radius, center);
+            let handle = world.add_character(
+                half_height,
+                radius,
+                center,
+                self.layers.mask(LAYER_CHARACTER),
+            );
             self.player = Some(PlayerPhysics {
                 handle,
                 half_height,
@@ -432,7 +498,7 @@ impl System for PhysicsSystem {
 
         // Kinematic capsules for the root-motion character rigs published by
         // GraphicsSystem (which ran init first this tick).
-        self.rigs = super::rig::init_rigs(&mut world, ctx);
+        self.rigs = super::rig::init_rigs(&mut world, ctx, self.layers.mask(LAYER_CHARACTER));
 
         self.world = Some(world);
     }
@@ -488,23 +554,57 @@ impl System for PhysicsSystem {
         // would keep simulating - and colliding with live bodies - invisibly.
         // Remove it from Rapier and drop its record before the step, keeping
         // self.held a valid index into the compacted list.
-        let dead: Vec<BodyHandle> = self
+        let dead: Vec<(Entity, BodyHandle)> = self
             .prop_bodies
             .iter()
             .filter(|p| !ctx.is_alive(p.entity))
-            .map(|p| p.handle)
+            .map(|p| (p.entity, p.handle))
             .collect();
         if !dead.is_empty() {
             let held_entity = self
                 .held
                 .and_then(|i| self.prop_bodies.get(i))
                 .map(|p| p.entity);
-            for handle in dead {
+            for (entity, handle) in dead {
                 world.remove_body(handle);
+                self.tracked.remove(&entity);
             }
             self.prop_bodies.retain(|p| ctx.is_alive(p.entity));
             self.held =
                 held_entity.and_then(|e| self.prop_bodies.iter().position(|p| p.entity == e));
+        }
+
+        // Adopt collider-bearing entities that appeared since init (runtime
+        // spawns): each gets a body at its spawn transform, with its pose
+        // snapshots seeded there so the render blend starts clean.
+        let new_snaps: Vec<(Entity, PropCollSnap)> = ctx
+            .join2::<Collider, Transform>()
+            .filter(|(entity, _, _)| !self.tracked.contains(entity))
+            .map(|(entity, collider, transform)| {
+                (
+                    entity,
+                    PropCollSnap {
+                        shape: crate::collider_shape(&collider.0, transform.scale),
+                        layer: collider.0.layer.clone(),
+                        position: transform.position,
+                        rotation_deg: transform.rotation_deg,
+                        pickup: false,
+                        dynamics: None,
+                    },
+                )
+            })
+            .collect();
+        for (entity, mut snap) in new_snaps {
+            snap.pickup = ctx.get::<Pickup>(entity).is_some();
+            snap.dynamics = ctx.get::<BodyDynamics>(entity).copied();
+            add_prop_body(
+                &self.layers,
+                &mut self.prop_bodies,
+                &mut self.tracked,
+                world,
+                entity,
+                snap,
+            );
         }
 
         // pickup / drop on the interact edge; held_changed carries the entity to
@@ -600,14 +700,15 @@ impl System for PhysicsSystem {
 
                 let center = player.center.current();
                 let desired = [desired_move[0] * dt, player.vy * dt, desired_move[2] * dt];
-                let moved = world.move_character(
-                    player.half_height,
-                    player.radius,
+                let moved = world.move_character(&CharacterMoveInput {
+                    half_height: player.half_height,
+                    radius: player.radius,
                     center,
                     desired,
                     dt,
-                    player.handle,
-                );
+                    exclude: player.handle,
+                    mask: self.layers.mask(LAYER_CHARACTER),
+                });
                 let new_center = [
                     center[0] + moved.translation[0],
                     center[1] + moved.translation[1],
@@ -630,10 +731,17 @@ impl System for PhysicsSystem {
                 if tick == 0 { &motions } else { &[] },
                 dt,
                 GRAVITY,
+                self.layers.mask(LAYER_CHARACTER),
             );
 
             // advance the simulation
             world.step(dt);
+
+            // batch the tick's contact hits (strongest per pair this frame)
+            self.contact_gate.advance_tick();
+            for hit in world.drain_contact_hits() {
+                self.contact_batch.add(hit);
+            }
 
             // record the tick's dynamic prop poses for the render blend
             for prop in self.prop_bodies.iter_mut().filter(|p| p.dynamic) {
@@ -643,7 +751,46 @@ impl System for PhysicsSystem {
         }
 
         // answer the IK ground probes and the follow camera's occlusion probe
-        super::probes::step_probes(world, ctx, &self.rigs);
+        super::probes::step_probes(
+            world,
+            ctx,
+            &self.rigs,
+            self.layers
+                .query_mask(LAYER_CHARACTER, &[LAYER_WORLD, LAYER_PROP]),
+        );
+
+        // publish the frame's contact events: one per body pair that passed
+        // the impulse threshold, gated by the per-pair refractory. `a` is
+        // always a prop entity; a hit whose sides both lack one (terrain,
+        // capsules) has no consumer-visible subject and is dropped.
+        for hit in self.contact_batch.drain() {
+            let entity_of = |handle: BodyHandle| {
+                self.prop_bodies
+                    .iter()
+                    .find(|p| p.handle == handle)
+                    .map(|p| p.entity)
+            };
+            let event = match (entity_of(hit.a), entity_of(hit.b)) {
+                (Some(a), b) => ContactEvent {
+                    a,
+                    b,
+                    point: hit.point,
+                    normal: hit.normal,
+                    impulse: hit.impulse,
+                },
+                (None, Some(b)) => ContactEvent {
+                    a: b,
+                    b: None,
+                    point: hit.point,
+                    normal: [-hit.normal[0], -hit.normal[1], -hit.normal[2]],
+                    impulse: hit.impulse,
+                },
+                (None, None) => continue,
+            };
+            if self.contact_gate.admit(&hit) {
+                ctx.events_mut::<ContactEvent>().send(event);
+            }
+        }
 
         // publish the sensor boundary crossings that pass their volume's
         // filter. A crossing whose body was removed this same step has no
@@ -729,12 +876,16 @@ impl System for PhysicsSystem {
     }
 }
 
-// A Prop's collider plus transform, snapshotted at init time.
+// A collider-bearing entity's physics description, snapshotted from its
+// components when its body is built.
 struct PropCollSnap {
     shape: crate::ColliderShape,
+    // Authored collision layer name; empty derives from the body kind.
+    layer: String,
     position: [f32; 3],
     rotation_deg: [f32; 3],
     pickup: bool,
+    dynamics: Option<BodyDynamics>,
 }
 
 // Build a Rapier heightfield collider for a heightfield-generator
@@ -748,6 +899,7 @@ fn build_heightfield_collider(
     world: &mut PhysicsWorld,
     mesh: &concinnity_core::assets::ProceduralMesh,
     offset_y: f32,
+    mask: LayerMask,
     ctx: &mut PipelineContext,
 ) -> Result<(), String> {
     let locator = mesh
@@ -773,12 +925,13 @@ fn build_heightfield_collider(
         grid.heights,
         [width, 1.0, depth],
         [0.0, offset_y, 0.0],
+        mask,
     );
     Ok(())
 }
 
 // Build a Rapier heightfield collider matching the procedural terrain mesh.
-fn build_heightfield(world: &mut PhysicsWorld, terrain: &TerrainParams) {
+fn build_heightfield(world: &mut PhysicsWorld, terrain: &TerrainParams, mask: LayerMask) {
     let n = (terrain.subdivisions as usize) + 1;
     let width = terrain.half_width * 2.0;
     let depth = terrain.half_depth * 2.0;
@@ -798,6 +951,7 @@ fn build_heightfield(world: &mut PhysicsWorld, terrain: &TerrainParams) {
         heights,
         [width, 1.0, depth],
         [0.0, terrain.offset_y, 0.0],
+        mask,
     );
 }
 
@@ -901,7 +1055,7 @@ mod tests {
 
         // Push a decomposed prop (Transform + Collider, plus the Pickup tag when
         // asked) exactly as the load-time decomposition would, and register it in
-        // the name index under `id` so a `PropBody` owner resolves to it.
+        // the name index under `id` so joints can resolve it.
         fn spawn_prop(&mut self, id: AssetId, position: [f32; 3], pickup: bool) -> Entity {
             let entity = self.components.push_typed(Transform {
                 position,
@@ -914,6 +1068,7 @@ mod tests {
                     half_extents: [0.5; 3],
                     radius: 0.5,
                     half_height: 0.0,
+                    layer: String::new(),
                 }),
             );
             if pickup {
@@ -930,6 +1085,12 @@ mod tests {
                 }
             }
             entity
+        }
+
+        // Make a spawned prop dynamic, exactly as the load-time PropBody
+        // decomposition would.
+        fn make_dynamic(&mut self, entity: Entity) {
+            self.components.insert_typed(entity, ball_dynamics());
         }
     }
 
@@ -1016,9 +1177,8 @@ mod tests {
         );
     }
 
-    fn ball_body(id: AssetId) -> PropBody {
-        PropBody {
-            prop_name: Some(id),
+    fn ball_dynamics() -> BodyDynamics {
+        BodyDynamics {
             mass: 1.0,
             friction: 0.5,
             restitution: 0.0,
@@ -1045,7 +1205,7 @@ mod tests {
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
-        world.components.push_typed(ball_body(id));
+        world.make_dynamic(entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
@@ -1069,7 +1229,7 @@ mod tests {
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
-        world.components.push_typed(ball_body(id));
+        world.make_dynamic(entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
@@ -1105,7 +1265,7 @@ mod tests {
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
-        world.components.push_typed(ball_body(id));
+        world.make_dynamic(entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
@@ -1151,7 +1311,7 @@ mod tests {
             let id = AssetId(1);
             let mut world = TestWorld::new();
             let entity = world.spawn_prop(id, [0.3, 5.0, 0.1], false);
-            world.components.push_typed(ball_body(id));
+            world.make_dynamic(entity);
 
             let mut physics = PhysicsSystem::new(PhysicsConfig::default());
             physics.init(&mut world.ctx());
@@ -1185,7 +1345,7 @@ mod tests {
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let ball = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
-        world.components.push_typed(ball_body(id));
+        world.make_dynamic(ball);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
@@ -1217,8 +1377,8 @@ mod tests {
     fn pickup_sets_held_tag() {
         let id = AssetId(1);
         let mut world = TestWorld::new();
-        world.spawn_prop(id, [0.0, 1.0, -2.0], true);
-        world.components.push_typed(ball_body(id));
+        let carriable = world.spawn_prop(id, [0.0, 1.0, -2.0], true);
+        world.make_dynamic(carriable);
         world
             .components
             .push_typed(interacting_camera([0.0, 1.0, 0.0]));
@@ -1232,6 +1392,144 @@ mod tests {
             world.ctx().query::<Held>().count(),
             1,
             "pickup inserts the Held tag on the entity"
+        );
+    }
+
+    // A collider-bearing entity that appears after init (a runtime spawn) is
+    // adopted on the next step: it gets a body and falls like an authored one.
+    #[test]
+    fn runtime_spawned_prop_gets_a_body_and_falls() {
+        let mut world = TestWorld::new();
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        let baseline = physics.physics_body_count();
+
+        let spawned = world.spawn_prop(AssetId(7), [0.0, 5.0, 0.0], false);
+        world.make_dynamic(spawned);
+        physics.step(&mut world.ctx());
+        assert_eq!(
+            physics.physics_body_count(),
+            baseline + 1,
+            "the spawned entity got a body on its first step"
+        );
+        for _ in 0..30 {
+            physics.step(&mut world.ctx());
+        }
+        let y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        assert!(y < 4.5, "the spawned body falls (y = {y})");
+        for _ in 0..300 {
+            physics.step(&mut world.ctx());
+        }
+        let y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        assert!(
+            (y - 0.5).abs() < 0.1,
+            "the spawned ball rests on the flat floor (y = {y})"
+        );
+    }
+
+    // Spawn, despawn, and respawn leave no bodies or colliders behind.
+    #[test]
+    fn spawn_despawn_respawn_cycle_is_leak_free() {
+        let mut world = TestWorld::new();
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+        let bodies = physics.physics_body_count();
+        let colliders = physics.physics_collider_count();
+
+        for round in 0..3 {
+            let spawned = world.spawn_prop(AssetId(100 + round), [0.0, 3.0, 0.0], false);
+            world.make_dynamic(spawned);
+            physics.step(&mut world.ctx());
+            assert_eq!(physics.physics_body_count(), bodies + 1, "round {round}");
+            world.components.despawn(spawned);
+            physics.step(&mut world.ctx());
+            assert_eq!(
+                physics.physics_body_count(),
+                bodies,
+                "round {round} reaped the body"
+            );
+            assert_eq!(
+                physics.physics_collider_count(),
+                colliders,
+                "round {round} reaped the collider"
+            );
+        }
+    }
+
+    // A hard landing publishes one ContactEvent naming the prop; resting
+    // afterwards stays silent.
+    #[test]
+    fn contact_event_fires_on_impact_and_not_at_rest() {
+        let id = AssetId(1);
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        world.make_dynamic(entity);
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+
+        let mut cursor = EventCursor::default();
+        let mut impacts: Vec<ContactEvent> = Vec::new();
+        for _ in 0..120 {
+            physics.step(&mut world.ctx());
+            let ctx = world.ctx();
+            if let Some(events) = ctx.events::<ContactEvent>() {
+                impacts.extend(events.read(&mut cursor).copied());
+            }
+        }
+        assert_eq!(impacts.len(), 1, "one landing, one event: {impacts:?}");
+        let impact = impacts[0];
+        assert_eq!(impact.a, entity);
+        assert_eq!(impact.b, None, "the floor slab has no entity");
+        assert!(
+            impact.impulse > 3.0 && impact.impulse < 50.0,
+            "impulse {} out of the plausible landing range",
+            impact.impulse
+        );
+
+        // Settled: hundreds of resting ticks publish nothing further.
+        for _ in 0..300 {
+            physics.step(&mut world.ctx());
+            let ctx = world.ctx();
+            if let Some(events) = ctx.events::<ContactEvent>() {
+                assert_eq!(
+                    events.read(&mut cursor).count(),
+                    0,
+                    "resting contact must not publish events"
+                );
+            }
+        }
+    }
+
+    // The config's no_collide pairs reach the built colliders: a prop on a
+    // layer that ignores `world` falls straight through the floor.
+    #[test]
+    fn no_collide_config_lets_a_layered_prop_fall_through_the_floor() {
+        let config = PhysicsConfig {
+            layers: vec!["ghost".to_string()],
+            no_collide: vec![["ghost".to_string(), "world".to_string()]],
+            ..PhysicsConfig::default()
+        };
+
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(AssetId(1), [0.0, 2.0, 0.0], false);
+        world.make_dynamic(entity);
+        world
+            .components
+            .get_mut::<Collider>(entity)
+            .unwrap()
+            .0
+            .layer = "ghost".to_string();
+
+        let mut physics = PhysicsSystem::new(config);
+        physics.init(&mut world.ctx());
+        for _ in 0..240 {
+            physics.step(&mut world.ctx());
+        }
+        let y = world.components.get::<Transform>(entity).unwrap().position[1];
+        assert!(
+            y < -10.0,
+            "the ghost-layer prop fell through the floor (y = {y})"
         );
     }
 }

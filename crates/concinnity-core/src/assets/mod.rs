@@ -19,6 +19,7 @@ mod audio_command;
 mod camera3d;
 mod camera_probe;
 mod character_rig;
+mod contact_event;
 mod controls_command;
 mod despawn_request;
 mod file;
@@ -54,6 +55,7 @@ mod volume_event;
 
 // Per-instance components an entity is composed from: its placement, render
 // description, collision, hierarchy, and gameplay tags.
+mod body_dynamics;
 mod children;
 mod collider;
 mod global_transform;
@@ -164,6 +166,7 @@ pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{TriggerFilter, TriggerVolume};
 pub use concinnity_asset::{WaterSurface, WaterWave};
 pub use concinnity_asset::{Window, WindowArgs, WindowMode};
+pub use contact_event::ContactEvent;
 pub use controls_command::ControlsCommand;
 pub use despawn_request::DespawnRequest;
 pub use file::File;
@@ -206,6 +209,7 @@ pub use volume_event::VolumeEvent;
 pub const MAX_WATER_WAVES: usize = 4;
 
 // Per-instance components an entity is composed from.
+pub use body_dynamics::BodyDynamics;
 pub use children::Children;
 pub use collider::Collider;
 pub use global_transform::GlobalTransform;

@@ -9,8 +9,8 @@
 use concinnity_core::assets::{CameraProbe, GroundProbes};
 use concinnity_core::ecs::PipelineContext;
 
-use super::PhysicsWorld;
 use super::rig::RigPhysics;
+use super::{LayerMask, PhysicsWorld};
 
 // Kept between the camera and the nearest obstruction so the near plane
 // never clips into it.
@@ -20,15 +20,28 @@ const CAMERA_MIN_DISTANCE: f32 = 0.3;
 
 // Answer every probe component. Character capsules are transparent to their
 // own probes (a foot ray starts inside the rig's capsule; the camera ray
-// starts at a pivot inside it).
-pub(crate) fn step_probes(world: &PhysicsWorld, ctx: &mut PipelineContext, rigs: &[RigPhysics]) {
+// starts at a pivot inside it); `mask` keeps the rays on scene geometry
+// (world and prop layers), so trigger regions and other characters never
+// register as ground or as a camera obstruction.
+pub(crate) fn step_probes(
+    world: &PhysicsWorld,
+    ctx: &mut PipelineContext,
+    rigs: &[RigPhysics],
+    mask: LayerMask,
+) {
     let handle_of = |target| rigs.iter().find(|r| r.target == target).map(|r| r.handle);
 
     for probes in ctx.query_mut::<GroundProbes>() {
         let exclude = handle_of(probes.target);
         for probe in &mut probes.probes {
             probe.hit = world
-                .raycast(probe.origin, [0.0, -1.0, 0.0], probe.max_dist, exclude)
+                .raycast(
+                    probe.origin,
+                    [0.0, -1.0, 0.0],
+                    probe.max_dist,
+                    exclude,
+                    mask,
+                )
                 .map(|hit| (hit.point, hit.normal));
         }
     }
@@ -41,7 +54,7 @@ pub(crate) fn step_probes(world: &PhysicsWorld, ctx: &mut PipelineContext, rigs:
         ];
         let dist = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
         probe.clearance = world
-            .raycast(probe.pivot, dir, dist, handle_of(probe.target))
+            .raycast(probe.pivot, dir, dist, handle_of(probe.target), mask)
             .map(|hit| (hit.distance - CAMERA_MARGIN).max(CAMERA_MIN_DISTANCE));
     }
 }

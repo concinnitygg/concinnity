@@ -14,3 +14,4 @@ uniform scaling).
 - `half_extents`: An array of 3 floats. Box half-extents in local space [x, y, z]. Used by cuboid shapes. Defaults to `[0.5, 0.5, 0.5]`.
 - `radius`: A float. Radius in local space. Used by ball and capsule shapes. Defaults to `0.5`.
 - `half_height`: A float. Half the cylinder height in local space. Used by capsule shapes. Defaults to `0.5`.
+- `layer`: A string. Collision layer name. Built-in layers are `world`, `prop`, `character`, and `trigger`; extra names come from [PhysicsConfig](PhysicsConfig.md) `layers`. Empty derives the layer from the body kind: `world` for a static prop, `prop` when a [PropBody](PropBody.md) makes it dynamic.

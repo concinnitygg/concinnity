@@ -26,7 +26,7 @@ pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
             name
         ));
     }
-    Ok(())
+    super::physics::check_collider_shape(name, args)
 }
 
 #[cfg(test)]

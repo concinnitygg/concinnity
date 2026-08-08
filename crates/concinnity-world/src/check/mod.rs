@@ -15,6 +15,7 @@ pub mod behavior;
 pub mod cross_reference;
 pub mod fault;
 pub mod instanced_prop;
+pub mod physics;
 pub mod prop;
 pub mod sdf_volume;
 pub mod shader;
@@ -57,6 +58,7 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
         "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
         "voxelworld" => voxel_world::check(name, args),
         "instancedprop" | "instanced" => instanced_prop::check(name, args),
+        "triggervolume" => physics::check(name, args),
         _ => Ok(()),
     }
 }

@@ -68,6 +68,7 @@ pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
     check_renderable_contract(assets, errors);
     check_shader_budget(assets, errors);
     check_material_shader_consumers(assets, errors);
+    super::physics::check_layers(assets, errors);
 }
 
 // At most one instance of every `singleton`-flagged type. No filler: companion

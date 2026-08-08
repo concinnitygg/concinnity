@@ -386,6 +386,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
             half_extents: [0.3, 0.15, 0.3],
             radius: 0.0,
             half_height: 0.0,
+            layer: String::new(),
         }),
         ..Default::default()
     });

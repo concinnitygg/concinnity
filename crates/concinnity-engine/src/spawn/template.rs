@@ -8,8 +8,8 @@
 // instances so their freed draw slots can be recycled by the next spawn.
 
 use crate::assets::{
-    GlobalTransform, Lifetime, MeshRenderer, ModelRenderer, RenderHandle, SkeletonPose, Spawner,
-    Transform,
+    BodyDynamics, Collider, GlobalTransform, Lifetime, MeshRenderer, ModelRenderer, Pickup,
+    RenderHandle, SkeletonPose, Spawner, Transform,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::decompose::EntityByName;
@@ -47,9 +47,13 @@ pub(super) fn spawn_from_template(
     }
 
     // Copy whichever renderer the template carries so the new entity is a
-    // first-class renderable for every system that joins on it.
+    // first-class renderable for every system that joins on it, plus its
+    // physics components so the physics system builds it a body.
     let mesh_renderer = ctx.get::<MeshRenderer>(template).cloned();
     let model_renderer = ctx.get::<ModelRenderer>(template).cloned();
+    let collider = ctx.get::<Collider>(template).cloned();
+    let body_dynamics = ctx.get::<BodyDynamics>(template).copied();
+    let pickup = ctx.get::<Pickup>(template).is_some();
 
     let entity = ctx.components.spawn();
     ctx.insert(entity, transform);
@@ -59,6 +63,15 @@ pub(super) fn spawn_from_template(
         ctx.insert(entity, renderer);
     } else if let Some(renderer) = model_renderer {
         ctx.insert(entity, renderer);
+    }
+    if let Some(collider) = collider {
+        ctx.insert(entity, collider);
+    }
+    if let Some(body_dynamics) = body_dynamics {
+        ctx.insert(entity, body_dynamics);
+    }
+    if pickup {
+        ctx.insert(entity, Pickup);
     }
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
@@ -212,6 +225,64 @@ mod tests {
             SlotAlloc::Reuse(slot) => slot,
             SlotAlloc::Append(idx) => idx,
         }
+    }
+
+    #[test]
+    fn spawned_copy_carries_the_template_physics_components() {
+        run(|ctx| {
+            ctx.insert_resource(EntityByName::default());
+
+            let template = ctx.components.spawn();
+            ctx.insert(template, Transform::default());
+            ctx.insert(
+                template,
+                MeshRenderer {
+                    mesh: None,
+                    material: None,
+                    texture: None,
+                    cull_distance: 0.0,
+                },
+            );
+            ctx.insert(template, RenderHandle { draws: [0].into() });
+            ctx.insert(
+                template,
+                Collider(crate::assets::PropCollider {
+                    radius: 0.4,
+                    ..Default::default()
+                }),
+            );
+            ctx.insert(
+                template,
+                BodyDynamics {
+                    mass: 2.5,
+                    ..Default::default()
+                },
+            );
+            ctx.insert(template, Pickup);
+
+            let mut alloc = DrawSlotAllocator::with_len(1);
+            let spawned = spawn_from_template(
+                ctx,
+                template,
+                None,
+                Transform::default(),
+                None,
+                |_src, _model| Some(alloc_slot(&mut alloc)),
+            )
+            .expect("spawn");
+
+            assert_eq!(
+                ctx.get::<Collider>(spawned).map(|c| c.0.radius),
+                Some(0.4),
+                "the collider is copied"
+            );
+            assert_eq!(
+                ctx.get::<BodyDynamics>(spawned).map(|b| b.mass),
+                Some(2.5),
+                "the dynamic-body parameters are copied"
+            );
+            assert!(ctx.get::<Pickup>(spawned).is_some(), "the tag is copied");
+        });
     }
 
     #[test]
