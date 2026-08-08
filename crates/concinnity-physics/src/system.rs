@@ -5,6 +5,7 @@
 // `PhysicsConfig`, a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading
 // the optional `PhysicsConfig` for the floor / terrain.
 
+use crate::interp::{PointInterp, PoseInterp};
 use crate::{BodyHandle, ColliderShape, PhysicsWorld};
 use concinnity_core::assets::{
     Camera3D, Collider, Held, Joint, PhysicsConfig, Pickup, PropBody, RigidBody, Transform,
@@ -12,18 +13,15 @@ use concinnity_core::assets::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, StepResult, System,
+    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, SimTiming, StepResult, System,
 };
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 // Acceleration due to gravity in world units per second squared. Shared with
 // the third-person controller so its jump takeoff matches the rig's fall.
 pub const GRAVITY: f32 = 20.0;
 // Friction coefficient for static (non-PropBody) prop colliders.
 const STATIC_FRICTION: f32 = 0.8;
-// Largest physics timestep; longer frames are clamped for solver stability.
-const MAX_DT: f32 = 1.0 / 30.0;
 
 // Reach distance for picking up a Prop, in world units.
 const PICKUP_REACH: f32 = 3.0;
@@ -40,7 +38,6 @@ const THROW_SPEED: f32 = 6.0;
 // `World::start` from the world's `PhysicsConfig`; never a declarable asset.
 #[derive(Debug)]
 pub struct PhysicsSystem {
-    last_step: Option<Instant>,
     // Camera eye Y at spawn; the flat-floor fallback derives nothing from it,
     // but it seeds a sensible fallback camera position.
     floor_y: f32,
@@ -95,8 +92,14 @@ struct PlayerPhysics {
     jump_height: f32,
     // Current vertical velocity (world units/second).
     vy: f32,
-    // Whether the capsule rested on a surface last frame.
+    // Whether the capsule rested on a surface last tick.
     grounded: bool,
+    // Authoritative simulated capsule centre with its render blend snapshots.
+    center: PointInterp,
+    // The eye position written back last frame. A Camera3D position that
+    // differs was moved externally (free-fly, a teleport) and is adopted with
+    // no blend across the jump.
+    written_eye: Option<[f32; 3]>,
 }
 
 // Links a prop entity to its body in the simulation.
@@ -109,6 +112,8 @@ struct PropPhysics {
     dynamic: bool,
     // Whether the prop can be picked up and carried.
     pickup: bool,
+    // Simulated pose snapshots the render blend samples (dynamic props only).
+    pose: PoseInterp,
 }
 
 impl PhysicsSystem {
@@ -134,7 +139,6 @@ impl PhysicsSystem {
             None
         };
         Self {
-            last_step: None,
             floor_y: config.floor_y,
             terrain,
             terrain_mesh: config.terrain_mesh,
@@ -192,6 +196,10 @@ impl PhysicsSystem {
             .collect();
 
         for (entity, snap) in snaps {
+            let pose = PoseInterp::new(
+                snap.position,
+                crate::convert::quat_from_euler_deg(snap.rotation_deg),
+            );
             let handle = if let Some(prop_body) = propbody_of.get(&entity) {
                 let handle = world.add_dynamic(
                     &snap.shape,
@@ -204,6 +212,7 @@ impl PhysicsSystem {
                     handle,
                     dynamic: true,
                     pickup: snap.pickup,
+                    pose,
                 });
                 handle
             } else {
@@ -218,6 +227,7 @@ impl PhysicsSystem {
                     handle,
                     dynamic: false,
                     pickup: false,
+                    pose,
                 });
                 handle
             };
@@ -230,8 +240,6 @@ impl PhysicsSystem {
 
 impl System for PhysicsSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        self.last_step = Some(Instant::now());
-
         let mut world = PhysicsWorld::new(GRAVITY);
 
         // floor: heightfield-mesh-driven, procedural noise, or flat slab
@@ -411,6 +419,8 @@ impl System for PhysicsSystem {
                 jump_height: rb.jump_height.max(0.0),
                 vy: 0.0,
                 grounded: true,
+                center: PointInterp::new(center),
+                written_eye: None,
             });
             tracing::debug!(
                 "PhysicsSystem: player capsule r={:.2} h={:.2} gravity={}",
@@ -428,25 +438,24 @@ impl System for PhysicsSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        let now = Instant::now();
-        let dt = self
-            .last_step
-            .map(|t| now.duration_since(t).as_secs_f32().min(MAX_DT))
-            .unwrap_or(0.0);
-        self.last_step = Some(now);
-
-        // Freeze while a menu is open: skip the solve so the world truly pauses.
-        // `last_step` is advanced above regardless, so the next live frame sees
-        // one normal interval rather than the whole paused span -- no catch-up
-        // burst on resume. The flag is published by GraphicsSystem, which runs
-        // first in the schedule, so it reflects this same tick.
+        // Freeze while a menu is open: skip the solve and the write-back so the
+        // world truly pauses (and an external editor's edits to simulated
+        // Transforms are not stomped by a stale blend). The simulation clock
+        // holds its accumulator across the pause, so resuming costs one normal
+        // frame. The flag is published by GraphicsSystem, which runs first in
+        // the schedule, so it reflects this same tick.
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }
 
-        if self.world.is_none() || dt <= 0.0 {
+        if self.world.is_none() {
             return StepResult::Continue;
         }
+
+        // The frame's fixed-tick budget and render blend factor. Absent (a
+        // directly-stepped world with no App), every step runs exactly one tick
+        // and writes the freshly simulated state.
+        let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
 
         // snapshot reads (released before any query_mut below)
         let (cam_pos, cam_yaw, cam_pitch, desired_move, jump_req, interact_req) = ctx
@@ -546,72 +555,95 @@ impl System for PhysicsSystem {
             }
         }
 
-        // carried prop hovers in front of the camera
-        if let Some(held_idx) = self.held {
-            let pp = &self.prop_bodies[held_idx];
-            let hold_pos = [
-                cam_pos[0] + fwd_full[0] * HOLD_DISTANCE,
-                cam_pos[1] + fwd_full[1] * HOLD_DISTANCE - HOLD_DROP,
-                cam_pos[2] + fwd_full[2] * HOLD_DISTANCE,
-            ];
-            world.set_kinematic_translation(pp.handle, hold_pos);
+        // Adopt an externally moved camera (free-fly, a teleport): a position
+        // that differs from the eye written back last frame was not ours, so
+        // the capsule snaps to it with no blend across the jump.
+        if let Some(player) = self.player.as_mut()
+            && player.written_eye != Some(cam_pos)
+        {
+            player
+                .center
+                .snap([cam_pos[0], cam_pos[1] - player.eye_offset, cam_pos[2]]);
         }
 
-        // move the player capsule
-        let mut new_cam_pos = cam_pos;
-        let mut grounded = true;
-        if let Some(player) = self.player.as_mut() {
-            if player.has_gravity {
-                if jump_req && player.grounded && player.jump_height > 0.0 {
-                    player.vy = (2.0 * GRAVITY * player.gravity_scale * player.jump_height).sqrt();
+        // The carried prop's hover point in front of the camera, refreshed
+        // from this frame's camera pose.
+        let hold_pos = [
+            cam_pos[0] + fwd_full[0] * HOLD_DISTANCE,
+            cam_pos[1] + fwd_full[1] * HOLD_DISTANCE - HOLD_DROP,
+            cam_pos[2] + fwd_full[2] * HOLD_DISTANCE,
+        ];
+
+        // Root-motion displacements published since last frame, applied on the
+        // frame's first tick. Rig capsules whose entity moved externally snap
+        // before any tick runs.
+        let motions = super::rig::drain_motions(ctx, &mut self.root_cursor);
+        super::rig::sync_rigs(ctx, &mut self.rigs);
+
+        for tick in 0..timing.ticks {
+            let dt = timing.tick_dt;
+
+            // carried prop hovers in front of the camera
+            if let Some(held_idx) = self.held {
+                world.set_kinematic_translation(self.prop_bodies[held_idx].handle, hold_pos);
+            }
+
+            // move the player capsule
+            if let Some(player) = self.player.as_mut() {
+                if player.has_gravity {
+                    if tick == 0 && jump_req && player.grounded && player.jump_height > 0.0 {
+                        player.vy =
+                            (2.0 * GRAVITY * player.gravity_scale * player.jump_height).sqrt();
+                    }
+                    player.vy -= GRAVITY * player.gravity_scale * dt;
                 }
-                player.vy -= GRAVITY * player.gravity_scale * dt;
+
+                let center = player.center.current();
+                let desired = [desired_move[0] * dt, player.vy * dt, desired_move[2] * dt];
+                let moved = world.move_character(
+                    player.half_height,
+                    player.radius,
+                    center,
+                    desired,
+                    dt,
+                    player.handle,
+                );
+                let new_center = [
+                    center[0] + moved.translation[0],
+                    center[1] + moved.translation[1],
+                    center[2] + moved.translation[2],
+                ];
+                world.set_kinematic_translation(player.handle, new_center);
+
+                player.grounded = moved.grounded;
+                if moved.grounded && player.vy < 0.0 {
+                    player.vy = 0.0;
+                }
+                player.center.push(new_center);
             }
 
-            let center = [cam_pos[0], cam_pos[1] - player.eye_offset, cam_pos[2]];
-            let desired = [desired_move[0] * dt, player.vy * dt, desired_move[2] * dt];
-            let moved = world.move_character(
-                player.half_height,
-                player.radius,
-                center,
-                desired,
+            // move the root-motion character rig capsules
+            super::rig::tick_rigs(
+                world,
+                ctx,
+                &mut self.rigs,
+                if tick == 0 { &motions } else { &[] },
                 dt,
-                player.handle,
+                GRAVITY,
             );
-            let new_center = [
-                center[0] + moved.translation[0],
-                center[1] + moved.translation[1],
-                center[2] + moved.translation[2],
-            ];
-            world.set_kinematic_translation(player.handle, new_center);
 
-            player.grounded = moved.grounded;
-            grounded = moved.grounded;
-            if moved.grounded && player.vy < 0.0 {
-                player.vy = 0.0;
+            // advance the simulation
+            world.step(dt);
+
+            // record the tick's dynamic prop poses for the render blend
+            for prop in self.prop_bodies.iter_mut().filter(|p| p.dynamic) {
+                let (pos, rot) = world.body_pose_quat(prop.handle);
+                prop.pose.push(pos, rot);
             }
-            new_cam_pos = [
-                new_center[0],
-                new_center[1] + player.eye_offset,
-                new_center[2],
-            ];
         }
-
-        // move the root-motion character rig capsules
-        super::rig::step_rigs(
-            world,
-            ctx,
-            &mut self.rigs,
-            &mut self.root_cursor,
-            dt,
-            GRAVITY,
-        );
 
         // answer the IK ground probes and the follow camera's occlusion probe
         super::probes::step_probes(world, ctx, &self.rigs);
-
-        // advance the simulation
-        world.step(dt);
 
         // publish the sensor boundary crossings that pass their volume's
         // filter. A crossing whose body was removed this same step has no
@@ -639,19 +671,19 @@ impl System for PhysicsSystem {
             }
         }
 
-        // read dynamic prop transforms back out, keyed by entity
+        // Write each dynamic prop's blended pose back to its Transform:
+        // positions lerped, rotations slerped as quaternions, with the Euler
+        // decomposition happening only here at the write boundary.
+        let alpha = timing.alpha;
         let prop_updates: Vec<(Entity, [f32; 3], [f32; 3])> = self
             .prop_bodies
             .iter()
             .filter(|p| p.dynamic)
             .map(|p| {
-                let (pos, rot) = world.body_pose(p.handle);
-                (p.entity, pos, rot)
+                let (pos, rot) = p.pose.sample(alpha);
+                (p.entity, pos, crate::convert::euler_deg_from_quat(rot))
             })
             .collect();
-
-        // write the simulated pose back to each entity's Transform, and the
-        // carried flag to its Held tag.
         for (entity, pos, rot) in prop_updates {
             if let Some(t) = ctx.get_mut::<Transform>(entity) {
                 t.position = pos;
@@ -668,20 +700,30 @@ impl System for PhysicsSystem {
             }
         }
 
-        // write camera position + view matrix
-        for camera in ctx.query_mut::<Camera3D>() {
-            camera.position = new_cam_pos;
-            camera.view_matrix = concinnity_core::gfx::camera::view_matrix(
-                camera.position,
-                camera.yaw,
-                camera.pitch,
-            );
+        // write the blended camera position + view matrix
+        let mut grounded = true;
+        if let Some(player) = self.player.as_mut() {
+            let center = player.center.sample(alpha);
+            let eye = [center[0], center[1] + player.eye_offset, center[2]];
+            player.written_eye = Some(eye);
+            grounded = player.grounded;
+            for camera in ctx.query_mut::<Camera3D>() {
+                camera.position = eye;
+                camera.view_matrix = concinnity_core::gfx::camera::view_matrix(
+                    camera.position,
+                    camera.yaw,
+                    camera.pitch,
+                );
+            }
         }
 
         // publish grounded state for jump gating
         for body in ctx.query_mut::<RigidBody>() {
             body.is_grounded = grounded;
         }
+
+        // write the blended rig positions for the render follow
+        super::rig::publish_rigs(ctx, &mut self.rigs, alpha);
 
         StepResult::Continue
     }
@@ -996,10 +1038,10 @@ mod tests {
         }
     }
 
-    // The simulated pose is written back to the prop's Transform.
+    // The simulated pose is written back to the prop's Transform. With no
+    // `SimTiming` published, each step runs exactly one fixed tick.
     #[test]
     fn dynamic_prop_writes_transform() {
-        use std::{thread, time::Duration};
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
@@ -1007,8 +1049,7 @@ mod tests {
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
-        for _ in 0..3 {
-            thread::sleep(Duration::from_millis(20));
+        for _ in 0..10 {
             physics.step(&mut world.ctx());
         }
 
@@ -1020,12 +1061,11 @@ mod tests {
     }
 
     // A menu freezes the solve: while `MenuActive(true)` is published the body
-    // does not fall, and clearing it resumes the fall from where it froze. This
-    // is the "true pause" the menu relies on; `last_step` advancing under the
-    // freeze keeps the resume to one normal interval (no catch-up burst).
+    // does not fall, and clearing it resumes the fall from where it froze.
+    // (The App-level simulation clock additionally holds its accumulator
+    // across the pause, so a live run resumes without a catch-up burst.)
     #[test]
     fn menu_active_freezes_then_resumes_physics() {
-        use std::{thread, time::Duration};
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
@@ -1034,10 +1074,9 @@ mod tests {
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
 
-        // Paused: step several frames with real wall-clock dt; the body stays put.
+        // Paused: the body stays put however many frames pass.
         world.resources.insert(MenuActive(true));
         for _ in 0..5 {
-            thread::sleep(Duration::from_millis(20));
             physics.step(&mut world.ctx());
         }
         let y_paused = world.components.get::<Transform>(entity).unwrap().position[1];
@@ -1048,8 +1087,7 @@ mod tests {
 
         // Resumed: the body falls again.
         world.resources.insert(MenuActive(false));
-        for _ in 0..3 {
-            thread::sleep(Duration::from_millis(20));
+        for _ in 0..5 {
             physics.step(&mut world.ctx());
         }
         let y_resumed = world.components.get::<Transform>(entity).unwrap().position[1];
@@ -1059,11 +1097,91 @@ mod tests {
         );
     }
 
+    // A zero-tick frame (the accumulator has not crossed a tick) advances
+    // nothing; the written Transform blends between the last two ticks by the
+    // frame's alpha.
+    #[test]
+    fn zero_tick_frames_blend_between_the_last_two_ticks() {
+        let id = AssetId(1);
+        let mut world = TestWorld::new();
+        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        world.components.push_typed(ball_body(id));
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.ctx());
+
+        let tick = |ticks, alpha| SimTiming {
+            ticks,
+            tick_dt: SimTiming::TICK_DT,
+            alpha,
+        };
+        world.resources.insert(tick(1, 1.0));
+        physics.step(&mut world.ctx());
+        let y_prev = world.components.get::<Transform>(entity).unwrap().position[1];
+        physics.step(&mut world.ctx());
+        let y_curr = world.components.get::<Transform>(entity).unwrap().position[1];
+        assert!(y_curr < y_prev, "the body falls tick over tick");
+
+        // No tick, alpha 0: the write-back returns to the previous tick's pose.
+        world.resources.insert(tick(0, 0.0));
+        physics.step(&mut world.ctx());
+        let y_alpha0 = world.components.get::<Transform>(entity).unwrap().position[1];
+        assert!(
+            (y_alpha0 - y_prev).abs() < 1e-6,
+            "alpha 0 samples the previous tick"
+        );
+
+        // No tick, alpha 0.5: halfway between the two ticks.
+        world.resources.insert(tick(0, 0.5));
+        physics.step(&mut world.ctx());
+        let y_mid = world.components.get::<Transform>(entity).unwrap().position[1];
+        let expected = (y_prev + y_curr) * 0.5;
+        assert!(
+            (y_mid - expected).abs() < 1e-6,
+            "alpha 0.5 blends the tick poses (y={y_mid}, expected {expected})"
+        );
+    }
+
+    // The same number of fixed ticks produces bit-identical world state
+    // however they are grouped into frames: 30 fps frames (two ticks each)
+    // against 120 fps frames (a tick every other frame).
+    #[test]
+    fn tick_grouping_does_not_change_the_outcome() {
+        let run = |frames: &[u32]| -> ([f32; 3], [f32; 3]) {
+            let id = AssetId(1);
+            let mut world = TestWorld::new();
+            let entity = world.spawn_prop(id, [0.3, 5.0, 0.1], false);
+            world.components.push_typed(ball_body(id));
+
+            let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+            physics.init(&mut world.ctx());
+            for &ticks in frames {
+                world.resources.insert(SimTiming {
+                    ticks,
+                    tick_dt: SimTiming::TICK_DT,
+                    alpha: 1.0,
+                });
+                physics.step(&mut world.ctx());
+            }
+            let t = world.components.get::<Transform>(entity).unwrap();
+            (t.position, t.rotation_deg)
+        };
+
+        // One simulated second: 30 frames of 2 ticks vs 120 frames alternating
+        // 0 and 1 ticks. Both run exactly 60 fixed ticks.
+        let thirty: Vec<u32> = std::iter::repeat_n(2, 30).collect();
+        let one_twenty: Vec<u32> = (0..120).map(|i| i % 2).collect();
+        assert_eq!(
+            run(&thirty),
+            run(&one_twenty),
+            "the fixed-tick outcome must not depend on frame grouping"
+        );
+    }
+
     // Despawning a decomposed prop reaps its Rapier body, so it stops simulating
     // (and colliding) once its entity is gone.
     #[test]
     fn despawning_a_prop_reaps_its_physics_body() {
-        use std::{thread, time::Duration};
         let id = AssetId(1);
         let mut world = TestWorld::new();
         let ball = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
@@ -1074,7 +1192,6 @@ mod tests {
 
         // Settle so the body is live and falling.
         for _ in 0..2 {
-            thread::sleep(Duration::from_millis(20));
             physics.step(&mut world.ctx());
         }
         let before = physics.physics_body_count();
@@ -1082,13 +1199,11 @@ mod tests {
         // Despawn the ball (stand-in for GraphicsSystem) and step: PhysicsSystem
         // reaps the orphaned body.
         world.components.despawn(ball);
-        thread::sleep(Duration::from_millis(20));
         physics.step(&mut world.ctx());
         let after = physics.physics_body_count();
         assert_eq!(after, before - 1, "the despawned prop's body was removed");
 
         // The sim keeps running cleanly with the body gone (no further removals).
-        thread::sleep(Duration::from_millis(20));
         physics.step(&mut world.ctx());
         assert_eq!(
             physics.physics_body_count(),
@@ -1100,7 +1215,6 @@ mod tests {
     // Picking up a carriable prop tags its entity with Held.
     #[test]
     fn pickup_sets_held_tag() {
-        use std::{thread, time::Duration};
         let id = AssetId(1);
         let mut world = TestWorld::new();
         world.spawn_prop(id, [0.0, 1.0, -2.0], true);
@@ -1112,7 +1226,6 @@ mod tests {
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         physics.init(&mut world.ctx());
 
-        thread::sleep(Duration::from_millis(5));
         physics.step(&mut world.ctx());
 
         assert_eq!(

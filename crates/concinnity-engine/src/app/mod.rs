@@ -8,6 +8,8 @@ pub mod anim_runtime;
 
 // Process-level thread + memory budgets computed at App start.
 pub mod budget;
+// Fixed-timestep accumulator advanced before each world step.
+pub(crate) mod clock;
 pub mod dev_flags;
 pub(crate) mod pacing;
 pub mod run;

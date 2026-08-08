@@ -19,6 +19,9 @@ pub struct App {
     // FPS-cap pacer, run before each world step so no system pays the sleep
     // inside its own step time (see `app::pacing`).
     pacer: crate::app::pacing::FramePacer,
+    // Fixed-timestep accumulator; publishes the frame's `SimTiming` resource
+    // before each world step (see `app::clock`).
+    clock: crate::app::clock::SimClock,
 }
 
 impl Default for App {
@@ -34,6 +37,7 @@ impl App {
             world: World::new_empty(),
             shutdown: ShutdownToken::new(),
             pacer: Default::default(),
+            clock: Default::default(),
         }
     }
 
@@ -43,6 +47,7 @@ impl App {
             world: World::new_empty(),
             shutdown,
             pacer: Default::default(),
+            clock: Default::default(),
         }
     }
 
@@ -168,9 +173,18 @@ impl App {
 
     // single world step, for callers that drive their own outer loop
     // (e.g. run_loop_macos in crate::app::run, which interleaves CFRunLoop pumps).
-    // The FPS-cap pacer holds the step's start to its target interval first.
+    // The FPS-cap pacer holds the step's start to its target interval first,
+    // then the simulation clock publishes the frame's fixed-tick budget. The
+    // menu state read is the previous frame's, the same one-frame lag the
+    // pacer's clamp accepts.
     pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
+        let paused = self
+            .world
+            .resource::<crate::ecs::MenuActive>()
+            .is_some_and(|m| m.0);
+        let timing = self.clock.advance(std::time::Instant::now(), paused);
+        self.world.insert_resource(timing);
         self.world.step()
     }
 }

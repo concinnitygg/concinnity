@@ -18,6 +18,36 @@ use concinnity_asset::FontHandle;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MenuActive(pub bool);
 
+// Fixed-timestep budget for the current frame, published by the App-level
+// simulation clock before each world step. `ticks` is how many fixed steps the
+// simulation systems (physics, behavior) run this frame; `tick_dt` is the
+// seconds each step advances; `alpha` is the accumulator remainder as a
+// fraction of `tick_dt`, used to blend the previous and current simulated
+// states when writing render-facing transforms. Absent (a directly-stepped
+// world with no App), the default is exactly one tick per step with no
+// blending, which makes bare `World::step` loops deterministic.
+#[derive(Debug, Clone, Copy)]
+pub struct SimTiming {
+    pub ticks: u32,
+    pub tick_dt: f32,
+    pub alpha: f32,
+}
+
+impl SimTiming {
+    /// Seconds each fixed simulation step advances (60 Hz).
+    pub const TICK_DT: f32 = 1.0 / 60.0;
+}
+
+impl Default for SimTiming {
+    fn default() -> Self {
+        Self {
+            ticks: 1,
+            tick_dt: Self::TICK_DT,
+            alpha: 1.0,
+        }
+    }
+}
+
 // The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
 // (from GraphicsConfig at init, refreshed by the settings row's live change)
 // and read by the App-level frame pacer before each world step. Independent of

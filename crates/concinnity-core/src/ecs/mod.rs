@@ -37,7 +37,7 @@ pub use frame::{FrameContext, FrameVec};
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
     HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
-    OverlayImages, PickEntry, PickIndex, ScreenStack, TraceEvent, TracePath, TracePaths,
+    OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent, TracePath, TracePaths,
     TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
 };
 

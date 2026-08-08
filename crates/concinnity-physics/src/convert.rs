@@ -39,6 +39,23 @@ pub fn from_rotation(rot: Rotation) -> [f32; 3] {
     [pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees()]
 }
 
+// A Rapier rotation's components as a plain `[x, y, z, w]` quaternion.
+pub fn to_quat(rot: Rotation) -> [f32; 4] {
+    [rot.x, rot.y, rot.z, rot.w]
+}
+
+// The `[x, y, z, w]` quaternion for engine Euler degrees. Pose interpolation
+// blends in quaternion space, so the lossy Euler decomposition happens only
+// once, at the Transform write boundary.
+pub fn quat_from_euler_deg(euler_deg: [f32; 3]) -> [f32; 4] {
+    to_quat(to_rotation(euler_deg))
+}
+
+// Engine Euler degrees `[pitch, yaw, roll]` for an `[x, y, z, w]` quaternion.
+pub fn euler_deg_from_quat(q: [f32; 4]) -> [f32; 3] {
+    from_rotation(Rotation::from_xyzw(q[0], q[1], q[2], q[3]).normalize())
+}
+
 // The `JointSpec` a `Joint` asset describes, converting authored degrees to
 // the radians Rapier expects for revolute joints.
 pub fn joint_spec(joint: &Joint) -> JointSpec {
@@ -135,6 +152,18 @@ mod tests {
     #[test]
     fn identity_rotation_is_zero_euler() {
         assert_eq!(from_rotation(Rotation::IDENTITY), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn quat_round_trips_through_euler() {
+        let euler = [12.0, 45.0, -30.0];
+        let back = euler_deg_from_quat(quat_from_euler_deg(euler));
+        for axis in 0..3 {
+            assert!(
+                (back[axis] - euler[axis]).abs() < 0.01,
+                "axis {axis}: {back:?} != {euler:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,16 +1,17 @@
 // concinnity-physics/src/rig.rs
 //
 // The character-rig drive: one kinematic capsule per `CharacterRig`
-// component (a `SkinnedMesh` that declared a `capsule`). Each frame the
+// component (a `SkinnedMesh` that declared a `capsule`). Each fixed tick the
 // capsule moves by the target's `RootMotion` displacement -- mapped through
 // the rig's authored rotation/scale -- plus gravity, sliding against the
-// scene like the player capsule; the resolved position is written back to
-// the rig component for GraphicsSystem's render follow.
+// scene like the player capsule; each frame the blended capsule position is
+// written back to the rig component for GraphicsSystem's render follow.
 
 use concinnity_core::assets::{CharacterRig, RootMotion};
 use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
 
+use super::interp::PointInterp;
 use super::{BodyHandle, PhysicsWorld};
 
 // Physics-side state for one rig.
@@ -20,6 +21,11 @@ pub(crate) struct RigPhysics {
     pub handle: BodyHandle,
     // Current vertical velocity (world units/second).
     pub vy: f32,
+    // Authoritative simulated capsule centre with its render blend snapshots.
+    center: PointInterp,
+    // The rig position written back last frame. A component position that
+    // differs was moved externally and is adopted with no blend.
+    written_pos: Option<[f32; 3]>,
 }
 
 // Capsule centre for a rig's mesh-origin position: the capsule stands on
@@ -46,10 +52,13 @@ pub(crate) fn init_rigs(world: &mut PhysicsWorld, ctx: &mut PipelineContext) -> 
         .map(|rig| {
             rig.position[1] += SPAWN_LIFT;
             rig.moved = true;
+            let center = center_of(rig);
             RigPhysics {
                 target: rig.target,
-                handle: world.add_character(rig.half_height, rig.radius, center_of(rig)),
+                handle: world.add_character(rig.half_height, rig.radius, center),
                 vy: 0.0,
+                center: PointInterp::new(center),
+                written_pos: Some(rig.position),
             }
         })
         .collect();
@@ -59,26 +68,43 @@ pub(crate) fn init_rigs(world: &mut PhysicsWorld, ctx: &mut PipelineContext) -> 
     rigs
 }
 
-// Step every rig capsule: root-motion displacement plus gravity, resolved
-// against the scene. Runs every frame -- a rig with no motion events still
-// settles under gravity.
-pub(crate) fn step_rigs(
+// Read the root-motion displacements published since last frame (by
+// AnimationSystem, which runs after physics; the events queue holds them for
+// one cycle).
+pub(crate) fn drain_motions(ctx: &PipelineContext, cursor: &mut EventCursor) -> Vec<RootMotion> {
+    ctx.events::<RootMotion>()
+        .map(|ev| ev.read(cursor).copied().collect())
+        .unwrap_or_default()
+}
+
+// Adopt externally moved rig components before the frame's ticks run: a
+// position that differs from the one written back last frame was not ours,
+// so the capsule snaps to it with no blend across the jump.
+pub(crate) fn sync_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics]) {
+    for rig_body in rigs.iter_mut() {
+        let Some(rig) = ctx
+            .query::<CharacterRig>()
+            .find(|r| r.target == rig_body.target)
+        else {
+            continue;
+        };
+        if rig_body.written_pos != Some(rig.position) {
+            rig_body.center.snap(center_of(rig));
+        }
+    }
+}
+
+// Advance every rig capsule one fixed tick: root-motion displacement plus
+// gravity, resolved against the scene. A rig with no motion still settles
+// under gravity.
+pub(crate) fn tick_rigs(
     world: &mut PhysicsWorld,
     ctx: &mut PipelineContext,
     rigs: &mut [RigPhysics],
-    cursor: &mut EventCursor,
+    motions: &[RootMotion],
     dt: f32,
     gravity: f32,
 ) {
-    if rigs.is_empty() {
-        return;
-    }
-    // This frame's displacements (published by AnimationSystem after last
-    // frame's physics step; the events queue holds them for one cycle).
-    let motions: Vec<RootMotion> = ctx
-        .events::<RootMotion>()
-        .map(|ev| ev.read(cursor).copied().collect())
-        .unwrap_or_default();
     for rig_body in rigs.iter_mut() {
         let Some(rig) = ctx
             .query_mut::<CharacterRig>()
@@ -108,7 +134,7 @@ pub(crate) fn step_rigs(
             rig.jump_velocity = 0.0;
         }
         rig_body.vy -= gravity * dt;
-        let center = center_of(rig);
+        let center = rig_body.center.current();
         let desired = [
             displacement[0],
             displacement[1] + rig_body.vy * dt,
@@ -128,11 +154,27 @@ pub(crate) fn step_rigs(
             rig_body.vy = 0.0;
         }
         rig.grounded = moved.grounded;
+        rig_body.center.push(new_center);
+    }
+}
+
+// Write each rig's blended capsule position back to its component for the
+// render follow.
+pub(crate) fn publish_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics], alpha: f32) {
+    for rig_body in rigs.iter_mut() {
+        let Some(rig) = ctx
+            .query_mut::<CharacterRig>()
+            .find(|r| r.target == rig_body.target)
+        else {
+            continue;
+        };
+        let center = rig_body.center.sample(alpha);
         let new_pos = [
-            new_center[0],
-            new_center[1] - rig.half_height - rig.radius,
-            new_center[2],
+            center[0],
+            center[1] - rig.half_height - rig.radius,
+            center[2],
         ];
+        rig_body.written_pos = Some(new_pos);
         if new_pos != rig.position {
             rig.position = new_pos;
             rig.moved = true;

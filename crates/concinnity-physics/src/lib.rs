@@ -11,6 +11,8 @@
 // registry; the dependency arrow is concinnity-physics <- concinnity-engine.
 
 mod convert;
+// Prev/curr pose snapshots blended by the frame's accumulator alpha.
+mod interp;
 // Raycast probe answering for animation IK and the follow camera.
 mod probes;
 // Root-motion character rigs: one kinematic capsule per `CharacterRig`.
@@ -27,7 +29,7 @@ pub use system::{GRAVITY, PhysicsSystem};
 // the asset data types (Joint, Prop, PropBody) carry no dependency on the
 // physics backend.
 pub(crate) use convert::{collider_shape, dynamic_params, joint_spec};
-use convert::{from_rotation, from_vec, to_rotation, to_vec};
+use convert::{from_rotation, from_vec, to_quat, to_rotation, to_vec};
 use rapier3d::control::{CharacterLength, KinematicCharacterController};
 use rapier3d::math::Pose;
 use rapier3d::parry::query::DefaultQueryDispatcher;
@@ -588,6 +590,15 @@ impl PhysicsWorld {
                 from_rotation(*body.rotation()),
             ),
             None => ([0.0; 3], [0.0; 3]),
+        }
+    }
+
+    // Read a body's current world-space position and `[x, y, z, w]` rotation
+    // quaternion, for pose interpolation (which blends in quaternion space).
+    pub fn body_pose_quat(&self, handle: BodyHandle) -> ([f32; 3], [f32; 4]) {
+        match self.bodies.get(handle.0) {
+            Some(body) => (from_vec(body.translation()), to_quat(*body.rotation())),
+            None => ([0.0; 3], [0.0, 0.0, 0.0, 1.0]),
         }
     }
 }

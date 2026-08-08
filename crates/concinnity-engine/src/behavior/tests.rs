@@ -16,6 +16,8 @@ struct TestWorld {
     profile: FrameProfile,
     resources: Resources,
     scratch: Arena,
+    // Simulated time accumulated by the `tick` helper's explicit dts.
+    elapsed: f32,
 }
 
 impl TestWorld {
@@ -37,6 +39,7 @@ fn world_with(behaviors: Vec<Behavior>) -> TestWorld {
         profile: FrameProfile::default(),
         resources: Resources::default(),
         scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+        elapsed: 0.0,
     };
     for b in behaviors {
         world.components.push_typed(b);
@@ -50,10 +53,10 @@ fn system(world: &mut TestWorld) -> BehaviorSystem {
     sys
 }
 
-// Drive one tick with an explicit dt, bypassing the wall clock.
+// Drive one tick with an explicit dt.
 fn tick(sys: &mut BehaviorSystem, world: &mut TestWorld, dt: f32) {
-    let elapsed = sys.prev_elapsed + dt;
-    sys.prev_elapsed = elapsed;
+    world.elapsed += dt;
+    let elapsed = world.elapsed;
     sys.tick(&mut world.ctx(), dt, elapsed);
 }
 

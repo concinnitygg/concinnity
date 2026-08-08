@@ -17,7 +17,6 @@
 // Clocks freeze while a menu is open, like the rest of the world clock.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use crate::assets::{
     Behavior, BehaviorSource, DespawnRequest, InteractSignal, PlayCue, ReparentRequest,
@@ -115,9 +114,10 @@ impl Instance {
             return false;
         }
         if repeat {
-            // At most one firing per tick; dropping whole elapsed intervals
-            // keeps a long frame from queueing a burst.
-            self.timer_accum %= interval.max(f32::EPSILON);
+            // At most one firing per tick. Fixed ticks make the subtraction
+            // exact for any interval above the tick length; a sub-tick
+            // interval fires every tick without accumulating unbounded debt.
+            self.timer_accum = (self.timer_accum - interval).min(interval);
         } else {
             self.timer_done = true;
         }
@@ -154,8 +154,9 @@ pub struct BehaviorSystem {
     // whether the node-path table has been published this world.
     trace_frame: u64,
     trace_paths_published: bool,
-    start_time: Option<Instant>,
-    prev_elapsed: f32,
+    // Fixed ticks run so far; elapsed simulated time is this times the tick
+    // length, so behavior clocks advance with the simulation, not the wall.
+    sim_ticks: u64,
     // Instances present before the first tick are the world's initial
     // population, so `spawned` does not fire for them.
     populated: bool,
@@ -177,8 +178,7 @@ impl Default for BehaviorSystem {
             transient_saves: false,
             trace_frame: 0,
             trace_paths_published: false,
-            start_time: None,
-            prev_elapsed: 0.0,
+            sim_ticks: 0,
             populated: false,
         }
     }
@@ -215,6 +215,7 @@ impl System for BehaviorSystem {
             .is_some_and(|t| t.0);
         self.trace_frame = 0;
         self.trace_paths_published = false;
+        self.sim_ticks = 0;
 
         // Restore persisted state, but only in a world that saves: any other
         // world starts fresh and never touches the state file.
@@ -264,13 +265,6 @@ impl System for BehaviorSystem {
         if self.programs.is_empty() {
             return StepResult::Continue;
         }
-        let elapsed = self
-            .start_time
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
-        let dt = (elapsed - self.prev_elapsed).max(0.0);
-        self.prev_elapsed = elapsed;
 
         if let Some(events) = ctx.events::<VolumeEvent>() {
             self.crossings
@@ -285,8 +279,22 @@ impl System for BehaviorSystem {
             .resource::<crate::ecs::MenuActive>()
             .map(|m| m.0)
             .unwrap_or(false);
-        if !menu_active {
-            self.tick(ctx, dt, elapsed);
+        if menu_active {
+            return StepResult::Continue;
+        }
+
+        // The frame's fixed-tick budget. Absent (a directly-stepped world with
+        // no App), every step runs exactly one tick. Edge events (crossings,
+        // presses) are consumed by the frame's first tick; catch-up ticks see
+        // none, so an edge never fires twice.
+        let timing = ctx
+            .resource::<crate::ecs::SimTiming>()
+            .copied()
+            .unwrap_or_default();
+        for _ in 0..timing.ticks {
+            self.sim_ticks += 1;
+            let elapsed = (self.sim_ticks as f64 * timing.tick_dt as f64) as f32;
+            self.tick(ctx, timing.tick_dt, elapsed);
         }
         StepResult::Continue
     }
