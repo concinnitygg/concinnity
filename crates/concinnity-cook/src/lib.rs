@@ -10,7 +10,10 @@
 // its `crate::{assets,ecs,gfx,geometry,result}` paths. The payload *decoders*
 // and shared payload types live in `concinnity_core::build`; this crate's
 // modules call back into them.
-pub use concinnity_core::{assets, build, ecs, gfx, paths, result};
+pub use concinnity_core::{assets, build, ecs, gfx, result};
+// The state tree and the source-asset lookup live in concinnity-store; both are
+// re-exported so cook code keeps naming them under `crate::*`.
+pub use concinnity_store::{paths, source};
 
 // The world front half -- the authored model, the type vocabulary
 // (`ComponentType` / `ResourceAssetType`), the typed spec vocabulary, and the

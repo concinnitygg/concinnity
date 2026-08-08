@@ -8,13 +8,12 @@ use std::fs;
 use std::io::Read;
 
 use concinnity_blob::BlobError;
-
-use crate::result::CnResult;
+use concinnity_core::result::CnResult;
 
 mod data;
 
-pub use crate::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use concinnity_blob::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH, WorldManifest};
+pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
 // Format a blob file path for a given index under `.concinnity/data/`. Blob 0
@@ -122,7 +121,7 @@ fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobDat
 // texture pool is sized per world.
 pub fn texture_resource_count() -> Result<usize, CnResult> {
     let (meta, _) = read_cnb(&blob_path(0))?;
-    let tag = crate::ecs::ResourceKind::Texture as u8;
+    let tag = concinnity_core::ecs::ResourceKind::Texture as u8;
     Ok(meta
         .resources
         .iter()
@@ -193,7 +192,7 @@ mod tests {
 
     #[test]
     fn load_raw_reads_blob0_eagerly_and_defers_overflow() {
-        use crate::ecs::{AssetKind, PayloadLocator};
+        use concinnity_core::ecs::{AssetKind, PayloadLocator};
 
         let dir = tempfile::tempdir().unwrap();
         let path_for = |idx: u32| {

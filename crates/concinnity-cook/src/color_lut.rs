@@ -26,8 +26,9 @@
 // size validator stay in concinnity-core; the `.png` slice-strip decode below
 // lives here in the build crate alongside the `png` crate.
 use concinnity_core::build::color_lut::{
-    LutFormat, classify_source, parse_cube, resolve_lut_source, serialise, validate_size,
+    LutFormat, classify_source, parse_cube, serialise, validate_size,
 };
+use concinnity_store::source::resolve_source_path as resolve_lut_source;
 
 // Validate that args specify a `ColorLut` source with a supported extension.
 pub fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), String> {

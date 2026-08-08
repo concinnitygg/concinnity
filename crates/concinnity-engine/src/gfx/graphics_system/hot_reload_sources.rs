@@ -45,7 +45,7 @@ pub struct TextureSourceEntry {
 // Singleton `ColorLut` reload entry. The 3D grading LUT has no slot (the
 // composite pass binds `self.color_lut` directly), so we only need the
 // resolved source path (the raw asset source string is resolved once at init
-// via `crate::build::color_lut::resolve_source_path` so the watcher knows
+// via `concinnity_store::source::resolve_source_path` so the watcher knows
 // where to subscribe and the per-frame reload knows what to re-read).
 #[derive(Debug, Clone)]
 pub struct ColorLutSource {
@@ -162,10 +162,10 @@ impl ProceduralMeshSourceMap {
 pub fn resolve_runtime_source_path(raw: &str) -> String {
     let p = Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = concinnity_core::paths::find_in_assets(raw) {
+        if let Some(path) = concinnity_store::source::find_in_assets(raw) {
             return path;
         }
-        return concinnity_core::paths::assets_dir()
+        return concinnity_store::paths::assets_dir()
             .join(raw)
             .to_string_lossy()
             .into_owned();

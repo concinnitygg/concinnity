@@ -427,7 +427,7 @@ mod tests {
 
         // The primary blob (data/0) and the provenance lock are both written.
         assert!(
-            concinnity_core::paths::data_dir().join("0").exists(),
+            concinnity_store::paths::data_dir().join("0").exists(),
             "data/0 blob written"
         );
         assert!(

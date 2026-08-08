@@ -300,10 +300,10 @@ pub fn resolve_source(source: &str) -> String {
     if !bare {
         return source.to_string();
     }
-    if let Some(found) = crate::paths::find_in_assets(source) {
+    if let Some(found) = crate::source::find_in_assets(source) {
         return found;
     }
-    concinnity_core::paths::assets_dir()
+    concinnity_store::paths::assets_dir()
         .join(source)
         .to_string_lossy()
         .into_owned()
@@ -2140,7 +2140,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_source("cn_test_no_such_model.glb");
-        let expected = concinnity_core::paths::assets_dir().join("cn_test_no_such_model.glb");
+        let expected = concinnity_store::paths::assets_dir().join("cn_test_no_such_model.glb");
         assert_eq!(resolved, expected.to_string_lossy());
     }
 

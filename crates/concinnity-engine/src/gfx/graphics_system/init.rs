@@ -1742,7 +1742,7 @@ impl GraphicsSystem {
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
-                resolved_path: crate::build::environment_map::resolve_source_path(&info.source),
+                resolved_path: concinnity_store::source::resolve_source_path(&info.source),
                 prefilter_face_size: info.prefilter_face_size,
                 irradiance_face_size: info.irradiance_face_size,
                 prefilter_samples: info.prefilter_samples,
@@ -1794,7 +1794,7 @@ impl GraphicsSystem {
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
-                resolved_path: crate::build::color_lut::resolve_source_path(&src),
+                resolved_path: concinnity_store::source::resolve_source_path(&src),
             });
         }
         Some((color_lut_bytes, color_lut_source))

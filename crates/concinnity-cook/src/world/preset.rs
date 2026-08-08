@@ -7,7 +7,7 @@
 use std::path::Path;
 
 fn find_preset_path(filename: &str, subdir: &str) -> Option<String> {
-    if let Some(p) = crate::paths::find_in_assets(filename) {
+    if let Some(p) = crate::source::find_in_assets(filename) {
         return Some(p);
     }
     preset_path_in(&crate::paths::assets_dir(), filename, subdir)

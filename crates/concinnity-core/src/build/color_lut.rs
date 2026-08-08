@@ -54,33 +54,6 @@ pub fn classify_source(source: &str) -> Result<LutFormat, String> {
     }
 }
 
-// Resolve a `ColorLut` source string into the actual file path on disk. The
-// runtime hot-reload watcher needs the resolved path so it can subscribe to
-// the correct parent directory; bare filenames are otherwise unfindable
-// after the build pipeline runs.
-pub fn resolve_source_path(source: &str) -> String {
-    resolve_lut_source(source)
-}
-
-// Resolve a ColorLut source string into a filesystem path. Bare filenames are
-// searched recursively under the assets directory (the same lookup used by
-// `EnvironmentMap` and `Shader`); anything with a directory component is
-// returned unchanged so absolute / relative paths still work.
-pub fn resolve_lut_source(source: &str) -> String {
-    let p = std::path::Path::new(source);
-    let is_bare = p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true);
-    if !is_bare {
-        return source.to_string();
-    }
-    if let Some(path) = crate::paths::find_in_assets(source) {
-        return path;
-    }
-    crate::paths::assets_dir()
-        .join(source)
-        .to_string_lossy()
-        .into_owned()
-}
-
 // Validate a LUT edge length against the accepted range. Shared by the
 // runtime [`deserialise`], the `.cube` parser, and the build crate's PNG-strip
 // parser so all three reject the same out-of-range sizes.

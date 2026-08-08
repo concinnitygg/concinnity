@@ -78,7 +78,7 @@ pub fn run() -> std::io::Result<()> {
 // cannot do anything useful. The concinnity-runtime binary calls this.
 pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
     init_logging();
-    concinnity_core::paths::set_state_dir(state_dir);
+    concinnity_store::paths::set_state_dir(state_dir);
 
     let mut app = App::new();
     app.load_blob().map_err(|e| {
@@ -86,7 +86,7 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
             std::io::ErrorKind::NotFound,
             format!(
                 "no compiled world data under {}: {e}",
-                concinnity_core::paths::data_dir().display()
+                concinnity_store::paths::data_dir().display()
             ),
         )
     })?;

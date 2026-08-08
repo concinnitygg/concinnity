@@ -40,8 +40,9 @@ use crate::hdr::{HdrImage, equirect_to_cube};
 use concinnity_core::assets::EnvironmentMap;
 use concinnity_core::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
-    compute_prefilter, max_mip_count, resolve_source_path, serialise_payload,
+    compute_prefilter, max_mip_count, serialise_payload,
 };
+use concinnity_store::source::resolve_source_path;
 
 // Validation + entry point
 //

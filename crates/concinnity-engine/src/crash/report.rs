@@ -94,7 +94,7 @@ impl CrashReport {
         out.push_str(&format!("engine: {}\n", env!("CARGO_PKG_VERSION")));
         out.push_str(&format!(
             "schema: {:#010x}\n",
-            concinnity_core::blob::SCHEMA_HASH
+            concinnity_store::blob::SCHEMA_HASH
         ));
         out.push_str(&format!(
             "os: {} {}\n",

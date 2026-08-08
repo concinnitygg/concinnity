@@ -35,7 +35,7 @@ pub(crate) fn install() {
 }
 
 fn report_fault(ctx: &CrashContext) {
-    let dir = concinnity_core::paths::crashes_dir();
+    let dir = concinnity_store::paths::crashes_dir();
     let report = CrashReport::gather_nonblocking(ReportKind::NativeFault, fault_message(ctx));
     let stem = write::unique_stem(&dir, &report.file_stem());
     super::minidump::write_fault_dump(&dir, &stem, ctx);

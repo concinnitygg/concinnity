@@ -29,6 +29,7 @@ concinnity-cook = { path = "../concinnity-cook" }
 concinnity-world = { path = "../concinnity-world" }
 concinnity-shader = { path = "../concinnity-shader" }
 concinnity-core = { path = "../concinnity-core" }
+concinnity-store = { path = "../concinnity-store" }
 concinnity-memory = { path = "../concinnity-memory" }
 
 argon2 = "0.5"

@@ -27,7 +27,7 @@ pub fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
         candidates.push(raw.to_string());
     } else {
         candidates.push(
-            concinnity_core::paths::assets_dir()
+            concinnity_store::paths::assets_dir()
                 .join(raw)
                 .to_string_lossy()
                 .into_owned(),
@@ -36,7 +36,7 @@ pub fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
             .parent()
             .map(|d| d.as_os_str().is_empty())
             .unwrap_or(true)
-            && let Some(found) = concinnity_core::paths::find_in_assets(raw)
+            && let Some(found) = concinnity_store::source::find_in_assets(raw)
         {
             candidates.push(found);
         }

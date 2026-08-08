@@ -309,7 +309,6 @@ mod tests {
     use concinnity_core::assets::{
         AudioCommand, AudioCue, Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
     };
-    use concinnity_core::blob::BlobData;
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
         Arena, AudioClipHandle, ComponentSlot, ComponentStorage, EntityByName, FrameContext,
@@ -318,6 +317,7 @@ mod tests {
     };
     use concinnity_core::gfx::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
+    use concinnity_store::blob::BlobData;
 
     // Accumulates audio components + one blob section serving every payload
     // locator handed out, plus the audio-clip resource records, then seals into a

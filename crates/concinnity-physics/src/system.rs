@@ -1015,11 +1015,11 @@ fn lcg_hash(mut v: u32) -> u32 {
 mod tests {
     use super::*;
     use concinnity_core::assets::{CameraController, FollowController, PropCollider};
-    use concinnity_core::blob::BlobData;
     use concinnity_core::ecs::{
         Arena, ComponentStorage, FrameContext, Resources, SkinnedMeshHandle,
     };
     use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_store::blob::BlobData;
 
     // Hand-assembled stand-in for the engine's `World`: owns the storage a
     // `PipelineContext` borrows so a `PhysicsSystem` can be init/stepped in

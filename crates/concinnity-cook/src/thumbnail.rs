@@ -43,7 +43,7 @@ pub struct ThumbReport {
 
 // Bake into the project's thumbnails directory.
 pub fn bake_thumbnails(result: &PipelineResult) -> std::io::Result<ThumbReport> {
-    bake_thumbnails_in(&concinnity_core::paths::thumbnails_dir(), result)
+    bake_thumbnails_in(&concinnity_store::paths::thumbnails_dir(), result)
 }
 
 // Bake into `dir` (tests point this at a scratch directory).

@@ -283,13 +283,13 @@ impl Settings {
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
     pub fn load() -> Self {
-        Self::load_from(&concinnity_core::paths::settings_path())
+        Self::load_from(&concinnity_store::paths::settings_path())
     }
 
     // Persist to the `settings` file as CBOR. Creates the state directory as
     // needed.
     pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&concinnity_core::paths::settings_path())
+        self.save_to(&concinnity_store::paths::settings_path())
     }
 
     // Read settings from `path`. Split from `load` so the serialize-read path
@@ -444,7 +444,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings");
         // The sandbox is somewhere else entirely, never the real settings file.
-        assert_ne!(path, concinnity_core::paths::settings_path());
+        assert_ne!(path, concinnity_store::paths::settings_path());
 
         s.save_to(&path).unwrap();
         // The write landed in the sandbox under the expected file name.
@@ -457,8 +457,8 @@ mod tests {
     // Settings resolve to the `settings` file directly under the state dir.
     #[test]
     fn settings_path_is_under_state_dir() {
-        let p = concinnity_core::paths::settings_path();
+        let p = concinnity_store::paths::settings_path();
         assert_eq!(p.file_name().unwrap(), "settings");
-        assert_eq!(p, concinnity_core::paths::state_dir().join("settings"));
+        assert_eq!(p, concinnity_store::paths::state_dir().join("settings"));
     }
 }

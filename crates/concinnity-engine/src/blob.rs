@@ -1,9 +1,9 @@
 // src/blob.rs
 //
-// The .cnb blob binary format (read/write, lock file, lazy payload load) lives
-// in concinnity-core; re-export it under the historical crate::blob::* paths.
-// `pub` so the editor crate's in-memory build path can construct `BlobData`.
-pub use concinnity_core::blob::*;
+// Blob file reading and lazy payload residency live in concinnity-store;
+// re-export them under the historical crate::blob::* paths. `pub` so the editor
+// crate's in-memory build path can construct `BlobData`.
+pub use concinnity_store::blob::*;
 
 use crate::ecs::ComponentAsset;
 use crate::ecs::asset_id::AssetId;
@@ -37,7 +37,7 @@ pub(crate) struct LoadedBlob {
 }
 
 pub(crate) fn load() -> Result<LoadedBlob, CnResult> {
-    let (meta, blob_data) = concinnity_core::blob::load_raw()?;
+    let (meta, blob_data) = concinnity_store::blob::load_raw()?;
 
     let components = meta
         .defs

@@ -14,10 +14,10 @@ use time::format_description::well_known::Rfc3339;
 use concinnity_blob::encode_cnb;
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 
-// Re-export the read side from core so `crate::blob::{BlobData, load_raw, ...}`
-// resolves for build-crate consumers that read blobs back. `blob_path` is shared
-// (used by write_blobs below and by readers).
-pub use concinnity_core::blob::{
+// Re-export the read side from concinnity-store so `crate::blob::{BlobData,
+// load_raw, ...}` resolves for build-crate consumers that read blobs back.
+// `blob_path` is shared (used by write_blobs below and by readers).
+pub use concinnity_store::blob::{
     BlobData, blob_path, load_defs, load_raw, payload_section_start, read_cnb,
 };
 
@@ -163,7 +163,7 @@ pub fn write_blobs(
     mesh_bounds: &[concinnity_blob::MeshBoundsRecord],
     blob_payloads: &[Vec<u8>],
 ) -> std::io::Result<PackResult> {
-    fs::create_dir_all(concinnity_core::paths::data_dir())?;
+    fs::create_dir_all(concinnity_store::paths::data_dir())?;
 
     // The manifest is derived from the very streams it summarizes, so the
     // shipped copy is consistent by construction; the runtime re-derives and
@@ -352,7 +352,7 @@ pub(crate) mod test_output {
     impl StateDir {
         pub(crate) fn new() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
-            concinnity_core::paths::set_state_dir(dir.path());
+            concinnity_store::paths::set_state_dir(dir.path());
             Self(dir)
         }
 
@@ -367,7 +367,7 @@ pub(crate) mod test_output {
 
     impl Drop for StateDir {
         fn drop(&mut self) {
-            concinnity_core::paths::clear_state_dir();
+            concinnity_store::paths::clear_state_dir();
         }
     }
 

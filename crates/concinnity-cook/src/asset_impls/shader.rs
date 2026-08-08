@@ -14,7 +14,7 @@ use concinnity_world::source_args::resolve_source_from_args;
 pub fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
-        if let Some(path) = concinnity_core::paths::find_in_assets(raw) {
+        if let Some(path) = concinnity_store::source::find_in_assets(raw) {
             return path;
         }
         if let Some(dir) = ctx.artifacts_dir {
@@ -23,7 +23,7 @@ pub fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
                 return artifact_path;
             }
         }
-        return concinnity_core::paths::assets_dir()
+        return concinnity_store::paths::assets_dir()
             .join(raw)
             .to_string_lossy()
             .into_owned();
@@ -208,7 +208,7 @@ mod tests {
         let _guard = crate::blob::test_output::LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let expected = concinnity_core::paths::assets_dir()
+        let expected = concinnity_store::paths::assets_dir()
             .join("cn_no_such.metal")
             .to_string_lossy()
             .into_owned();

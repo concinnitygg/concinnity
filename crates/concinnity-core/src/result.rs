@@ -20,12 +20,6 @@ pub enum CnResult {
     FileIo,
 }
 
-impl From<std::io::Error> for CnResult {
-    fn from(_e: std::io::Error) -> Self {
-        CnResult::FileIo
-    }
-}
-
 // Baked blob records are postcard; a decode failure means the record and the
 // component schema disagree (a stale blob survives the version check instead
 // of reaching here).
@@ -47,12 +41,6 @@ mod tests {
         assert_eq!(CnResult::InvalidState.to_string(), "Invalid state");
         assert_eq!(CnResult::InvalidArgument.to_string(), "Invalid argument");
         assert_eq!(CnResult::FileIo.to_string(), "File I/O error");
-    }
-
-    #[test]
-    fn io_errors_map_to_file_io() {
-        let e = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
-        assert_eq!(CnResult::from(e), CnResult::FileIo);
     }
 
     #[test]

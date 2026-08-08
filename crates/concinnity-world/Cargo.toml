@@ -21,6 +21,7 @@ doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-store = { path = "../concinnity-store" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

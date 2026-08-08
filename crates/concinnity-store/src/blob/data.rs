@@ -4,9 +4,8 @@
 // concinnity-blob format crate -- it deals in file paths and lazy disk reads,
 // both of which that crate is deliberately free of.
 
-use concinnity_asset::PayloadLocator;
-
-use crate::result::CnResult;
+use concinnity_core::ecs::PayloadLocator;
+use concinnity_core::result::CnResult;
 
 // State of one blob file's payload section.
 //
@@ -188,7 +187,7 @@ impl BlobData {
 
 // The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
-impl crate::ecs::PayloadStore for BlobData {
+impl concinnity_core::ecs::PayloadStore for BlobData {
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
         BlobData::read(self, locator)
     }

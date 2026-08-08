@@ -32,6 +32,7 @@ alloc-detail = ["concinnity-memory/detail"]
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-store = { path = "../concinnity-store" }
 concinnity-render = { path = "../concinnity-render" }
 concinnity-device = { path = "../concinnity-device" }
 concinnity-physics = { path = "../concinnity-physics" }

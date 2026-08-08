@@ -174,7 +174,7 @@ impl Default for BehaviorSystem {
             press_cursor: EventCursor::default(),
             crossings: Vec::new(),
             presses: Vec::new(),
-            save_dir: concinnity_core::paths::saves_dir(),
+            save_dir: concinnity_store::paths::saves_dir(),
             transient_saves: false,
             trace_frame: 0,
             trace_paths_published: false,

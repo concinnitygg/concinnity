@@ -60,31 +60,6 @@ pub fn max_mip_count(face_size: u32) -> u32 {
     mips
 }
 
-// Resolve an EnvironmentMap `source` string into a filesystem path. Bare
-// filenames are searched under `.concinnity/assets/` (recursively) so worlds
-// can reference a panorama by filename only, matching the lookup semantics of
-// `Shader` stage source paths. Anything containing a directory separator is
-// returned unchanged, so absolute or relative paths still work.
-//
-// The runtime hot-reload watcher needs the resolved path so it can subscribe
-// to the correct parent directory; bare filenames are otherwise unfindable
-// after the build pipeline runs. The decode itself (`decode_source`) lives in
-// the cook crate; only this path resolution stays here for the dev-time watcher.
-pub fn resolve_source_path(source: &str) -> String {
-    let p = std::path::Path::new(source);
-    let is_bare = p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true);
-    if !is_bare {
-        return source.to_string();
-    }
-    if let Some(path) = crate::paths::find_in_assets(source) {
-        return path;
-    }
-    crate::paths::assets_dir()
-        .join(source)
-        .to_string_lossy()
-        .into_owned()
-}
-
 // Cube sampling
 
 // Cube-face sampler: project a normalised direction onto the dominant axis
@@ -782,16 +757,5 @@ mod tests {
         assert_eq!(max_mip_count(16), 3); // 16, 8, 4
         assert_eq!(max_mip_count(8), 2); // 8, 4
         assert_eq!(max_mip_count(4), 1); // 4
-    }
-
-    #[test]
-    fn resolve_source_path_returns_directoried_paths_unchanged() {
-        // Any path with a directory component is taken verbatim (relative or
-        // absolute) so the hot-reload watcher subscribes to the right parent.
-        assert_eq!(
-            resolve_source_path("assets/hdri/x.hdr"),
-            "assets/hdri/x.hdr"
-        );
-        assert_eq!(resolve_source_path("/abs/path.hdr"), "/abs/path.hdr");
     }
 }

@@ -26,7 +26,7 @@ pub(crate) struct WorldSession {
 
 // The per-project store file, beside `saves/` and `settings`.
 pub(crate) fn default_path() -> PathBuf {
-    concinnity_core::paths::writable_state_dir().join("editor")
+    concinnity_store::paths::writable_state_dir().join("editor")
 }
 
 // The store key for a world file: its stem, so `world.jsonl` and a sibling

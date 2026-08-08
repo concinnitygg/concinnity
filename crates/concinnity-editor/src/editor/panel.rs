@@ -1172,7 +1172,7 @@ mod tests {
         ONCE.call_once(|| {
             let dir = std::env::temp_dir().join(format!("cn-editor-tests-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
-            concinnity_core::paths::set_root(dir);
+            concinnity_store::paths::set_root(dir);
         });
     }
 

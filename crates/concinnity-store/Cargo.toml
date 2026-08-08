@@ -1,5 +1,5 @@
 [package]
-name = "concinnity-audio"
+name = "concinnity-store"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -7,15 +7,15 @@ license.workspace = true
 publish = false
 
 [lib]
-name = "concinnity_audio"
+name = "concinnity_store"
+path = "src/lib.rs"
 doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-blob = { path = "../concinnity-blob" }
 
-kira = "0.12"
-mint = "0.5"
 tracing = "0.1.44"
 
 [dev-dependencies]
-concinnity-store = { path = "../concinnity-store" }
+tempfile = "3.25.0"

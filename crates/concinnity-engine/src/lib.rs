@@ -32,7 +32,7 @@ pub use app::run::run_from;
 // Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.
-pub use concinnity_core::paths::set_writable_state_dir;
+pub use concinnity_store::paths::set_writable_state_dir;
 
 // Export-time compilation of the built-in shaders into a bundle's
 // shader-cache/, for backends that compile them at renderer init. Re-exported

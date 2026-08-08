@@ -205,7 +205,7 @@ fn minimize_keeps_only_the_fields_that_differ() {
 fn materializing_a_preset_prefab_authors_it_as_a_world_line() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
-    let dir = concinnity_core::paths::assets_dir().join("prefabs");
+    let dir = concinnity_store::paths::assets_dir().join("prefabs");
     std::fs::create_dir_all(&dir).expect("preset dir");
     std::fs::write(
         dir.join("cn_test_prefab.json"),

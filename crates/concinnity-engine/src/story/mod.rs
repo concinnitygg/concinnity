@@ -290,7 +290,7 @@ impl StorySystem {
             started: false,
             in_choice: false,
             vars: HashMap::new(),
-            save_dir: concinnity_core::paths::saves_dir(),
+            save_dir: concinnity_store::paths::saves_dir(),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             last_step: None,
@@ -321,7 +321,7 @@ impl System for StorySystem {
             .resource::<crate::ecs::TransientSaves>()
             .is_some_and(|t| t.0)
         {
-            self.save_dir = concinnity_core::paths::preview_saves_dir();
+            self.save_dir = concinnity_store::paths::preview_saves_dir();
             let _ = std::fs::remove_dir_all(&self.save_dir);
         }
         // The scaffold references were resolved to ids at build time, like

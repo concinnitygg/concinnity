@@ -165,13 +165,13 @@ fn enabled() -> bool {
 }
 
 fn cache_dir() -> PathBuf {
-    concinnity_core::paths::shader_cache_dir()
+    concinnity_store::paths::shader_cache_dir()
 }
 
 fn load(digest: &str) -> Option<Vec<u8>> {
     dirs_to_read(
         cache_dir(),
-        concinnity_core::paths::bundled_shader_cache_dir(),
+        concinnity_store::paths::bundled_shader_cache_dir(),
     )
     .iter()
     .find_map(|dir| load_in(dir, digest))
