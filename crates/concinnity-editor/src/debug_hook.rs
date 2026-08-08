@@ -8,7 +8,7 @@
 
 use crate::app::state::App;
 use crate::ecs::World;
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 
 pub(crate) trait DebugHook: Send {
     // Called once per frame on the main thread, just before the world step.

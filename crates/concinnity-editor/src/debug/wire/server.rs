@@ -12,7 +12,7 @@ use crate::ecs::{SystemAsset, World};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 
 use tokio_tungstenite::tungstenite::{Message, accept};
 

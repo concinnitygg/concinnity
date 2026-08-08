@@ -25,4 +25,3 @@ pub mod gfx;
 pub mod platform;
 pub mod resource;
 pub mod result;
-pub mod shutdown;

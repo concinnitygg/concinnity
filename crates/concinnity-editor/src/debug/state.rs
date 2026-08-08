@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 
 use crate::gfx::streaming_system::StreamingStats;
 

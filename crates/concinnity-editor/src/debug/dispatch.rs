@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn shutdown_cancels_the_attached_token() {
-        use concinnity_core::shutdown::ShutdownToken;
+        use concinnity_engine::shutdown::ShutdownToken;
         let token = ShutdownToken::new();
         let st = DebugState {
             shutdown_token: Some(token.clone()),

@@ -2,7 +2,7 @@
 use crate::blob;
 use crate::ecs::{StepResult, World};
 use crate::result::CnResult;
-use concinnity_core::shutdown::ShutdownToken;
+use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppStatus {

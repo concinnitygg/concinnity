@@ -43,6 +43,7 @@ pub use concinnity_device::precompile::{
 };
 pub(crate) mod cbor_file;
 pub mod config;
+pub mod shutdown;
 // Crash reporting: panic hook, native fault capture, local report files.
 // `pub` so the binaries install the hooks and the editor composes the
 // recent-log ring layer into its tracing subscriber.

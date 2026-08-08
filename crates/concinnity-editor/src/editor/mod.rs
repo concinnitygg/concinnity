@@ -70,7 +70,7 @@ use crate::app::state::App;
 use crate::debug_hook::DebugHook;
 use crate::ecs::World;
 use crate::world::{WORLD_JSONL, find_world_jsonl};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 use hook::EditorHook;
 
 // A minimal renderable world: a lone GraphicsConfig, which the cook pipeline
