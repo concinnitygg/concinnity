@@ -1150,7 +1150,7 @@ mod tests {
         fn draw_frame(
             &mut self,
             _params: crate::gfx::backend::FrameParams<'_>,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
@@ -1164,7 +1164,7 @@ mod tests {
             _vert_bytes: &[u8],
             _frag_bytes: &[u8],
             _shadow_bytes: &[u8],
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
@@ -1175,7 +1175,7 @@ mod tests {
             &mut self,
             _slot: usize,
             _image: &concinnity_core::build::texture::TextureImage,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
@@ -1187,7 +1187,7 @@ mod tests {
             _verts: &[crate::gfx::mesh_payload::Vertex],
             _idxs: &[u16],
             _frame: u64,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn setup_chunk_streaming(
@@ -1196,13 +1196,13 @@ mod tests {
             _chunk_idx_bytes: usize,
             _texture_slot: usize,
             _normal_map_slot: usize,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn add_chunk_mesh(
             &mut self,
             _mesh: crate::gfx::backend::ChunkMesh<'_>,
-        ) -> Result<usize, String> {
+        ) -> crate::gfx::error::RenderResult<usize> {
             Ok(0)
         }
         fn remove_chunk_mesh(

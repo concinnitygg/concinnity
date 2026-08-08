@@ -6,6 +6,7 @@
 // have the same name, so `self.draw_frame(...)` calls the inherent here.
 
 use crate::gfx::backend::{ChunkMesh, FrameParams, QualitySettings, RenderBackend};
+use crate::gfx::error::{RenderError, RenderResult};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::profile::RenderStats;
@@ -112,7 +113,6 @@ impl RenderBackend for MtlContext {
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
         fn retire_draw_object(&mut self, draw_idx: usize);
-        fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u16], draw_objects: Vec<SkinnedDrawObject>, vert_bytes: &[u8], frag_bytes: &[u8], shadow_bytes: &[u8]) -> Result<(), String>;
         fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
         fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]);
         fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>);
@@ -120,21 +120,16 @@ impl RenderBackend for MtlContext {
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_model(&mut self, skinned_index: usize, model: [[f32; 4]; 4]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-        fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> Result<(), String>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
-        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> Result<(), String>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities;
         fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
         fn render_stats(&self) -> RenderStats;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String>;
         fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>);
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
-        fn rebuild_static_geometry(&mut self, changes: Vec<crate::gfx::backend::DrawGeometryUpdate>) -> Result<(), String>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u16, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
@@ -151,6 +146,68 @@ impl RenderBackend for MtlContext {
 
     // Methods that are NOT a 1:1 forward; written out by hand.
 
+    // Typed-boundary forwarders: the inherent methods report `String` errors,
+    // which `?` coerces to `RenderError::Other`. Sites that can classify a
+    // failure construct the typed variant directly instead.
+    fn upload_skinned(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u16],
+        draw_objects: Vec<SkinnedDrawObject>,
+        vert_bytes: &[u8],
+        frag_bytes: &[u8],
+        shadow_bytes: &[u8],
+    ) -> RenderResult<()> {
+        debug_assert_main_thread("upload_skinned");
+        Ok(MtlContext::upload_skinned(
+            self,
+            vertices,
+            indices,
+            draw_objects,
+            vert_bytes,
+            frag_bytes,
+            shadow_bytes,
+        )?)
+    }
+
+    fn update_texture_slot(
+        &mut self,
+        slot: usize,
+        image: &crate::build::texture::TextureImage,
+    ) -> RenderResult<()> {
+        debug_assert_main_thread("update_texture_slot");
+        Ok(MtlContext::update_texture_slot(self, slot, image)?)
+    }
+
+    fn upload_mesh(
+        &mut self,
+        draw_idx: usize,
+        verts: &[Vertex],
+        idxs: &[u16],
+        frame: u64,
+    ) -> RenderResult<()> {
+        debug_assert_main_thread("upload_mesh");
+        Ok(MtlContext::upload_mesh(self, draw_idx, verts, idxs, frame)?)
+    }
+
+    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> RenderResult<usize> {
+        debug_assert_main_thread("add_chunk_mesh");
+        Ok(MtlContext::add_chunk_mesh(self, mesh)?)
+    }
+
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+        debug_assert_main_thread("update_environment_map");
+        Ok(MtlContext::update_environment_map(self, payload)?)
+    }
+
+    fn rebuild_static_geometry(
+        &mut self,
+        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+    ) -> RenderResult<()> {
+        debug_assert_main_thread("rebuild_static_geometry");
+        Ok(MtlContext::rebuild_static_geometry(self, changes)?)
+    }
+
     // The inherent takes the two stage slices it needs rather than the whole
     // payload struct: a bucket pipeline pairs `vertex_main` with
     // `fragment_main_bindless` and has no instanced or shadow variant.
@@ -158,9 +215,10 @@ impl RenderBackend for MtlContext {
         &mut self,
         bucket: u32,
         shader: crate::gfx::backend_init::ShaderBytes<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         MtlContext::install_world_shader(self, bucket, shader.vert, shader.frag)
+            .map_err(RenderError::ShaderCompile)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer
@@ -175,12 +233,18 @@ impl RenderBackend for MtlContext {
         }
     }
 
-    fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         // Not in the guarded `forward!` block: draw_frame needs the
         // MainThreadMarker as a *value* (it threads it into NSEvent pumping and
         // window ops), so it proves the invariant itself and returns Err off
         // the main thread rather than asserting: no point double-checking.
-        self.draw_frame(params)
+        //
+        // A GPU-side failure surfaces asynchronously on a completed command
+        // buffer, so a frame's error is reported here on a later call.
+        if let Some(e) = self.take_device_error() {
+            return Err(e);
+        }
+        Ok(MtlContext::draw_frame(self, params)?)
     }
 
     fn window_closed(&mut self) -> bool {
@@ -203,10 +267,10 @@ impl RenderBackend for MtlContext {
         chunk_idx_bytes: usize,
         _texture_slot: usize,
         _normal_map_slot: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
         // Metal binds chunk textures per draw, so the slot args are unused.
-        self.setup_chunk_streaming(chunk_vtx_bytes, chunk_idx_bytes)
+        Ok(self.setup_chunk_streaming(chunk_vtx_bytes, chunk_idx_bytes)?)
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
@@ -244,8 +308,8 @@ impl RenderBackend for MtlContext {
     fn reload_world(
         &mut self,
         init: crate::gfx::backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         debug_assert_main_thread("reload_world");
-        self.apply_world_reload(init)
+        Ok(self.apply_world_reload(init)?)
     }
 }

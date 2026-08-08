@@ -121,6 +121,8 @@ pub struct GraphicsSystem {
     failed: bool,
     start_time: Option<Instant>,
     frame_count: u64,
+    // Per-class recovery for failed frames; see `frame_policy`.
+    frame_policy: frame_policy::FramePolicy,
     // A togglable menu (a Screen) coexists with a controlled Camera3D. When set,
     // cursor capture is driven each frame by whether a menu screen is active
     // (release while open, capture otherwise) rather than fixed at startup.
@@ -411,6 +413,7 @@ impl GraphicsSystem {
             failed: false,
             start_time: None,
             frame_count: 0,
+            frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
             render_scale: crate::assets::UpscaleQuality::default(),
             upscale_backend: crate::assets::UpscalerBackend::default(),
@@ -706,6 +709,7 @@ pub(crate) fn derive_quality_settings(
 }
 
 mod frame;
+mod frame_policy;
 mod helpers;
 pub mod hot_reload_sources;
 mod init;

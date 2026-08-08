@@ -26,7 +26,7 @@ impl VkContext {
         chunk_idx_bytes: usize,
         texture_slot: usize,
         normal_map_slot: usize,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         self.wait_idle();
         let old_v = self.geometry.vertex_buffer_bytes;
         let old_i = self.geometry.index_buffer_bytes;
@@ -129,7 +129,10 @@ impl VkContext {
 
     // Place one streamed chunk's geometry in the chunk headroom region and
     // add (or recycle) a `DrawObject` for it; returns the draw-list index.
-    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+    pub fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+    ) -> crate::gfx::error::RenderResult<usize> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -140,7 +143,7 @@ impl VkContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".to_string());
+            return Err("add_chunk_mesh: empty chunk geometry".into());
         }
         self.chunk_stream.vtx_alloc.reclaim(frame);
         self.chunk_stream.idx_alloc.reclaim(frame);
@@ -152,10 +155,10 @@ impl VkContext {
             .vtx_alloc
             .alloc(v_len as u64)
             .ok_or_else(|| {
-                format!(
+                crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk vertex space for {} bytes",
                     v_len
-                )
+                ))
             })? as usize;
         let i_off = match self.chunk_stream.idx_alloc.alloc(i_len as u64) {
             Some(o) => o as usize,
@@ -163,10 +166,10 @@ impl VkContext {
                 self.chunk_stream
                     .vtx_alloc
                     .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
+                return Err(crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk index space for {} bytes",
                     i_len
-                ));
+                )));
             }
         };
 

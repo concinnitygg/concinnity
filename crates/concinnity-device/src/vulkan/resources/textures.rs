@@ -231,13 +231,14 @@ impl VkContext {
         &mut self,
         slot: usize,
         image: &crate::build::texture::TextureImage,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         if slot >= self.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
                 slot,
                 self.textures.len()
-            ));
+            )
+            .into());
         }
         let ctx = GpuUploadContext {
             alloc: &self.alloc,
@@ -281,7 +282,7 @@ impl VkContext {
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
     pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        self.update_texture_slot(slot, &grey)
+        Ok(self.update_texture_slot(slot, &grey)?)
     }
 
     // Per-frame streamed-texture upkeep, called at the top of `draw_frame`

@@ -21,10 +21,10 @@ pub(crate) mod gfx {
         render_types, rt_reflections, ssao, ssgi, ssr,
     };
     pub use concinnity_render::{
-        backend, backend_init, bvh, csm, decal, display_mode, draw_slot, fullscreen, hdr_output,
-        input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection, reflection_probe,
-        render_graph, rt_geom, rt_topology, scene_flow, shadow_schedule, skinned_pool,
-        slot_rewrites, spot_shadow, transparent, volumetric_fog,
+        backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
+        hdr_output, input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection,
+        reflection_probe, render_graph, rt_geom, rt_topology, scene_flow, shadow_schedule,
+        skinned_pool, slot_rewrites, spot_shadow, transparent, volumetric_fog,
     };
 }
 

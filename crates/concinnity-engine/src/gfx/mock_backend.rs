@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::gfx::backend::{ChunkMesh, DeviceCapabilities, FrameParams, GpuProfile, RenderBackend};
 use crate::gfx::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
+use crate::gfx::error::{RenderError, RenderResult};
 use crate::gfx::input::RenderInput;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
@@ -142,7 +143,7 @@ pub(crate) struct MockState {
     // Returned by the next window_closed() poll.
     pub window_closed: bool,
     // When set, draw_frame returns this error instead of Ok.
-    pub fail_draw: Option<String>,
+    pub fail_draw: Option<RenderError>,
     // When set, reload_world returns this error instead of Ok (exercising the
     // hot-swap failure path where GraphicsSystem marks itself failed).
     pub fail_reload: Option<String>,
@@ -345,11 +346,11 @@ impl RenderBackend for MockBackend {
         self.hot_swap
     }
 
-    fn reload_world(&mut self, init: BackendInit<'_>) -> Result<(), String> {
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         let fail = self.state.lock().unwrap().fail_reload.clone();
         self.record(Call::ReloadWorld);
         if let Some(e) = fail {
-            return Err(e);
+            return Err(e.into());
         }
         // Record the reloaded world's content into this (transplanted) backend's
         // state, exactly as the factory would for a fresh build, so a test can
@@ -358,7 +359,7 @@ impl RenderBackend for MockBackend {
         Ok(())
     }
 
-    fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::DrawFrame {
             world_hidden: params.world_hidden,
@@ -395,7 +396,7 @@ impl RenderBackend for MockBackend {
         _vert_bytes: &[u8],
         _frag_bytes: &[u8],
         _shadow_bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.record(Call::UploadSkinned {
             vertices: vertices.len(),
             draws: draw_objects.len(),
@@ -420,7 +421,7 @@ impl RenderBackend for MockBackend {
         &mut self,
         slot: usize,
         image: &crate::build::texture::TextureImage,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.record(Call::UpdateTextureSlot {
             slot,
             w: image.width(),
@@ -440,7 +441,7 @@ impl RenderBackend for MockBackend {
         verts: &[Vertex],
         idxs: &[u16],
         _frame: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.record(Call::UploadMesh {
             draw_idx,
             vertices: verts.len(),
@@ -465,12 +466,12 @@ impl RenderBackend for MockBackend {
         _chunk_idx_bytes: usize,
         _texture_slot: usize,
         _normal_map_slot: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.record(Call::SetupChunkStreaming);
         Ok(())
     }
 
-    fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> Result<usize, String> {
+    fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> RenderResult<usize> {
         let mut s = self.state.lock().unwrap();
         let idx = s.next_slot;
         s.next_slot += 1;

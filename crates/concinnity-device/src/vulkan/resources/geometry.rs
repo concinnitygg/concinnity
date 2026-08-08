@@ -69,7 +69,7 @@ impl VkContext {
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         let obj = self
             .draw_objects
             .get(draw_idx)
@@ -81,7 +81,8 @@ impl VkContext {
                 draw_idx,
                 vertex_count,
                 vertices.len()
-            ));
+            )
+            .into());
         }
         if indices.len() != index_count {
             return Err(format!(
@@ -89,7 +90,8 @@ impl VkContext {
                 draw_idx,
                 index_count,
                 indices.len()
-            ));
+            )
+            .into());
         }
 
         self.geometry.mesh_vtx_alloc.reclaim(frame);
@@ -101,10 +103,10 @@ impl VkContext {
             .mesh_vtx_alloc
             .alloc(v_len as u64)
             .ok_or_else(|| {
-                format!(
+                crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "upload_mesh: draw {}: no free vertex space for {} bytes",
                     draw_idx, v_len
-                )
+                ))
             })? as usize;
         let i_off = match self.geometry.mesh_idx_alloc.alloc(i_len as u64) {
             Some(o) => o as usize,
@@ -112,10 +114,10 @@ impl VkContext {
                 self.geometry
                     .mesh_vtx_alloc
                     .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
+                return Err(crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "upload_mesh: draw {}: no free index space for {} bytes",
                     draw_idx, i_len
-                ));
+                )));
             }
         };
 

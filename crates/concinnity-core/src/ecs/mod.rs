@@ -36,9 +36,10 @@ pub use frame::{FrameContext, FrameVec};
 // re-exports them under the historical `crate::ecs::*` paths.
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
-    HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
-    OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent, TracePath, TracePaths,
-    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
+    GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
+    OverlayImage, OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent,
+    TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides,
+    WorldLines,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

@@ -20,6 +20,24 @@ use crate::gfx::settings_system::rows::{
 // point and nothing rasterizes (shadow passes included).
 const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
 
+// Record a device-memory failure in the shared [`GpuMemoryPressure`] resource,
+// where the streaming valve can observe it.
+fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
+    use crate::ecs::GpuMemoryPressure;
+    match ctx.resource_mut::<GpuMemoryPressure>() {
+        Some(pressure) => {
+            pressure.events += 1;
+            pressure.last_frame = frame;
+        }
+        None => {
+            ctx.insert_resource(GpuMemoryPressure {
+                events: 1,
+                last_frame: frame,
+            });
+        }
+    }
+}
+
 impl GraphicsSystem {
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if self.failed {
@@ -309,11 +327,25 @@ impl GraphicsSystem {
                     view_mode: view.mode,
                     show: view.show,
                 }) {
-                    Ok(()) => {}
+                    Ok(()) => self.frame_policy.frame_succeeded(),
                     Err(e) => {
-                        tracing::error!("GraphicsSystem: draw_frame: {}", e);
-                        backend.wait_idle();
-                        return StepResult::Stop;
+                        if matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_)) {
+                            publish_memory_pressure(ctx, self.frame_count);
+                        }
+                        match self.frame_policy.on_frame_error(&e) {
+                            super::frame_policy::FrameAction::SkipFrame => {}
+                            super::frame_policy::FrameAction::Shutdown => {
+                                backend.wait_idle();
+                                return StepResult::Stop;
+                            }
+                            // The device no longer services work; waiting for
+                            // it to idle would block on a queue that can never
+                            // signal, so stop without draining.
+                            super::frame_policy::FrameAction::ShutdownDeviceLost => {
+                                tracing::error!("GraphicsSystem: device lost, stopping: {}", e);
+                                return StepResult::Stop;
+                            }
+                        }
                     }
                 }
 

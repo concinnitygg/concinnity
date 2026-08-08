@@ -119,7 +119,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     let size = data.len() as u64;
     if size == 0 {
         // Return a minimal 4-byte buffer to keep Vulkan happy.
-        return alloc.create_buffer(4, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL);
+        return Ok(alloc.create_buffer(4, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?);
     }
     let staging = alloc.create_buffer(
         size,

@@ -363,13 +363,13 @@ impl DeviceAllocator {
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         props: vk::MemoryPropertyFlags,
-    ) -> Result<PooledBuffer, String> {
+    ) -> crate::gfx::error::RenderResult<PooledBuffer> {
         let info = vk::BufferCreateInfo::default()
             .size(size.max(1))
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         let buffer = unsafe { self.device.create_buffer(&info, None) }
-            .map_err(|e| format!("create_buffer: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "create_buffer"))?;
         let reqs = unsafe { self.device.get_buffer_memory_requirements(buffer) };
         let device_address = usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
         let reservation = match self.reserve(reqs, props, ResourceKind::Linear, device_address) {
@@ -385,7 +385,7 @@ impl DeviceAllocator {
         } {
             unsafe { self.device.destroy_buffer(buffer, None) };
             self.release(reservation);
-            return Err(format!("bind_buffer_memory: {e}"));
+            return Err(super::error::map_vk_result(e, "bind_buffer_memory"));
         }
         let mapped = resource_ptr(&reservation);
         Ok(PooledBuffer {
@@ -404,9 +404,9 @@ impl DeviceAllocator {
         &self,
         info: &vk::ImageCreateInfo,
         props: vk::MemoryPropertyFlags,
-    ) -> Result<PooledImage, String> {
+    ) -> crate::gfx::error::RenderResult<PooledImage> {
         let image = unsafe { self.device.create_image(info, None) }
-            .map_err(|e| format!("create_image: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "create_image"))?;
         let reqs = unsafe { self.device.get_image_memory_requirements(image) };
         let kind = if info.tiling == vk::ImageTiling::LINEAR {
             ResourceKind::Linear
@@ -426,7 +426,7 @@ impl DeviceAllocator {
         } {
             unsafe { self.device.destroy_image(image, None) };
             self.release(reservation);
-            return Err(format!("bind_image_memory: {e}"));
+            return Err(super::error::map_vk_result(e, "bind_image_memory"));
         }
         let mapped = resource_ptr(&reservation);
         Ok(PooledImage {
@@ -542,7 +542,7 @@ impl DeviceAllocator {
         props: vk::MemoryPropertyFlags,
         kind: ResourceKind,
         device_address: bool,
-    ) -> Result<Reservation, String> {
+    ) -> crate::gfx::error::RenderResult<Reservation> {
         let memory_type = self.find_memory_type(reqs.memory_type_bits, props)?;
         let key = PoolKey {
             memory_type,
@@ -641,7 +641,7 @@ impl DeviceAllocator {
         memory_type: u32,
         size: u64,
         device_address: bool,
-    ) -> Result<(vk::DeviceMemory, *mut u8), String> {
+    ) -> crate::gfx::error::RenderResult<(vk::DeviceMemory, *mut u8)> {
         let mut flags_info =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let mut info = vk::MemoryAllocateInfo::default()
@@ -650,8 +650,9 @@ impl DeviceAllocator {
         if device_address {
             info = info.push_next(&mut flags_info);
         }
-        let memory = unsafe { device.allocate_memory(&info, None) }
-            .map_err(|e| format!("allocator: block of {size} bytes: {e}"))?;
+        let memory = unsafe { device.allocate_memory(&info, None) }.map_err(|e| {
+            super::error::map_vk_result(e, &format!("allocator: block of {size} bytes"))
+        })?;
         tracing::debug!(
             "allocator: new {} KiB block (memory type {memory_type}, device_address {device_address})",
             size / 1024,
@@ -667,7 +668,7 @@ impl DeviceAllocator {
                 Ok(ptr) => ptr as *mut u8,
                 Err(e) => {
                     unsafe { device.free_memory(memory, None) };
-                    return Err(format!("allocator: map block: {e}"));
+                    return Err(super::error::map_vk_result(e, "allocator: map block"));
                 }
             }
         } else {

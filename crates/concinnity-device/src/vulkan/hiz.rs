@@ -333,12 +333,14 @@ impl HiZResources {
         let alloc_ubo_ring = |count: usize| -> Result<Vec<PooledBuffer>, String> {
             (0..count)
                 .map(|_| {
-                    alloc.create_buffer(
-                        ubo_size,
-                        vk::BufferUsageFlags::UNIFORM_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )
+                    alloc
+                        .create_buffer(
+                            ubo_size,
+                            vk::BufferUsageFlags::UNIFORM_BUFFER,
+                            vk::MemoryPropertyFlags::HOST_VISIBLE
+                                | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        )
+                        .map_err(String::from)
                 })
                 .collect()
         };

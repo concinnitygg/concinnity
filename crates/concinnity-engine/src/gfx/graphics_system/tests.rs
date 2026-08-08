@@ -1020,15 +1020,89 @@ fn window_close_stops_after_wait_idle() {
     assert_eq!(s.draw_frames(), 0, "no frame drawn after the close");
 }
 
+// An unclassified frame error skips frames up to its bound, then stops after
+// draining the (still healthy) device.
 #[test]
-fn draw_frame_error_stops_the_loop() {
+fn unclassified_draw_error_skips_bounded_then_stops() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    lock(&state).fail_draw = Some("device lost".to_string());
+    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::Other("boom".to_string()));
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
     assert!(lock(&state).saw(&Call::WaitIdle));
+}
+
+// A frame drawing successfully resets the failure streak, so intermittent
+// errors never accumulate to a stop.
+#[test]
+fn successful_frame_resets_the_failure_streak() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    for _ in 0..3 {
+        lock(&state).fail_draw = Some(crate::gfx::error::RenderError::Other("boom".to_string()));
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+        lock(&state).fail_draw = None;
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    }
+}
+
+// Device loss stops immediately, and must NOT drain the GPU: waiting on a
+// lost device blocks on a queue that can never signal.
+#[test]
+fn device_lost_stops_immediately_without_gpu_drain() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::DeviceLost {
+        reason: crate::gfx::error::DeviceLostReason::Removed,
+        detail: "test".to_string(),
+    });
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
+    assert!(
+        !lock(&state).saw(&Call::WaitIdle),
+        "must not wait on a lost device"
+    );
+}
+
+// A swapchain mismatch is transient: the frame is skipped and the loop keeps
+// running while the backend recreates the swapchain.
+#[test]
+fn swapchain_out_of_date_skips_the_frame() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::SwapchainOutOfDate);
+    for _ in 0..5 {
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    }
+}
+
+// Device-memory exhaustion publishes the pressure resource the streaming
+// valve consumes, and keeps running within its bound.
+#[test]
+fn out_of_device_memory_publishes_pressure_and_continues() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    lock(&state).fail_draw = Some(crate::gfx::error::RenderError::OutOfDeviceMemory(
+        "test".to_string(),
+    ));
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    let pressure = *world
+        .ctx()
+        .resource::<crate::ecs::GpuMemoryPressure>()
+        .expect("pressure resource published");
+    assert_eq!(pressure.events, 2);
 }
 
 // Reaching the cap must Stop rather than report Done: `World::step` treats Done

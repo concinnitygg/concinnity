@@ -1302,7 +1302,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
-    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1363,7 +1363,7 @@ impl DxContext {
                     self.frame_sync.fence_event,
                 )
             }
-            .map_err(|e| format!("SetEventOnCompletion: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "SetEventOnCompletion"))?;
             unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
         }
 
@@ -1740,7 +1740,8 @@ impl DxContext {
             }
         }
 
-        unsafe { end_cmd.Close() }.map_err(|e| format!("end cmd close: {e}"))?;
+        unsafe { end_cmd.Close() }
+            .map_err(|e| super::error::map_hresult(e.code(), "end cmd close"))?;
 
         // 5. Submit everything in topological order: [start, per-pass...,
         //    end]. Single ExecuteCommandLists call → the GPU executes
@@ -1778,7 +1779,13 @@ impl DxContext {
         if let Err(e) = present_result.ok() {
             self.flush_validation();
             let reason = unsafe { self.device.GetDeviceRemovedReason() };
-            return Err(format!("Present: {e}; device removed reason: {reason:?}"));
+            return Err(super::error::classify_present_failure(
+                e.code(),
+                reason
+                    .err()
+                    .map(|r| r.code())
+                    .unwrap_or(windows::core::HRESULT(0)),
+            ));
         }
         // Record the buffer just shown so a headless `screenshot` captures the
         // on-screen image (the next `GetCurrentBackBufferIndex` already advanced
@@ -1792,7 +1799,7 @@ impl DxContext {
         self.frame_sync.next_fence_value.set(next_val + 1);
         self.frame_sync.fence_values[frame] = next_val;
         unsafe { self.command_queue.Signal(&self.frame_sync.fence, next_val) }
-            .map_err(|e| format!("Signal: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "Signal"))?;
 
         self.current_frame = (self.current_frame + 1) % FRAMES;
         Ok(())

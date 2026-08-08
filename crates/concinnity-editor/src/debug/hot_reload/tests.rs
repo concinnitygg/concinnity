@@ -710,7 +710,10 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             crate::gfx::input::RenderInput::default()
         }
         fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _: crate::gfx::backend::FrameParams<'_>) -> Result<(), String> {
+        fn draw_frame(
+            &mut self,
+            _: crate::gfx::backend::FrameParams<'_>,
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn update_view(&mut self, _: [[f32; 4]; 4]) {}
@@ -724,7 +727,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             _: &[u8],
             _: &[u8],
             _: &[u8],
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
@@ -735,7 +738,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             &mut self,
             _: usize,
             _: &concinnity_core::build::texture::TextureImage,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -747,7 +750,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             _: &[crate::gfx::mesh_payload::Vertex],
             _: &[u16],
             _: u64,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn setup_chunk_streaming(
@@ -756,13 +759,13 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
             _: usize,
             _: usize,
             _: usize,
-        ) -> Result<(), String> {
+        ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }
         fn add_chunk_mesh(
             &mut self,
             _: crate::gfx::backend::ChunkMesh<'_>,
-        ) -> Result<usize, String> {
+        ) -> crate::gfx::error::RenderResult<usize> {
             Ok(0)
         }
         fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -858,7 +861,10 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         crate::gfx::input::RenderInput::default()
     }
     fn wait_idle(&self) {}
-    fn draw_frame(&mut self, _: crate::gfx::backend::FrameParams<'_>) -> Result<(), String> {
+    fn draw_frame(
+        &mut self,
+        _: crate::gfx::backend::FrameParams<'_>,
+    ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
@@ -872,7 +878,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         _: &[u8],
         _: &[u8],
         _: &[u8],
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
     fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
@@ -883,11 +889,11 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         &mut self,
         slot: usize,
         image: &concinnity_core::build::texture::TextureImage,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         self.texture_updates
             .push((slot, image.width(), image.height()));
         if self.fail_texture_updates {
-            return Err("texture update rejected".to_string());
+            return Err("texture update rejected".into());
         }
         Ok(())
     }
@@ -900,7 +906,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         _: &[crate::gfx::mesh_payload::Vertex],
         _: &[u16],
         _: u64,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
     fn setup_chunk_streaming(
@@ -909,10 +915,13 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         _: usize,
         _: usize,
         _: usize,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         Ok(())
     }
-    fn add_chunk_mesh(&mut self, _: crate::gfx::backend::ChunkMesh<'_>) -> Result<usize, String> {
+    fn add_chunk_mesh(
+        &mut self,
+        _: crate::gfx::backend::ChunkMesh<'_>,
+    ) -> crate::gfx::error::RenderResult<usize> {
         Ok(0)
     }
     fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
@@ -951,10 +960,10 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn rebuild_static_geometry(
         &mut self,
         changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         self.static_rebuild_change_counts.push(changes.len());
         if self.fail_static_rebuild {
-            return Err("static rebuild rejected".to_string());
+            return Err("static rebuild rejected".into());
         }
         Ok(())
     }
@@ -1003,10 +1012,10 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
         }
         Ok(())
     }
-    fn update_environment_map(&mut self, _: &[u8]) -> Result<(), String> {
+    fn update_environment_map(&mut self, _: &[u8]) -> crate::gfx::error::RenderResult<()> {
         self.env_updates += 1;
         if self.fail_env_updates {
-            return Err("environment map update rejected".to_string());
+            return Err("environment map update rejected".into());
         }
         Ok(())
     }

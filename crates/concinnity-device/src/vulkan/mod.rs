@@ -16,6 +16,7 @@ mod decal;
 mod descriptor_layout;
 mod device;
 mod draw;
+mod error;
 mod fog;
 mod glass;
 mod gpu_profile;

@@ -74,7 +74,7 @@ impl RenderBackend for VkContext {
         fn update_quality_params(&mut self, settings: crate::gfx::backend::QualitySettings);
         fn take_input(&mut self) -> RenderInput;
         fn wait_idle(&self);
-        fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String>;
+        fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
         fn retire_draw_object(&mut self, draw_idx: usize);
@@ -85,12 +85,12 @@ impl RenderBackend for VkContext {
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_model(&mut self, skinned_index: usize, model: [[f32; 4]; 4]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-        fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> Result<(), String>;
+        fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> crate::gfx::error::RenderResult<()>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
-        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> Result<(), String>;
+        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> crate::gfx::error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize, texture_slot: usize, normal_map_slot: usize) -> Result<(), String>;
-        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
+        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize, texture_slot: usize, normal_map_slot: usize) -> crate::gfx::error::RenderResult<()>;
+        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> crate::gfx::error::RenderResult<usize>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn add_decal(&mut self, record: crate::gfx::decal::DecalRecord) -> Result<usize, String>;
@@ -100,15 +100,12 @@ impl RenderBackend for VkContext {
         fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
         fn logical_size(&self) -> (f32, f32);
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u16, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
-        fn rebuild_static_geometry(&mut self, changes: Vec<crate::gfx::backend::DrawGeometryUpdate>) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
         fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4]) -> Result<usize, String>;
-        fn install_world_shader(&mut self, bucket: u32, shader: crate::gfx::backend_init::ShaderBytes<'_>) -> Result<(), String>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -122,11 +119,11 @@ impl RenderBackend for VkContext {
         _vert_bytes: &[u8],
         frag_bytes: &[u8],
         _shadow_bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
         // Vulkan compiles the vertex / shadow paths from inline GLSL; only the
         // fragment shader is supplied as a precompiled SPIR-V payload.
-        self.upload_skinned(vertices, indices, draw_objects, frag_bytes)
+        Ok(self.upload_skinned(vertices, indices, draw_objects, frag_bytes)?)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer
@@ -197,8 +194,31 @@ impl RenderBackend for VkContext {
     fn reload_world(
         &mut self,
         init: crate::gfx::backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("reload_world");
-        self.apply_world_reload(init)
+        Ok(self.apply_world_reload(init)?)
+    }
+
+    fn update_environment_map(&mut self, payload: &[u8]) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("update_environment_map");
+        Ok(VkContext::update_environment_map(self, payload)?)
+    }
+
+    fn rebuild_static_geometry(
+        &mut self,
+        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("rebuild_static_geometry");
+        Ok(VkContext::rebuild_static_geometry(self, changes)?)
+    }
+
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("install_world_shader");
+        VkContext::install_world_shader(self, bucket, shader)
+            .map_err(crate::gfx::error::RenderError::ShaderCompile)
     }
 }

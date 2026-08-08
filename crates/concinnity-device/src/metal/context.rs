@@ -537,6 +537,11 @@ pub struct MtlContext {
     // render buffer's own error names the real culprit. Logged once (this flag
     // throttles it) so a per-frame fault streak does not spam at frame rate.
     pub(super) render_fault_logged: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // First classified GPU failure observed on a completed frame command
+    // buffer, parked here by the completion handler (GPU callback thread)
+    // until the next draw_frame reports it across the backend boundary.
+    pub(super) device_error:
+        std::sync::Arc<std::sync::Mutex<Option<crate::gfx::error::RenderError>>>,
     // Count of render-graph per-pass command-buffer faults logged so far.
     // Each graph pass commits its own command buffer; this throttle logs the
     // first handful (with the pass name + error) so the *original* fault in a
@@ -1380,6 +1385,14 @@ impl MtlContext {
             cmd_buf.commit();
             cmd_buf.waitUntilCompleted();
         }
+    }
+
+    // Drain the classified GPU failure a completion handler parked, if any.
+    pub(super) fn take_device_error(&self) -> Option<crate::gfx::error::RenderError> {
+        self.device_error
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 }
 

@@ -30,6 +30,7 @@ bytemuck = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
+thiserror = "2.0.18"
 tracing = "0.1.44"
 
 [build-dependencies]

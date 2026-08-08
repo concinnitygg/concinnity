@@ -201,6 +201,18 @@ pub struct ScreenStack {
 #[derive(Debug, Clone, Default)]
 pub struct WorldLines(pub alloc::vec::Vec<crate::gfx::lines::Line>);
 
+// Device-memory pressure signal, published by GraphicsSystem whenever GPU
+// work fails for lack of device memory. Renderer-free counters so the
+// streaming valve can react (tighten budgets, evict) without naming the
+// renderer; nothing consumes it yet.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuMemoryPressure {
+    // Device-memory failures observed since startup.
+    pub events: u64,
+    // Frame index of the most recent failure.
+    pub last_frame: u64,
+}
+
 // The editor's fly-camera state. While true (published only by the `cn
 // editor` HUD drive), InputSystem keeps the navigation keys and mouse deltas
 // live and GraphicsSystem captures the cursor even though the world is frozen

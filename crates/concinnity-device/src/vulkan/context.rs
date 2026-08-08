@@ -1500,7 +1500,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 //  Public API
 
 impl VkContext {
-    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1555,7 +1555,7 @@ impl VkContext {
                     true,
                     u64::MAX,
                 )
-                .map_err(|e| format!("wait fences: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "wait fences"))?;
         }
 
         // Streamed texture swaps: re-point this frame slot's bindless pool
@@ -1710,10 +1710,11 @@ impl VkContext {
                 }
                 idx
             }
-            Err(_) => {
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.rebuild_swapchain()?;
                 return Ok(());
             }
+            Err(e) => return Err(super::error::map_vk_result(e, "acquire swapchain image")),
         };
 
         unsafe { device.reset_fences(std::slice::from_ref(&self.frame_sync.in_flight[frame])) }
@@ -1780,7 +1781,7 @@ impl VkContext {
                     std::slice::from_ref(&submit_info),
                     self.frame_sync.in_flight[frame],
                 )
-                .map_err(|e| format!("queue submit: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "queue submit"))?;
         }
 
         // Present.
@@ -1797,7 +1798,7 @@ impl VkContext {
         if present_result == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) || present_result == Ok(true) {
             self.rebuild_swapchain()?;
         } else {
-            present_result.map_err(|e| format!("present: {e}"))?;
+            present_result.map_err(|e| super::error::map_vk_result(e, "present"))?;
             // Record which swapchain image now holds a complete, presented frame
             // so the `screenshot` debug command can read it back.
             self.last_present_index = Some(image_index);

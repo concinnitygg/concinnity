@@ -31,6 +31,7 @@ pub mod cursor;
 pub mod decal;
 pub mod display_mode;
 pub mod draw_slot;
+pub mod error;
 pub mod fullscreen;
 pub mod hdr_output;
 pub mod input;

@@ -1356,6 +1356,7 @@ impl MtlContext {
             frame_stats: crate::gfx::profile::RenderStats::default(),
             gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            device_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pass_fault_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             pass_timing,
             pass_times_us: std::sync::Arc::new(std::array::from_fn(|_| {

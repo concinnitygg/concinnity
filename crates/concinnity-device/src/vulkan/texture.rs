@@ -96,7 +96,7 @@ pub(super) struct ImageSpec {
 pub(super) fn create_image(
     alloc: &DeviceAllocator,
     spec: &ImageSpec,
-) -> Result<PooledImage, String> {
+) -> crate::gfx::error::RenderResult<PooledImage> {
     let &ImageSpec {
         width,
         height,
@@ -449,7 +449,7 @@ pub(super) fn upload_texture_deferred(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<(GpuImage, UploadInFlight), String> {
+) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(format!(
@@ -458,7 +458,8 @@ pub(super) fn upload_texture_deferred(
             height,
             pixels.len(),
             base
-        ));
+        )
+        .into());
     }
 
     let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
@@ -501,7 +502,7 @@ fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> 
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
     image: &concinnity_core::build::texture::TextureImage,
-) -> Result<(GpuImage, UploadInFlight), String> {
+) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
     use concinnity_core::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
@@ -526,7 +527,7 @@ pub(super) fn upload_texture_image_deferred(
 pub(super) fn upload_texture_image(
     ctx: &GpuUploadContext,
     image: &concinnity_core::build::texture::TextureImage,
-) -> Result<GpuImage, String> {
+) -> crate::gfx::error::RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;
     Ok(img)
@@ -558,7 +559,7 @@ fn upload_texture_levels_deferred(
     ctx: &GpuUploadContext,
     format: vk::Format,
     levels: &[TextureLevel<'_>],
-) -> Result<(GpuImage, UploadInFlight), String> {
+) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
     let &GpuUploadContext {
         alloc,
         device,

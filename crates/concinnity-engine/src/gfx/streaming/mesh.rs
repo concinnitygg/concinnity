@@ -397,7 +397,7 @@ impl MeshStreamer {
     pub fn drain_completed(
         &mut self,
         frame: u64,
-        mut upload: impl FnMut(usize, &[Vertex], &[u16]) -> Result<(), String>,
+        mut upload: impl FnMut(usize, &[Vertex], &[u16]) -> crate::gfx::error::RenderResult<()>,
     ) -> usize {
         let mut applied = 0;
         while let Ok(result) = self.result_rx.try_recv() {
@@ -633,7 +633,9 @@ mod tests {
         while std::time::Instant::now() < deadline && !drained {
             streamer.drain_completed(1, |_, _, _| {
                 drained = true;
-                Err("no free space".to_string())
+                Err(crate::gfx::error::RenderError::OutOfDeviceMemory(
+                    "no free space".to_string(),
+                ))
             });
             std::thread::sleep(std::time::Duration::from_millis(1));
         }

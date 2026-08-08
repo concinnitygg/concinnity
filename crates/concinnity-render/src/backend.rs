@@ -21,6 +21,7 @@
 
 use crate::auto_exposure::AutoExposureSettings;
 use crate::backend_init::{BackendInit, ShaderBytes, SwapchainConfig};
+use crate::error::{RenderError, RenderResult};
 use crate::input::RenderInput;
 use crate::keymap::KeyMap;
 use crate::mesh_payload::{SkinnedVertex, Vertex};
@@ -341,7 +342,7 @@ pub trait RenderBackend: SceneControl + Send {
     fn wait_idle(&self);
 
     // Per-frame drive. See [`FrameParams`] for the inputs.
-    fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String>;
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     fn update_view(&mut self, matrix: [[f32; 4]; 4]);
     fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
 
@@ -363,7 +364,7 @@ pub trait RenderBackend: SceneControl + Send {
         vert_bytes: &[u8],
         frag_bytes: &[u8],
         shadow_bytes: &[u8],
-    ) -> Result<(), String>;
+    ) -> RenderResult<()>;
     fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
 
     // Attach morph-target data to the skinned draw objects, called once after
@@ -425,7 +426,7 @@ pub trait RenderBackend: SceneControl + Send {
         &mut self,
         slot: usize,
         image: &crate::build::texture::TextureImage,
-    ) -> Result<(), String>;
+    ) -> RenderResult<()>;
 
     // Mesh streaming.
     fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
@@ -435,7 +436,7 @@ pub trait RenderBackend: SceneControl + Send {
         verts: &[Vertex],
         idxs: &[u16],
         frame: u64,
-    ) -> Result<(), String>;
+    ) -> RenderResult<()>;
 
     // Seed the streamed-mesh sub-allocators with one reserved headroom block
     // (byte ranges in the shared vertex / index buffers) instead of the
@@ -464,8 +465,8 @@ pub trait RenderBackend: SceneControl + Send {
         chunk_idx_bytes: usize,
         texture_slot: usize,
         normal_map_slot: usize,
-    ) -> Result<(), String>;
-    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
+    ) -> RenderResult<()>;
+    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> RenderResult<usize>;
     fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
     fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
 
@@ -739,7 +740,7 @@ pub trait RenderBackend: SceneControl + Send {
     // return `Ok(())` and the size-changing reload is logged + skipped at
     // the caller (the existing in-place path already errored on size
     // mismatch).
-    fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> Result<(), String> {
+    fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
         let _ = changes;
         Ok(())
     }
@@ -846,7 +847,7 @@ pub trait RenderBackend: SceneControl + Send {
     // share a single byte format. Driven by asset hot-reload (`cn debug`
     // only). Default no-op: backends that have not implemented the swap leave
     // the IBL cubes bound at whatever payload was uploaded at init.
-    fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let _ = payload;
         Ok(())
     }
@@ -995,7 +996,7 @@ pub trait RenderBackend: SceneControl + Send {
     // Default no-op-with-Ok: a backend that renders every draw with the world
     // default program has no per-bucket pipeline to build, and the bucket is
     // resident as far as scene loading is concerned.
-    fn install_world_shader(&mut self, bucket: u32, shader: ShaderBytes<'_>) -> Result<(), String> {
+    fn install_world_shader(&mut self, bucket: u32, shader: ShaderBytes<'_>) -> RenderResult<()> {
         let _ = (bucket, shader);
         Ok(())
     }
@@ -1032,9 +1033,11 @@ pub trait RenderBackend: SceneControl + Send {
     // (pixel format / frames-in-flight / EDR) is guaranteed unchanged. Default
     // `Err`/unsupported: DirectX / Vulkan fall back to a full rebuild (no
     // regression; a real implementation is Windows-pending like the rest).
-    fn reload_world(&mut self, init: BackendInit<'_>) -> Result<(), String> {
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         let _ = init;
-        Err("reload_world: not supported on this backend".to_string())
+        Err(RenderError::Other(
+            "reload_world: not supported on this backend".to_string(),
+        ))
     }
 }
 
@@ -1215,7 +1218,7 @@ mod tests {
             RenderInput::default()
         }
         fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _params: FrameParams<'_>) -> Result<(), String> {
+        fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
@@ -1229,7 +1232,7 @@ mod tests {
             _vert_bytes: &[u8],
             _frag_bytes: &[u8],
             _shadow_bytes: &[u8],
-        ) -> Result<(), String> {
+        ) -> RenderResult<()> {
             Ok(())
         }
         fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
@@ -1240,7 +1243,7 @@ mod tests {
             &mut self,
             _slot: usize,
             _image: &crate::build::texture::TextureImage,
-        ) -> Result<(), String> {
+        ) -> RenderResult<()> {
             Ok(())
         }
         fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
@@ -1252,7 +1255,7 @@ mod tests {
             _verts: &[Vertex],
             _idxs: &[u16],
             _frame: u64,
-        ) -> Result<(), String> {
+        ) -> RenderResult<()> {
             Ok(())
         }
         fn setup_chunk_streaming(
@@ -1261,10 +1264,10 @@ mod tests {
             _chunk_idx_bytes: usize,
             _texture_slot: usize,
             _normal_map_slot: usize,
-        ) -> Result<(), String> {
+        ) -> RenderResult<()> {
             Ok(())
         }
-        fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> Result<usize, String> {
+        fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> RenderResult<usize> {
             Ok(0)
         }
         fn remove_chunk_mesh(

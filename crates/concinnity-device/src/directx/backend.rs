@@ -74,7 +74,7 @@ impl RenderBackend for DxContext {
         fn update_quality_params(&mut self, settings: crate::gfx::backend::QualitySettings);
         fn take_input(&mut self) -> RenderInput;
         fn wait_idle(&self);
-        fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String>;
+        fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
         fn retire_draw_object(&mut self, draw_idx: usize);
@@ -85,12 +85,8 @@ impl RenderBackend for DxContext {
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_model(&mut self, skinned_index: usize, model: [[f32; 4]; 4]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-        fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> Result<(), String>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
-        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> Result<(), String>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize, texture_slot: usize, normal_map_slot: usize) -> Result<(), String>;
-        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String>;
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
         fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
         fn add_decal(&mut self, record: crate::gfx::decal::DecalRecord) -> Result<usize, String>;
@@ -102,16 +98,13 @@ impl RenderBackend for DxContext {
         fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile;
         fn logical_size(&self) -> (f32, f32);
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String>;
         fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>);
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u16, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
-        fn rebuild_static_geometry(&mut self, changes: Vec<crate::gfx::backend::DrawGeometryUpdate>) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
         fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4]) -> Result<usize, String>;
-        fn install_world_shader(&mut self, bucket: u32, shader: crate::gfx::backend_init::ShaderBytes<'_>) -> Result<(), String>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -130,8 +123,76 @@ impl RenderBackend for DxContext {
     fn reload_world(
         &mut self,
         init: crate::gfx::backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
-        self.apply_world_reload(init)
+    ) -> crate::gfx::error::RenderResult<()> {
+        Ok(self.apply_world_reload(init)?)
+    }
+
+    // Typed-boundary forwarders: the inherent methods report `String` errors,
+    // which `?` coerces to `RenderError::Other`. Sites that can classify a
+    // failure construct the typed variant directly instead.
+    fn update_texture_slot(
+        &mut self,
+        slot: usize,
+        image: &crate::build::texture::TextureImage,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("update_texture_slot");
+        Ok(DxContext::update_texture_slot(self, slot, image)?)
+    }
+
+    fn upload_mesh(
+        &mut self,
+        draw_idx: usize,
+        verts: &[Vertex],
+        idxs: &[u16],
+        frame: u64,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("upload_mesh");
+        Ok(DxContext::upload_mesh(self, draw_idx, verts, idxs, frame)?)
+    }
+
+    fn setup_chunk_streaming(
+        &mut self,
+        chunk_vtx_bytes: usize,
+        chunk_idx_bytes: usize,
+        texture_slot: usize,
+        normal_map_slot: usize,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("setup_chunk_streaming");
+        Ok(DxContext::setup_chunk_streaming(
+            self,
+            chunk_vtx_bytes,
+            chunk_idx_bytes,
+            texture_slot,
+            normal_map_slot,
+        )?)
+    }
+
+    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> crate::gfx::error::RenderResult<usize> {
+        debug_assert_main_thread("add_chunk_mesh");
+        Ok(DxContext::add_chunk_mesh(self, mesh)?)
+    }
+
+    fn update_environment_map(&mut self, payload: &[u8]) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("update_environment_map");
+        Ok(DxContext::update_environment_map(self, payload)?)
+    }
+
+    fn rebuild_static_geometry(
+        &mut self,
+        changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("rebuild_static_geometry");
+        Ok(DxContext::rebuild_static_geometry(self, changes)?)
+    }
+
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        shader: crate::gfx::backend_init::ShaderBytes<'_>,
+    ) -> crate::gfx::error::RenderResult<()> {
+        debug_assert_main_thread("install_world_shader");
+        DxContext::install_world_shader(self, bucket, shader)
+            .map_err(crate::gfx::error::RenderError::ShaderCompile)
     }
 
     fn upload_skinned(
@@ -142,11 +203,11 @@ impl RenderBackend for DxContext {
         _vert_bytes: &[u8],
         frag_bytes: &[u8],
         _shadow_bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
         // DirectX compiles the vertex / shadow paths from inline HLSL; only the
         // fragment shader is supplied as a precompiled DXBC payload.
-        self.upload_skinned(vertices, indices, draw_objects, frag_bytes)
+        Ok(self.upload_skinned(vertices, indices, draw_objects, frag_bytes)?)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer

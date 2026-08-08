@@ -893,6 +893,7 @@ impl MtlContext {
             let gpu_time = std::sync::Arc::clone(&self.gpu_time_us);
             let pass_times = std::sync::Arc::clone(&self.pass_times_us);
             let render_fault_logged = std::sync::Arc::clone(&self.render_fault_logged);
+            let device_error = std::sync::Arc::clone(&self.device_error);
             let pass_buffer = self
                 .pass_timing
                 .as_ref()
@@ -913,10 +914,26 @@ impl MtlContext {
                     // `SubmissionsIgnored` cascade seen later on the RT build.
                     // Log its own error once so the real first fault is visible.
                     use objc2_metal::MTLCommandBufferStatus;
-                    if cb.status() == MTLCommandBufferStatus::Error
-                        && !render_fault_logged.swap(true, std::sync::atomic::Ordering::Relaxed)
-                    {
-                        tracing::error!("frame render command buffer faulted: {:?}", cb.error());
+                    if cb.status() == MTLCommandBufferStatus::Error {
+                        if !render_fault_logged.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            tracing::error!(
+                                "frame render command buffer faulted: {:?}",
+                                cb.error()
+                            );
+                        }
+                        // Classify and park the first failure for the next
+                        // draw_frame to report across the backend boundary.
+                        let classified = match cb.error() {
+                            Some(e) => super::error::classify_ns_error(&e),
+                            None => crate::gfx::error::RenderError::Other(
+                                "frame command buffer faulted without an error object".to_string(),
+                            ),
+                        };
+                        if let Ok(mut slot) = device_error.lock()
+                            && slot.is_none()
+                        {
+                            *slot = Some(classified);
+                        }
                     }
                     // Whole-frame GPU time. This handler's command buffer is
                     // only one slice of a multi-buffer frame, so its own

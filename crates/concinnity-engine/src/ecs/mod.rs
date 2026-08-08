@@ -34,9 +34,10 @@ pub use concinnity_core::ecs::{
 // (engine systems and the editor's hook drive).
 pub use concinnity_core::ecs::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
-    HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown, OverlayImage,
-    OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent, TracePath, TracePaths,
-    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WorldLines,
+    GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
+    OverlayImage, OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent,
+    TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides,
+    WorldLines,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
