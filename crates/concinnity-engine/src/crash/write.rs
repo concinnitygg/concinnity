@@ -6,7 +6,7 @@
 // directory is pruned to the newest reports, minidump siblings included.
 
 use super::report::CrashReport;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -96,7 +96,10 @@ pub(crate) fn prune(dir: &Path, keep: usize) {
 // Create the minidump file for a report stem. Returns the open file plus its
 // path so a failed dump can be cleaned up.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub(crate) fn create_dump_file(dir: &Path, stem: &str) -> std::io::Result<(File, PathBuf)> {
+pub(crate) fn create_dump_file(
+    dir: &Path,
+    stem: &str,
+) -> std::io::Result<(std::fs::File, PathBuf)> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{stem}.dmp"));
     let file = OpenOptions::new()

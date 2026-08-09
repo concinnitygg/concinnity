@@ -14,6 +14,8 @@ pub(crate) const MAX_BACKTRACE_BYTES: usize = 192 * 1024;
 pub(crate) enum ReportKind {
     Panic,
     DeviceLost,
+    // Only the native fault handler constructs this; Linux has none.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     NativeFault,
 }
 
@@ -22,6 +24,7 @@ impl ReportKind {
         match self {
             ReportKind::Panic => "panic",
             ReportKind::DeviceLost => "gpu-device-lost",
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             ReportKind::NativeFault => "native-fault",
         }
     }
