@@ -307,6 +307,11 @@ pub struct GraphicsSystem {
     // (`draw_list::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
     transform_cache: crate::gfx::draw_list::TransformCache,
+    // Last-pushed model matrix per draw slot / skinned instance plus the
+    // frame's batched updates: a static slot costs a compare instead of a
+    // backend call, and each family crosses the trait once per frame.
+    model_push: model_push::ModelPushCache,
+    skinned_model_push: model_push::ModelPushCache,
     // Test-only injection seam: pre-resolved settings, a fabricated GPU
     // profile, and a mock backend factory, so unit tests can drive
     // run_init / run_step without a GPU device or the on-disk settings store.
@@ -467,6 +472,8 @@ impl GraphicsSystem {
             texture_cap: 96,
             texture_budget: 4,
             transform_cache: crate::gfx::draw_list::TransformCache::default(),
+            model_push: model_push::ModelPushCache::default(),
+            skinned_model_push: model_push::ModelPushCache::default(),
             #[cfg(test)]
             test_hooks: None,
         }
@@ -714,6 +721,7 @@ mod helpers;
 pub mod hot_reload_sources;
 mod init;
 mod lines;
+mod model_push;
 pub(crate) mod scene;
 mod streaming;
 #[cfg(test)]

@@ -869,6 +869,61 @@ fn transform_edit_pushes_new_model_matrix() {
     assert_eq!(model[3][2], 30.0);
 }
 
+// The model-push change gate: a slot is sent when its matrix differs from the
+// last push, so a static frame sends nothing and a move sends exactly one
+// update for the moved slot.
+#[test]
+fn model_matrices_push_only_on_change() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    let model_pushes = |s: &MockState| {
+        s.calls
+            .iter()
+            .filter(|c| matches!(c, Call::UpdateModel(_)))
+            .count()
+    };
+
+    // First frame: nothing was pushed before, so the quad's slot is sent.
+    step(&mut gs, &mut world);
+    assert_eq!(model_pushes(&lock(&state)), 1, "first frame seeds the slot");
+
+    // Static frames send nothing.
+    for _ in 0..2 {
+        lock(&state).calls.clear();
+        step(&mut gs, &mut world);
+        assert_eq!(
+            model_pushes(&lock(&state)),
+            0,
+            "static frame pushed a model"
+        );
+    }
+
+    // A move sends exactly one update carrying the new matrix.
+    {
+        let mut ctx = world.ctx();
+        let t = ctx.query_mut::<Transform>().next().unwrap();
+        t.position = [4.0, 5.0, 6.0];
+    }
+    lock(&state).calls.clear();
+    step(&mut gs, &mut world);
+    {
+        let s = lock(&state);
+        assert_eq!(model_pushes(&s), 1, "one move, one update");
+        assert_eq!(s.models.get(&0).expect("slot 0")[3][0], 4.0);
+    }
+
+    // And the frame after the move is quiet again.
+    lock(&state).calls.clear();
+    step(&mut gs, &mut world);
+    assert_eq!(
+        model_pushes(&lock(&state)),
+        0,
+        "settled frame pushed a model"
+    );
+}
+
 #[test]
 fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     let (state, hooks) = recording_hooks();
@@ -3354,11 +3409,12 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
     assert!(init_graphics(&mut world, hooks).failed, "undecodable data");
 }
 
-// The per-frame skinned push: AnimationSystem's poses reach the GPU each frame,
-// and a runtime-spawned instance's Transform follows it. Both are skipped behind
-// an open menu -- animation is frozen there, so the last upload still stands.
+// The per-frame skinned push: a pose reaches the GPU when its matrices were
+// rewritten (flagged by whoever wrote them), so an unanimated mesh uploads
+// its seeded bind pose once and nothing after. A rewritten pose uploads
+// again, unless a menu is open (animation is frozen behind it).
 #[test]
-fn skinned_poses_reach_the_backend_each_frame_and_freeze_behind_a_menu() {
+fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     use crate::assets::SkinnedMesh;
 
     let (state, hooks) = recording_hooks();
@@ -3376,13 +3432,40 @@ fn skinned_poses_reach_the_backend_each_frame_and_freeze_behind_a_menu() {
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
+    let flag_pose = |world: &mut TestWorld| {
+        let mut ctx = world.ctx();
+        let pose = ctx
+            .query_mut::<crate::assets::SkeletonPose>()
+            .next()
+            .unwrap();
+        pose.updated = true;
+    };
+
     step(&mut gs, &mut world);
     assert!(
         lock(&state).saw(&Call::UpdateSkinnedPose(0)),
-        "the template's pose is pushed each frame"
+        "the seeded bind pose is pushed on the first frame"
     );
 
-    // Freeze the world the way an open menu does.
+    // No animation rewrote the pose: the next frame pushes nothing.
+    lock(&state).calls.clear();
+    step(&mut gs, &mut world);
+    assert!(
+        !lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        "an untouched pose is not re-uploaded"
+    );
+
+    // A rewritten pose (flagged the way AnimationSystem does) is pushed once.
+    flag_pose(&mut world);
+    lock(&state).calls.clear();
+    step(&mut gs, &mut world);
+    assert!(
+        lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        "a flagged pose is uploaded"
+    );
+
+    // Freeze the world the way an open menu does: even a flagged pose waits.
+    flag_pose(&mut world);
     world.resources.insert(crate::ecs::MenuOverride(Some(true)));
     lock(&state).calls.clear();
     step(&mut gs, &mut world);

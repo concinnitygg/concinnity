@@ -1,7 +1,23 @@
 // src/gfx/anim_graph/tests.rs
 
 use super::*;
-use crate::gfx::skinning::{AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton};
+use crate::gfx::skinning::{
+    AnimationClip, Joint, JointPose, JointTrack, Keyframe, Mat4, PoseScratch, Skeleton,
+};
+
+// Sample through a throwaway scratch and hand the pose back by value, so
+// assertions read like the old Vec-returning API.
+fn sample_pose(
+    graph: &CompiledGraph,
+    cursor: &GraphCursor,
+    params: &[f32],
+    clips: &[AnimationClip],
+    skeleton: &Skeleton,
+) -> Vec<Mat4> {
+    let mut scratch = PoseScratch::default();
+    sample_graph_pose_into(graph, cursor, params, |i| &clips[i], skeleton, &mut scratch);
+    scratch.locals
+}
 
 fn clip_play(clip: usize, duration_secs: f32) -> ClipPlay {
     ClipPlay {
@@ -243,11 +259,11 @@ fn sample_blends_outgoing_and_incoming_during_fade() {
     cursor.advance(&graph, &[], 0.0);
     // Half-way through the 1s fade from clip at x=0 to clip at x=2.
     cursor.advance(&graph, &[], 0.5);
-    let locals = sample_graph_pose(&graph, &cursor, &[], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[], &clips, &skeleton);
     assert!((locals[0][3][0] - 1.0).abs() < 1e-4, "midpoint of 0 and 2");
     // Fade over: pure incoming pose.
     cursor.advance(&graph, &[], 0.6);
-    let locals = sample_graph_pose(&graph, &cursor, &[], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[], &clips, &skeleton);
     assert!((locals[0][3][0] - 2.0).abs() < 1e-4);
 }
 
@@ -260,7 +276,7 @@ fn sample_without_fade_is_pure_current_state() {
         initial: 1,
     };
     let cursor = GraphCursor::start(&graph);
-    let locals = sample_graph_pose(&graph, &cursor, &[], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[], &clips, &skeleton);
     assert!((locals[0][3][0] - 2.0).abs() < 1e-4);
 }
 
@@ -395,7 +411,7 @@ fn synced_members_sample_at_shared_phase() {
         fade: None,
     };
     // Mid-blend (weights 0.5 / 0.5) at phase 0.25: both members read 0.25.
-    let locals = sample_graph_pose(&graph, &cursor, &[0.5], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[0.5], &clips, &skeleton);
     assert!(
         (locals[0][3][0] - 0.25).abs() < 1e-4,
         "phase-locked members must agree: {}",
@@ -417,7 +433,7 @@ fn non_sync_blend_samples_members_at_absolute_clock() {
     let mut cursor = GraphCursor::start(&graph);
     cursor.advance(&graph, &[0.5], 0.3);
     assert!((cursor.clock - 0.3).abs() < 1e-6, "seconds, not phase");
-    let locals = sample_graph_pose(&graph, &cursor, &[0.5], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[0.5], &clips, &skeleton);
     assert!(
         (locals[0][3][0] - 1.0).abs() < 1e-4,
         "even blend of 0 and 2"
@@ -442,7 +458,7 @@ fn zero_weight_members_do_not_affect_the_pose() {
     };
     let cursor = GraphCursor::start(&graph);
     // Parked exactly on the middle member.
-    let locals = sample_graph_pose(&graph, &cursor, &[1.0], |i| &clips[i], &skeleton);
+    let locals = sample_pose(&graph, &cursor, &[1.0], &clips, &skeleton);
     assert!((locals[0][3][0] - 2.0).abs() < 1e-4);
 }
 

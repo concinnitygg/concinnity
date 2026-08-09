@@ -84,6 +84,7 @@ pub(crate) enum Call {
         draws: usize,
     },
     UpdateSkinnedPose(usize),
+    UpdateSkinnedModel(usize),
     SeedSkinnedInstancePool(usize),
     EvictTextureSlot(usize),
     UpdateTextureSlot {
@@ -378,10 +379,19 @@ impl RenderBackend for MockBackend {
         self.record(Call::UpdateView(matrix));
     }
 
-    fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]) {
+    fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         let mut s = self.state.lock().unwrap();
-        s.models.insert(index, model);
-        s.calls.push(Call::UpdateModel(index));
+        for &(index, model) in updates {
+            s.models.insert(index as usize, model);
+            s.calls.push(Call::UpdateModel(index as usize));
+        }
+    }
+
+    fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+        let mut s = self.state.lock().unwrap();
+        for &(index, _model) in updates {
+            s.calls.push(Call::UpdateSkinnedModel(index as usize));
+        }
     }
 
     fn retire_draw_object(&mut self, draw_idx: usize) {

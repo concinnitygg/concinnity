@@ -15,6 +15,7 @@ pub mod frustum;
 pub mod lines;
 pub mod lod_select;
 pub mod overlay;
+pub mod pose_scratch;
 pub mod profile;
 pub mod render_types;
 pub mod root_motion;

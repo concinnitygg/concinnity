@@ -314,6 +314,47 @@ fn root_motion_clip_publishes_displacement_events() {
     );
 }
 
+// Root-motion events for several targets are published in handle order every
+// step (the target map iterates ordered), so event consumers see the same
+// sequence run to run.
+#[test]
+fn root_motion_events_emit_in_handle_order() {
+    let mut world = World::new_empty();
+    let mut handles = Vec::new();
+    for name in ["rm_ord_c", "rm_ord_a", "rm_ord_b"] {
+        handles.push(SkinnedMeshHandle(intern(name).0));
+        let mut a: Animation = serde_json::from_value(serde_json::json!({
+            "target": name,
+            "duration": 1.0,
+            "looping": true,
+            "root_motion": true,
+            "root_track": [
+                {"time": 0.0, "translation": [0.0, 0.0, 0.0]},
+                {"time": 1.0, "translation": [2.0, 0.0, 0.0]}
+            ],
+        }))
+        .unwrap();
+        a.asset_id = intern(&format!("{name}_clip"));
+        world.add_component(a);
+    }
+    world.start().unwrap();
+
+    // The first step has no time delta; the second emits one event per target.
+    world.step();
+    std::thread::sleep(Duration::from_millis(5));
+    world.step();
+
+    let events = world
+        .events::<crate::assets::RootMotion>()
+        .expect("RootMotion queue exists");
+    let mut cursor = crate::ecs::EventCursor::default();
+    let order: Vec<_> = events.read(&mut cursor).map(|m| m.target).collect();
+    assert_eq!(order.len(), handles.len(), "one event per moving target");
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted, "events are published in handle order");
+}
+
 // The full rig chain: a skinned mesh with a capsule + a root-motion clip
 // moves its CharacterRig through PhysicsSystem, staying grounded.
 // Full IK chain: the graph authors an ik_chain on a three-joint leg whose

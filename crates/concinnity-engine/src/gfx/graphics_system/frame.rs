@@ -154,15 +154,18 @@ impl GraphicsSystem {
                 // Push updated model matrices for any entity whose transform
                 // changed since last frame (physics, camera interact, reparent):
                 // resolve each entity's GlobalTransform from Transform + Parent
-                // (top-down so parents propagate to children), then push it to the
-                // entity's GPU draw slots. The cached path reuses its scratch and
-                // skips the resolve entirely when no Transform / Parent changed.
+                // (top-down so parents propagate to children), then queue it for
+                // the entity's GPU draw slots. The cached path reuses its scratch
+                // and skips the resolve entirely when no Transform / Parent
+                // changed; the push cache drops slots whose matrix is unchanged,
+                // so a static scene sends nothing.
                 draw_list::propagate_transforms_cached(ctx, &mut self.transform_cache);
+                self.model_push.begin();
                 for (_entity, global, handle) in
                     ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()
                 {
                     for &slot in &handle.draws {
-                        backend.update_model(slot as usize, global.0);
+                        self.model_push.push_changed(slot as usize, global.0);
                     }
                 }
 
@@ -172,10 +175,12 @@ impl GraphicsSystem {
                 // runtime skips this entirely. A despawned entity simply drops
                 // out of the index.
                 if !self.pick_candidates.is_empty() {
-                    // Editor-session hidden objects: overwrite their just-pushed
+                    // Editor-session hidden objects: overwrite their just-queued
                     // model matrices with the degenerate one (nothing draws)
                     // and keep them out of the pick index. Re-derived every
-                    // frame, so clearing the set restores them immediately.
+                    // frame, so clearing the set restores them immediately: the
+                    // overwrite goes through the push cache, so un-hiding shows
+                    // up as a changed matrix and is re-sent.
                     let hidden = ctx
                         .resource::<crate::ecs::HiddenAssets>()
                         .map(|h| h.0.clone())
@@ -187,7 +192,7 @@ impl GraphicsSystem {
                     {
                         if let Some(handle) = ctx.get::<crate::assets::RenderHandle>(c.entity) {
                             for &slot in &handle.draws {
-                                backend.update_model(slot as usize, HIDDEN_MODEL);
+                                self.model_push.push_changed(slot as usize, HIDDEN_MODEL);
                             }
                         }
                     }
@@ -211,28 +216,39 @@ impl GraphicsSystem {
                         .collect();
                     ctx.insert_resource(crate::ecs::PickIndex { entries });
                 }
+                if !self.model_push.batch().is_empty() {
+                    backend.update_models(self.model_push.batch());
+                }
 
                 // Push the latest skinned poses to the GPU. AnimationSystem
                 // wrote them into the SkeletonPose components on the previous
-                // tick; the one-frame lag is invisible at animation rates.
-                // Skipped while a menu is open: animation is frozen, so the
-                // poses are unchanged and the last upload still stands (the
-                // skinned draw is skipped behind an opaque menu anyway).
+                // tick (flagging each pose it touched); the one-frame lag is
+                // invisible at animation rates. An untouched pose keeps its
+                // last upload, so an unanimated mesh uploads its bind pose
+                // once and never again. Skipped while a menu is open:
+                // animation is frozen, so nothing is flagged anyway and the
+                // skinned draw is skipped behind an opaque menu.
                 if !menu_active {
-                    for pose in ctx.query::<crate::assets::SkeletonPose>() {
+                    for pose in ctx.query_mut::<crate::assets::SkeletonPose>() {
+                        if !pose.updated {
+                            continue;
+                        }
                         backend.update_skinned_pose(pose.skinned_index, &pose.joint_matrices);
                         if !pose.morph_weights.is_empty() {
                             backend.update_morph_weights(pose.skinned_index, &pose.morph_weights);
                         }
+                        pose.updated = false;
                     }
-                    // Push the model matrix for skinned instances that carry a
+                    // Queue the model matrix for skinned instances that carry a
                     // Transform (the runtime-spawned ones), so a moved instance
                     // follows it. The authored templates have no Transform and keep
                     // the model baked into their draw object at load.
+                    self.skinned_model_push.begin();
                     for (_entity, pose, transform) in
                         ctx.join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
                     {
-                        backend.update_skinned_model(pose.skinned_index, transform.model_matrix());
+                        self.skinned_model_push
+                            .push_changed(pose.skinned_index, transform.model_matrix());
                     }
                     // Move rig-driven meshes to their capsule's resolved
                     // position (PhysicsSystem wrote it on the previous tick;
@@ -240,9 +256,12 @@ impl GraphicsSystem {
                     // lost while uploads are skipped).
                     for rig in ctx.query_mut::<crate::assets::CharacterRig>() {
                         if rig.moved {
-                            backend.update_skinned_model(rig.skinned_index, rig.model());
+                            self.skinned_model_push.push(rig.skinned_index, rig.model());
                             rig.moved = false;
                         }
+                    }
+                    if !self.skinned_model_push.batch().is_empty() {
+                        backend.update_skinned_models(self.skinned_model_push.batch());
                     }
                 }
 

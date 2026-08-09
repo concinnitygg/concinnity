@@ -7,13 +7,13 @@
 // into a mesh-space target for the analytic two-bone solve, applied to the
 // sampled locals just before the skinning matrices.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::assets::{AnimParams, CharacterRig, GraphIkChain, GroundProbe, GroundProbes};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::ik::TwoBoneChain;
-use crate::gfx::skinning::{Mat4, Skeleton, mat4_affine_inverse};
+use crate::gfx::skinning::{Mat4, PoseScratch, Skeleton, mat4_affine_inverse};
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`
 // above it and reaches `PROBE_DOWN` below.
@@ -113,7 +113,7 @@ pub(super) struct IkFrame {
 // Serial pre-pass: fold each target's probe answers, rig state, and weight
 // parameters into per-chain pins for the parallel sample loop.
 pub(super) fn frame_inputs(
-    targets: &HashMap<SkinnedMeshHandle, super::TargetState>,
+    targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext,
 ) -> HashMap<SkinnedMeshHandle, IkFrame> {
     let mut out = HashMap::new();
@@ -171,12 +171,13 @@ pub(super) fn frame_inputs(
     out
 }
 
-// Apply every pinned chain to one target's sampled locals (runs inside the
-// parallel sample loop). The pin keeps the animated foot's world X/Z and
-// clamps only its height, so the gait's horizontal travel is untouched.
+// Apply every pinned chain to the sampled locals in `scratch.locals` (runs
+// inside the parallel sample loop; `scratch.aux` is the world-matrix buffer
+// the solves compose through). The pin keeps the animated foot's world X/Z
+// and clamps only its height, so the gait's horizontal travel is untouched.
 pub(super) fn apply_chains(
     skeleton: &Skeleton,
-    locals: &mut Vec<Mat4>,
+    scratch: &mut PoseScratch,
     chains: &[IkChainRuntime],
     frame: &IkFrame,
 ) {
@@ -184,8 +185,8 @@ pub(super) fn apply_chains(
         let Some((pin_y, weight)) = *pin else {
             continue;
         };
-        let worlds = skeleton.world_matrices(locals);
-        let Some(w) = worlds.get(chain.chain.end) else {
+        skeleton.world_matrices_into(&scratch.locals, &mut scratch.aux);
+        let Some(w) = scratch.aux.get(chain.chain.end) else {
             continue;
         };
         let foot_mesh = [w[3][0], w[3][1], w[3][2]];
@@ -195,7 +196,14 @@ pub(super) fn apply_chains(
         }
         let target_world = [foot_world[0], pin_y, foot_world[2]];
         let target_mesh = transform_point(&frame.inv_model, target_world);
-        crate::gfx::ik::apply_two_bone_ik(skeleton, locals, &chain.chain, target_mesh, weight);
+        crate::gfx::ik::apply_two_bone_ik(
+            skeleton,
+            &mut scratch.locals,
+            &chain.chain,
+            target_mesh,
+            weight,
+            &mut scratch.aux,
+        );
     }
 }
 
@@ -204,7 +212,7 @@ pub(super) fn apply_chains(
 // applied to a joint's bind position is its current mesh-space position, so
 // no extra hierarchy walk is needed.
 pub(super) fn refresh_rays(
-    targets: &HashMap<SkinnedMeshHandle, super::TargetState>,
+    targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext,
 ) {
     for (&target, state) in targets {

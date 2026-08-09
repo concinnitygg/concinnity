@@ -6,7 +6,7 @@
 // component, which gameplay systems (or the `anim-param` debug command)
 // write; the graph math itself lives in `concinnity_cpu::gfx::anim_graph`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::assets::{AnimGraph, AnimParams};
 use crate::ecs::asset_id::AssetId;
@@ -39,7 +39,7 @@ pub(super) struct GraphTarget {
 // failure here (blob/clip-list disagreement) downgrades the bucket to its
 // flat drive with a warning rather than dropping the world.
 pub(super) fn install_graphs(
-    targets: &mut HashMap<SkinnedMeshHandle, TargetState>,
+    targets: &mut BTreeMap<SkinnedMeshHandle, TargetState>,
     ctx: &mut PipelineContext,
     clip_slots: &HashMap<AssetId, (SkinnedMeshHandle, usize)>,
 ) -> usize {
@@ -170,8 +170,8 @@ mod tests {
     }
 
     // A flat bucket for `target`, holding the one clip a graph can claim.
-    fn flat_bucket(target: SkinnedMeshHandle) -> HashMap<SkinnedMeshHandle, TargetState> {
-        HashMap::from([(
+    fn flat_bucket(target: SkinnedMeshHandle) -> BTreeMap<SkinnedMeshHandle, TargetState> {
+        BTreeMap::from([(
             target,
             TargetState {
                 clips: vec![clip_entry()],
@@ -229,7 +229,7 @@ mod tests {
         }
     }
 
-    fn is_graph(targets: &HashMap<SkinnedMeshHandle, TargetState>, t: SkinnedMeshHandle) -> bool {
+    fn is_graph(targets: &BTreeMap<SkinnedMeshHandle, TargetState>, t: SkinnedMeshHandle) -> bool {
         matches!(targets[&t].mode, TargetMode::Graph(_))
     }
 
@@ -254,7 +254,7 @@ mod tests {
     fn install_graphs_ignores_a_graph_with_no_target() {
         let mut w = TestWorld::new();
         w.push(AnimGraph::default());
-        let mut targets = HashMap::new();
+        let mut targets = BTreeMap::new();
         assert_eq!(
             install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
             0
@@ -268,7 +268,7 @@ mod tests {
         let target = handle("gi_no_clips");
         let mut w = TestWorld::new();
         w.push(parse(graph_json("gi_no_clips", "gi_missing_clip")));
-        let mut targets = HashMap::new();
+        let mut targets = BTreeMap::new();
         assert_eq!(
             install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
             0

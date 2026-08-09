@@ -1812,9 +1812,14 @@ impl VkContext {
         self.view_matrix = matrix;
     }
 
-    pub fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]) {
-        if let Some(obj) = self.draw_objects.get_mut(index) {
-            obj.model = model;
+    // Update the model matrices of the given draw objects, one
+    // `(slot, matrix)` entry per changed object. Out-of-range slots have no
+    // effect.
+    pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+        for &(index, model) in updates {
+            if let Some(obj) = self.draw_objects.get_mut(index as usize) {
+                obj.model = model;
+            }
         }
     }
 

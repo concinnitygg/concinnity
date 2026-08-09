@@ -157,49 +157,50 @@ impl Skeleton {
     }
 
     /// Compose `local_poses` (one local matrix per joint) into mesh-space
-    /// joint matrices with a single forward pass over the hierarchy.
-    /// `local_poses` shorter than the skeleton has its missing tail filled
-    /// from the bind pose.
-    pub fn world_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
-        let n = self.joints.len();
-        let mut world: Vec<Mat4> = Vec::with_capacity(n);
+    /// joint matrices with a single forward pass over the hierarchy, written
+    /// into `out` (cleared first, so its capacity is reused). `local_poses`
+    /// shorter than the skeleton has its missing tail filled from the bind
+    /// pose.
+    pub fn world_matrices_into(&self, local_poses: &[Mat4], out: &mut Vec<Mat4>) {
+        out.clear();
+        out.reserve(self.joints.len());
         for (i, joint) in self.joints.iter().enumerate() {
             let local = local_poses.get(i).copied().unwrap_or(self.bind_locals[i]);
             let world_mat = match joint.parent {
-                Some(p) if p < i => mat4_mul(world[p], local),
+                Some(p) if p < i => mat4_mul(out[p], local),
                 _ => local,
             };
-            world.push(world_mat);
+            out.push(world_mat);
         }
-        world
     }
 
     /// Compose `local_poses` into world-space joint matrices, then multiply
     /// by the inverse bind matrices to produce the skinning matrices the
-    /// vertex shader applies.
+    /// vertex shader applies, written into `out` (cleared first, so its
+    /// capacity is reused). `local_poses` must not alias `out`.
     ///
     /// The result is capped at `MAX_JOINTS` entries (the GPU joint buffer is
     /// fixed-size) and is always at least one matrix so the buffer is never
     /// empty.
-    pub fn skinning_matrices(&self, local_poses: &[Mat4]) -> Vec<Mat4> {
-        let mut out: Vec<Mat4> = self
-            .world_matrices(local_poses)
-            .iter()
-            .zip(&self.inverse_bind)
-            .map(|(w, ib)| mat4_mul(*w, *ib))
-            .take(MAX_JOINTS)
-            .collect();
+    pub fn skinning_matrices_into(&self, local_poses: &[Mat4], out: &mut Vec<Mat4>) {
+        self.world_matrices_into(local_poses, out);
+        let n = out.len().min(self.inverse_bind.len()).min(MAX_JOINTS);
+        for (i, ib) in self.inverse_bind[..n].iter().enumerate() {
+            out[i] = mat4_mul(out[i], *ib);
+        }
+        out.truncate(n);
         if out.is_empty() {
             out.push(IDENTITY);
         }
-        out
     }
 
     /// Skinning matrices for the rest (bind) pose: every joint's local
     /// transform is its bind transform, so every skinning matrix is identity.
     /// Used to seed a `SkeletonPose` before the first animation tick.
     pub fn bind_skinning_matrices(&self) -> Vec<Mat4> {
-        self.skinning_matrices(&self.bind_locals)
+        let mut out = Vec::new();
+        self.skinning_matrices_into(&self.bind_locals, &mut out);
+        out
     }
 
     /// The local bind matrix of every joint, in joint order. A pose sample
@@ -273,53 +274,62 @@ pub struct AnimationClip {
 }
 
 impl AnimationClip {
-    /// Sample the clip at time `t` against `skeleton`, returning one local
-    /// matrix per joint. Joints with no track keep their bind transform.
-    pub fn sample(&self, t: f32, skeleton: &Skeleton) -> Vec<Mat4> {
-        self.sample_looped(t, self.looping, skeleton)
+    /// Sample the clip at time `t` against `skeleton`, writing one local
+    /// matrix per joint into `out` (cleared first, so its capacity is
+    /// reused). Joints with no track keep their bind transform.
+    pub fn sample_into(&self, t: f32, skeleton: &Skeleton, out: &mut Vec<Mat4>) {
+        self.sample_looped_into(t, self.looping, skeleton, out)
     }
 
-    /// `sample` with the loop mode supplied by the caller instead of the
+    /// `sample_into` with the loop mode supplied by the caller instead of the
     /// clip's own flag. Lets a graph state override looping without cloning
     /// the clip.
-    pub fn sample_looped(&self, t: f32, looping: bool, skeleton: &Skeleton) -> Vec<Mat4> {
+    pub fn sample_looped_into(
+        &self,
+        t: f32,
+        looping: bool,
+        skeleton: &Skeleton,
+        out: &mut Vec<Mat4>,
+    ) {
         let local_t = self.clip_time(t, looping);
-        let mut locals: Vec<Mat4> = skeleton.bind_locals().to_vec();
+        out.clear();
+        out.extend_from_slice(skeleton.bind_locals());
         for track in &self.tracks {
-            if track.joint < locals.len() {
-                locals[track.joint] = track.sample(local_t);
+            if track.joint < out.len() {
+                out[track.joint] = track.sample(local_t);
             }
         }
-        locals
     }
 
-    /// Sample the morph-weight track at time `t`, lerping between the
-    /// surrounding keys with the same wrap/clamp semantics as pose sampling.
-    /// Empty when the clip has no morph keys.
-    pub fn sample_morph_weights(&self, t: f32, looping: bool) -> Vec<f32> {
+    /// Sample the morph-weight track at time `t` into `out` (cleared first,
+    /// so its capacity is reused), lerping between the surrounding keys with
+    /// the same wrap/clamp semantics as pose sampling. `out` is left empty
+    /// when the clip has no morph keys.
+    pub fn sample_morph_weights_into(&self, t: f32, looping: bool, out: &mut Vec<f32>) {
+        out.clear();
         if self.morph_keys.is_empty() {
-            return Vec::new();
+            return;
         }
         let local_t = self.clip_time(t, looping);
         let first = &self.morph_keys[0];
         if local_t <= first.0 {
-            return first.1.clone();
+            out.extend_from_slice(&first.1);
+            return;
         }
         for pair in self.morph_keys.windows(2) {
             if local_t <= pair[1].0 {
                 let span = (pair[1].0 - pair[0].0).max(1e-6);
                 let f = (local_t - pair[0].0) / span;
                 let n = pair[0].1.len().max(pair[1].1.len());
-                return (0..n)
-                    .map(|i| {
-                        let a = pair[0].1.get(i).copied().unwrap_or(0.0);
-                        let b = pair[1].1.get(i).copied().unwrap_or(0.0);
-                        a + (b - a) * f
-                    })
-                    .collect();
+                out.extend((0..n).map(|i| {
+                    let a = pair[0].1.get(i).copied().unwrap_or(0.0);
+                    let b = pair[1].1.get(i).copied().unwrap_or(0.0);
+                    a + (b - a) * f
+                }));
+                return;
             }
         }
-        self.morph_keys[self.morph_keys.len() - 1].1.clone()
+        out.extend_from_slice(&self.morph_keys[self.morph_keys.len() - 1].1);
     }
 
     // Clip-local time for a wall-clock `t`: wrapped when looping, otherwise
@@ -372,15 +382,17 @@ mod tests {
             morph_keys: vec![(0.0, vec![0.0, 1.0]), (1.0, vec![1.0, 0.0])],
             root: None,
         };
-        assert!(clip.sample_morph_weights(-1.0, false)[0].abs() < 1e-6);
-        let mid = clip.sample_morph_weights(0.5, false);
+        let morph = |t: f32, looping: bool| {
+            let mut out = Vec::new();
+            clip.sample_morph_weights_into(t, looping, &mut out);
+            out
+        };
+        assert!(morph(-1.0, false)[0].abs() < 1e-6);
+        let mid = morph(0.5, false);
         assert!(approx(mid[0], 0.5) && approx(mid[1], 0.5));
-        assert!(
-            approx(clip.sample_morph_weights(5.0, false)[0], 1.0),
-            "clamps past the end"
-        );
+        assert!(approx(morph(5.0, false)[0], 1.0), "clamps past the end");
         // Looping wraps: t = 1.25 samples like t = 0.25.
-        let wrapped = clip.sample_morph_weights(1.25, true);
+        let wrapped = morph(1.25, true);
         assert!(approx(wrapped[0], 0.25));
 
         let empty = AnimationClip {
@@ -390,7 +402,9 @@ mod tests {
             morph_keys: Vec::new(),
             root: None,
         };
-        assert!(empty.sample_morph_weights(0.5, true).is_empty());
+        let mut out = vec![9.0];
+        empty.sample_morph_weights_into(0.5, true, &mut out);
+        assert!(out.is_empty(), "no morph keys clears the output");
     }
 
     #[test]
@@ -419,7 +433,8 @@ mod tests {
             scale: [1.0, 1.0, 1.0],
         }
         .to_matrix();
-        let skin = sk.skinning_matrices(&locals);
+        let mut skin = Vec::new();
+        sk.skinning_matrices_into(&locals, &mut skin);
         // Bind-space point one unit +x of the child joint origin: (1, 1, 0).
         let p = [1.0f32, 1.0, 0.0, 1.0];
         let m = skin[1];
@@ -464,7 +479,8 @@ mod tests {
             morph_keys: Vec::new(),
         };
         // Halfway through: yaw should be 45 deg.
-        let locals = clip.sample(1.0, &sk);
+        let mut locals = Vec::new();
+        clip.sample_into(1.0, &sk, &mut locals);
         // Recover yaw: for a pure yaw the first column is (cos, 0, -sin).
         let yaw = atan2(-locals[1][0][2], locals[1][0][0]).to_degrees();
         assert!(approx(yaw, 45.0), "yaw was {}", yaw);
@@ -489,10 +505,16 @@ mod tests {
             }],
             morph_keys: Vec::new(),
         };
-        // t = 2.5 wraps to 0.5: identical sample.
-        let a = clip.sample(0.5, &sk);
-        let b = clip.sample(2.5, &sk);
+        // t = 2.5 wraps to 0.5: identical sample, into reused capacity.
+        let mut a = Vec::new();
+        clip.sample_into(0.5, &sk, &mut a);
+        let mut b = Vec::new();
+        clip.sample_into(2.5, &sk, &mut b);
         assert_eq!(a[1], b[1]);
+        // Resampling into a warm buffer does not reallocate it.
+        let ptr = a.as_ptr();
+        clip.sample_into(1.5, &sk, &mut a);
+        assert_eq!(a.as_ptr(), ptr, "warm sample buffer is reused in place");
     }
 
     #[test]

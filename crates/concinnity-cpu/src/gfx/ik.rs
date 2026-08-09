@@ -188,13 +188,16 @@ pub fn solve_two_bone(
 // end-joint position in mesh space; `weight` in `[0, 1]` fades the solve by
 // pulling the effective target from the animated end position toward
 // `target`. Locals shorter than the chain's joints grow from the bind pose
-// first, so a partial sample still solves correctly.
+// first, so a partial sample still solves correctly. `world` is a reusable
+// buffer the hierarchy composes through, so a steady-state solve allocates
+// nothing.
 pub fn apply_two_bone_ik(
     skeleton: &Skeleton,
     locals: &mut Vec<Mat4>,
     chain: &TwoBoneChain,
     target: Vec3,
     weight: f32,
+    world: &mut Vec<Mat4>,
 ) {
     let weight = weight.clamp(0.0, 1.0);
     let n = skeleton.len();
@@ -205,7 +208,7 @@ pub fn apply_two_bone_ik(
         let i = locals.len();
         locals.push(skeleton.joints()[i].bind.to_matrix());
     }
-    let world = skeleton.world_matrices(locals);
+    skeleton.world_matrices_into(locals, world);
     let pos = |m: &Mat4| [m[3][0], m[3][1], m[3][2]];
     let p_root = pos(&world[chain.root]);
     let p_mid = pos(&world[chain.mid]);
@@ -265,8 +268,20 @@ mod tests {
     }
 
     fn joint_pos(skeleton: &Skeleton, locals: &[Mat4], i: usize) -> [f32; 3] {
-        let w = skeleton.world_matrices(locals)[i];
+        let mut worlds = Vec::new();
+        skeleton.world_matrices_into(locals, &mut worlds);
+        let w = worlds[i];
         [w[3][0], w[3][1], w[3][2]]
+    }
+
+    fn solve(
+        skeleton: &Skeleton,
+        locals: &mut Vec<Mat4>,
+        chain: &TwoBoneChain,
+        target: [f32; 3],
+        weight: f32,
+    ) {
+        apply_two_bone_ik(skeleton, locals, chain, target, weight, &mut Vec::new());
     }
 
     fn assert_close(a: [f32; 3], b: [f32; 3], tol: f32) {
@@ -287,7 +302,7 @@ mod tests {
         let skeleton = leg();
         let mut locals = bind_locals(&skeleton);
         // Pull the foot up half a unit: the leg must bend.
-        apply_two_bone_ik(&skeleton, &mut locals, &CHAIN, [0.0, 0.5, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &CHAIN, [0.0, 0.5, 0.0], 1.0);
         assert_close(joint_pos(&skeleton, &locals, 2), [0.0, 0.5, 0.0], 1e-3);
         // The knee moved out on the pole side (+Z) and the hip stayed put.
         let knee = joint_pos(&skeleton, &locals, 1);
@@ -305,7 +320,7 @@ mod tests {
     fn out_of_reach_target_straightens_toward_it() {
         let skeleton = leg();
         let mut locals = bind_locals(&skeleton);
-        apply_two_bone_ik(&skeleton, &mut locals, &CHAIN, [3.0, 2.0, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &CHAIN, [3.0, 2.0, 0.0], 1.0);
         // Max reach is ~2 along +X from the hip at (0,2,0).
         let foot = joint_pos(&skeleton, &locals, 2);
         assert_close(foot, [2.0, 2.0, 0.0], 2e-2);
@@ -315,7 +330,7 @@ mod tests {
     fn sideways_target_respects_the_pole_plane() {
         let skeleton = leg();
         let mut locals = bind_locals(&skeleton);
-        apply_two_bone_ik(&skeleton, &mut locals, &CHAIN, [1.0, 0.8, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &CHAIN, [1.0, 0.8, 0.0], 1.0);
         assert_close(joint_pos(&skeleton, &locals, 2), [1.0, 0.8, 0.0], 1e-3);
         let knee = joint_pos(&skeleton, &locals, 1);
         assert!(knee[2] > 0.05, "knee stays on the +Z pole side: {knee:?}");
@@ -325,13 +340,13 @@ mod tests {
     fn weight_blends_between_animated_and_solved() {
         let skeleton = leg();
         let mut half = bind_locals(&skeleton);
-        apply_two_bone_ik(&skeleton, &mut half, &CHAIN, [0.0, 0.5, 0.0], 0.5);
+        solve(&skeleton, &mut half, &CHAIN, [0.0, 0.5, 0.0], 0.5);
         // Half weight pins the foot halfway between animated (y=0) and the
         // target (y=0.5).
         assert_close(joint_pos(&skeleton, &half, 2), [0.0, 0.25, 0.0], 1e-3);
 
         let mut off = bind_locals(&skeleton);
-        apply_two_bone_ik(&skeleton, &mut off, &CHAIN, [0.0, 0.5, 0.0], 0.0);
+        solve(&skeleton, &mut off, &CHAIN, [0.0, 0.5, 0.0], 0.0);
         assert_close(joint_pos(&skeleton, &off, 2), [0.0, 0.0, 0.0], 1e-6);
     }
 
@@ -341,7 +356,7 @@ mod tests {
         let mut locals = bind_locals(&skeleton);
         let before = locals.clone();
         // Target exactly on the root: no solvable direction.
-        apply_two_bone_ik(&skeleton, &mut locals, &CHAIN, [0.0, 2.0, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &CHAIN, [0.0, 2.0, 0.0], 1.0);
         assert_eq!(locals, before);
         // Out-of-range chain indices are ignored.
         let bad = TwoBoneChain {
@@ -350,7 +365,7 @@ mod tests {
             end: 2,
             pole: [0.0, 0.0, 1.0],
         };
-        apply_two_bone_ik(&skeleton, &mut locals, &bad, [0.0, 0.5, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &bad, [0.0, 0.5, 0.0], 1.0);
         assert_eq!(locals, before);
     }
 
@@ -367,7 +382,7 @@ mod tests {
             ..JointPose::default()
         }
         .to_matrix();
-        apply_two_bone_ik(&skeleton, &mut locals, &CHAIN, [0.0, 0.2, 0.0], 1.0);
+        solve(&skeleton, &mut locals, &CHAIN, [0.0, 0.2, 0.0], 1.0);
         assert_close(joint_pos(&skeleton, &locals, 2), [0.0, 0.2, 0.0], 1e-3);
     }
 }

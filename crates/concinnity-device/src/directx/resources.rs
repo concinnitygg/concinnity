@@ -1809,13 +1809,15 @@ impl DxContext {
         self.skinned_pool.release(skinned_index);
     }
 
-    // Push a skinned object's model-to-world matrix (it animates in place unless
-    // something moves it). The per-frame cull records and the legacy skinned draw
-    // both read `obj.model` directly, so this only writes the field. A no-op if
-    // the index is out of range.
-    pub fn update_skinned_model(&mut self, skinned_index: usize, model: [[f32; 4]; 4]) {
-        if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
-            obj.model = model;
+    // Push the model-to-world matrices of the given skinned objects, one
+    // `(skinned index, matrix)` entry per moved instance. The per-frame cull
+    // records and the legacy skinned draw both read `obj.model` directly, so
+    // this only writes the fields. Out-of-range indices have no effect.
+    pub fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+        for &(skinned_index, model) in updates {
+            if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {
+                obj.model = model;
+            }
         }
     }
 

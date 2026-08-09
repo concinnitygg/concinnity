@@ -76,14 +76,14 @@ impl RenderBackend for VkContext {
         fn wait_idle(&self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
-        fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
+        fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn retire_draw_object(&mut self, draw_idx: usize);
         fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
         fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]);
         fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>);
         fn spawn_skinned_instance(&mut self, template_skinned_index: usize, model: [[f32; 4]; 4]) -> Option<usize>;
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
-        fn update_skinned_model(&mut self, skinned_index: usize, model: [[f32; 4]; 4]);
+        fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
         fn update_texture_slot(&mut self, slot: usize, image: &crate::build::texture::TextureImage) -> crate::gfx::error::RenderResult<()>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;

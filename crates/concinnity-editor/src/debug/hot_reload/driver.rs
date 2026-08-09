@@ -118,6 +118,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
             if let Some(new_skel) = index_to_new.get(&pose.skinned_index) {
                 pose.skeleton = new_skel.clone();
                 pose.joint_matrices = pose.skeleton.bind_skinning_matrices();
+                pose.updated = true;
                 applied += 1;
             }
         }

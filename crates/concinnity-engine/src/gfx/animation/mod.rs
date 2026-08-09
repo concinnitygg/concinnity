@@ -20,7 +20,7 @@ mod root;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use crate::assets::{Animation, SkeletonPose};
@@ -94,7 +94,9 @@ pub struct AnimationReloadEntry {
 // never a world-declared asset, so it carries no config.
 pub struct AnimationSystem {
     // Per-target clip buckets keyed by the `SkinnedMesh` handle they animate.
-    targets: HashMap<SkinnedMeshHandle, TargetState>,
+    // Ordered so per-frame iteration (and the RootMotion events it emits) is
+    // deterministic across runs.
+    targets: BTreeMap<SkinnedMeshHandle, TargetState>,
     // Interned-name -> handle index snapshotted at init, so the debug WS
     // animation commands (which address a mesh by name) can find the bucket.
     name_index: crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex,
@@ -132,7 +134,7 @@ impl AnimationSystem {
     // the world's components in [`System::init`].
     pub fn new() -> Self {
         Self {
-            targets: HashMap::new(),
+            targets: BTreeMap::new(),
             name_index: Default::default(),
             start: None,
             last_step_secs: None,
@@ -393,42 +395,63 @@ impl System for AnimationSystem {
             let Some(state) = targets.get(&pose.mesh_id) else {
                 return;
             };
-            let mut locals = match &state.mode {
+            // Split borrows: the scratch buffers and outputs are written
+            // while the skeleton is read.
+            let crate::assets::SkeletonPose {
+                skeleton,
+                scratch,
+                joint_matrices,
+                morph_weights,
+                updated,
+                ..
+            } = pose;
+            match &state.mode {
                 TargetMode::Flat(flat) => match state.clips.as_slice() {
                     [] => return,
                     [single] => {
                         // One-clip buckets ignore weight and play at full
                         // strength; the blend would be a no-op anyway.
-                        single.clip.sample(t, &pose.skeleton)
+                        single.clip.sample_into(t, skeleton, &mut scratch.locals)
                     }
                     many => {
-                        let sampled: Vec<_> = many
-                            .iter()
-                            .map(|c| c.clip.sample(t, &pose.skeleton))
-                            .collect();
-                        skinning::blend_many(&sampled, &flat.current_weights)
+                        // Incremental normalized fold: the first clip seeds
+                        // the accumulator (regardless of weight, so an
+                        // all-zero bucket falls back to it), later clips at
+                        // weight 0 are skipped without sampling.
+                        let mut fold = skinning::PoseBlend::new(&mut scratch.locals);
+                        for (i, entry) in many.iter().enumerate() {
+                            let w = flat.current_weights.get(i).copied().unwrap_or(1.0);
+                            if fold.seeded() && w <= 0.0 {
+                                continue;
+                            }
+                            entry.clip.sample_into(t, skeleton, &mut scratch.clip);
+                            fold.add(&scratch.clip, w);
+                        }
                     }
                 },
-                TargetMode::Graph(g) => crate::gfx::anim_graph::sample_graph_pose(
+                TargetMode::Graph(g) => crate::gfx::anim_graph::sample_graph_pose_into(
                     &g.graph,
                     &g.cursor,
                     &g.params,
                     |i| &state.clips[i].clip,
-                    &pose.skeleton,
+                    skeleton,
+                    scratch,
                 ),
-            };
+            }
             if let TargetMode::Graph(g) = &state.mode
                 && let Some(frame) = ik_frames.get(&pose.mesh_id)
             {
-                ik::apply_chains(&pose.skeleton, &mut locals, &g.chains, frame);
+                ik::apply_chains(skeleton, scratch, &g.chains, frame);
             }
-            pose.joint_matrices = pose.skeleton.skinning_matrices(&locals);
+            skeleton.skinning_matrices_into(&scratch.locals, joint_matrices);
+            *updated = true;
 
             // Morph weights follow the same flat blend as the pose; clips
             // without a morph track do not dilute the result. Graph-driven
             // targets do not sample morph tracks.
             if let TargetMode::Flat(flat) = &state.mode {
-                let mut acc: Vec<f32> = Vec::new();
+                let acc = &mut scratch.morph;
+                acc.clear();
                 let mut weight_sum = 0.0f32;
                 for (i, entry) in state.clips.iter().enumerate() {
                     if entry.clip.morph_keys.is_empty() {
@@ -442,20 +465,25 @@ impl System for AnimationSystem {
                     if w <= 0.0 {
                         continue;
                     }
-                    let sampled = entry.clip.sample_morph_weights(t, entry.clip.looping);
-                    if acc.len() < sampled.len() {
-                        acc.resize(sampled.len(), 0.0);
+                    entry.clip.sample_morph_weights_into(
+                        t,
+                        entry.clip.looping,
+                        &mut scratch.weights,
+                    );
+                    if acc.len() < scratch.weights.len() {
+                        acc.resize(scratch.weights.len(), 0.0);
                     }
-                    for (a, s) in acc.iter_mut().zip(sampled.iter()) {
+                    for (a, s) in acc.iter_mut().zip(scratch.weights.iter()) {
                         *a += s * w;
                     }
                     weight_sum += w;
                 }
                 if weight_sum > 0.0 {
-                    for a in &mut acc {
+                    for a in acc.iter_mut() {
                         *a /= weight_sum;
                     }
-                    pose.morph_weights = acc;
+                    morph_weights.clear();
+                    morph_weights.extend_from_slice(acc);
                 }
             }
         });

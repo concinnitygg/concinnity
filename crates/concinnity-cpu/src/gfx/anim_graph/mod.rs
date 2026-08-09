@@ -16,7 +16,7 @@ pub use concinnity_core::gfx::anim_graph::{
     CompiledTransition, ParamSpec, StatePlay, blend1d_weights, blend2d_weights,
 };
 pub use root::{cursor_root_delta, state_root_delta};
-pub use sample::sample_graph_pose;
+pub use sample::sample_graph_pose_into;
 
 // An in-flight crossfade from the previous state. The outgoing state's clock
 // keeps advancing during the fade so its pose stays live rather than frozen.

@@ -344,7 +344,13 @@ pub trait RenderBackend: SceneControl + Send {
     // Per-frame drive. See [`FrameParams`] for the inputs.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     fn update_view(&mut self, matrix: [[f32; 4]; 4]);
-    fn update_model(&mut self, index: usize, model: [[f32; 4]; 4]);
+
+    // Push this frame's changed model matrices, one `(draw slot, matrix)`
+    // entry per moved draw object, applied in order. Batched so the trait is
+    // crossed once per frame rather than once per entity; the caller sends
+    // only slots whose matrix actually changed. An out-of-range slot is
+    // ignored.
+    fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
 
     // Retire a draw object: hide it from every pass (main, shadow, velocity)
     // and exclude it from the ray-tracing acceleration structure, so a
@@ -411,11 +417,13 @@ pub trait RenderBackend: SceneControl + Send {
     // pre-reserved instance slot.
     fn retire_skinned_draw_object(&mut self, _skinned_index: usize) {}
 
-    // Push a skinned object's model-to-world matrix (it animates in place
-    // unless something moves it). Cheap: the per-frame cull rebuild (and the
-    // legacy skinned draw) reads the object's model directly, so this just
-    // writes the field. A no-op if the index is out of range.
-    fn update_skinned_model(&mut self, _skinned_index: usize, _model: [[f32; 4]; 4]) {}
+    // Push this frame's changed skinned model-to-world matrices, one
+    // `(skinned index, matrix)` entry per moved instance, applied in order
+    // (a skinned object animates in place unless something moves it). Cheap:
+    // the per-frame cull rebuild reads the object's model directly, so this
+    // just writes the fields. Out-of-range indices are ignored; default
+    // no-op for a backend without movable skinned instances.
+    fn update_skinned_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
 
     // Texture streaming. Albedo and normal maps share one handle-indexed pool,
     // so every streamed texture (whatever its role) flows through these. The
@@ -1222,7 +1230,7 @@ mod tests {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_model(&mut self, _index: usize, _model: [[f32; 4]; 4]) {}
+        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
         fn retire_draw_object(&mut self, _draw_idx: usize) {}
         fn upload_skinned(
             &mut self,
@@ -1342,7 +1350,7 @@ mod tests {
         backend.seed_skinned_instance_pool(vec![]);
         assert!(backend.spawn_skinned_instance(0, IDENTITY).is_none());
         backend.retire_skinned_draw_object(0);
-        backend.update_skinned_model(0, IDENTITY);
+        backend.update_skinned_models(&[(0, IDENTITY)]);
 
         // Streaming + cursor + capture no-ops.
         backend.seed_mesh_streaming(0, 0, 0, 0);

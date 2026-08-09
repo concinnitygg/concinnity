@@ -34,7 +34,7 @@ pub(super) struct Transition {
     pub duration_secs: f32,
 }
 
-// The live blend vector consumed by `skinning::blend_many`, plus any
+// The live blend vector consumed by the per-pose weighted blend, plus any
 // in-flight ramp.
 #[derive(Default)]
 pub(super) struct FlatState {

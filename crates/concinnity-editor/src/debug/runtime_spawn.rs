@@ -1154,7 +1154,7 @@ mod tests {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_model(&mut self, _index: usize, _model: [[f32; 4]; 4]) {}
+        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
         fn retire_draw_object(&mut self, _draw_idx: usize) {}
         fn upload_skinned(
             &mut self,

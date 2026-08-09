@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use crate::ecs::SkinnedMeshHandle;
+use crate::gfx::pose_scratch::PoseScratch;
 use crate::gfx::skeleton::Skeleton;
 use crate::gfx::transform::Mat4;
 
@@ -33,6 +34,13 @@ pub struct SkeletonPose {
     /// mesh without morph targets or until a clip with a morph track drives
     /// them.
     pub morph_weights: Vec<f32>,
+    /// True while `joint_matrices` / `morph_weights` hold data the render
+    /// backend has not consumed yet. Set by whoever writes the pose, cleared
+    /// after upload, so an unanimated pose is uploaded exactly once.
+    pub updated: bool,
+    /// Reusable sampling buffers owned by this pose, so the per-frame
+    /// sample/blend/skinning chain allocates nothing in steady state.
+    pub scratch: PoseScratch,
 }
 
 impl SkeletonPose {
@@ -46,6 +54,8 @@ impl SkeletonPose {
             skeleton,
             joint_matrices,
             morph_weights: Vec::new(),
+            updated: true,
+            scratch: PoseScratch::default(),
         }
     }
 }
