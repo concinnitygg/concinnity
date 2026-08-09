@@ -1,7 +1,7 @@
 // src/cli/list.rs
-use concinnity_cook::ComponentType;
 use concinnity_cook::resource_handles::ResourceAssetType;
 use concinnity_cook::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
+use concinnity_world::registry::ComponentType;
 
 // Authoring metadata for a type name, whether it is a registry component or a
 // resource asset (AudioClip, Texture, ...) that lives outside the component
@@ -374,8 +374,11 @@ mod tests {
         for name in ["AudioClip", "Texture"] {
             assert!(ComponentType::parse(name).is_none());
             let r = registration_for(name).unwrap();
-            assert_eq!(r.origin, concinnity_cook::ecs::AssetOrigin::External);
-            assert_eq!(r.payload, concinnity_cook::ecs::AssetPayload::Compiled);
+            assert_eq!(r.origin, concinnity_world::registry::AssetOrigin::External);
+            assert_eq!(
+                r.payload,
+                concinnity_world::registry::AssetPayload::Compiled
+            );
         }
     }
 

@@ -37,21 +37,21 @@ fn resolve(name: &str) -> u32 {
     })
 }
 
-/// Empty this thread's interner and install it behind the schema crate's
-/// resolver seam. Call first in any test that interns or deserializes a named
-/// reference.
+// Empty this thread's interner and install it behind the schema crate's
+// resolver seam. Call first in any test that interns or deserializes a named
+// reference.
 pub(crate) fn reset_interner() {
     concinnity_asset::set_name_resolver(resolve);
     NAMES.with(|names| names.borrow_mut().clear());
 }
 
-/// Resolve `name` to its id, assigning the next one if it is new.
+// Resolve `name` to its id, assigning the next one if it is new.
 pub(crate) fn intern(name: &str) -> AssetId {
     AssetId(resolve(name))
 }
 
-/// Pre-intern a batch of names in order, so ids are dense and follow the order
-/// a world would declare them in.
+// Pre-intern a batch of names in order, so ids are dense and follow the order
+// a world would declare them in.
 pub(crate) fn intern_all(names: &[&str]) {
     for n in names {
         resolve(n);

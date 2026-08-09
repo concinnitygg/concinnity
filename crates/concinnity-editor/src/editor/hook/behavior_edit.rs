@@ -18,7 +18,7 @@
 
 use std::sync::OnceLock;
 
-use concinnity_cook::ComponentType;
+use concinnity_world::registry::ComponentType;
 use serde_json::Value;
 
 use super::*;

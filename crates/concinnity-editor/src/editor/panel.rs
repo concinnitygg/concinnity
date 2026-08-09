@@ -31,8 +31,8 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use concinnity_cook::ComponentType;
 use concinnity_cook::resource_handles::ResourceAssetType;
+use concinnity_world::registry::ComponentType;
 
 use crate::assets::TextAlign;
 use crate::ecs::World;
@@ -1891,7 +1891,7 @@ mod tests {
         for ty in picker_types() {
             // Most add types are components; Font (and future resources) are
             // addable-blank resource assets, External by construction.
-            if let Some(ct) = concinnity_cook::ComponentType::parse(ty) {
+            if let Some(ct) = concinnity_world::registry::ComponentType::parse(ty) {
                 assert!(ct.addable(), "{ty} must be External / addable");
             } else {
                 assert!(
@@ -1912,7 +1912,7 @@ mod tests {
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         isolate_state_dir();
-        use concinnity_cook::ComponentType;
+        use concinnity_world::registry::ComponentType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[

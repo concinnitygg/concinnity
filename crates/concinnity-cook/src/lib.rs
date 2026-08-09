@@ -6,23 +6,31 @@
 // files into the binary blobs the runtime reads; it depends on concinnity-cpu
 // and core has no edge back into it.
 //
-// The vocabulary and compute modules below are re-exported so code moved here
-// keeps resolving its `crate::{assets,ecs,gfx,platform,result}` paths. The
-// payload *decoders* and shared payload types live in `concinnity_cpu::build`;
-// this crate's modules call back into them.
-pub use concinnity_core::{assets, platform, result};
-pub use concinnity_cpu::{build, gfx};
+// Bridge: the vocabulary and compute modules below are re-exported crate-wide
+// so code moved here keeps resolving its `crate::{assets,ecs,gfx,result}`
+// paths. The payload *decoders* and shared payload types live in
+// `concinnity_cpu::build`; this crate's modules call back into them.
+pub(crate) use concinnity_core::{assets, result};
+pub(crate) use concinnity_cpu::{build, gfx};
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
 // `asset_id`: the interner keeps a per-thread table, so it lives in
 // concinnity-cpu and re-exports the vocabulary's `AssetId` / `AssetRef`.
-pub mod ecs {
+pub(crate) mod ecs {
     pub use concinnity_core::ecs::*;
     pub use concinnity_cpu::ecs::asset_id;
 }
-// The state tree and the source-asset lookup live in concinnity-store; both are
-// re-exported so cook code keeps naming them under `crate::*`.
-pub use concinnity_store::{paths, source};
+// The source-asset lookup lives in concinnity-store, re-exported so cook code
+// keeps naming it under `crate::source`.
+pub(crate) use concinnity_store::source;
+
+// Build-host API, re-exported deliberately: a host driving the pipeline (the
+// CLI, an example harness) works against cook alone, the way a runtime host
+// works against concinnity-engine. `paths` is the state tree cook builds into
+// (anchoring it, locating `data/`); `platform` is the backend platform whose
+// shader payloads cook compiles and caches.
+pub use concinnity_core::platform;
+pub use concinnity_store::paths;
 
 // The world front half -- the authored model, the type vocabulary
 // (`ComponentType` / `ResourceAssetType`), the typed spec vocabulary, and the
@@ -92,5 +100,4 @@ pub use pipeline::{
     build_from_path, build_pipeline_from_str, validate_asset, validate_world_jsonl,
     write_build_outputs,
 };
-pub use registry::ComponentType;
 pub use world::prepare_world;

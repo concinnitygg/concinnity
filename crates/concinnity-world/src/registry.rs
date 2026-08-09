@@ -11,8 +11,9 @@
 // `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
 // module instantiates the authoring half of it.
 
-use crate::ecs::{AssetOrigin, AssetPayload};
 use crate::result::CnResult;
+
+pub use crate::ecs::{AssetOrigin, AssetPayload};
 
 // Static authoring metadata for an asset type: how it is declared, whether it
 // compiles a payload, and its default args JSON. Derived from the registry
