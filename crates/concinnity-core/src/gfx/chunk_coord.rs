@@ -6,13 +6,6 @@
 // (voxel/Minecraft-style worlds bound the vertical extent). A `ChunkCoord` is
 // the integer index of a chunk column; the world position of its `(0,0,0)`
 // corner is `coord * chunk_world_size`.
-//
-// This module is written against `core` only -- no `std`, no `alloc`, no
-// threads or I/O -- so it can move into a future `no_std` client runtime
-// unchanged, alongside `gfx::streaming` and `gfx::range_alloc`. The
-// world->chunk conversion deliberately avoids `f32::floor` (which lives in
-// `std`, not `core`) by doing the floor with an integer truncation and a sign
-// correction.
 
 // Integer index of a chunk column in the infinite X/Z grid.
 //
@@ -32,9 +25,9 @@ impl ChunkCoord {
 
     // The chunk column a world-space `(wx, wz)` position falls in.
     //
-    // `chunk_w` / `chunk_d` are the chunk's world-space size on X / Z. Uses a
-    // `core`-only floor (truncate-toward-zero plus a sign fix) so a negative
-    // coordinate maps to the chunk *below* it rather than toward zero.
+    // `chunk_w` / `chunk_d` are the chunk's world-space size on X / Z. Floors
+    // rather than truncates, so a negative coordinate maps to the chunk *below*
+    // it rather than toward zero.
     pub fn from_world(wx: f32, wz: f32, chunk_w: f32, chunk_d: f32) -> Self {
         Self::new(floor_div(wx, chunk_w), floor_div(wz, chunk_d))
     }
@@ -71,18 +64,13 @@ impl ChunkCoord {
     }
 }
 
-// `floor(v / size)` as an `i32`, without `f32::floor` (which is `std`-only).
-//
-// `as i32` truncates toward zero; for a negative non-integer quotient that is
-// one too high, so the result is decremented. A `size <= 0` is meaningless
-// for a chunk grid and collapses to chunk 0 rather than dividing by zero.
+// `floor(v / size)` as an `i32`. A `size <= 0` is meaningless for a chunk grid
+// and collapses to chunk 0 rather than dividing by zero.
 fn floor_div(v: f32, size: f32) -> i32 {
     if size <= 0.0 {
         return 0;
     }
-    let q = v / size;
-    let t = q as i32;
-    if q < 0.0 && (t as f32) != q { t - 1 } else { t }
+    crate::math::floor(v / size) as i32
 }
 
 // Rebase a column-major view matrix onto a render `origin` for

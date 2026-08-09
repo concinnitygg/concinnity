@@ -6,7 +6,7 @@
 // never re-derives it.
 
 use crate::assets::Animation;
-use crate::gfx::root_motion::RootKey;
+use concinnity_core::gfx::root_motion::RootKey;
 
 // Strip the root joint's travel out of `tracks` and bake it into
 // `root_track`, per the `root_motion` / `root_motion_y` flags. Runs once

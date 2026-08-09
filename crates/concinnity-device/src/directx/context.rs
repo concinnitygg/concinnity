@@ -354,8 +354,8 @@ pub(super) struct HotReloadState {
 // / `evict_mesh` allocate and free byte ranges so a streamed mesh lands wherever
 // there is room.
 pub(super) struct MeshStreamState {
-    pub vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
 }
 
 // Byte-range sub-allocators for the headroom region appended to the shared
@@ -367,8 +367,8 @@ pub(super) struct MeshStreamState {
 // is the shared chunk (albedo, normal) pair's SRV-heap base, written by
 // `setup_chunk_streaming`. Empty until that runs.
 pub(super) struct ChunkStreamState {
-    pub vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub srv_base_slot: usize,
 }
 

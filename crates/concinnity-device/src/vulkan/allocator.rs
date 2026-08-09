@@ -55,7 +55,7 @@ use std::rc::{Rc, Weak};
 
 use ash::{Device, vk};
 
-use crate::gfx::block_alloc::{BlockAllocator, Placement};
+use crate::suballoc::block_alloc::{BlockAllocator, Placement};
 
 // Largest block the pool asks for. Big enough that a heavy world holds its
 // persistent set in a handful of blocks, small enough that one block is not an

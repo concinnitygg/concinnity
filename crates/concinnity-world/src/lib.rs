@@ -18,10 +18,18 @@
 // served by `spec`'s `AssetSpec` builders, converted to world entries by
 // `spec::json`.
 
-// Bridge: re-export the core modules the moved code names under crate::* so
-// its `crate::<module>` import paths resolve unchanged.
+// Bridge: re-export the modules the moved code names under crate::* so its
+// `crate::<module>` import paths resolve unchanged.
 #[allow(unused_imports)]
-pub(crate) use concinnity_core::{assets, build, ecs, result};
+pub(crate) use concinnity_core::{assets, platform, result};
+
+// The vocabulary's ECS surface, with the build-time name interner shadowing its
+// `asset_id`: the interner keeps a per-thread table, so it lives in
+// concinnity-cpu and re-exports the vocabulary's `AssetId` / `AssetRef`.
+pub(crate) mod ecs {
+    pub use concinnity_core::ecs::*;
+    pub use concinnity_cpu::ecs::asset_id;
+}
 #[allow(unused_imports)]
 pub(crate) use concinnity_store::paths;
 

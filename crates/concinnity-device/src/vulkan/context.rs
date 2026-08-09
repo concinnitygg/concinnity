@@ -309,8 +309,8 @@ pub(super) struct VkGeometry {
     // seeds them with each streamed draw's build-time region at init, then
     // `upload_mesh` / `evict_mesh` allocate and free byte ranges so a streamed
     // mesh lands wherever there is room.
-    pub(super) mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub(super) mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub(super) mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub(super) mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     // Current byte sizes of the shared vertex/index buffers. Tracked so
     // `setup_chunk_streaming` knows how much build-time geometry to copy when
     // it grows them.
@@ -433,8 +433,8 @@ pub(super) struct VkChunkStream {
     // Byte-range sub-allocators for the headroom region appended to the shared
     // vertex/index buffers, disjoint from the build-time geometry and the
     // mesh-streaming allocators.
-    pub(super) vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub(super) idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub(super) vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub(super) idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     // Dedicated pool + one shared (albedo, normal) descriptor set for streamed
     // chunks.
     pub(super) descriptor_pool: Option<vk::DescriptorPool>,

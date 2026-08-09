@@ -60,7 +60,7 @@ impl crate::asset::BuildAsset for SdfVolume {
         // declares an `.hlsl` source (or an `hlsl`-only map) contributes
         // nothing the Metal build can compile, so it is a hard error here
         // rather than an attempt to read a file the backend never needs.
-        let platform_key = concinnity_core::build::Platform::current().key();
+        let platform_key = concinnity_core::platform::Platform::current().key();
         let raw = current_platform_source_arg(args).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -122,7 +122,7 @@ mod tests {
     // A `.metal` source is the one the macOS build selects; on the other
     // backends the same shape resolves through their own extension.
     fn args(source: &str) -> serde_json::Value {
-        let key = concinnity_core::build::Platform::current().key();
+        let key = concinnity_core::platform::Platform::current().key();
         serde_json::json!({"fragment_shaders": {key: source}})
     }
 

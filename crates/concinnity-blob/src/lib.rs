@@ -18,7 +18,7 @@
 // This crate owns the format contract and nothing else: the record schema, the
 // header consts, the version, and the pure bytes <-> metadata transforms. It
 // performs no I/O and holds no residency policy, so it never learns where blob
-// files live or which of them are resident. Callers own both: concinnity-core
+// files live or which of them are resident. Callers own both: concinnity-store
 // reads the `.concinnity/data/` layout into `BlobData`, concinnity-cook writes
 // what `encode_cnb` returns.
 //

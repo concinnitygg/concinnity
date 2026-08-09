@@ -10,12 +10,10 @@
 // on *world* block coordinates, so adjacent chunks line up seamlessly across
 // their shared edge.
 //
-// This module is written against `core` only -- the lattice hash is integer
-// arithmetic and interpolation uses a polynomial smoothstep, so there is no
-// `f32::sin` / `floor` / `sqrt` (all `std`-only). It can move into a future
-// `no_std` runtime unchanged, like its `gfx::chunk_coord` neighbour.
+// The lattice hash is integer arithmetic and interpolation is a polynomial
+// smoothstep, so generation involves no transcendentals at all.
 
-use crate::gfx::chunk_coord::ChunkCoord;
+use concinnity_core::gfx::chunk_coord::ChunkCoord;
 
 // One palette entry for the chunk mesher: solidity plus per-face atlas UVs.
 //

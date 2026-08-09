@@ -2,8 +2,7 @@
 // backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
 // foundation rather than the build module -- the engine picks a `Shader` stage's
 // current-platform source at runtime, and the build pipeline reuses the same
-// selection at compile time. Re-exported as `crate::build::Platform` for the
-// build-side callers.
+// selection at compile time.
 
 // Shader source language families supported by the engine. Each variant
 // matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).

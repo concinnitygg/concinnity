@@ -9,17 +9,21 @@
 // (the renderer driver, animation, camera controllers, draw list) and the
 // client-only settings/quality-preset resolution.
 //
-// The pure GPU data layouts and CPU-side math (mesh payloads, LOD, skinning,
-// camera, frustum, chunk-streaming helpers, post-process settings) live in
-// concinnity-core and are re-exported here so the historical
-// crate::gfx::<module> paths keep resolving.
-// `pub` so the editor crate can reach these core GPU-layout modules through
-// `concinnity_engine::gfx::*` (e.g. shader-layout reflection); `chunk_coord` is
-// named only by the chunk-streaming drive, so it stays crate-private.
+// The GPU data layouts and render math (camera, frustum, post-process settings)
+// live in concinnity-core; the CPU kernels over them (mesh payloads, skinning,
+// IK, line expansion, the animation cursor) in concinnity-cpu. Both are
+// re-exported here so the crate::gfx::<module> paths keep resolving.
+// `pub` so the editor crate can reach them through `concinnity_engine::gfx::*`
+// (e.g. shader-layout reflection); `chunk_coord` is named only by the
+// chunk-streaming drive, so it stays crate-private.
 pub(crate) use concinnity_core::gfx::chunk_coord;
+pub use concinnity_core::gfx::lod_select as lod;
 pub use concinnity_core::gfx::{
-    anim_graph, auto_exposure, camera, frustum, ik, lines, lod, mesh_payload, mesh_seed, profile,
-    render_types, root_motion, rt_reflections, skinning, ssao, ssgi, ssr, view_modes,
+    camera, frustum, profile, render_types, root_motion, rt_reflections, ssao, ssgi, ssr,
+    view_modes,
+};
+pub use concinnity_cpu::gfx::{
+    anim_graph, auto_exposure, ik, lines, mesh_payload, mesh_seed, skinning,
 };
 
 // Render-prep from concinnity-render that the client's own systems consume (the

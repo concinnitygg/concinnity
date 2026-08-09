@@ -1174,7 +1174,7 @@ mod tests {
         fn update_texture_slot(
             &mut self,
             _slot: usize,
-            _image: &concinnity_core::build::texture::TextureImage,
+            _image: &concinnity_cpu::build::texture::TextureImage,
         ) -> crate::gfx::error::RenderResult<()> {
             Ok(())
         }

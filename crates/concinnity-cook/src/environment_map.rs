@@ -38,7 +38,7 @@ use serde::Deserialize;
 
 use crate::hdr::{HdrImage, equirect_to_cube};
 use concinnity_core::assets::EnvironmentMap;
-use concinnity_core::build::environment_map::{
+use concinnity_cpu::build::environment_map::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, compute_irradiance,
     compute_prefilter, max_mip_count, serialise_payload,
 };
@@ -48,8 +48,8 @@ use concinnity_store::source::resolve_source_path;
 //
 // The three tunables (prefilter/irradiance face size, prefilter sample count)
 // have a single source of truth: the `EnvironmentMap` `Default` impl in
-// concinnity-core. Args are deserialised through that struct, so a field absent
-// from the JSONL inherits the core default instead of a constant duplicated here.
+// concinnity-asset. Args are deserialised through that struct, so a field absent
+// from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
     let params: EnvironmentMap = Deserialize::deserialize(args)
@@ -279,7 +279,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::build::environment_map::deserialise;
+    use concinnity_cpu::build::environment_map::deserialise;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {

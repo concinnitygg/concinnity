@@ -21,12 +21,13 @@ vulkan = [
     "dep:ash",
     "dep:sha2",
     "dep:shaderc",
-    "concinnity-core/vulkan",
+    "concinnity-cpu/vulkan",
     "concinnity-render/vulkan",
 ]
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-cpu = { path = "../concinnity-cpu" }
 concinnity-store = { path = "../concinnity-store" }
 concinnity-render = { path = "../concinnity-render" }
 

@@ -21,7 +21,7 @@ use crate::assets::MAX_WATER_WAVES;
 // volume's `fragment_shaders` map (preferred) or its `fragment_shader`
 // fallback. Mirrors the source selection in `source_args`.
 fn sdf_current_platform_source(v: &SdfVolume) -> Option<String> {
-    let platform = crate::build::Platform::current();
+    let platform = crate::platform::Platform::current();
     if let Some(map) = &v.fragment_shaders
         && let Some(src) = map.get(platform.key()).filter(|s| !s.is_empty())
     {
@@ -648,7 +648,7 @@ mod tests {
         // single `fragment_shader` path resolves as current-platform-compatible
         // on Metal, DirectX, and Vulkan alike.
         fn platform_ext() -> &'static str {
-            crate::build::Platform::current().key()
+            crate::platform::Platform::current().key()
         }
 
         #[test]

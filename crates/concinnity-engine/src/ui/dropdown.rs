@@ -1,7 +1,7 @@
-// src/gfx/dropdown.rs
+// src/ui/dropdown.rs
 //
 // Reference-space layout for a settings dropdown's floating option list, shared
-// by the client's input hit-test and its renderer so the two agree on where
+// by the input hit-test and the overlay renderer so the two agree on where
 // each option sits. A dropdown row's control button is the anchor; the list is
 // a stack of equal-height option rows placed directly below it, or flipped
 // above when it would spill past the bottom of the reference canvas. A list
@@ -10,7 +10,7 @@
 // index by adding its scroll position (the `first` shown option). Purely
 // geometric: no colors, fonts, or draw state.
 
-use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 // The most option rows a dropdown list shows at once; a longer list scrolls
 // (the wheel moves the window while it is open).
@@ -87,12 +87,6 @@ pub fn item_at(layout: &DropdownLayout, px: f32, py: f32) -> Option<usize> {
         .items
         .iter()
         .position(|&[x, y, w, h]| px >= x && px < x + w && py >= y && py < y + h)
-}
-
-// Whether reference-space point `(px, py)` lies inside the list rectangle.
-pub fn contains(layout: &DropdownLayout, px: f32, py: f32) -> bool {
-    let [x, y, w, h] = layout.list;
-    px >= x && px < x + w && py >= y && py < y + h
 }
 
 // Scrollbar-thumb styling: a chunky near-square handle inside the list's right
@@ -275,15 +269,6 @@ mod tests {
         // Outside the list horizontally / below it: no hit.
         assert_eq!(item_at(&l, 700.0, 150.0), None);
         assert_eq!(item_at(&l, 500.0, 300.0), None);
-    }
-
-    #[test]
-    fn contains_matches_the_list_bounds() {
-        let l = layout([400.0, 100.0, 200.0, 40.0], 3);
-        assert!(contains(&l, 400.0, 140.0));
-        assert!(contains(&l, 599.0, 259.0));
-        assert!(!contains(&l, 399.0, 140.0));
-        assert!(!contains(&l, 500.0, 260.0));
     }
 
     #[test]

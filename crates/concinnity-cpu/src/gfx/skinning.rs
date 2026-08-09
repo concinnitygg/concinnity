@@ -2,12 +2,12 @@
 //
 // Pose blending: combining several sampled poses into one set of local joint
 // matrices. The skeleton, clip, and transform types these operate on live in
-// concinnity-types and are re-exported here under their historical paths.
+// concinnity-core and are re-exported here under their historical paths.
 
-pub use concinnity_types::gfx::skeleton::{
+pub use concinnity_core::gfx::skeleton::{
     AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton,
 };
-pub use concinnity_types::gfx::transform::{
+pub use concinnity_core::gfx::transform::{
     IDENTITY, Mat4, blend_matrices, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
     trs_matrix,
 };

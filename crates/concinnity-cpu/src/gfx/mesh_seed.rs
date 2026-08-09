@@ -10,11 +10,10 @@
 // upload and tolerates a transient `alloc` miss while freed regions await
 // their retire frame.
 //
-// This is pure policy + buffer math: no backend types, no I/O, no threads. It
-// lives alongside `gfx::range_alloc` for the same reason.
+// This is pure policy + buffer math: no backend types, no I/O, no threads.
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawObject, InstancedCluster};
+use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster};
 
 const VERTEX_STRIDE: usize = core::mem::size_of::<Vertex>();
 const INDEX_STRIDE: usize = core::mem::size_of::<u32>();
@@ -249,7 +248,7 @@ pub fn compact_for_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{LodSlice, MaterialUniforms};
+    use concinnity_core::gfx::render_types::{LodSlice, MaterialUniforms};
 
     fn vtx(x: f32) -> Vertex {
         Vertex {

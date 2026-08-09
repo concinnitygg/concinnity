@@ -909,7 +909,7 @@ fn build_heightfield_collider(
     let bytes = ctx
         .read_payload(locator)
         .map_err(|e| format!("read terrain payload: {e:?}"))?;
-    let grid = concinnity_core::gfx::mesh_payload::deserialise_heightfield(bytes)?
+    let grid = concinnity_cpu::gfx::mesh_payload::deserialise_heightfield(bytes)?
         .ok_or("terrain mesh payload has no baked heightfield collider")?;
     if grid.rows < 2 || grid.cols < 2 {
         return Err(format!(

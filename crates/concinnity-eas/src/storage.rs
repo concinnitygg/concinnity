@@ -14,7 +14,7 @@
 // row's owner needs its recorded row patched, or a later join probe reads the
 // wrong row.
 //
-// The engine pairs this with its own asset/blob codegen: concinnity-types'
+// The engine pairs this with its own asset/blob codegen: concinnity-core'
 // `define_components!` calls this for the storage half and adds the asset-enum
 // dispatch (`push(ComponentAsset)`, `all_defs`) in a separate impl block. The
 // storage layout, access trait, and join live here so the component query shares

@@ -1,4 +1,4 @@
-// src/gfx/block_alloc.rs
+// src/suballoc/block_alloc.rs
 //
 // A block pool: many small resources placed inside a few large blocks.
 //
@@ -9,16 +9,17 @@
 // than the byte count, and runs out on a world the byte budget would have held
 // comfortably. Placing resources inside a handful of blocks decouples the two.
 //
-// This is pure policy: `core` + `alloc` only, no backend types, no device
-// handles, no I/O. It decides *which block and what offset*; the caller owns
-// the blocks and performs the API-specific bind. `RangeAllocator` places
+// This is pure policy: no backend types, no device handles, no I/O. It decides
+// *which block and what offset*; the caller owns the blocks and performs the
+// API-specific bind. `RangeAllocator` places
 // resources within one block, so blocks inherit its best-fit placement,
 // coalescing free list, and deferred frees keyed on a retire frame.
 //
 // The pool never allocates a block itself. `alloc` returns `None` when nothing
-// fits, and the caller creates a block of `block_size_for` bytes, hands it back
-// via `add_block`, and retries -- which is what keeps the device call out of
-// this layer.
+// fits, and the caller sizes a block, hands it back via `add_block`, and
+// retries -- which is what keeps the device call out of this layer. Each
+// backend picks its own block size (geometric growth up to a cap), so the pool
+// only requires that a fresh block cover the request plus its alignment slack.
 
 use super::range_alloc::RangeAllocator;
 
@@ -81,8 +82,8 @@ impl BlockAllocator {
 
     // Place `size` bytes at an `align`-aligned offset in an existing shared
     // block, or `None` when none can host it. On `None` the caller creates a
-    // block of `block_size_for` bytes, registers it with `add_block`, and
-    // places into that block with `alloc_in`.
+    // block large enough for the request plus its alignment slack, registers it
+    // with `add_block`, and places into that block with `alloc_in`.
     //
     // Dedicated blocks are skipped: they are sized for one resource, and
     // letting a later small request settle in one would keep the whole block
@@ -111,15 +112,6 @@ impl BlockAllocator {
         let offset = state.ranges.alloc_aligned(size, align)?;
         state.in_use += size;
         Some(Placement { block, offset })
-    }
-
-    // How large a block must be to host a `size`-byte request at `align`. The
-    // standard block size normally, grown to fit a request too large for one.
-    // The alignment slack is included so a block sized for a request can always
-    // place it, whatever offset the block ends up starting at.
-    pub fn block_size_for(&self, size: u64, align: u64) -> u64 {
-        let needed = size.saturating_add(align.max(1).saturating_sub(1));
-        needed.max(self.block_size)
     }
 
     // Register a block of `size` bytes the caller just created, returning the
@@ -204,7 +196,13 @@ mod tests {
         if let Some(p) = pool.alloc(size, align) {
             return p;
         }
-        let block = pool.add_block(pool.block_size_for(size, align));
+        // A backend's block sizing, reduced to its invariant: at least the
+        // standard block size, and always enough for the request plus its
+        // alignment slack.
+        let bytes = size
+            .saturating_add(align.max(1).saturating_sub(1))
+            .max(pool.block_size);
+        let block = pool.add_block(bytes);
         pool.alloc_in(block, size, align)
             .expect("fresh block must host it")
     }
@@ -299,7 +297,7 @@ mod tests {
     fn a_block_sized_for_a_request_can_always_place_it() {
         // A 256-aligned request of exactly the block size needs headroom for
         // the alignment, or the fresh block could not host what it was sized
-        // for. `block_size_for` accounts for that.
+        // for.
         let mut pool = BlockAllocator::new(BLOCK);
         place(&mut pool, 64, 1);
         let p = place(&mut pool, BLOCK, 256);

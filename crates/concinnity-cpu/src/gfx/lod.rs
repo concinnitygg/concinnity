@@ -14,10 +14,10 @@
 // `(index_offset, index_count)` change.
 
 // The runtime slice selection these alternates are chosen between at draw time
-// lives in concinnity-types; re-exported here under its historical path.
+// lives in concinnity-core; re-exported here under its historical path.
 use std::collections::{BTreeSet, BinaryHeap};
 
-pub use concinnity_types::gfx::lod_select::{
+pub use concinnity_core::gfx::lod_select::{
     bounds_finite, camera_distance, pick_lod_level, pick_lod_slice, skinned_camera_distance,
 };
 

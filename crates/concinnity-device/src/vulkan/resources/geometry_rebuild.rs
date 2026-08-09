@@ -238,8 +238,8 @@ impl VkContext {
         self.geometry.vertex_buffer_bytes = new_v_bytes;
         self.geometry.index_buffer = new_ibuf;
         self.geometry.index_buffer_bytes = new_i_bytes;
-        self.geometry.mesh_vtx_alloc = crate::gfx::range_alloc::RangeAllocator::new();
-        self.geometry.mesh_idx_alloc = crate::gfx::range_alloc::RangeAllocator::new();
+        self.geometry.mesh_vtx_alloc = crate::suballoc::range_alloc::RangeAllocator::new();
+        self.geometry.mesh_idx_alloc = crate::suballoc::range_alloc::RangeAllocator::new();
         for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in
             new_layouts.into_iter().enumerate()
         {

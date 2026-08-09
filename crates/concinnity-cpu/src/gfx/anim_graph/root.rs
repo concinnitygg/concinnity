@@ -5,8 +5,8 @@
 // snapshots. Mirrors the pose sampler's weighting exactly, so the character
 // moves at the speed the blended feet imply.
 
-use crate::gfx::root_motion::{add3, scale3};
 use crate::gfx::skinning::AnimationClip;
+use concinnity_core::gfx::root_motion::{add3, scale3};
 
 use super::{CompiledGraph, CompiledState, GraphCursor};
 
@@ -86,7 +86,7 @@ mod tests {
         Blend1D, ClipPlay, CompiledGraph, CompiledState, CompiledTransition, GraphCursor, StatePlay,
     };
     use super::*;
-    use crate::gfx::root_motion::{RootKey, RootTrack};
+    use concinnity_core::gfx::root_motion::{RootKey, RootTrack};
 
     // A looping clip of `duration` covering `travel` X per cycle.
     fn walker(duration: f32, travel: f32) -> AnimationClip {

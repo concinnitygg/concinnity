@@ -3,7 +3,7 @@
 // A reference deserializes either from an already-resolved integer id (the
 // compiled-args / runtime form) or from a name string (the authoring form).
 // Turning a name into a dense id is engine policy -- the build assigns ids in
-// world declaration order -- so this data crate does not own it. concinnity-core
+// world declaration order -- so this data crate does not own it. concinnity-cpu
 // installs a resolver here, backed by its build-time interner, before it
 // deserializes named references. A name seen with no resolver installed is a
 // configuration error, surfaced as a deserialization failure (the resolver is
@@ -13,7 +13,7 @@
 // Each resolver is a plain function pointer held in an atomic, so this stays
 // `no_std` and thread-safe: the pointer is written once (install) and only read
 // afterward, and the installed function keeps its own (per-thread) state in
-// concinnity-core. The two slot types below centralize the single unavoidable
+// concinnity-cpu. The two slot types below centralize the single unavoidable
 // piece of unsafe -- `core` has no atomic function-pointer type, so reading a
 // `fn` back out of a `usize` requires a `transmute` -- into one audited place
 // per function-pointer shape.
@@ -84,7 +84,7 @@ impl HandleResolverSlot {
 
 static RESOLVER: NameResolverSlot = NameResolverSlot::new();
 
-/// Install the name -> id resolver. Called once by concinnity-core, backed by
+/// Install the name -> id resolver. Called once by concinnity-cpu, backed by
 /// its build-time interner. Idempotent; the last writer wins.
 pub fn set_name_resolver(f: ResolveFn) {
     RESOLVER.set(f);

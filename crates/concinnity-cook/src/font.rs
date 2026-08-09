@@ -12,7 +12,7 @@
 use serde::Deserialize;
 
 use concinnity_core::assets::Font;
-use concinnity_core::build::font::GlyphMetrics;
+use concinnity_cpu::build::font::GlyphMetrics;
 
 // Pixels of distance gradient on each side of the glyph edge stored in the atlas
 // (in low-resolution / atlas pixels).
@@ -456,7 +456,7 @@ fn serialise(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::build::font::deserialise;
+    use concinnity_cpu::build::font::deserialise;
 
     #[test]
     fn round_trip_serialise() {

@@ -6,8 +6,8 @@
 // renderer's line pass; oriented shapes take a column-major model matrix
 // (`Transform::model_matrix` convention, `m[col][row]`).
 
-use concinnity_core::geometry::glass_quad::plane_basis;
-use concinnity_core::gfx::lines::Line;
+use concinnity_cpu::geometry::glass_quad::plane_basis;
+use concinnity_cpu::gfx::lines::Line;
 
 // Full-circle resolution. High enough that a large range sphere still reads
 // as a curve, cheap enough to ignore (a circle is 32 segments).

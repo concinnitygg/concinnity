@@ -14,8 +14,8 @@
 | `concinnity-physics`   | lib       |                    | Physics system (wraps [rapier3d]).                                   |
 | `concinnity-audio`     | lib       |                    | Audio system (wraps [kira]).                                         |
 | `concinnity-store`     | lib       |                    | State tree on disk: paths, source lookup, blob reads.                |
-| `concinnity-core`      | lib       |                    | CPU compute over the runtime vocabulary: skinning, LOD, raster, IBL. |
-| `concinnity-types`     | lib       | :white_check_mark: | Runtime vocabulary: GPU layouts, ECS components, registry, settings. |
+| `concinnity-cpu`       | lib       |                    | CPU compute over the vocabulary: payload codecs, geometry, kernels.  |
+| `concinnity-core`      | lib       | :white_check_mark: | Runtime vocabulary: GPU layouts, ECS components, registry, settings. |
 | `concinnity-blob`      | lib       | :white_check_mark: | Packed asset blob format; `write` feature gated to cook.             |
 | `concinnity-asset`     | lib       | :white_check_mark: | User-facing asset schema (the single home for asset types).          |
 | `concinnity-eas`       | lib       | :white_check_mark: | Entity/archetype storage backing the ECS.                            |
@@ -30,76 +30,67 @@
 
 ```mermaid
 block
-columns 7
+columns 9
 
-space:2
-cli
-space:1
 runtime
-space:2
+space:3
+cli
+space:4
+
+space:9
 
 space:7
-
-space:1
 editor
-space:5
-
-space:7
-
-space:5
-cook
 space:1
 
-space:7
+space:9
 
-space:1
+space:3
 engine
 space:1
+cook
+space:3
+
+space:9
+
 docs
-space:3
-
-space:7
-
+space:6
 device
-space:5
-world
+space:1
 
-space:7
+space:9
 
-space:3
-store
-space:2
 render
+space:1
+physics
+space:1
+world
+space:4
 
-space:7
+space:9
 
 audio
 space:5
-physics
+cpu
+space:1
+store
 
-space:7
-
-space:3
-core
-space:3
-
-space:7
-
-space:3
-types
-space:3
-
-space:7
+space:9
 
 space:4
+core
+space:4
+
+space:9
+
+space:8
 blob
-space:2
 
-space:7
+space:9
 
-space:1
-memory
+space:3
 eas
+memory
 asset
 space:3
 
@@ -111,18 +102,19 @@ cli --> engine
 cli --> world
 cli --> docs
 
-core --> types
+cpu --> core
 
-types --> eas
-types --> asset
-types --> blob
-types --> memory
+core --> eas
+core --> asset
+core --> blob
+core --> memory
 
 store --> core
 store --> blob
 
 engine --> audio
 engine --> core
+engine --> cpu
 engine --> store
 engine --> device
 engine --> physics
@@ -133,10 +125,12 @@ editor --> device
 editor --> store
 editor --> cook
 editor --> core
+editor --> cpu
 editor --> world
 
 cook --> blob
 cook --> core
+cook --> cpu
 cook --> store
 cook --> world
 cook --> docs
@@ -144,17 +138,21 @@ cook --> docs
 docs --> world
 
 device --> core
+device --> cpu
 device --> render
 device --> store
 
 audio --> core
 
 physics --> core
+physics --> cpu
 
 render --> core
+render --> cpu
 
 blob --> asset
 
 world --> core
+world --> cpu
 world --> store
 ```

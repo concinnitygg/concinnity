@@ -120,7 +120,7 @@ pub fn payload_key(
     };
     let target = inputs
         .target_dependent
-        .then(|| concinnity_core::build::Platform::current().key());
+        .then(|| concinnity_core::platform::Platform::current().key());
     key_from_parts(discriminant, args, &files, target)
 }
 
@@ -602,7 +602,7 @@ mod tests {
             sources: SourceFiles::Only(Vec::new()),
             target_dependent: true,
         };
-        let platform = concinnity_core::build::Platform::current().key();
+        let platform = concinnity_core::platform::Platform::current().key();
         assert_eq!(
             payload_key(1, &args, &ctx(), &dependent),
             key_from_parts(1, &args, &[], Some(platform)),

@@ -10,7 +10,7 @@
 // Colours match the translate gizmo's handles (X red, Y green, Z blue), so the
 // two teach the same axis mapping.
 
-use concinnity_core::gfx::lines::Line;
+use concinnity_cpu::gfx::lines::Line;
 
 // Fraction of the camera's far plane the line holds full alpha for, before it
 // starts fading. The remainder ramps to zero, so the run dissolves into the

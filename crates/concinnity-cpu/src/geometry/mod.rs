@@ -18,7 +18,7 @@ pub mod glass_quad;
 mod voxel;
 pub mod water_grid;
 
-pub use concinnity_types::math::vec3;
+pub use concinnity_core::math::vec3;
 pub use vec3::{vec3_add, vec3_face_normal, vec3_normalise};
 
 pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
@@ -33,8 +33,10 @@ pub use voxel::{PaletteSlot, build_voxel_mesh};
 pub type Vert = ([f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 
 // Convert a payload-form joint back into the args-form `JointDef`.
-fn payload_joint_to_def(j: crate::gfx::mesh_payload::PayloadJoint) -> crate::assets::JointDef {
-    crate::assets::JointDef {
+fn payload_joint_to_def(
+    j: crate::gfx::mesh_payload::PayloadJoint,
+) -> concinnity_core::assets::JointDef {
+    concinnity_core::assets::JointDef {
         name: j.name,
         parent: j.parent,
         translation: j.translation,
@@ -48,7 +50,7 @@ fn payload_joint_to_def(j: crate::gfx::mesh_payload::PayloadJoint) -> crate::ass
 // init path can call it without re-implementing the field mapping.
 pub fn payload_joints_to_defs(
     joints: Vec<crate::gfx::mesh_payload::PayloadJoint>,
-) -> Vec<crate::assets::JointDef> {
+) -> Vec<concinnity_core::assets::JointDef> {
     joints.into_iter().map(payload_joint_to_def).collect()
 }
 

@@ -1,5 +1,5 @@
-use crate::gfx::overlay::UI_REFERENCE_SIZE;
 use crate::world::ui_spec::sprite;
+use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 use concinnity_world::spec::{AssetSpec, asset, spec_to_value};
 
 use super::helpers::wrap_text;

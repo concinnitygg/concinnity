@@ -426,7 +426,7 @@ pub fn poll_pending_assets(
     for tex in &batch.textures {
         // Hot-reload decodes sources to RGBA8; wrap them so the backend
         // regenerates the mip chain on upload.
-        let image = concinnity_core::build::texture::TextureImage::rgba8(
+        let image = concinnity_cpu::build::texture::TextureImage::rgba8(
             tex.width,
             tex.height,
             tex.pixels.clone(),

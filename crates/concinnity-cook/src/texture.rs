@@ -21,13 +21,13 @@
 // 3. No other files need to change.
 
 // The pre-compiled payload `deserialise` / `serialise` and the resolution-cap
-// `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
+// `downscale_rgba` stay in concinnity-cpu (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
 use serde::Deserialize;
 
 use concinnity_core::assets::Texture;
-use concinnity_core::build::texture::{
+use concinnity_cpu::build::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialise,
 };
 
@@ -1247,8 +1247,8 @@ mod tests {
 
     // compile_texture_payload: file-backed branch and payload envelope
 
-    fn deserialise(payload: &[u8]) -> concinnity_core::build::texture::TextureImage {
-        concinnity_core::build::texture::deserialise(payload).expect("deserialise payload")
+    fn deserialise(payload: &[u8]) -> concinnity_cpu::build::texture::TextureImage {
+        concinnity_cpu::build::texture::deserialise(payload).expect("deserialise payload")
     }
 
     #[test]

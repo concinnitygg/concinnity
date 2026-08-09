@@ -5,7 +5,7 @@
 // functions that pack their output into the binary blob. These run only at cook
 // time; the runtime plays the compiled payload. The shared low-level mesh math
 // (per-vertex tangents, face normals, the `Vert` tuple, the voxel mesher) lives
-// in `concinnity_core::geometry` because the runtime chunk-streaming path uses
+// in `concinnity_cpu::geometry` because the runtime chunk-streaming path uses
 // it too; this module calls back into it.
 //
 // Adding a new generator
@@ -20,14 +20,14 @@ mod room;
 mod skybox;
 mod terrain;
 
-use concinnity_core::geometry::{
+use concinnity_cpu::geometry::{
     PaletteSlot, Vert, build_voxel_mesh, compute_tangents, vec3_add, vec3_face_normal,
     vec3_normalise,
 };
 
 // Re-exported so cook code that also needs the runtime-side joint conversion
 // (mesh_reimport) can reach it through `crate::geometry`.
-pub use concinnity_core::geometry::payload_joints_to_defs;
+pub use concinnity_cpu::geometry::payload_joints_to_defs;
 
 // Tangent-bearing and raw inline vertex forms the build helpers pack into the
 // payload:
@@ -85,7 +85,7 @@ pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
                 .get("subdivisions")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(64) as u32;
-            concinnity_core::geometry::water_grid::build_water_grid(
+            concinnity_cpu::geometry::water_grid::build_water_grid(
                 half_width,
                 half_depth,
                 subdivisions,

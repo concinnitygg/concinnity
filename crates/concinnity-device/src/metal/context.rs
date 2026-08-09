@@ -485,15 +485,15 @@ pub struct MtlContext {
     // `index_buffer`. Seeded at init by evicting every streamed mesh; from
     // then on `upload_mesh` / `evict_mesh` allocate and free byte ranges so a
     // streamed mesh can be placed wherever there is free space.
-    pub(super) mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub(super) mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub(super) mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub(super) mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     // Sub-allocators for the chunk-geometry headroom region appended to
     // `vertex_buffer` / `index_buffer` by `setup_chunk_streaming`. They manage
     // a byte range disjoint from the build-time geometry and the
     // mesh-streaming allocators, so a streamed `VoxelWorld` chunk never
     // collides with static geometry. Empty until `setup_chunk_streaming` runs.
-    pub(super) chunk_vtx_alloc: crate::gfx::range_alloc::RangeAllocator,
-    pub(super) chunk_idx_alloc: crate::gfx::range_alloc::RangeAllocator,
+    pub(super) chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub(super) chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     // Free list of `draw_objects` slots vacated by removed chunks or retired
     // (despawned) draws, reused by the next `add_chunk_mesh` or runtime
     // `clone_static_draw_object` so the draw list does not grow without bound as

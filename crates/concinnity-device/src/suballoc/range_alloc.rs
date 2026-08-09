@@ -1,4 +1,4 @@
-// src/gfx/range_alloc.rs
+// src/suballoc/range_alloc.rs
 //
 // A byte-range sub-allocator: it hands out offsets into a larger span it does
 // not own. Streamed meshes place their geometry in the renderer's shared vertex
@@ -12,9 +12,7 @@
 // space can be reused by a different one -- the prerequisite for streaming
 // more mesh geometry than the buffers hold at once.
 //
-// This is pure policy: `core` + `alloc` only (just `Vec`), no backend types,
-// no I/O, no threads. It lives alongside `gfx::streaming` for the same reason
-// -- a future `no_std` client runtime can keep it unchanged.
+// This is pure policy: no backend types, no I/O, no threads.
 //
 // Free space is a sorted, coalesced free list; allocation is best-fit, so an
 // exact-size block is consumed whole with no split. Frees are *deferred*: a
@@ -172,6 +170,8 @@ impl RangeAllocator {
     }
 
     // Number of distinct free blocks -- a fragmentation gauge for diagnostics.
+    // Observes coalescing, which no caller acts on but the tests assert.
+    #[cfg(test)]
     pub fn free_block_count(&self) -> usize {
         self.free.len()
     }

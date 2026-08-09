@@ -58,13 +58,12 @@ mod tests {
         });
         let payload = compile_mesh_payload(&args).expect("compiles");
 
-        let grid = concinnity_core::gfx::mesh_payload::deserialise_heightfield(&payload)
+        let grid = concinnity_cpu::gfx::mesh_payload::deserialise_heightfield(&payload)
             .expect("parse")
             .expect("heightfield trailer present");
         assert_eq!((grid.rows, grid.cols), (5, 5));
-        let (mesh_verts, _, _) =
-            concinnity_core::gfx::mesh_payload::deserialise_with_lods(&payload)
-                .expect("render path");
+        let (mesh_verts, _, _) = concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(&payload)
+            .expect("render path");
         assert_eq!(grid.heights.len(), mesh_verts.len());
         for (h, v) in grid.heights.iter().zip(&mesh_verts) {
             assert_eq!(*h, v.pos[1]);

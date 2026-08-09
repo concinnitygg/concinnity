@@ -26,7 +26,7 @@ pub(super) fn build_dropdown_overlay(
     const TEXT_PAD: f32 = 10.0;
     const BORDER_PX: f32 = 2.0;
 
-    use concinnity_core::gfx::dropdown;
+    use crate::ui::dropdown;
     let count = screen.options.len();
     let layout = dropdown::layout(screen.anchor, count);
     // The layout windows a long list; rows show options `first..`, so the

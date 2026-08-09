@@ -182,7 +182,7 @@ impl EditorHook {
             .resource::<crate::ecs::PickIndex>()
             .into_iter()
             .flat_map(|index| index.entries.iter())
-            .filter_map(|e| concinnity_core::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
+            .filter_map(|e| concinnity_cpu::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
             .min_by(|a, b| a.t.total_cmp(&b.t));
         let t = hit.map(|f| f.t).unwrap_or_else(|| {
             // The ground plane y = 0, when the ray descends toward it.
@@ -259,7 +259,7 @@ impl EditorHook {
     fn ray_hit_names(
         &self,
         world: &World,
-        ray: &concinnity_core::gfx::pick::PickRay,
+        ray: &concinnity_cpu::gfx::pick::PickRay,
     ) -> Vec<String> {
         let Some(index) = world.resource::<crate::ecs::PickIndex>() else {
             return Vec::new();
@@ -268,7 +268,7 @@ impl EditorHook {
             .entries
             .iter()
             .filter_map(|e| {
-                let t = concinnity_core::gfx::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
+                let t = concinnity_cpu::gfx::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
                 Some((t, pick::resolve_name(e.asset_id)?))
             })
             .collect();

@@ -7,7 +7,7 @@ pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
 // Validate SdfVolume args without compiling.
 fn check_args(args: &serde_json::Value) -> Result<(), String> {
     if crate::source_args::current_platform_source_arg(args).is_none() {
-        let platform_key = concinnity_core::build::Platform::current().key();
+        let platform_key = concinnity_core::platform::Platform::current().key();
         return Err(format!(
             "SdfVolume requires a `fragment_shader` or a `fragment_shaders` \
              entry for backend \"{platform_key}\" (a path to a shader file \
@@ -35,7 +35,7 @@ mod tests {
     // single `fragment_shader` path resolves as current-platform-compatible
     // on Metal, DirectX, and Vulkan alike.
     fn platform_ext() -> &'static str {
-        concinnity_core::build::Platform::current().key()
+        concinnity_core::platform::Platform::current().key()
     }
 
     #[test]

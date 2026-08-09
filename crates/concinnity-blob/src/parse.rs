@@ -1,6 +1,6 @@
 // The blob decode half: turn blob bytes back into metadata. Reading those bytes
-// off disk is the caller's job, so the payload residency store and the
-// `.concinnity/data/` layout both live in concinnity-core.
+// off disk is the caller's job, so the payload residency store lives in
+// concinnity-core and the `.concinnity/data/` layout in concinnity-store.
 
 use crate::error::BlobError;
 use crate::schema::BlobMeta;

@@ -2205,12 +2205,12 @@ impl DxContext {
                 index_buffer_view,
             },
             mesh_stream: super::context::MeshStreamState {
-                vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-                idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
+                vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+                idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
             },
             chunk_stream: super::context::ChunkStreamState {
-                vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-                idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
+                vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+                idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
                 srv_base_slot: chunk_srv_base_slot,
             },
             skinned: SkinnedState {

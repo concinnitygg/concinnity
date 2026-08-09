@@ -17,8 +17,8 @@ fn main() {
         .to_path_buf();
     let roots = [
         manifest.join("../concinnity-asset/src"),
-        manifest.join("../concinnity-types/src/assets"),
-        manifest.join("../concinnity-types/src/ecs/registry.rs"),
+        manifest.join("../concinnity-core/src/assets"),
+        manifest.join("../concinnity-core/src/ecs/registry.rs"),
         manifest.join("src/schema.rs"),
     ];
 

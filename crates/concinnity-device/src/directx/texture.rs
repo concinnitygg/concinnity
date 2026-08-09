@@ -257,8 +257,8 @@ pub(super) struct TextureLevel<'a> {
 }
 
 // DXGI equivalent of a compiled texture payload format.
-fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -> DXGI_FORMAT {
-    use concinnity_core::build::texture::TextureFormat;
+fn dxgi_texture_format(format: concinnity_cpu::build::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_cpu::build::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
         TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
@@ -274,9 +274,9 @@ fn dxgi_texture_format(format: concinnity_core::build::texture::TextureFormat) -
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_cpu::build::texture::TextureImage,
 ) -> Result<(PooledTexture, UploadInFlight), String> {
-    use concinnity_core::build::texture::TextureFormat;
+    use concinnity_cpu::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
@@ -299,7 +299,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_cpu::build::texture::TextureImage,
 ) -> Result<PooledTexture, String> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_upload(alloc.device(), alloc.queue())?;

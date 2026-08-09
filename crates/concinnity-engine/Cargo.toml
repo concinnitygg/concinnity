@@ -19,7 +19,7 @@ doctest = false
 # the shared native Win32 window layer; macOS Vulkan uses GLFW, as Linux does.
 vulkan = [
     "concinnity-device/vulkan",
-    "concinnity-core/vulkan",
+    "concinnity-cpu/vulkan",
     "concinnity-render/vulkan",
 ]
 
@@ -32,6 +32,7 @@ alloc-detail = ["concinnity-memory/detail"]
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-cpu = { path = "../concinnity-cpu" }
 concinnity-store = { path = "../concinnity-store" }
 concinnity-render = { path = "../concinnity-render" }
 concinnity-device = { path = "../concinnity-device" }

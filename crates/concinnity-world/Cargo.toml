@@ -21,6 +21,8 @@ doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+# Only for the build-time name interner (`ecs::asset_id`), which is std-bound.
+concinnity-cpu = { path = "../concinnity-cpu" }
 concinnity-store = { path = "../concinnity-store" }
 
 serde = { version = "1", features = ["derive"] }

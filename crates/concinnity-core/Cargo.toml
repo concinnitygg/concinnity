@@ -12,19 +12,25 @@ path = "src/lib.rs"
 doctest = false
 
 [features]
-# Forwarded to concinnity-types, whose build script resolves the backend cfg the
-# gfx data layouts and Platform::current() compile against. Activates no extra
-# dependency. Inert on Linux (always vk) and macOS (always metal).
-vulkan = ["concinnity-types/vulkan"]
+# Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so
+# the backend-conditional gfx data layouts and Platform::current() compile for
+# the same backend the client picks. Activates no extra dependency. Inert on
+# Linux (always vk) and macOS (always metal). concinnity-cpu forwards its own
+# `vulkan` feature here so the two resolve the same backend.
+vulkan = []
 
 [dependencies]
-concinnity-types = { path = "../concinnity-types" }
 concinnity-asset = { path = "../concinnity-asset" }
+concinnity-blob = { path = "../concinnity-blob" }
+concinnity-eas = { path = "../concinnity-eas" }
 concinnity-memory = { path = "../concinnity-memory" }
 
-bytemuck = { version = "1", features = ["derive"] }
-rayon = "1"
+bytemuck = { version = "1", default-features = false, features = ["derive"] }
+libm = "0.2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+thiserror = { version = "2.0.18", default-features = false }
+tracing = { version = "0.1.44", default-features = false }
 
 [dev-dependencies]
-serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

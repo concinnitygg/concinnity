@@ -36,7 +36,7 @@ pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
 // platform key into its binary; `cn export` scans these bytes and refuses a
 // mismatch. The token after the `cn-runtime-platform:` prefix is the
 // shader-platform key (`metal` / `hlsl` / `glsl`), matching
-// `concinnity_core::build::asset::Platform::key`. `main` takes the static's
+// `concinnity_core::platform::Platform::key`. `main` takes the static's
 // address through a `black_box` so no linker dead-strips it.
 #[cfg(backend_metal)]
 #[used]

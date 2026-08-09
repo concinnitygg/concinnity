@@ -3896,14 +3896,14 @@ impl VkContext {
             geometry: VkGeometry {
                 vertex_buffer,
                 index_buffer,
-                mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-                mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
+                mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+                mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
                 vertex_buffer_bytes,
                 index_buffer_bytes,
             },
             chunk_stream: VkChunkStream {
-                vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-                idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
+                vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+                idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
                 descriptor_pool: None,
                 object_set: None,
                 texture_slot: None,

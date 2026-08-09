@@ -9,7 +9,7 @@
 // `decode_dds_blocks` reads the container's block-compressed mip chain for
 // passthrough into the compressed texture payload.
 
-use concinnity_core::build::texture::{TextureFormat, TextureMip};
+use concinnity_cpu::build::texture::{TextureFormat, TextureMip};
 
 const MAGIC: &[u8; 4] = b"DDS ";
 const HEADER_LEN: usize = 124;

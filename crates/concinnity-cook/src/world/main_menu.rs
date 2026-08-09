@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use super::expand::{asset_name, type_norm};
 use super::ui_spec::{centered_label, font_sizes, label_value, sprite};
 use crate::assets::{MainMenu, SettingsProfile};
-use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 use concinnity_world::spec::{asset, spec_to_value};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
@@ -236,7 +236,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
     }
 
     // Menus lay out against a fixed reference canvas; the renderer uniformly
-    // scales the overlay to the live window (see crate::gfx::overlay), so the
+    // scales the overlay to the live window (see concinnity_core::gfx::overlay), so the
     // declared Window size does not affect the menu layout.
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let font_px_by_name = font_sizes(assets);

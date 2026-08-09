@@ -1,16 +1,25 @@
 // src/lib.rs
 //
-// concinnity-cook: the asset compile pipeline, extracted from concinnity-core
+// concinnity-cook: the asset compile pipeline, extracted from concinnity-cpu
 // so the runtime foundation no longer carries the build-only dependencies
 // (fbxcel, fontdue, shaderc, sha2, kira). This crate turns world.jsonl + source
-// files into the binary blobs the runtime reads; it depends on concinnity-core
+// files into the binary blobs the runtime reads; it depends on concinnity-cpu
 // and core has no edge back into it.
 //
-// The staying-in-core modules are re-exported so code moved here keeps resolving
-// its `crate::{assets,ecs,gfx,geometry,result}` paths. The payload *decoders*
-// and shared payload types live in `concinnity_core::build`; this crate's
-// modules call back into them.
-pub use concinnity_core::{assets, build, ecs, gfx, result};
+// The vocabulary and compute modules below are re-exported so code moved here
+// keeps resolving its `crate::{assets,ecs,gfx,platform,result}` paths. The
+// payload *decoders* and shared payload types live in `concinnity_cpu::build`;
+// this crate's modules call back into them.
+pub use concinnity_core::{assets, platform, result};
+pub use concinnity_cpu::{build, gfx};
+
+// The vocabulary's ECS surface, with the build-time name interner shadowing its
+// `asset_id`: the interner keeps a per-thread table, so it lives in
+// concinnity-cpu and re-exports the vocabulary's `AssetId` / `AssetRef`.
+pub mod ecs {
+    pub use concinnity_core::ecs::*;
+    pub use concinnity_cpu::ecs::asset_id;
+}
 // The state tree and the source-asset lookup live in concinnity-store; both are
 // re-exported so cook code keeps naming them under `crate::*`.
 pub use concinnity_store::{paths, source};
@@ -47,7 +56,7 @@ mod file_stamp;
 pub mod font;
 // Build-time mesh generators + payload compilers. The runtime-side mesh helpers
 // they share (tangents, the voxel mesher, chunk streaming) stay in
-// `concinnity_core::geometry`; this module re-exports what cook code names.
+// `concinnity_cpu::geometry`; this module re-exports what cook code names.
 pub mod geometry;
 pub mod glb;
 pub mod gltf;
@@ -77,7 +86,7 @@ pub mod world;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode + world parse API stays in
-// concinnity-core.
+// concinnity-cpu.
 pub use pipeline::{
     BuildProgress, PipelineResult, TextureSourceInfo, build_compiled, build_compiled_with_progress,
     build_from_path, build_pipeline_from_str, validate_asset, validate_world_jsonl,

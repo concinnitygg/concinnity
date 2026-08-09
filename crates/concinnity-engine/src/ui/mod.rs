@@ -3,8 +3,10 @@
 // any `HitRegion`, `Screen`, or `KeyBinding`, then it processes hover/click,
 // screen overlays, and key bindings each frame.
 
+pub(crate) mod dropdown;
 mod focus;
 mod screen;
+mod scroll_layout;
 
 use crate::assets::{
     FrameInput, HitRegion, Key, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
@@ -14,10 +16,9 @@ use crate::assets::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::settings;
-use concinnity_core::gfx::dropdown;
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
-use concinnity_core::gfx::scroll_layout::{self, RowSpec};
 use screen::{ScreenMeta, ScreenRegistry};
+use scroll_layout::RowSpec;
 use std::collections::HashMap;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.

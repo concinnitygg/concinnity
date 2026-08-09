@@ -5,7 +5,7 @@
 // the generic primitives only: entities, typed storage columns, change ticks,
 // component masks and a join index, resources, events, the deferred command
 // buffer, and system access sets for conflict-free scheduling. The concrete
-// component set is registered by concinnity-types through the define_components!
+// component set is registered by concinnity-core through the define_components!
 // macro; nothing here knows about meshes, blobs, or rendering.
 //
 // Closed-world by design: EAS stores only the component types the project

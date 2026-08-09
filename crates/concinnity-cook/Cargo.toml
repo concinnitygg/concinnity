@@ -13,6 +13,7 @@ doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-cpu = { path = "../concinnity-cpu" }
 concinnity-store = { path = "../concinnity-store" }
 concinnity-blob = { path = "../concinnity-blob" }
 concinnity-world = { path = "../concinnity-world" }

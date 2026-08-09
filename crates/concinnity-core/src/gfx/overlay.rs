@@ -1,6 +1,6 @@
 // src/gfx/overlay.rs
 //
-// Screen-overlay scaling math shared by the build pipeline (which lays menus
+// Screen-overlay scaling math shared by the cook pipeline (which lays menus
 // out against a fixed reference canvas) and the client renderer (which scales
 // that canvas to the live window). Screen-owned UI (menus, settings) is authored
 // in a fixed reference resolution; at runtime the whole overlay is uniformly

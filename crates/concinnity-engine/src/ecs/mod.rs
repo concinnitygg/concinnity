@@ -25,8 +25,12 @@ pub use concinnity_core::ecs::{
     Arena, AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot,
     ComponentStorage, Entity, EventCursor, EventStore, Events, FontHandle, FrameContext,
     MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext, Resources,
-    SceneGroup, SkinnedMeshHandle, TextureHandle, Tick, asset_id,
+    SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
 };
+
+// The name interner keeps a per-thread table, so it lives in concinnity-cpu;
+// its module re-exports the vocabulary's `AssetId` / `AssetRef` alongside.
+pub use concinnity_cpu::ecs::asset_id;
 
 // Renderer-free per-frame protocol resources, moved to concinnity-core so the
 // physics / audio subsystem crates can reach them without a renderer dependency.

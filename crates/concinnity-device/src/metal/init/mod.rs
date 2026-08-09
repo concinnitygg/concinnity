@@ -1330,10 +1330,10 @@ impl MtlContext {
                 morphs: Vec::new(),
                 morph_weights: Vec::new(),
             },
-            mesh_vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-            mesh_idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-            chunk_vtx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
-            chunk_idx_alloc: crate::gfx::range_alloc::RangeAllocator::new(),
+            mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+            mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+            chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
+            chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
             draw_slots,
             // Seeded later by `seed_skinned_instance_pool` once skinned geometry
             // (with its pre-reserved copies) has been uploaded.

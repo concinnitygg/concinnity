@@ -313,7 +313,7 @@ pub fn assign_mesh_source_handles(
 // The current build's handle map, consulted by the per-kind resource-handle
 // resolver seams. One map holds every kind's handles; each seam closure reads it
 // with its own `ResourceKind`. Thread-local so parallel builds (and the interner
-// they share) stay isolated, exactly like `concinnity_core::ecs::asset_id`'s
+// they share) stay isolated, exactly like `concinnity_cpu::ecs::asset_id`'s
 // interner.
 thread_local! {
     static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());

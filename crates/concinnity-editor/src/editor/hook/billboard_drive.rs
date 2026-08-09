@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::assets::{Camera3D, Transform};
-use concinnity_core::gfx::pick::ray_aabb;
+use concinnity_cpu::gfx::pick::ray_aabb;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
 // for, its projected center, and its straight-line camera distance (the

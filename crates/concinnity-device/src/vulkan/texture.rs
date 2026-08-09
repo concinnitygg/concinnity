@@ -485,8 +485,8 @@ pub(super) struct TextureLevel<'a> {
 
 // Vulkan equivalent of a compiled texture payload format. The BC formats need
 // the `textureCompressionBC` device feature, enabled in `vulkan::device`.
-fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> vk::Format {
-    use concinnity_core::build::texture::TextureFormat;
+fn vk_texture_format(format: concinnity_cpu::build::texture::TextureFormat) -> vk::Format {
+    use concinnity_cpu::build::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
         TextureFormat::Bc1 => vk::Format::BC1_RGBA_UNORM_BLOCK,
@@ -501,9 +501,9 @@ fn vk_texture_format(format: concinnity_core::build::texture::TextureFormat) -> 
 // their container mip chain verbatim.
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_cpu::build::texture::TextureImage,
 ) -> crate::gfx::error::RenderResult<(GpuImage, UploadInFlight)> {
-    use concinnity_core::build::texture::TextureFormat;
+    use concinnity_cpu::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
@@ -526,7 +526,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     ctx: &GpuUploadContext,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_cpu::build::texture::TextureImage,
 ) -> crate::gfx::error::RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;

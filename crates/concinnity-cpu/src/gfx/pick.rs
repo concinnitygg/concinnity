@@ -131,7 +131,7 @@ pub fn ray_aabb(ray: &PickRay, bb_min: [f32; 3], bb_max: [f32; 3]) -> Option<f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::camera::view_matrix;
+    use concinnity_core::gfx::camera::view_matrix;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const FOV: f32 = core::f32::consts::FRAC_PI_2;

@@ -1,33 +1,34 @@
 // src/lib.rs
 //
-// concinnity-core: the CPU compute layer over the runtime vocabulary, shared by
-// the client runtime and the `concinnity-cook` compile pipeline. Skinning and
-// pose blending, IK, LOD decimation, rasterisation, IBL convolution, the
-// procedural geometry generators, and the payload decoders (`build`). It takes
-// threads (`rayon`) and is unapologetically std.
+// concinnity-core: the engine's RUNTIME vocabulary. The types the renderer,
+// the cook pipeline, the subsystem crates, and the editor all have to agree on
+// and none of them owns: the backend-agnostic GPU data layouts the CPU and the
+// shaders both name, the transform and skeleton math those layouts are
+// expressed in, the ECS component definitions and the registry built from them,
+// and the post-process / quality setting structs.
 //
-// The vocabulary all of that computes over -- the GPU data layouts, the
-// transform and skeleton types, the assets, the ECS registry -- is
-// `concinnity-types`, which this crate re-exports under its own module paths so
-// a consumer reaches everything through `concinnity_core::*` as before. The
-// asset COMPILE pipeline, including world.jsonl parsing and expansion, lives in
-// `concinnity-cook`; core has no dependency on it. Core depends on no graphics
-// backend, windowing, physics, or audio crate.
+// Data and the small total functions over it. CPU compute over that vocabulary
+// -- skinning, IK, LOD decimation, rasterisation, IBL convolution -- lives in
+// concinnity-cpu, which sits directly above this crate. The AUTHORED vocabulary
+// (what a world.jsonl declares) is concinnity-asset, below.
 //
-// Core knows where nothing lives: it names no path, opens no file, and reads no
-// clock. Resolving the state tree and reading the compiled blob out of it is
-// `concinnity-store`, which sits above this crate.
+// The crate is `#![no_std]` because nothing here needs an operating system, not
+// as a portability goal in itself: it opens no file, spawns no thread, and
+// reads no clock. `libm` supplies the f32 transcendentals `core` leaves out
+// (see `math`).
 
-pub mod build;
+#![no_std]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+pub mod assets;
 pub mod ecs;
-pub mod geometry;
 pub mod gfx;
-
-pub use concinnity_types::{assets, platform, resource, result};
-
-// The component registry macros. Defined in concinnity-types alongside the
-// component list they expand over; re-exported so the build crate keeps
-// reaching them at `concinnity_core::*`.
-pub use concinnity_types::{
-    __define_asset_kind, define_components, for_each_component, for_each_resource_asset,
-};
+pub mod math;
+pub mod platform;
+pub mod resource;
+pub mod result;
+#[cfg(test)]
+mod test_support;

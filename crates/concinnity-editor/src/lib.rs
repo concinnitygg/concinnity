@@ -10,7 +10,9 @@
 #[allow(unused_imports)]
 pub(crate) use concinnity_cook::world;
 #[allow(unused_imports)]
-pub(crate) use concinnity_core::{build, geometry, result};
+pub(crate) use concinnity_core::result;
+#[allow(unused_imports)]
+pub(crate) use concinnity_cpu::{build, geometry};
 #[allow(unused_imports)]
 pub(crate) use concinnity_engine::{app, assets, blob, config, ecs, gfx, jobs, resource};
 

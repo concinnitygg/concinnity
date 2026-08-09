@@ -36,7 +36,7 @@ impl MtlContext {
     pub fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_core::build::texture::TextureImage,
+        image: &concinnity_cpu::build::texture::TextureImage,
     ) -> Result<(), String> {
         if slot >= self.textures.len() {
             return Err(format!(

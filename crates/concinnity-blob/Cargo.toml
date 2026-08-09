@@ -8,7 +8,7 @@ publish = false
 
 # The .cnb blob container format: the record schema, the 16-byte header, the
 # format version, and the pure bytes <-> metadata transforms. Performs no I/O
-# and holds no residency policy -- concinnity-core owns the `.concinnity/`
+# and holds no residency policy -- concinnity-store owns the `.concinnity/`
 # layout and `BlobData`, concinnity-cook writes what `encode_cnb` returns. That
 # keeps the crate no_std, so a no_std client runtime can decode blobs with its
 # own byte source.

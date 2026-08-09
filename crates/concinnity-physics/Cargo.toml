@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }
+concinnity-cpu = { path = "../concinnity-cpu" }
 
 rapier3d = "0.32"
 tracing = "0.1.44"

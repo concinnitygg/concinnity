@@ -1364,7 +1364,7 @@ struct CompiledOutput {
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
 fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<concinnity_blob::MeshBoundsRecord> {
-    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
+    let (verts, idxs, _) = concinnity_cpu::gfx::mesh_payload::deserialise_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
     let mut max = first.pos;

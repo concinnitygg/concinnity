@@ -79,9 +79,9 @@ pub(super) fn upload_texture(
 // block-row stride. All Apple GPUs sample BC formats natively.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::build::texture::TextureImage,
+    image: &concinnity_cpu::build::texture::TextureImage,
 ) -> Result<PooledTexture, String> {
-    use concinnity_core::build::texture::TextureFormat;
+    use concinnity_cpu::build::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips

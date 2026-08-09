@@ -1,16 +1,17 @@
-// src/gfx/scroll_layout.rs
+// src/ui/scroll_layout.rs
 //
-// Pure vertical-layout solver shared by the build pipeline and the client. A
-// scrollable settings page is a vertical stack of rows; some rows belong to a
-// collapsible group and disappear when that group is collapsed; the visible
-// stack may be taller than the band it shows through, in which case it scrolls.
+// Pure vertical-layout solver for a scrollable panel. A scrollable settings
+// page is a vertical stack of rows; some rows belong to a collapsible group and
+// disappear when that group is collapsed; the visible stack may be taller than
+// the band it shows through, in which case it scrolls.
 //
 // This module owns only the geometry: given each row's natural height, its
 // group membership, the per-group collapsed state, the band height, and the
 // current scroll offset, it returns where each row ends up (a delta from its
 // build-time position), whether it is visible, the total content height, the
 // clamped scroll, and the scrollbar thumb size + offset. It knows nothing about
-// AssetIds or rendering; the client maps these results onto concrete elements.
+// AssetIds or rendering; `UiInputSystem` maps these results onto concrete
+// elements.
 
 // One row in the stack. `group` is the index of the collapsible group whose
 // collapsed state hides this row, or `None` for a row that is always shown

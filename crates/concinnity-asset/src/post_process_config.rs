@@ -314,7 +314,7 @@ impl ReflectionBlurResolution {
 
 // Default SSGI hemisphere-ray and ray-march-step counts for the authored
 // `ssgi_rays` / `ssgi_steps` fields. Defined here (the schema default) and
-// re-exported by `concinnity-types`' `gfx::ssgi` for its runtime clamp path, so
+// re-exported by `concinnity-core`' `gfx::ssgi` for its runtime clamp path, so
 // the authored default and the runtime code stay a single source of truth.
 pub const DEFAULT_SSGI_RAYS: u32 = 8;
 pub const DEFAULT_SSGI_STEPS: u32 = 12;

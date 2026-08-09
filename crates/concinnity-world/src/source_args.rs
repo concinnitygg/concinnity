@@ -6,7 +6,7 @@
 // selects from the typed struct instead (`StageSourceExt` and the SdfVolume
 // clamp in concinnity-core), so the runtime tier carries no JSON parsing.
 
-use concinnity_core::build::Platform;
+use concinnity_core::platform::Platform;
 
 /// Resolve a shader stage source filename for `platform` from its raw stage args:
 /// the `sources` map entry for the platform wins, then the single `source`

@@ -8,7 +8,7 @@
 // maps, so the blue channel is reconstructed as the unit-length Z and written
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
 
-use concinnity_core::build::texture::TextureFormat;
+use concinnity_cpu::build::texture::TextureFormat;
 
 // Expand a 16-bit 565 colour to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {

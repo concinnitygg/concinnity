@@ -3,23 +3,26 @@
 // The backend-agnostic, GPU-free render-prep layer. Holds the
 // `RenderBackend`/`SceneControl` trait seam the device backends implement, plus
 // the record builders, render graph, and CPU-side math that turn asset
-// components into GPU-ready data. Depends on concinnity-core alone; owns no
-// device or window handle. The device backends (concinnity-device) and the
-// runtime driver (concinnity-engine) both build on top of this crate.
+// components into GPU-ready data. Depends on the vocabulary (concinnity-core)
+// and the CPU compute over it (concinnity-cpu); owns no device or window
+// handle. The device backends (concinnity-device) and the runtime driver
+// (concinnity-engine) both build on top of this crate.
 
-// Core GPU-layout + render-math types, re-exported at the crate root so the
-// render-prep modules reach them as `crate::<type>` (they were `crate::gfx::<type>`
-// in the client, where gfx/mod.rs re-exported the same core modules).
+// GPU-layout + render-math vocabulary, re-exported at the crate root so the
+// render-prep modules reach them as `crate::<type>`.
 pub use concinnity_core::gfx::{
-    auto_exposure, chunk_coord, frustum, lines, mesh_payload, profile, render_types,
-    rt_reflections, ssao, ssgi, ssr,
+    auto_exposure, chunk_coord, frustum, profile, render_types, rt_reflections, ssao, ssgi, ssr,
 };
+// The mesh payload codec, which is CPU work rather than vocabulary.
+pub use concinnity_cpu::gfx::mesh_payload;
 
-// Backend-agnostic foundation the moved modules reach by their historical
-// crate:: paths: asset data types (`Decal`, `ParticleEmitter`, `Key`, ...), the
-// stable `AssetId` newtype (`ecs::asset_id`), and the runtime environment-map
-// bake helpers the reflection-probe payload builder calls (`build::environment_map`).
-pub(crate) use concinnity_core::{assets, build, ecs, geometry};
+// The rest of what the render-prep modules reach by their `crate::` paths:
+// asset data types (`Decal`, `ParticleEmitter`, `Key`, ...) and the stable
+// `AssetId` newtype from the vocabulary, and from the compute crate the
+// environment-map bake the reflection-probe payload builder calls plus the
+// glass-quad generator.
+pub(crate) use concinnity_core::{assets, ecs};
+pub(crate) use concinnity_cpu::{build, geometry};
 
 pub mod area_light;
 pub mod backend;
