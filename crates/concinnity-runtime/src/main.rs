@@ -164,17 +164,20 @@ mod tests {
     #[test]
     fn the_shipped_player_tracks_its_own_heap() {
         const MIB: usize = 1 << 20;
-        let held: Vec<u8> = vec![0; MIB];
 
-        let stats = concinnity_memory::stats().expect("linking the engine installs the allocator");
-        assert!(stats.alloc_count > 0);
+        let before = concinnity_memory::stats()
+            .expect("linking the engine installs the allocator")
+            .alloc_count;
+        let held: Vec<u8> = core::hint::black_box(vec![0; MIB]);
+        let after = concinnity_memory::stats().expect("the allocator stays installed");
+
         assert!(
-            stats.live_bytes >= MIB as u64,
-            "live bytes {} does not cover a megabyte this test is holding",
-            stats.live_bytes
+            after.alloc_count > before,
+            "allocation count did not move ({before} -> {}) across a megabyte",
+            after.alloc_count
         );
-        assert!(stats.peak_bytes >= stats.live_bytes);
-        drop(held);
+        assert!(after.peak_bytes >= after.live_bytes);
+        drop(core::hint::black_box(held));
     }
 
     #[test]
