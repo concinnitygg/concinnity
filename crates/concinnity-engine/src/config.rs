@@ -245,6 +245,13 @@ pub struct AudioSettings {
     // world's audio initializes (the main menu itself has no audio).
     #[serde(default)]
     pub master_volume: Option<f32>,
+    // Per-bus volumes under the master, same semantics (`None` = unity).
+    #[serde(default)]
+    pub music_volume: Option<f32>,
+    #[serde(default)]
+    pub sfx_volume: Option<f32>,
+    #[serde(default)]
+    pub voice_volume: Option<f32>,
 }
 
 // Persisted overrides for control settings.
@@ -363,6 +370,9 @@ mod tests {
             },
             audio: AudioSettings {
                 master_volume: Some(0.5),
+                music_volume: Some(0.75),
+                sfx_volume: Some(1.0),
+                voice_volume: Some(0.25),
             },
             controls: ControlsSettings {
                 mouse_sensitivity: Some(0.0025),

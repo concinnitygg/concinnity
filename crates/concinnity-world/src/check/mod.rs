@@ -11,6 +11,7 @@
 
 pub mod anim_graph;
 pub(crate) mod asset_refs;
+pub mod audio;
 pub mod behavior;
 pub mod cross_reference;
 pub mod fault;
@@ -59,6 +60,8 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
         "voxelworld" => voxel_world::check(name, args),
         "instancedprop" | "instanced" => instanced_prop::check(name, args),
         "triggervolume" => physics::check(name, args),
+        "audioemitter" => audio::check_emitter(name, args),
+        "audiocue" => audio::check_cue(name, args),
         _ => Ok(()),
     }
 }

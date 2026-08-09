@@ -72,11 +72,12 @@ pub(crate) const QUALITY_CYCLE_KEYS: [&str; 5] = [
     "reflection_blur_resolution",
 ];
 
-// Master-volume gains, one per option index (the labels live in core). Indices
-// map to a linear gain via `master_volume_at` / `master_volume_index`.
-const MASTER_VOLUME_GAINS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
-// Effective master volume when the user has never chosen one (full gain).
-pub(crate) const DEFAULT_MASTER_VOLUME: f32 = 1.0;
+// Volume gains shared by the master and per-bus rows, one per option index
+// (the labels live in core). Indices map to a linear gain via `volume_at` /
+// `volume_index`.
+const VOLUME_GAINS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+// Effective volume for any stage the user has never chosen (full gain).
+pub(crate) const DEFAULT_VOLUME: f32 = 1.0;
 
 // Effective mouse sensitivity (radians per pixel) when the user has never
 // chosen one. Matches `CameraController`'s authored default. Mouse sensitivity
@@ -336,19 +337,17 @@ pub(crate) fn texture_quality_index(cap: u32) -> usize {
     nearest_count_index(&TEXTURE_QUALITY_CAPS, cap)
 }
 
-// Linear gain for a master-volume option index, and the index for a gain. A
-// gain that is not a preset (an authored value) falls back to the last index
+// Linear gain for a volume option index, and the index for a gain. A gain
+// that is not a preset (an authored value) falls back to the last index
 // (full).
-pub(crate) fn master_volume_at(index: usize) -> f32 {
-    *MASTER_VOLUME_GAINS
-        .get(index)
-        .unwrap_or(&DEFAULT_MASTER_VOLUME)
+pub(crate) fn volume_at(index: usize) -> f32 {
+    *VOLUME_GAINS.get(index).unwrap_or(&DEFAULT_VOLUME)
 }
-pub(crate) fn master_volume_index(gain: f32) -> usize {
-    MASTER_VOLUME_GAINS
+pub(crate) fn volume_index(gain: f32) -> usize {
+    VOLUME_GAINS
         .iter()
         .position(|g| (g - gain).abs() < 1.0e-4)
-        .unwrap_or(MASTER_VOLUME_GAINS.len() - 1)
+        .unwrap_or(VOLUME_GAINS.len() - 1)
 }
 
 // Advance an option index one step in the given direction (wrapping at the
@@ -775,17 +774,14 @@ mod tests {
     }
 
     #[test]
-    fn master_volume_index_and_at_round_trip() {
-        for i in 0..MASTER_VOLUME_GAINS.len() {
-            assert_eq!(master_volume_index(master_volume_at(i)), i);
+    fn volume_index_and_at_round_trip() {
+        for i in 0..VOLUME_GAINS.len() {
+            assert_eq!(volume_index(volume_at(i)), i);
         }
         // A non-preset gain falls back to the full (last) index.
-        assert_eq!(master_volume_index(0.33), MASTER_VOLUME_GAINS.len() - 1);
+        assert_eq!(volume_index(0.33), VOLUME_GAINS.len() - 1);
         // The default reads as the full preset.
-        assert_eq!(
-            master_volume_at(master_volume_index(DEFAULT_MASTER_VOLUME)),
-            1.0
-        );
+        assert_eq!(volume_at(volume_index(DEFAULT_VOLUME)), 1.0);
     }
 
     #[test]

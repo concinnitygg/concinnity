@@ -327,6 +327,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             clip: *clip,
             kind: *kind,
             volume: *volume,
+            priority: 0,
         })),
         COp::Scene { scene, transition } => out.push(Effect::Scene {
             scene: *scene,

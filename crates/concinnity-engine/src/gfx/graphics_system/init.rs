@@ -771,10 +771,12 @@ impl GraphicsSystem {
         // (with the baseline default when unset); their owning systems apply the
         // value at their own init.
         let user_settings = self.persisted_settings();
-        let master_volume = user_settings
-            .audio
-            .master_volume
-            .unwrap_or(crate::gfx::settings::DEFAULT_MASTER_VOLUME);
+        let volume_of =
+            |stored: Option<f32>| stored.unwrap_or(crate::gfx::settings::DEFAULT_VOLUME);
+        let master_volume = volume_of(user_settings.audio.master_volume);
+        let music_volume = volume_of(user_settings.audio.music_volume);
+        let sfx_volume = volume_of(user_settings.audio.sfx_volume);
+        let voice_volume = volume_of(user_settings.audio.voice_volume);
         // Movement key map: a persisted rebind set overrides the engine default.
         // Pushed to the backend after it is built (below) and used to sync the
         // Controls-tab rebind row labels (`init_rebind_rows`).
@@ -797,7 +799,10 @@ impl GraphicsSystem {
             "upscale_backend" => Some(crate::gfx::settings::upscale_backend_index(
                 upscale_backend_sel,
             )),
-            "master_volume" => Some(crate::gfx::settings::master_volume_index(master_volume)),
+            "master_volume" => Some(crate::gfx::settings::volume_index(master_volume)),
+            "music_volume" => Some(crate::gfx::settings::volume_index(music_volume)),
+            "sfx_volume" => Some(crate::gfx::settings::volume_index(sfx_volume)),
+            "voice_volume" => Some(crate::gfx::settings::volume_index(voice_volume)),
             // Display-output / upscaling toggles (Off/On), held on self.
             "temporal_upscaling" => Some(display_upscaling as usize),
             "hdr_display" => Some(display_hdr as usize),

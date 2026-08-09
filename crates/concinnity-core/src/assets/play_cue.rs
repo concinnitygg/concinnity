@@ -12,4 +12,6 @@ pub struct PlayCue {
     pub clip: AudioClipHandle,
     pub kind: CueKind,
     pub volume: f32,
+    // Voice priority for a one-shot request (higher wins a full voice pool).
+    pub priority: i32,
 }

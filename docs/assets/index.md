@@ -81,6 +81,7 @@
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
 - [AppLimits](AppLimits.md) - Optional per-application overrides for the runtime's thread and memory budgets. Each field of `0` means "auto" (the engine picks a value from the host machine); a non-zero value overrides that choice, clamped to what the machine can safely give.
+- [AudioBus](AudioBus.md) - A mix bus grouping related sounds under one user volume.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
 - [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
@@ -108,6 +109,7 @@
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
 - [QueryDecl](QueryDecl.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
 - [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
+- [Rolloff](Rolloff.md) - How an [AudioEmitter](AudioEmitter.md)'s volume falls with distance.
 - [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [ScrollPanel](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [ScrollPanel](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.

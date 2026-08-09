@@ -1,6 +1,6 @@
 // Positional audio-emitter schema.
 
-use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
+use crate::{AssetId, AudioBus, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
 
 /// A point source of sound in the world.
 ///
@@ -9,8 +9,13 @@ use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle
 /// [Prop](#prop), the emitter tracks that prop's position every frame, so the
 /// sound follows a moving object.
 ///
+/// The sound is at full volume inside `min_distance`, fades according to
+/// `rolloff` between `min_distance` and `max_distance`, and is inaudible
+/// beyond `max_distance`.
+///
 /// ```jsonl
 /// {"name":"fire_sound","type":"AudioEmitter","args":{"clip":"fire_loop","position":[6.0,4.0,-6.0]}}
+/// {"name":"waterfall","type":"AudioEmitter","args":{"clip":"falls","position":[0,2,8],"min_distance":3.0,"max_distance":80.0,"rolloff":"linear"}}
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -27,6 +32,28 @@ pub struct AudioEmitter {
     /// Optional [Prop](#prop) whose position the emitter tracks each frame.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub prop: Option<AssetId>,
+    /// Distance from the listener at which the sound plays at full volume.
+    pub min_distance: f32,
+    /// Distance from the listener beyond which the sound is inaudible. Must
+    /// exceed `min_distance`.
+    pub max_distance: f32,
+    /// How volume falls between `min_distance` and `max_distance`.
+    pub rolloff: Rolloff,
+    /// Mix bus the emitter routes through. Defaults to `sfx`.
+    pub bus: Option<AudioBus>,
+}
+
+/// How an [AudioEmitter](#audioemitter)'s volume falls with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Rolloff {
+    /// Natural falloff, steep near the source. The default.
+    #[default]
+    Logarithmic,
+    /// Gradual falloff spread evenly across the range.
+    Linear,
+    /// No distance falloff: constant volume everywhere (panning still applies).
+    None,
 }
 
 impl Default for AudioEmitter {
@@ -37,6 +64,10 @@ impl Default for AudioEmitter {
             volume: 1.0,
             looping: true,
             prop: None,
+            min_distance: 1.0,
+            max_distance: 50.0,
+            rolloff: Rolloff::Logarithmic,
+            bus: None,
         }
     }
 }
@@ -54,6 +85,10 @@ mod tests {
         assert_eq!(e.position, [0.0, 0.0, 0.0]);
         assert!(e.clip.is_none());
         assert!(e.prop.is_none());
+        assert_eq!(e.min_distance, 1.0);
+        assert_eq!(e.max_distance, 50.0);
+        assert_eq!(e.rolloff, Rolloff::Logarithmic);
+        assert!(e.bus.is_none());
     }
 
     #[test]
@@ -73,5 +108,27 @@ mod tests {
         assert_eq!(back.clip, Some(AudioClipHandle(3)));
         assert_eq!(back.prop, Some(AssetId(4)));
         assert_eq!(back.volume, 0.5);
+    }
+
+    #[test]
+    fn authored_rolloff_and_bus_parse_and_round_trip() {
+        crate::test_support::install_resolvers();
+        let e: AudioEmitter = serde_json::from_str(
+            r#"{"clip":"hum","min_distance":2.5,"max_distance":80.0,"rolloff":"linear","bus":"voice"}"#,
+        )
+        .unwrap();
+        assert_eq!(e.min_distance, 2.5);
+        assert_eq!(e.max_distance, 80.0);
+        assert_eq!(e.rolloff, Rolloff::Linear);
+        assert_eq!(e.bus, Some(crate::AudioBus::Voice));
+
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        let back: AudioEmitter = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.max_distance, 80.0);
+        assert_eq!(back.rolloff, Rolloff::Linear);
+        assert_eq!(back.bus, Some(crate::AudioBus::Voice));
+
+        let none: AudioEmitter = serde_json::from_str(r#"{"rolloff":"none"}"#).unwrap();
+        assert_eq!(none.rolloff, Rolloff::None);
     }
 }

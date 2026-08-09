@@ -253,11 +253,19 @@ pub(crate) fn audio(world: &World) -> Option<SystemAsset> {
     if !needs {
         return None;
     }
-    // The persisted master volume lives in the engine's settings store; resolve
-    // it here and hand it to the system so the audio crate stays free of the
+    // The persisted volumes live in the engine's settings store; resolve them
+    // here and hand them to the system so the audio crate stays free of the
     // engine's `Settings` type.
-    let master = crate::config::Settings::load().audio.master_volume;
-    Some(concinnity_audio::AudioSystem::new(master).into())
+    let audio = crate::config::Settings::load().audio;
+    Some(
+        concinnity_audio::AudioSystem::new(concinnity_audio::AudioVolumes {
+            master: audio.master_volume,
+            music: audio.music_volume,
+            sfx: audio.sfx_volume,
+            voice: audio.voice_volume,
+        })
+        .into(),
+    )
 }
 
 // UiInputSystem: present whenever the world declares any `HitRegion`, `Screen`,

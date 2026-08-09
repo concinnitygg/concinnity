@@ -5,16 +5,18 @@
 // the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 // never opens an audio device.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::{AudioEngine, EmitterId};
+use crate::occlusion::OcclusionSmoother;
+use crate::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
 use concinnity_core::assets::{
-    AudioCommand, AudioCue, AudioEmitter, Behavior, Camera3D, CueKind, PlayCue, ScreenShown, Story,
-    Transform,
+    AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
+    Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    AudioClipHandle, EntityByName, EventCursor, PayloadLocator, PipelineContext, StepResult, System,
+    AudioClipHandle, EntityByName, EventCursor, PayloadLocator, PipelineContext, SimTiming,
+    StepResult, System,
 };
 use concinnity_core::resource::AudioClipTable;
 
@@ -23,19 +25,18 @@ use concinnity_core::resource::AudioClipTable;
 // it carries no config.
 pub struct AudioSystem {
     engine: AudioEngine,
-    // The persisted master output volume (settings menu), applied to the main
-    // mix track at init. `None` leaves output at unity. Resolved by the
-    // engine's audio gate (which owns the settings store) and handed in at
-    // construction, so this crate needs no dependency on the engine.
-    master_volume: Option<f32>,
-    // One entry per `AudioEmitter` that became a live engine emitter.
+    // The persisted mix volumes (settings menu), applied at init. Resolved by
+    // the engine's audio gate (which owns the settings store) and handed in
+    // at construction, so this crate needs no dependency on the engine.
+    volumes: AudioVolumes,
+    // One entry per `AudioEmitter` in the world, in query order.
     emitters: Vec<EmitterBinding>,
     // Screen-triggered cues, keyed by the Screen whose activation fires them.
-    cues: HashMap<AssetId, Vec<CueBinding>>,
-    // Encoded clip payloads for the cue and story clips, keyed by the clip's
-    // AudioClipHandle.
-    cue_clip_bytes: HashMap<AudioClipHandle, Vec<u8>>,
-    // Cursor into the Events<AudioCommand> queue (live master-volume changes).
+    cues: std::collections::HashMap<AssetId, Vec<CueBinding>>,
+    // Last listener position handed to the engine; the occlusion probes ray
+    // from it.
+    listener_position: [f32; 3],
+    // Cursor into the Events<AudioCommand> queue (live volume changes).
     audio_cmd_cursor: EventCursor,
     // Cursor into the Events<ScreenShown> queue (cue triggers).
     view_shown_cursor: EventCursor,
@@ -45,13 +46,22 @@ pub struct AudioSystem {
     // Cues that matched a shown screen so far; observable engine-independent
     // progress for headless tests (playback needs a device and a payload).
     cues_matched: usize,
+    // Distinct clips handed to the decode worker at init; the same kind of
+    // engine-independent observable.
+    clips_queued: usize,
 }
 
 // Links one engine emitter to the world data that positions it.
 struct EmitterBinding {
-    id: EmitterId,
+    // `None` when the engine is disabled or kira's track limit was reached;
+    // the binding still tracks position so probes stay uniform.
+    id: Option<EmitterId>,
     // The Prop this emitter follows each frame, if any.
     follows: Option<AssetId>,
+    // Current world position (authored, then updated from the followed prop).
+    position: [f32; 3],
+    // Smoothed occlusion state fed from this emitter's probe.
+    occlusion: OcclusionSmoother,
 }
 
 // One AudioCue resolved to its clip and playback style.
@@ -59,6 +69,16 @@ struct CueBinding {
     clip: AudioClipHandle,
     kind: CueKind,
     volume: f32,
+    bus: AudioBus,
+    priority: i32,
+}
+
+// The bus a cue routes through when none is authored.
+fn default_bus(kind: CueKind) -> AudioBus {
+    match kind {
+        CueKind::Music => AudioBus::Music,
+        CueKind::Sound => AudioBus::Sfx,
+    }
 }
 
 impl std::fmt::Debug for AudioSystem {
@@ -72,22 +92,23 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
-    // Fresh system with no device, live emitters, or cues. `master_volume` is
-    // the persisted settings-menu master (`None` = unity), applied to the mix
-    // in [`System::init`]. The output device is acquired and the emitters /
+    // Fresh system with no device, live emitters, or cues. `volumes` holds
+    // the persisted settings-menu mix (`None` per stage = unity), applied in
+    // [`System::init`]. The output device is acquired and the emitters /
     // cues are bound from the world's components in `init`, so construction is
     // side-effect-free (required by the `World::system_manifest` gate probe).
-    pub fn new(master_volume: Option<f32>) -> Self {
+    pub fn new(volumes: AudioVolumes) -> Self {
         Self {
             engine: AudioEngine::disabled(),
-            master_volume,
+            volumes,
             emitters: Vec::new(),
-            cues: HashMap::new(),
-            cue_clip_bytes: HashMap::new(),
+            cues: std::collections::HashMap::new(),
+            listener_position: [0.0; 3],
             audio_cmd_cursor: EventCursor::default(),
             view_shown_cursor: EventCursor::default(),
             play_cue_cursor: EventCursor::default(),
             cues_matched: 0,
+            clips_queued: 0,
         }
     }
 
@@ -95,6 +116,49 @@ impl AudioSystem {
     // schedule tests observe, since playback itself needs an output device.
     pub fn cues_matched(&self) -> usize {
         self.cues_matched
+    }
+
+    // Distinct clips handed to the decode worker at init; the same kind of
+    // engine-independent observable.
+    pub fn clips_queued(&self) -> usize {
+        self.clips_queued
+    }
+
+    /// One-shot voices currently playing (or queued behind a clip decode),
+    /// bounded by the engine's voice cap. Zero without an output device.
+    pub fn playing_sounds(&self) -> usize {
+        self.engine.playing_sounds()
+    }
+
+    // Read a clip's payload from the blob and hand it to the decode worker,
+    // once per distinct clip. Returns false when the clip has no compiled
+    // payload or the read failed (logged by the caller's context message).
+    fn queue_clip(
+        &mut self,
+        ctx: &mut PipelineContext,
+        locators: &[Option<PayloadLocator>],
+        queued: &mut HashSet<AudioClipHandle>,
+        clip: AudioClipHandle,
+    ) -> bool {
+        if !queued.insert(clip) {
+            return true;
+        }
+        let Some(locator) = locators.get(clip.index()).cloned().flatten() else {
+            queued.remove(&clip);
+            return false;
+        };
+        match ctx.read_payload(&locator) {
+            Ok(bytes) => {
+                self.engine.queue_clip(clip.0 as u64, bytes.to_vec());
+                self.clips_queued += 1;
+                true
+            }
+            Err(e) => {
+                tracing::warn!("AudioSystem: clip payload read failed: {e}");
+                queued.remove(&clip);
+                false
+            }
+        }
     }
 }
 
@@ -114,93 +178,105 @@ impl System for AudioSystem {
             .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
             .unwrap_or_default();
 
-        // The persisted master volume (settings menu) scales every emitter via
-        // the main mix track, so it can be changed live (see `step`). `None`
-        // leaves output at unity. Clips play at their authored gain; the master
-        // is a separate output-stage multiplier.
+        // The persisted volumes (settings menu) scale the master mix and each
+        // bus, so they can be changed live (see `step`). `None` leaves a
+        // stage at unity. Clips play at their authored gain; these are
+        // separate output-stage multipliers.
         self.engine
-            .set_master_volume(self.master_volume.unwrap_or(1.0));
+            .set_volume(AudioTarget::Master, self.volumes.master.unwrap_or(1.0));
+        self.engine
+            .set_volume(AudioTarget::Music, self.volumes.music.unwrap_or(1.0));
+        self.engine
+            .set_volume(AudioTarget::Sfx, self.volumes.sfx.unwrap_or(1.0));
+        self.engine
+            .set_volume(AudioTarget::Voice, self.volumes.voice.unwrap_or(1.0));
 
-        for emitter in emitter_snaps {
-            let Some(id) = self.engine.add_emitter(emitter.position) else {
-                continue;
+        let mut queued: HashSet<AudioClipHandle> = HashSet::new();
+
+        for (index, emitter) in emitter_snaps.into_iter().enumerate() {
+            let params = EmitterParams {
+                min_distance: emitter.min_distance,
+                max_distance: emitter.max_distance,
+                rolloff: emitter.rolloff,
+                bus: emitter.bus.unwrap_or(AudioBus::Sfx),
             };
-            match emitter
-                .clip
-                .and_then(|clip| clip_locators.get(clip.index()).cloned().flatten())
-            {
-                Some(locator) => match ctx.read_payload(&locator) {
-                    Ok(bytes) => {
-                        self.engine
-                            .play_clip(id, bytes, emitter.looping, emitter.volume);
+            let id = self.engine.add_emitter(emitter.position, &params);
+            match emitter.clip {
+                Some(clip) => {
+                    if self.queue_clip(ctx, &clip_locators, &mut queued, clip)
+                        && let Some(id) = id
+                    {
+                        // Starts on the tick the decode lands.
+                        self.engine.play_emitter_clip(
+                            id,
+                            clip.0 as u64,
+                            emitter.looping,
+                            emitter.volume,
+                        );
                     }
-                    Err(e) => tracing::warn!("AudioSystem: clip payload read failed: {e}"),
-                },
+                }
                 None => tracing::warn!(
                     "AudioSystem: emitter has no clip with a compiled payload, silent"
                 ),
             }
+            // One occlusion probe per emitter; PhysicsSystem answers it each
+            // frame when the world simulates physics.
+            ctx.push(AudioOcclusionProbe {
+                emitter: index as u32,
+                from: [0.0; 3],
+                to: emitter.position,
+                blocked: None,
+            });
             self.emitters.push(EmitterBinding {
                 id,
                 follows: emitter.prop,
+                position: emitter.position,
+                occlusion: OcclusionSmoother::new(),
             });
         }
 
-        // Bind the screen-triggered cues and cache their clip payloads (keyed by
-        // handle), so firing a cue never touches the blob mid-frame.
+        // Bind the screen-triggered cues and queue their clips for decode, so
+        // firing a cue never touches the blob mid-frame.
         let cue_snaps: Vec<AudioCue> = ctx.query::<AudioCue>().cloned().collect();
         for cue in cue_snaps {
             let (Some(screen), Some(clip)) = (cue.screen, cue.clip) else {
                 tracing::warn!("AudioSystem: cue without a screen and a clip, ignored");
                 continue;
             };
-            if let std::collections::hash_map::Entry::Vacant(slot) = self.cue_clip_bytes.entry(clip)
-            {
-                match clip_locators.get(clip.index()).cloned().flatten() {
-                    Some(locator) => match ctx.read_payload(&locator) {
-                        Ok(bytes) => {
-                            slot.insert(bytes.to_vec());
-                        }
-                        Err(e) => tracing::warn!("AudioSystem: cue payload read failed: {e}"),
-                    },
-                    None => {
-                        tracing::warn!("AudioSystem: cue clip has no compiled payload, silent")
-                    }
-                }
+            if !self.queue_clip(ctx, &clip_locators, &mut queued, clip) {
+                tracing::warn!("AudioSystem: cue clip has no compiled payload, silent");
             }
             self.cues.entry(screen).or_default().push(CueBinding {
                 clip,
                 kind: cue.kind,
                 volume: cue.volume,
+                bus: cue.bus.unwrap_or(default_bus(cue.kind)),
+                priority: cue.priority,
             });
         }
 
         // Stories and behaviors play clips by direct PlayCue request rather
-        // than through screen-keyed cues, so cache every clip payload up
-        // front, keyed by handle.
+        // than through screen-keyed cues, so queue every clip up front.
         if ctx.query::<Story>().next().is_some()
             || ctx.query::<Behavior>().any(Behavior::plays_sound)
         {
-            let uncached: Vec<(AudioClipHandle, PayloadLocator)> = clip_locators
+            let clips: Vec<AudioClipHandle> = clip_locators
                 .iter()
                 .enumerate()
-                .filter_map(|(i, loc)| loc.clone().map(|l| (AudioClipHandle(i as u32), l)))
-                .filter(|(handle, _)| !self.cue_clip_bytes.contains_key(handle))
+                .filter_map(|(i, loc)| loc.as_ref().map(|_| AudioClipHandle(i as u32)))
                 .collect();
-            for (handle, locator) in uncached {
-                match ctx.read_payload(&locator) {
-                    Ok(bytes) => {
-                        self.cue_clip_bytes.insert(handle, bytes.to_vec());
-                    }
-                    Err(e) => tracing::warn!("AudioSystem: story clip payload read failed: {e}"),
+            for clip in clips {
+                if !self.queue_clip(ctx, &clip_locators, &mut queued, clip) {
+                    tracing::warn!("AudioSystem: story clip payload read failed");
                 }
             }
         }
 
         tracing::info!(
-            "AudioSystem: {} emitter(s), {} cue screen(s), engine {}",
+            "AudioSystem: {} emitter(s), {} cue screen(s), {} clip(s) decoding, engine {}",
             self.emitters.len(),
             self.cues.len(),
+            self.clips_queued,
             if self.engine.is_enabled() {
                 "enabled"
             } else {
@@ -210,11 +286,15 @@ impl System for AudioSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Apply any live master-volume change sent this tick by GraphicsSystem,
-        // which runs first. The last one this tick wins.
+        // Drain finished decodes (starting deferred plays) and release the
+        // voice slots of finished one-shots.
+        self.engine.tick();
+
+        // Apply any live volume change sent this tick by GraphicsSystem,
+        // which runs first. The last one per target this tick wins.
         if let Some(events) = ctx.events::<AudioCommand>() {
             for cmd in events.read(&mut self.audio_cmd_cursor) {
-                self.engine.set_master_volume(cmd.master_volume);
+                self.engine.set_volume(cmd.target, cmd.gain);
             }
         }
 
@@ -233,15 +313,14 @@ impl System for AudioSystem {
                 };
                 self.cues_matched += bindings.len();
                 for cue in bindings {
-                    let Some(bytes) = self.cue_clip_bytes.get(&cue.clip) else {
-                        continue;
-                    };
+                    let key = cue.clip.0 as u64;
                     match cue.kind {
                         CueKind::Music => {
-                            self.engine.play_music(cue.clip.0 as u64, bytes, cue.volume);
+                            self.engine.play_music(key, cue.volume, cue.bus);
                         }
                         CueKind::Sound => {
-                            self.engine.play_sound(bytes, cue.volume);
+                            self.engine
+                                .play_sound(key, cue.volume, cue.bus, cue.priority);
                         }
                     }
                 }
@@ -254,15 +333,14 @@ impl System for AudioSystem {
             let requests: Vec<PlayCue> = events.read(&mut self.play_cue_cursor).copied().collect();
             for cue in requests {
                 self.cues_matched += 1;
-                let Some(bytes) = self.cue_clip_bytes.get(&cue.clip) else {
-                    continue;
-                };
+                let key = cue.clip.0 as u64;
                 match cue.kind {
                     CueKind::Music => {
-                        self.engine.play_music(cue.clip.0 as u64, bytes, cue.volume);
+                        self.engine.play_music(key, cue.volume, AudioBus::Music);
                     }
                     CueKind::Sound => {
-                        self.engine.play_sound(bytes, cue.volume);
+                        self.engine
+                            .play_sound(key, cue.volume, AudioBus::Sfx, cue.priority);
                     }
                 }
             }
@@ -274,20 +352,42 @@ impl System for AudioSystem {
             .next()
             .map(|c| (c.position, c.yaw, c.pitch))
         {
+            self.listener_position = pos;
             self.engine.set_listener(pos, yaw, pitch);
         }
 
-        // Prop-bound emitters track their followed prop's current position, read
-        // from its Transform via the name index.
+        // Prop-bound emitters track their followed prop's current position,
+        // read from its Transform via the name index.
         if self.emitters.iter().any(|b| b.follows.is_some()) {
-            for binding in &self.emitters {
+            for binding in &mut self.emitters {
                 if let Some(prop_id) = binding.follows
                     && let Some(entity) =
                         ctx.resource::<EntityByName>().and_then(|n| n.get(prop_id))
                     && let Some(t) = ctx.get::<Transform>(entity)
                 {
-                    self.engine.set_emitter_position(binding.id, t.position);
+                    binding.position = t.position;
+                    if let Some(id) = binding.id {
+                        self.engine.set_emitter_position(id, t.position);
+                    }
                 }
+            }
+        }
+
+        // Feed each emitter's occlusion probe (physics answered last frame's
+        // ray) through its smoother and into the mixer, and refresh the ray
+        // endpoints for the next physics step. An unanswered probe (no
+        // physics in the world) reads as clear.
+        for probe in ctx.query_mut::<AudioOcclusionProbe>() {
+            let Some(binding) = self.emitters.get_mut(probe.emitter as usize) else {
+                continue;
+            };
+            probe.from = self.listener_position;
+            probe.to = binding.position;
+            let factor = binding
+                .occlusion
+                .step(probe.blocked.unwrap_or(false), SimTiming::TICK_DT);
+            if let Some(id) = binding.id {
+                self.engine.set_emitter_occlusion(id, factor);
             }
         }
 
@@ -298,16 +398,18 @@ impl System for AudioSystem {
 #[cfg(test)]
 mod tests {
     // These tests drive AudioSystem::init / step against a hand-built
-    // PipelineContext and an in-memory blob, so no audio device is opened. They
-    // assert on the engine-independent state the system tracks (its cue
-    // bindings, cached payloads, and match counter) rather than on playback,
-    // which needs a real device. Cue payloads are opaque to the caching path,
-    // so any bytes serve. The gate/schedule tests (which need the engine's
-    // `World`) live in the engine's `ecs/schedule.rs`.
+    // PipelineContext and an in-memory blob, so no audio playback happens
+    // (init may still probe for a device on a dev machine; every assertion
+    // here is engine-independent). They assert on the state the system
+    // tracks: cue bindings, queued-clip and match counters, emitter bindings,
+    // and the occlusion probes. The gate/schedule tests (which need the
+    // engine's `World`) live in the engine's `ecs/schedule.rs`.
     use super::{AudioSystem, EmitterBinding};
-    use crate::EmitterId;
+    use crate::occlusion::OcclusionSmoother;
+    use crate::{AudioVolumes, EmitterId};
     use concinnity_core::assets::{
-        AudioCommand, AudioCue, Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
+        AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Camera3D,
+        CueKind, PlayCue, ScreenShown, Story, Transform,
     };
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
@@ -401,15 +503,15 @@ mod tests {
         }
     }
 
-    // init binds a screen-triggered cue and caches its clip payload up front, so
-    // firing the cue later never touches the blob.
+    // init binds a screen-triggered cue with its routing defaults and hands
+    // its clip to the decode worker once, so firing the cue later never
+    // touches the blob.
     #[test]
-    fn init_binds_cue_and_caches_its_payload() {
+    fn init_binds_cue_and_queues_its_clip() {
         let screen = AssetId(90);
-        let bytes = b"cue-clip-bytes";
 
         let mut w = AudioWorld::new();
-        let clip = w.clip(bytes);
+        let clip = w.clip(b"cue-clip-bytes");
         w.push(AudioCue {
             screen: Some(screen),
             clip: Some(clip),
@@ -419,7 +521,7 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
 
         let bindings = sys.cues.get(&screen).expect("cue bound to its screen");
@@ -428,13 +530,41 @@ mod tests {
         assert_eq!(bindings[0].kind, CueKind::Music);
         assert!((bindings[0].volume - 0.7).abs() < 1.0e-6);
         assert_eq!(
-            sys.cue_clip_bytes.get(&clip).map(Vec::as_slice),
-            Some(&bytes[..])
+            bindings[0].bus,
+            AudioBus::Music,
+            "music cue defaults to the music bus"
         );
+        assert_eq!(bindings[0].priority, 0);
+        assert_eq!(sys.clips_queued(), 1);
+    }
+
+    // An authored bus and priority override the kind-derived defaults.
+    #[test]
+    fn init_respects_authored_cue_bus_and_priority() {
+        let screen = AssetId(90);
+
+        let mut w = AudioWorld::new();
+        let clip = w.clip(b"line-bytes");
+        w.push(AudioCue {
+            screen: Some(screen),
+            clip: Some(clip),
+            kind: CueKind::Sound,
+            bus: Some(AudioBus::Voice),
+            priority: 4,
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+
+        let bindings = sys.cues.get(&screen).expect("cue bound");
+        assert_eq!(bindings[0].bus, AudioBus::Voice);
+        assert_eq!(bindings[0].priority, 4);
     }
 
     // A cue missing its screen or its clip is ignored: nothing is bound and no
-    // payload is cached.
+    // clip is queued.
     #[test]
     fn init_ignores_cue_without_clip() {
         let mut w = AudioWorld::new();
@@ -445,32 +575,106 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
 
         assert!(sys.cues.is_empty());
-        assert!(sys.cue_clip_bytes.is_empty());
+        assert_eq!(sys.clips_queued(), 0);
     }
 
-    // A story caches every clip payload up front (it plays them by direct
-    // PlayCue request, not through screen-keyed cues).
+    // A story queues every clip up front (it plays them by direct PlayCue
+    // request, not through screen-keyed cues), each clip exactly once even
+    // when a cue already queued it.
     #[test]
-    fn init_caches_story_clip_payloads() {
-        let bytes = b"story-page-audio";
+    fn init_queues_story_clips_without_duplicates() {
+        let screen = AssetId(90);
 
         let mut w = AudioWorld::new();
-        let clip = w.clip(bytes);
+        let cue_clip = w.clip(b"cue-audio");
+        let page_clip = w.clip(b"story-page-audio");
+        w.push(AudioCue {
+            screen: Some(screen),
+            clip: Some(cue_clip),
+            ..Default::default()
+        });
         w.push(Story::default());
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
 
-        assert!(sys.cues.is_empty(), "no cues declared");
-        assert_eq!(
-            sys.cue_clip_bytes.get(&clip).map(Vec::as_slice),
-            Some(&bytes[..])
+        let _ = page_clip;
+        assert_eq!(sys.clips_queued(), 2, "both clips queued, neither twice");
+    }
+
+    // init binds every emitter (device or not), queues its clip, and
+    // publishes one occlusion probe per emitter aimed at it.
+    #[test]
+    fn init_binds_emitters_and_publishes_occlusion_probes() {
+        let mut w = AudioWorld::new();
+        let clip = w.clip(b"loop-bytes");
+        w.push(AudioEmitter {
+            clip: Some(clip),
+            position: [3.0, 1.0, -2.0],
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+
+        assert_eq!(sys.emitters.len(), 1);
+        assert_eq!(sys.emitters[0].position, [3.0, 1.0, -2.0]);
+        assert_eq!(sys.clips_queued(), 1);
+
+        let ctx = sealed.ctx();
+        let probes: Vec<&AudioOcclusionProbe> = ctx.query::<AudioOcclusionProbe>().collect();
+        assert_eq!(probes.len(), 1, "one probe per emitter");
+        assert_eq!(probes[0].emitter, 0);
+        assert_eq!(probes[0].to, [3.0, 1.0, -2.0]);
+        assert_eq!(probes[0].blocked, None, "unanswered until physics steps");
+    }
+
+    // A blocked probe answer muffles gradually: the smoothed factor rises
+    // over several steps instead of slamming to 1, and the system refreshes
+    // the probe's ray endpoints each step.
+    #[test]
+    fn step_smooths_probe_answers_and_refreshes_endpoints() {
+        let mut w = AudioWorld::new();
+        let clip = w.clip(b"loop-bytes");
+        w.push(AudioEmitter {
+            clip: Some(clip),
+            position: [5.0, 0.0, 0.0],
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+
+        // Physics answered: the segment is blocked.
+        {
+            let mut ctx = sealed.ctx();
+            for probe in ctx.query_mut::<AudioOcclusionProbe>() {
+                probe.blocked = Some(true);
+            }
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        let after_one = sys.emitters[0].occlusion.current();
+        assert!(
+            after_one > 0.0 && after_one < 0.5,
+            "one tick moves partway: {after_one}"
         );
+        for _ in 0..120 {
+            sys.step(&mut sealed.ctx());
+        }
+        assert!(sys.emitters[0].occlusion.current() > 0.9, "settles blocked");
+
+        // The ray endpoints track the listener and emitter for next frame.
+        let ctx = sealed.ctx();
+        let probe = ctx.query::<AudioOcclusionProbe>().next().unwrap();
+        assert_eq!(probe.from, [0.0; 3], "no camera: listener at origin");
+        assert_eq!(probe.to, [5.0, 0.0, 0.0]);
     }
 
     // A shown screen fires each of its cues once, across both playback kinds; the
@@ -498,7 +702,7 @@ mod tests {
         });
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
         assert_eq!(sys.cues.get(&screen).map(Vec::len), Some(2));
 
@@ -529,7 +733,7 @@ mod tests {
         w.push(Story::default());
         let mut sealed = w.seal();
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
 
         {
@@ -539,11 +743,13 @@ mod tests {
                 clip,
                 kind: CueKind::Music,
                 volume: 1.0,
+                priority: 0,
             });
             events.send(PlayCue {
                 clip,
                 kind: CueKind::Sound,
                 volume: 0.5,
+                priority: 2,
             });
         }
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
@@ -577,70 +783,100 @@ mod tests {
         };
         assert!(sealed.ctx().get::<Transform>(entity).is_some());
 
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         // A live emitter that follows the prop, seeded directly (a real
         // emitter needs a device, which the headless test has no access to).
         sys.emitters.push(EmitterBinding {
-            id: EmitterId(0),
+            id: Some(EmitterId(0)),
             follows: Some(prop),
+            position: [0.0; 3],
+            occlusion: OcclusionSmoother::new(),
         });
 
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
-    }
-
-    // A master-volume AudioCommand sent mid-tick is read AND applied by the
-    // audio system the same tick, so the new master takes effect without a
-    // restart (the settings-menu master-volume row). `master_volume: None` at
-    // construction means init leaves output at unity.
-    #[test]
-    fn audio_command_applies_master_volume_live() {
-        let mut sealed = AudioWorld::new().seal();
-        let mut sys = AudioSystem::new(None);
-        sys.init(&mut sealed.ctx());
-        // Init applied unity (no persisted master handed in).
-        assert!((sys.engine.last_master_volume - 1.0).abs() < 1.0e-6);
-
-        // GraphicsSystem would send this when the master-volume row is cycled;
-        // the audio system reads it this same tick.
-        {
-            let mut ctx = sealed.ctx();
-            ctx.events_mut::<AudioCommand>()
-                .send(AudioCommand { master_volume: 0.5 });
-        }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
-        assert!(
-            (sys.engine.last_master_volume - 0.5).abs() < 1.0e-6,
-            "master volume should be applied live this tick"
+        assert_eq!(
+            sys.emitters[0].position,
+            [3.0, 4.0, 5.0],
+            "binding tracked the prop"
         );
     }
 
-    // Several AudioCommands sent in one tick (e.g. a rapid double-cycle) are
-    // all read in order; the last one sent is applied last and wins.
+    // A volume AudioCommand sent mid-tick is read AND applied by the audio
+    // system the same tick, so the new gain takes effect without a restart
+    // (the settings-menu volume rows). Default volumes at construction mean
+    // init leaves every stage at unity.
+    #[test]
+    fn audio_command_applies_volumes_live_per_target() {
+        let mut sealed = AudioWorld::new().seal();
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+        // Init applied unity everywhere (no persisted volumes handed in).
+        assert_eq!(sys.engine.last_volume(AudioTarget::Master), 1.0);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Voice), 1.0);
+
+        // GraphicsSystem would send these when volume rows are cycled; the
+        // audio system reads them this same tick.
+        {
+            let mut ctx = sealed.ctx();
+            let events = ctx.events_mut::<AudioCommand>();
+            events.send(AudioCommand {
+                target: AudioTarget::Master,
+                gain: 0.5,
+            });
+            events.send(AudioCommand {
+                target: AudioTarget::Music,
+                gain: 0.25,
+            });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.5);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Music), 0.25);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Sfx), 1.0, "untouched");
+    }
+
+    // Several AudioCommands for one target sent in one tick (e.g. a rapid
+    // double-cycle) are all read in order; the last one sent wins.
     #[test]
     fn audio_command_last_write_wins_per_tick() {
         let mut sealed = AudioWorld::new().seal();
-        let mut sys = AudioSystem::new(None);
+        let mut sys = AudioSystem::new(AudioVolumes::default());
         sys.init(&mut sealed.ctx());
 
         {
             let mut ctx = sealed.ctx();
             let events = ctx.events_mut::<AudioCommand>();
-            events.send(AudioCommand { master_volume: 0.5 });
             events.send(AudioCommand {
-                master_volume: 0.25,
+                target: AudioTarget::Master,
+                gain: 0.5,
+            });
+            events.send(AudioCommand {
+                target: AudioTarget::Master,
+                gain: 0.25,
             });
         }
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
-        assert!((sys.engine.last_master_volume - 0.25).abs() < 1.0e-6);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.25);
     }
 
-    // A persisted master handed in at construction is applied to the mix at
-    // init (the settings-menu master-volume, resolved by the engine's gate).
+    // Persisted volumes handed in at construction are applied to every stage
+    // at init (the settings-menu volumes, resolved by the engine's gate).
     #[test]
-    fn init_applies_persisted_master_volume() {
+    fn init_applies_persisted_volumes() {
         let mut sealed = AudioWorld::new().seal();
-        let mut sys = AudioSystem::new(Some(0.5));
+        let mut sys = AudioSystem::new(AudioVolumes {
+            master: Some(0.5),
+            music: Some(0.75),
+            sfx: None,
+            voice: Some(0.25),
+        });
         sys.init(&mut sealed.ctx());
-        assert!((sys.engine.last_master_volume - 0.5).abs() < 1.0e-6);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.5);
+        assert_eq!(sys.engine.last_volume(AudioTarget::Music), 0.75);
+        assert_eq!(
+            sys.engine.last_volume(AudioTarget::Sfx),
+            1.0,
+            "unset = unity"
+        );
+        assert_eq!(sys.engine.last_volume(AudioTarget::Voice), 0.25);
     }
 }

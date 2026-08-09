@@ -574,26 +574,36 @@ impl SettingsState {
                     cfg.graphics.upscale_backend = Some(self.upscale_backend);
                     Some(opts[next])
                 }
-                "master_volume" => {
+                "master_volume" | "music_volume" | "sfx_volume" | "voice_volume" => {
                     // Live: cycle the gain, persist it, and hand it to
                     // AudioSystem (which owns the audio engine) as an
                     // AudioCommand it drains this same tick -- GraphicsSystem
                     // runs first, so the change applies this frame. A world
                     // with no audio simply has no AudioSystem to drain it;
                     // the persisted value then applies at the next audio init.
-                    let cur = settings::master_volume_index(
-                        cfg.audio
-                            .master_volume
-                            .unwrap_or(settings::DEFAULT_MASTER_VOLUME),
-                    );
+                    let (stored, target) = match cmd.setting.as_str() {
+                        "master_volume" => (
+                            &mut cfg.audio.master_volume,
+                            crate::assets::AudioTarget::Master,
+                        ),
+                        "music_volume" => (
+                            &mut cfg.audio.music_volume,
+                            crate::assets::AudioTarget::Music,
+                        ),
+                        "sfx_volume" => {
+                            (&mut cfg.audio.sfx_volume, crate::assets::AudioTarget::Sfx)
+                        }
+                        _ => (
+                            &mut cfg.audio.voice_volume,
+                            crate::assets::AudioTarget::Voice,
+                        ),
+                    };
+                    let cur = settings::volume_index(stored.unwrap_or(settings::DEFAULT_VOLUME));
                     let next = settings::cycle(cur, opts.len(), cmd.op);
-                    let gain = settings::master_volume_at(next);
-                    cfg.audio.master_volume = Some(gain);
-                    ctx.events_mut::<crate::assets::AudioCommand>().send(
-                        crate::assets::AudioCommand {
-                            master_volume: gain,
-                        },
-                    );
+                    let gain = settings::volume_at(next);
+                    *stored = Some(gain);
+                    ctx.events_mut::<crate::assets::AudioCommand>()
+                        .send(crate::assets::AudioCommand { target, gain });
                     Some(opts[next])
                 }
                 // Quality-feature toggles: flip the matching field on the

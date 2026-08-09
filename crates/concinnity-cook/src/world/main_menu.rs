@@ -147,7 +147,12 @@ const VIDEO_QUALITY_SLIDERS: [(&str, &str); 9] = [
     ("auto_exposure_max_ev", "Auto Exposure Max"),
     ("auto_exposure_speed", "Auto Exposure Speed"),
 ];
-const AUDIO_ROWS: [(&str, &str); 1] = [("master_volume", "Master Volume")];
+const AUDIO_ROWS: [(&str, &str); 4] = [
+    ("master_volume", "Master Volume"),
+    ("music_volume", "Music Volume"),
+    ("sfx_volume", "SFX Volume"),
+    ("voice_volume", "Voice Volume"),
+];
 // Controls-tab sliders, top to bottom: (setting key, display label). Mouse
 // sensitivity is a continuous slider (the client maps the 1..100 track to a
 // radians-per-pixel value) applied live by the camera controller.

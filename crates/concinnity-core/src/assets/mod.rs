@@ -16,6 +16,7 @@ mod anim_params;
 mod animation;
 mod application;
 mod audio_command;
+mod audio_occlusion_probe;
 mod camera3d;
 mod camera_probe;
 mod character_rig;
@@ -82,13 +83,14 @@ pub use anim_graph::{
 pub use anim_params::AnimParams;
 pub use animation::Animation;
 pub use application::Application;
-pub use audio_command::AudioCommand;
+pub use audio_command::{AudioCommand, AudioTarget};
+pub use audio_occlusion_probe::AudioOcclusionProbe;
 pub use camera_probe::CameraProbe;
 pub use camera3d::Camera3D;
 pub use character_rig::CharacterRig;
 pub use concinnity_asset::AaMode;
+pub use concinnity_asset::AudioBus;
 pub use concinnity_asset::AudioClip;
-pub use concinnity_asset::AudioEmitter;
 pub use concinnity_asset::BlockType;
 pub use concinnity_asset::CameraShot;
 pub use concinnity_asset::ColorLut;
@@ -141,6 +143,7 @@ pub use concinnity_asset::VoxelChunk;
 pub use concinnity_asset::VoxelWorld;
 pub use concinnity_asset::{AppLimits, ApplicationArgs};
 pub use concinnity_asset::{AudioCue, CueKind};
+pub use concinnity_asset::{AudioEmitter, Rolloff};
 pub use concinnity_asset::{
     Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl, VarDecl, Variables,
 };

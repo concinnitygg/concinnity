@@ -563,5 +563,6 @@ fn play(ctx: &mut PipelineContext, clip: Option<AudioClipHandle>, kind: CueKind)
         clip,
         kind,
         volume: 1.0,
+        priority: 0,
     });
 }

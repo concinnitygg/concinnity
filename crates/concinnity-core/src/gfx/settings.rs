@@ -83,8 +83,9 @@ pub const TEXTURE_QUALITY_OPTIONS: [&str; 4] = ["Low", "Medium", "High", "Ultra"
 pub const GRAPHICS_QUALITY_OPTIONS: [&str; 6] =
     ["Auto", "Low", "Medium", "High", "Ultra", "Custom"];
 
-// Master-volume options, in cycle order. The client maps each to a linear gain.
-pub const MASTER_VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
+// Volume options shared by the master and per-bus volume rows, in cycle
+// order. The client maps each to a linear gain.
+pub const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
 
 // Settings whose option list is enumerated from the hardware at runtime, so
 // this static registry cannot hold their labels. Each still renders as a
@@ -110,7 +111,7 @@ pub fn options(key: &str) -> Option<&'static [&'static str]> {
         "render_scale" => Some(&RENDER_SCALE_OPTIONS),
         "upscale_backend" => Some(&UPSCALE_BACKEND_OPTIONS),
         "fps_cap" => Some(&FPS_CAP_OPTIONS),
-        "master_volume" => Some(&MASTER_VOLUME_OPTIONS),
+        "master_volume" | "music_volume" | "sfx_volume" | "voice_volume" => Some(&VOLUME_OPTIONS),
         "aa_mode" => Some(&AA_MODE_OPTIONS),
         "ssgi_resolution" => Some(&SSGI_RESOLUTION_OPTIONS),
         "ssgi_rays" => Some(&SSGI_RAYS_OPTIONS),

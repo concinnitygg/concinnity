@@ -45,6 +45,7 @@ pub use resolver::{
 // under concinnity-core/src/assets. Each holds the plain struct(s), enum(s),
 // `Default`, and serde derives; the matching ECS behavior lives in core.
 mod application;
+mod audio_bus;
 mod audio_clip;
 mod audio_cue;
 mod audio_emitter;
@@ -117,9 +118,10 @@ mod water_surface;
 mod window;
 
 pub use application::{AppLimits, ApplicationArgs};
+pub use audio_bus::AudioBus;
 pub use audio_clip::AudioClip;
 pub use audio_cue::{AudioCue, CueKind};
-pub use audio_emitter::AudioEmitter;
+pub use audio_emitter::{AudioEmitter, Rolloff};
 pub use behavior::{Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl};
 pub use block_type::BlockType;
 pub use camera_shot::CameraShot;

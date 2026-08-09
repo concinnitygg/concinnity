@@ -702,12 +702,14 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
     assert_eq!(f.persisted().graphics.fps_cap, Some(f.state.fps_cap));
 }
 
-// Master volume is owned by AudioSystem, so the change travels as an
-// AudioCommand it drains this same tick.
+// Volumes are owned by AudioSystem, so each change travels as an
+// AudioCommand it drains this same tick, addressed to the row's target.
 #[test]
-fn master_volume_sends_an_audio_command() {
+fn volume_rows_send_targeted_audio_commands() {
+    use concinnity_core::assets::AudioTarget;
     let mut f = Fixture::new();
     f.next("master_volume");
+    f.next("voice_volume");
 
     let sent: Vec<AudioCommand> = f
         .world
@@ -715,11 +717,11 @@ fn master_volume_sends_an_audio_command() {
         .events::<AudioCommand>()
         .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(
-        f.persisted().audio.master_volume,
-        Some(sent[0].master_volume)
-    );
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].target, AudioTarget::Master);
+    assert_eq!(f.persisted().audio.master_volume, Some(sent[0].gain));
+    assert_eq!(sent[1].target, AudioTarget::Voice);
+    assert_eq!(f.persisted().audio.voice_volume, Some(sent[1].gain));
 }
 
 // The "Display performance stats" master grays its sub-rows when switched off

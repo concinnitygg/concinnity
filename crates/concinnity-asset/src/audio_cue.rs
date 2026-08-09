@@ -1,6 +1,6 @@
 // Audio-cue schema.
 
-use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
+use crate::{AssetId, AudioBus, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
 
 /// Plays audio when a [Screen](#screen) is shown.
 ///
@@ -38,6 +38,13 @@ pub struct AudioCue {
     pub kind: CueKind,
     /// Linear gain applied to the clip (1.0 leaves it unchanged).
     pub volume: f32,
+    /// Mix bus the cue routes through. Defaults to `music` for a music cue
+    /// and `sfx` for a sound cue; set `voice` for dialogue.
+    pub bus: Option<AudioBus>,
+    /// Voice priority for a `sound` cue. When all voice slots are busy, a new
+    /// sound silences the oldest lowest-priority voice; a sound outranked by
+    /// everything playing is skipped. Higher wins; the default is 0.
+    pub priority: i32,
 }
 
 /// How an [AudioCue](#audiocue) plays its clip.
@@ -60,6 +67,8 @@ impl Default for AudioCue {
             clip: None,
             kind: CueKind::Sound,
             volume: 1.0,
+            bus: None,
+            priority: 0,
         }
     }
 }
@@ -75,6 +84,8 @@ mod tests {
         assert_eq!(c.volume, 1.0);
         assert!(c.clip.is_none());
         assert!(c.screen.is_none());
+        assert!(c.bus.is_none());
+        assert_eq!(c.priority, 0);
         assert_eq!(CueKind::default(), CueKind::Sound);
     }
 
@@ -99,5 +110,20 @@ mod tests {
         assert_eq!(back.screen, Some(AssetId(4)));
         assert_eq!(back.kind, CueKind::Music);
         assert_eq!(back.asset_id, AssetId::default());
+    }
+
+    #[test]
+    fn a_voice_cue_parses_its_bus_and_priority() {
+        crate::test_support::install_resolvers();
+        let c: AudioCue =
+            serde_json::from_str(r#"{"clip":"line","screen":"menu","bus":"voice","priority":5}"#)
+                .unwrap();
+        assert_eq!(c.bus, Some(AudioBus::Voice));
+        assert_eq!(c.priority, 5);
+
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let back: AudioCue = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.bus, Some(AudioBus::Voice));
+        assert_eq!(back.priority, 5);
     }
 }
