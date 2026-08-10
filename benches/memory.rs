@@ -7,8 +7,10 @@
 //
 // Run with `cargo bench -p concinnity-bench --bench memory`.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+
 use concinnity_bench::Bench;
-use concinnity_memory::{Arena, InlineVec, MemTag, Pool, Realm};
+use concinnity_memory::{Arena, InlineVec, MemTag, Pool, Realm, TrackingAlloc};
 
 const FRAME_ITEMS: usize = 4_096;
 const POOL_CHURN: usize = 1_024;
@@ -71,6 +73,38 @@ fn main() {
         core::hint::black_box(&v);
         v[0]
     });
+
+    // What the counters cost the binaries that run on them: the same system
+    // allocator with and without the tracking wrapper in front of it. This is
+    // the per-allocation price of the memory instrumentation, and the delta
+    // between these two rows is the whole of it.
+    {
+        let tracked = TrackingAlloc::new(System);
+        let layout = Layout::from_size_align(64, 16).expect("valid layout");
+
+        // black_box on the pointer is load-bearing: without it the untracked
+        // pair has no observable effect and LLVM deletes it outright, while
+        // the tracked pair survives on its counter writes -- which would
+        // compare real work against nothing.
+        bench.run("memory/alloc_tracked/64B", 1, || {
+            // SAFETY: the layout has a non-zero size, and the block is freed
+            // through the same allocator and layout it was allocated with.
+            unsafe {
+                let ptr = core::hint::black_box(tracked.alloc(layout));
+                assert!(!ptr.is_null(), "system allocator returned null");
+                tracked.dealloc(ptr, layout);
+            }
+        });
+
+        bench.run("memory/alloc_untracked/64B", 1, || {
+            // SAFETY: as above, against the system allocator directly.
+            unsafe {
+                let ptr = core::hint::black_box(System.alloc(layout));
+                assert!(!ptr.is_null(), "system allocator returned null");
+                System.dealloc(ptr, layout);
+            }
+        });
+    }
 
     {
         let ledger = concinnity_memory::ledger();

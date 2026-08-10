@@ -145,6 +145,12 @@ pub(crate) struct StreamingState {
     pub(crate) pressure_stage: pressure::StreamPressureStage,
     pub(crate) pressure_factor: f64,
     pub(crate) last_sampled_rss: Option<u64>,
+    // Long-session memory drift, folded from the same throttled sample. Purely
+    // reported: it names what grew, and never moves the valve.
+    pub(crate) drift: crate::app::mem_drift::DriftTracker,
+    // Last verdict logged, so a steady session states its reading once rather
+    // than twice a second.
+    pub(crate) last_drift_verdict: Option<crate::app::mem_drift::DriftVerdict>,
     // Gates the periodic per-pool counter line so a settled pool logs its
     // counts once rather than every sample.
     pub(crate) heartbeats: stats_log::PoolHeartbeats,
@@ -192,6 +198,9 @@ impl System for StreamingSystem {
                 let rss = crate::app::sysmem::process_resident_bytes();
                 if let Some(pressure) = state.sample_pressure(rss, budget) {
                     ctx.insert_resource(pressure);
+                }
+                if let Some(drift) = state.sample_drift(rss, budget) {
+                    ctx.insert_resource(drift);
                 }
             }
         }
@@ -632,6 +641,38 @@ impl StreamingState {
         })
     }
 
+    // Fold the same RSS sample into the long-session drift tracker, stating the
+    // reading whenever it changes. Reports only: every valve stage is decided
+    // by `sample_pressure`, and nothing here moves a byte budget.
+    fn sample_drift(
+        &mut self,
+        rss: Option<u64>,
+        budget: u64,
+    ) -> Option<crate::app::mem_drift::MemoryDrift> {
+        use crate::app::mem_drift::DriftVerdict;
+        let rss = rss?;
+        let heap_live = concinnity_memory::stats()?.live_bytes;
+        let drift = self.drift.sample(rss, heap_live, budget)?;
+
+        if self.last_drift_verdict != Some(drift.verdict) {
+            self.last_drift_verdict = Some(drift.verdict);
+            let heap_mib = drift.heap_growth_bytes / (1024 * 1024);
+            let outside_mib = drift.outside_heap_growth_bytes / (1024 * 1024);
+            let minutes = drift.window_secs / 60;
+            let reading = drift.verdict.label();
+            if drift.verdict == DriftVerdict::Settled {
+                tracing::info!(
+                    "memory drift: {reading} -- heap {heap_mib:+} MiB, outside heap {outside_mib:+} MiB over {minutes} min"
+                );
+            } else {
+                tracing::warn!(
+                    "memory drift: {reading} -- heap {heap_mib:+} MiB, outside heap {outside_mib:+} MiB over {minutes} min"
+                );
+            }
+        }
+        Some(drift)
+    }
+
     // Scale each pool's byte budget to `factor` of its captured baseline. Pools
     // with no baseline (count-only) are left alone; there is nothing to reduce.
     fn apply_byte_factor(&mut self, factor: f64) {
@@ -850,6 +891,8 @@ mod tests {
             pressure_stage: StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,
+            drift: Default::default(),
+            last_drift_verdict: None,
             heartbeats: Default::default(),
         }
     }
@@ -981,6 +1024,41 @@ mod tests {
         assert!(p.under_pressure);
         assert_eq!(p.rss_bytes, 920);
         assert_eq!(p.budget_bytes, 1000);
+    }
+
+    // The drift tracker rides the same sample as the valve: it reports nothing
+    // until the session settles, and the two terms it then reports always
+    // account for exactly the RSS movement between them.
+    #[test]
+    fn sample_drift_reports_once_settled_and_splits_the_whole_rss_movement() {
+        const RSS: u64 = 2 * 1024 * 1024 * 1024;
+        const BUDGET: u64 = 4 * RSS;
+        let mut s = empty_state();
+
+        assert_eq!(s.sample_drift(None, BUDGET), None, "no RSS, no drift");
+        // Steady samples until the tracker settles and starts reporting; the
+        // run it needs is the drift module's business, not this system's.
+        let d = (0..16)
+            .find_map(|_| s.sample_drift(Some(RSS), BUDGET))
+            .expect("a steady run settles the baseline");
+        assert_eq!(d.verdict, crate::app::mem_drift::DriftVerdict::Settled);
+        // RSS did not move, so whatever the heap did, the outside term is its
+        // exact complement.
+        assert_eq!(d.heap_growth_bytes + d.outside_heap_growth_bytes, 0);
+    }
+
+    // Drift is reported, never acted on: the valve's stage and byte-budget
+    // factor are decided entirely by `sample_pressure`.
+    #[test]
+    fn sample_drift_never_moves_the_valve() {
+        const RSS: u64 = 2 * 1024 * 1024 * 1024;
+        let mut s = empty_state();
+        for _ in 0..4 {
+            s.sample_drift(Some(RSS), 4 * RSS);
+        }
+        assert_eq!(s.pressure_stage, StreamPressureStage::None);
+        assert_eq!(s.pressure_factor, 1.0);
+        assert_eq!(s.last_sampled_rss, None);
     }
 
     #[test]

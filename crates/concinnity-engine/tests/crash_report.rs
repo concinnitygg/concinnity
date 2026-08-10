@@ -11,6 +11,12 @@ fn panicking_probe() {
     panic!("crash report end to end probe");
 }
 
+// The exact byte count from a `key: <bytes> (<scale>)` header line.
+fn header_bytes(text: &str, key: &str) -> Option<u64> {
+    let rest = text.lines().find_map(|l| l.strip_prefix(key))?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
 #[test]
 fn crash_report_lands_for_a_panicking_process() {
     let root = tempfile::tempdir().unwrap();
@@ -45,6 +51,19 @@ fn crash_report_lands_for_a_panicking_process() {
     assert!(text.contains("crash_report.rs"));
     assert!(text.contains("backtrace:"));
     assert!(text.trim_end().ends_with("(end of report)"));
+
+    // The memory figures come from a real crashing process, so they must be
+    // plausible rather than merely present: the tracked heap is a part of the
+    // resident set, never the whole of it or more.
+    let heap_live = header_bytes(&text, "heap-live: ").expect("the engine installs the allocator");
+    let rss = header_bytes(&text, "rss: ").expect("RSS is queryable on a supported platform");
+    assert!(heap_live > 0, "a running process holds a tracked heap");
+    assert!(
+        heap_live < rss,
+        "tracked heap {heap_live} must fit inside RSS {rss}"
+    );
+    assert!(text.contains("heap-peak: "));
+    assert!(text.contains("heap-churn: "));
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {

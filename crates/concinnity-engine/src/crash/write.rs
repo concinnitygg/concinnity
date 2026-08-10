@@ -125,6 +125,7 @@ mod tests {
             backtrace: None,
             notes: Vec::new(),
             recent_logs: Vec::new(),
+            memory: Default::default(),
         }
     }
 

@@ -3103,6 +3103,8 @@ impl GraphicsSystem {
             pressure_stage: crate::gfx::streaming_system::pressure::StreamPressureStage::None,
             pressure_factor: 1.0,
             last_sampled_rss: None,
+            drift: Default::default(),
+            last_drift_verdict: None,
             heartbeats: Default::default(),
         });
 

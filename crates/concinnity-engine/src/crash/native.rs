@@ -7,7 +7,7 @@
 // text report with nonblocking snapshots. The fault is reported as unhandled
 // so the OS default crash behavior still runs.
 
-use super::report::{CrashReport, ReportKind};
+use super::report::{CrashReport, ReportKind, UtcTime, file_stem_at};
 use super::write;
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 use std::sync::OnceLock;
@@ -35,10 +35,18 @@ pub(crate) fn install() {
 }
 
 fn report_fault(ctx: &CrashContext) {
+    // The dump lands before the report is gathered. Naming it still costs a
+    // path and a few directory probes, but everything else the report needs --
+    // formatting the message, snapshotting the notes and the log ring, querying
+    // process memory -- runs after the artifact with the compromised-context
+    // writer is already on disk.
     let dir = concinnity_store::paths::crashes_dir();
-    let report = CrashReport::gather_nonblocking(ReportKind::NativeFault, fault_message(ctx));
-    let stem = write::unique_stem(&dir, &report.file_stem());
+    let time = UtcTime::now();
+    let stem = write::unique_stem(&dir, &file_stem_at(time));
     super::minidump::write_fault_dump(&dir, &stem, ctx);
+
+    let mut report = CrashReport::gather_nonblocking(ReportKind::NativeFault, fault_message(ctx));
+    report.time = time;
     let _ = write::write_report_named(&dir, &stem, &report);
     write::prune(&dir, write::RETAINED_REPORTS);
 }

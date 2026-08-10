@@ -33,6 +33,7 @@ const CLOSE_BG: AssetId = AssetId(BASE + 2);
 const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
 const CHURN_LABEL: AssetId = AssetId(BASE + 4);
 const HOT_CLASS_LABEL: AssetId = AssetId(BASE + 5);
+const DRIFT_LABEL: AssetId = AssetId(BASE + 6);
 
 // Per-row families, one slot per row.
 fn track(i: usize) -> AssetId {
@@ -109,7 +110,9 @@ const MIN_FILL_W: f32 = 2.0;
 // line always, plus a line per reported tag and the size-class line when the
 // allocator measured one.
 pub(crate) fn size(snap: &HealthSnapshot) -> [f32; 2] {
-    let lines = health::tag_rows(snap).len() + usize::from(health::hot_class_text(snap).is_some());
+    let lines = health::tag_rows(snap).len()
+        + usize::from(health::drift_text(snap).is_some())
+        + usize::from(health::hot_class_text(snap).is_some());
     [
         PANEL_W,
         widget::TITLE_H + ROWS as f32 * ROW_H + CHURN_H + lines as f32 * TAG_ROW_H + BOTTOM_PAD,
@@ -172,6 +175,21 @@ pub(crate) fn apply(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse
         None => widget::set_label_visible(world, CHURN_LABEL, false),
     }
     y += CHURN_H;
+
+    match health::drift_text(snap) {
+        Some(text) => {
+            place_text(
+                world,
+                DRIFT_LABEL,
+                [o[0] + PAD_X, y + TAG_ROW_H * 0.5],
+                TextAlign::Left,
+                theme::LABEL_DIM,
+                &text,
+            );
+            y += TAG_ROW_H;
+        }
+        None => widget::set_label_visible(world, DRIFT_LABEL, false),
+    }
 
     match health::hot_class_text(snap) {
         Some(text) => {
@@ -334,7 +352,13 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 }
 
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, CHURN_LABEL, HOT_CLASS_LABEL];
+    let mut ids = vec![
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        CHURN_LABEL,
+        HOT_CLASS_LABEL,
+        DRIFT_LABEL,
+    ];
     for i in 0..ROWS {
         ids.push(caption_label(i));
         ids.push(value_label(i));
@@ -588,6 +612,50 @@ mod tests {
             assert!(y + TAG_ROW_H <= panel[1] + panel[3]);
             last_y = y;
         }
+    }
+
+    // The drift line runs the full panel width with nothing to wrap onto, so
+    // its widest plausible rendering has to fit: both terms in three-digit
+    // gigabytes over a window measured in days. Anything wider than the machine
+    // has RAM for is not a case worth reserving room for.
+    #[test]
+    fn the_widest_drift_line_fits_the_panel() {
+        let snap = HealthSnapshot {
+            drift: Some(crate::app::mem_drift::MemoryDrift {
+                heap_growth_bytes: -999 * GB as i64,
+                outside_heap_growth_bytes: 999 * GB as i64,
+                window_secs: 999 * 24 * 3600,
+                verdict: crate::app::mem_drift::DriftVerdict::Both,
+            }),
+            ..snapshot()
+        };
+        let text = health::drift_text(&snap).expect("the snapshot carries drift");
+        let width = text.chars().count() as f32 * CHAR_W;
+        assert!(
+            width <= PANEL_W - 2.0 * PAD_X,
+            "drift line {width}px wide runs past the panel: {text:?}"
+        );
+    }
+
+    // The line only takes a slot when there is a baseline to report, so a
+    // session that has not settled shows no empty row.
+    #[test]
+    fn the_drift_line_takes_a_row_only_once_it_reports() {
+        let without = size(&snapshot());
+        let mut snap = snapshot();
+        snap.drift = Some(crate::app::mem_drift::MemoryDrift {
+            heap_growth_bytes: 0,
+            outside_heap_growth_bytes: 0,
+            window_secs: 60,
+            verdict: crate::app::mem_drift::DriftVerdict::Settled,
+        });
+        assert_eq!(size(&snap)[1], without[1] + TAG_ROW_H);
+
+        let mut world = injected_world();
+        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        assert!(label(&world, DRIFT_LABEL).visible);
+        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        assert!(!label(&world, DRIFT_LABEL).visible);
     }
 
     // A world nothing reports into draws no breakdown at all, and the panel is

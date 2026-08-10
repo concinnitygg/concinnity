@@ -9,6 +9,7 @@
 // recorded.
 
 mod hook;
+mod memory;
 mod report;
 mod ring;
 mod write;

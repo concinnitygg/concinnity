@@ -11,6 +11,8 @@ pub mod budget;
 // Fixed-timestep accumulator advanced before each world step.
 pub(crate) mod clock;
 pub mod dev_flags;
+// Long-session drift of process memory against the tracked heap.
+pub mod mem_drift;
 pub(crate) mod pacing;
 pub mod run;
 pub mod runloop;

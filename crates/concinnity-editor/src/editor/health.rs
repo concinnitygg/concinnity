@@ -32,6 +32,7 @@
 // sums every resident item. The per-frame system timings are the one thing
 // accumulated every tick, because a rate needs the whole window.
 
+use crate::app::mem_drift::MemoryDrift;
 use crate::app::syscpu::CpuSampler;
 use crate::ecs::World;
 use concinnity_memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
@@ -157,6 +158,9 @@ pub(crate) struct HealthSnapshot {
     // The allocation size class holding the most live blocks. `None` unless the
     // binary was built with the allocator's `detail` feature.
     pub hot_class: Option<SizeClass>,
+    // Where the process's memory has moved since the session settled. `None`
+    // until a baseline exists, which is most of a short editor session.
+    pub drift: Option<MemoryDrift>,
 }
 
 // The most breakdown rows there can be: every tag, in both realms.
@@ -243,6 +247,50 @@ pub(crate) fn churn_text(snap: &HealthSnapshot) -> Option<String> {
     ))
 }
 
+// The drift line: how far the process's memory has moved since the session
+// settled, split into the part the tracked heap explains and the part it does
+// not. `None` until a baseline exists.
+//
+// The split is the whole line. The meters above show where memory stands, and
+// standing still says nothing about which way it is heading; a heap that grew
+// while the rest held steady is ours to fix, and a resident set that grew while
+// the heap held steady is not. Whole units, because a drift figure is a
+// magnitude and a tenth of a megabyte of it is noise.
+pub(crate) fn drift_text(snap: &HealthSnapshot) -> Option<String> {
+    let drift = snap.drift?;
+    Some(format!(
+        "{}  heap {}  outside {}",
+        window_text(drift.window_secs),
+        whole_signed_bytes(drift.heap_growth_bytes),
+        whole_signed_bytes(drift.outside_heap_growth_bytes),
+    ))
+}
+
+// Signed bytes at whole-unit precision, e.g. "+412 MB" / "-3 GB".
+fn whole_signed_bytes(value: i64) -> String {
+    let (div, suffix) = byte_scale(value.unsigned_abs() as f64);
+    let sign = if value < 0 { '-' } else { '+' };
+    format!("{sign}{:.0} {suffix}", value.unsigned_abs() as f64 / div)
+}
+
+// The drift window at the coarsest useful precision: minutes, then hours, then
+// days. A drift figure without its window is unreadable -- 400 MB over three
+// minutes and over three hours are different problems -- and a window to the
+// second is more than the figure beside it deserves. Days matter because a
+// long-running server is exactly what this line is for, and a session measured
+// in weeks reads as "41d" rather than "1000h".
+fn window_text(secs: u64) -> String {
+    let minutes = secs / 60;
+    let hours = minutes / 60;
+    if hours >= 48 {
+        format!("{}d", hours / 24)
+    } else if minutes >= 60 {
+        format!("{hours}h")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 // Where the heap's live blocks concentrate, under the meters' churn line.
 // `None` in a build without the allocator's `detail` feature, which is every
 // shipped one.
@@ -320,6 +368,7 @@ impl HealthState {
             total_cores: world.thread_budget().map(|b| b.total_cores),
             tags: concinnity_memory::ledger().snapshot(),
             hot_class: concinnity_memory::size_classes().and_then(|c| c.busiest()),
+            drift: world.memory_drift(),
         };
     }
 }
@@ -565,6 +614,63 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(tag_rows(&snap).len(), MAX_TAG_ROWS);
+    }
+
+    // The reading the line exists for: the heap held steady while the resident
+    // set climbed, so the growth is not a leak and hunting one would waste the
+    // session.
+    #[test]
+    fn the_drift_line_separates_heap_growth_from_growth_outside_it() {
+        let snap = HealthSnapshot {
+            drift: Some(MemoryDrift {
+                heap_growth_bytes: 2 * 1024 * 1024,
+                outside_heap_growth_bytes: 412 * 1024 * 1024,
+                window_secs: 2 * 3600,
+                verdict: crate::app::mem_drift::DriftVerdict::OutsideHeap,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            drift_text(&snap).expect("a baseline was captured"),
+            "2h  heap +2 MB  outside +412 MB"
+        );
+    }
+
+    // Memory handed back reads as negative rather than as growth, which is the
+    // difference between a session recovering and one in trouble.
+    #[test]
+    fn the_drift_line_signs_a_shrinking_term() {
+        let snap = HealthSnapshot {
+            drift: Some(MemoryDrift {
+                heap_growth_bytes: -(3 * 1024 * 1024 * 1024),
+                outside_heap_growth_bytes: 0,
+                window_secs: 45 * 60,
+                verdict: crate::app::mem_drift::DriftVerdict::Settled,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            drift_text(&snap).expect("a baseline was captured"),
+            "45m  heap -3 GB  outside +0 B"
+        );
+    }
+
+    // A session measured in weeks is the one this line is built for, so its
+    // window has to stay readable rather than running to four digits of hours.
+    #[test]
+    fn a_multi_day_window_reads_in_days() {
+        assert_eq!(window_text(0), "0m");
+        assert_eq!(window_text(59 * 60), "59m");
+        assert_eq!(window_text(3 * 3600), "3h");
+        assert_eq!(window_text(47 * 3600), "47h");
+        assert_eq!(window_text(41 * 24 * 3600), "41d");
+    }
+
+    // No baseline yet is no line, rather than a row of zeroes claiming a
+    // settled session that was never measured.
+    #[test]
+    fn the_drift_line_is_absent_before_a_baseline_exists() {
+        assert_eq!(drift_text(&HealthSnapshot::default()), None);
     }
 
     // The size-class line is a development instrument: absent, not zeroed, in a

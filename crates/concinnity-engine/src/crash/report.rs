@@ -4,6 +4,7 @@
 // section-based: the writer emits sections in order of forensic value and
 // flushes between them, so a partial report still leads with what matters.
 
+use super::memory::MemorySnapshot;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Caps keep the hook's allocations bounded no matter what panicked.
@@ -39,6 +40,7 @@ pub(crate) struct CrashReport {
     pub backtrace: Option<String>,
     pub notes: Vec<(String, String)>,
     pub recent_logs: Vec<String>,
+    pub memory: MemorySnapshot,
 }
 
 impl CrashReport {
@@ -54,6 +56,7 @@ impl CrashReport {
             backtrace: None,
             notes: super::notes_snapshot(),
             recent_logs: super::ring::global().snapshot(),
+            memory: MemorySnapshot::capture(),
         }
     }
 
@@ -70,13 +73,14 @@ impl CrashReport {
             backtrace: None,
             notes: super::try_notes_snapshot(),
             recent_logs: super::ring::global().try_snapshot(),
+            memory: MemorySnapshot::capture(),
         }
     }
 
     // Preferred file stem for this report: sortable timestamp plus pid, so
     // retention pruning can order reports by name alone.
     pub(crate) fn file_stem(&self) -> String {
-        format!("crash-{}-{}", self.time.stem(), std::process::id())
+        file_stem_at(self.time)
     }
 
     // The report text as ordered sections. The writer flushes after each one.
@@ -104,6 +108,7 @@ impl CrashReport {
             std::env::consts::OS,
             std::env::consts::ARCH
         ));
+        self.memory.write_into(&mut out);
         for (key, value) in &self.notes {
             out.push_str(&format!("{key}: {value}\n"));
         }
@@ -146,6 +151,12 @@ impl CrashReport {
         out.push_str("(end of report)\n");
         out
     }
+}
+
+// The file stem a report written at `time` claims. Free-standing so the fault
+// handler can name (and write) the minidump before it builds the report.
+pub(crate) fn file_stem_at(time: UtcTime) -> String {
+    format!("crash-{}-{}", time.stem(), std::process::id())
 }
 
 // Truncate to `cap` bytes on a char boundary.
@@ -252,6 +263,15 @@ mod tests {
             backtrace: Some("0: frame_a\n1: frame_b".to_string()),
             notes: vec![("backend".to_string(), "metal".to_string())],
             recent_logs: vec!["+1.000s INFO app: started".to_string()],
+            memory: MemorySnapshot {
+                heap: Some(concinnity_memory::MemStats {
+                    live_bytes: 400 * 1024 * 1024,
+                    peak_bytes: 512 * 1024 * 1024,
+                    alloc_count: 900,
+                    free_count: 400,
+                }),
+                rss_bytes: Some(6 * 1024 * 1024 * 1024),
+            },
         }
     }
 
@@ -262,6 +282,8 @@ mod tests {
             "kind: panic",
             "time: 2026-08-08 12:34:56 UTC",
             "schema: 0x",
+            "heap-live: 419430400 (400.0 MiB)",
+            "rss: 6442450944 (6.0 GiB)",
             "backend: metal",
             "message: index out of bounds",
             "thread: main",

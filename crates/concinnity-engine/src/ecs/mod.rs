@@ -447,6 +447,15 @@ impl World {
             .copied()
     }
 
+    // Long-session memory drift, folded from the same throttled sample as the
+    // back-off valve. `None` until the session settles enough for a baseline,
+    // and for the same reasons `streaming_pressure` is absent.
+    pub fn memory_drift(&self) -> Option<crate::app::mem_drift::MemoryDrift> {
+        self.resources
+            .get::<crate::app::mem_drift::MemoryDrift>()
+            .copied()
+    }
+
     // The detected GPU's capability + memory profile, published by graphics
     // init. `None` before init runs, and `GpuProfile::UNKNOWN` when the backend
     // could not classify the device.
