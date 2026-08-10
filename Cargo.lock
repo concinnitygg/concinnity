@@ -616,12 +616,14 @@ dependencies = [
 name = "concinnity-bench"
 version = "0.18.3"
 dependencies = [
+ "concinnity-asset",
  "concinnity-blob",
  "concinnity-cook",
  "concinnity-cpu",
  "concinnity-eas",
  "concinnity-memory",
  "concinnity-physics",
+ "concinnity-render",
 ]
 
 [[package]]

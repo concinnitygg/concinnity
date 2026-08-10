@@ -40,6 +40,10 @@ cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
   import-baked (61-key) and sparse (2-key) track densities, weighted pose
   blending, skinning-matrix resolution, the composed two-clip per-character
   cost, and the two-bone IK solve.
+- `render`: the GPU-free render-prep layer. BVH build and frustum query
+  over a 10k-object scene, light packing for the clustered forward pass,
+  the streaming planner's per-frame re-rank under sustained pool pressure
+  (churn asserted), and draw-slot recycling. No backend is involved.
 - `physics`: the physics wrapper and rapier. Stepping benches rebuild an
   identical stacked world and step it a fixed count per iteration, so the
   measured work is bit-identical run to run (asserted, so a rapier upgrade
