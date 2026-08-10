@@ -240,16 +240,13 @@ impl JointTrack {
                 if t >= last.time {
                     return last.pose.to_matrix();
                 }
-                // Linear scan: joint tracks have a handful of keys.
-                for w in keys.windows(2) {
-                    let (a, b) = (w[0], w[1]);
-                    if t >= a.time && t <= b.time {
-                        let span = (b.time - a.time).max(1e-6);
-                        let f = (t - a.time) / span;
-                        return a.pose.blend_matrix(&b.pose, f);
-                    }
-                }
-                last.pose.to_matrix()
+                // Keys are time-ordered; imported clips are baked at the
+                // sample rate, so tracks can carry dozens of keys.
+                let i = keys.partition_point(|k| k.time < t);
+                let (a, b) = (keys[i - 1], keys[i]);
+                let span = (b.time - a.time).max(1e-6);
+                let f = (t - a.time) / span;
+                a.pose.blend_matrix(&b.pose, f)
             }
         }
     }
@@ -484,6 +481,31 @@ mod tests {
         // Recover yaw: for a pure yaw the first column is (cos, 0, -sin).
         let yaw = atan2(-locals[1][0][2], locals[1][0][0]).to_degrees();
         assert!(approx(yaw, 45.0), "yaw was {}", yaw);
+    }
+
+    #[test]
+    fn many_key_track_samples_the_containing_segment() {
+        // A densely baked track (like importer output): keys every 0.1s with
+        // translation.x following the key time, so any sample time recovers
+        // itself. Covers end clamps, exact key hits, and mid-segment lerps.
+        let keys: Vec<Keyframe> = (0..=20)
+            .map(|i| {
+                let time = i as f32 * 0.1;
+                Keyframe {
+                    time,
+                    pose: JointPose {
+                        translation: [time, 0.0, 0.0],
+                        ..JointPose::default()
+                    },
+                }
+            })
+            .collect();
+        let track = JointTrack { joint: 0, keys };
+        let x_at = |t: f32| track.sample(t)[3][0];
+        assert!(approx(x_at(-0.5), 0.0), "clamps at the first key");
+        assert!(approx(x_at(5.0), 2.0), "clamps at the last key");
+        assert!(approx(x_at(0.7), 0.7), "exact key hit");
+        assert!(approx(x_at(1.234), 1.234), "lerps inside a segment");
     }
 
     #[test]
