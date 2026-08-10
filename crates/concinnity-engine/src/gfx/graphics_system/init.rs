@@ -12,7 +12,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::{
     draw_list::{self, MaterialEntry},
-    lights, skinning, text,
+    lights, skinning, text, transform_propagation,
 };
 use std::time::Instant;
 
@@ -2256,7 +2256,7 @@ impl GraphicsSystem {
         // renderer fields from MeshRenderer/ModelRenderer, world matrices from
         // Transform/Parent. `items` / `world_mats` are column-aligned with
         // `prop_entities`.
-        let resolved = draw_list::resolve_world_matrices(ctx);
+        let resolved = transform_propagation::resolve_world_matrices(ctx);
         let entity_name: std::collections::HashMap<crate::ecs::Entity, AssetId> = ctx
             .resource::<crate::ecs::decompose::EntityByName>()
             .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())

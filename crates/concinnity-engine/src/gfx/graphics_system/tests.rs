@@ -1566,7 +1566,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     // Park the child under a real parent first, so a wrongful detach shows.
     {
         let mut ctx = world.ctx();
-        crate::gfx::draw_list::reparent(&mut ctx, child, Some(parent));
+        crate::gfx::transform_propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: Some(GHOST.into()),
@@ -1597,7 +1597,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
 
     {
         let mut ctx = world.ctx();
-        crate::gfx::draw_list::reparent(&mut ctx, child, Some(parent));
+        crate::gfx::transform_propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: None,

@@ -7,7 +7,7 @@ use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
 use crate::gfx::backend::FrameParams;
-use crate::gfx::{draw_list, scene_flow, setting_action, settings};
+use crate::gfx::{scene_flow, setting_action, settings, transform_propagation};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
 use crate::gfx::settings_system::rows::{
@@ -159,7 +159,7 @@ impl GraphicsSystem {
                 // and skips the resolve entirely when no Transform / Parent
                 // changed; the push cache drops slots whose matrix is unchanged,
                 // so a static scene sends nothing.
-                draw_list::propagate_transforms_cached(ctx, &mut self.transform_cache);
+                transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
                 self.model_push.begin();
                 for (_entity, global, handle) in
                     ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()

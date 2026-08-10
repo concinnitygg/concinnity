@@ -22,10 +22,10 @@ pub mod schedule;
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    Arena, AudioClipHandle, BlobAssetDef, Component, ComponentAsset, ComponentSlot,
+    Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset, ComponentSlot,
     ComponentStorage, Entity, EventCursor, EventStore, Events, FontHandle, FrameContext,
-    MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext, Resources,
-    SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
+    MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext,
+    Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;

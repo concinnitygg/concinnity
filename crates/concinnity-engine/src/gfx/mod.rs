@@ -55,6 +55,9 @@ pub mod animation;
 // `World::start` from a `Camera3D`'s controller settings.
 pub(crate) mod camera_controller;
 pub mod draw_list;
+// Transform -> GlobalTransform propagation down the Parent hierarchy, and the
+// runtime reparent that recomposes it. Driven per frame by GraphicsSystem.
+pub(crate) mod transform_propagation;
 // The renderer driver. An internal system (not a declarable asset), constructed
 // by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;

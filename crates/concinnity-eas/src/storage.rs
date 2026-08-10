@@ -199,6 +199,27 @@ macro_rules! define_component_storage {
                 C::slot(self).changed_tick()
             }
 
+            // Every tick stamp of C's column at once. A consumer that tracks
+            // rows individually needs `bulk` and `structural` alongside
+            // `changed` to know whether the per-row stamps still describe the
+            // whole change.
+            pub fn column_ticks<C: $slot>(&self) -> $crate::ColumnTicks {
+                C::slot(self).ticks()
+            }
+
+            // Rows of C written since `since`, paired with their owning entity.
+            // Only the rows a targeted `get_mut` touched are reported, so this
+            // is the dirty set a per-frame pass re-examines instead of the whole
+            // column. Meaningful only while C's `bulk` and `structural` ticks
+            // have not moved since `since`; past either, every row must be
+            // treated as changed.
+            pub fn changed_rows<C: $slot>(
+                &self,
+                since: $crate::Tick,
+            ) -> impl Iterator<Item = ($crate::Entity, &C)> {
+                C::slot(self).changed_rows(since.clamp_to(self.change_tick))
+            }
+
             // Borrow one entity's component C, if it has one.
             #[allow(dead_code)]
             pub fn get<C: $slot>(&self, entity: $crate::Entity) -> Option<&C> {
@@ -206,13 +227,15 @@ macro_rules! define_component_storage {
                 C::slot(self).get(row as usize)
             }
 
-            // Mutably borrow one entity's component C, stamping the change tick.
+            // Mutably borrow one entity's component C, stamping that row's
+            // change tick (and the column's) but not the bulk tick, so
+            // `changed_rows` can report exactly this entity.
             #[allow(dead_code)]
             pub fn get_mut<C: $slot>(&mut self, entity: $crate::Entity) -> Option<&mut C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
                 let tick = self.change_tick.bump();
-                C::slot_mut(self).values_mut(tick).get_mut(row)
+                C::slot_mut(self).value_mut(row, tick)
             }
 
             // Read-only join over two component types. Iterates the first type's
@@ -599,6 +622,108 @@ mod tests {
         assert_eq!(s.get::<Position>(b), Some(&Position(99)));
         // The other entity's row is untouched by the targeted write.
         assert_eq!(s.get::<Position>(a), Some(&Position(1)));
+    }
+
+    // A targeted `get_mut` stamps one row, so `changed_rows` names exactly the
+    // entity written. The column tick still moves (coarse consumers are
+    // unaffected), but neither the bulk nor the structural stamp does.
+    #[test]
+    fn changed_rows_reports_only_the_row_get_mut_touched() {
+        let mut s = TestStorage::default();
+        let _a = s.push_typed(Position(1));
+        let _b = s.push_typed(Position(2));
+        let c = s.push_typed(Position(3));
+        let before = s.column_ticks::<Position>();
+
+        s.get_mut::<Position>(c).unwrap().0 = 30;
+
+        let seen: Vec<(crate::Entity, u32)> = s
+            .changed_rows::<Position>(before.changed)
+            .map(|(e, p)| (e, p.0))
+            .collect();
+        assert_eq!(seen, vec![(c, 30)]);
+
+        let after = s.column_ticks::<Position>();
+        assert!(after.changed.is_newer_than(before.changed));
+        assert_eq!(
+            after.bulk, before.bulk,
+            "a targeted write is not a bulk one"
+        );
+        assert_eq!(after.structural, before.structural, "nor a structural one");
+    }
+
+    // A whole-column write leaves the per-row stamps alone, so `changed_rows`
+    // on its own reports nothing: `bulk` is the stamp that says every row
+    // moved, which is why a row-tracking consumer has to consult it.
+    #[test]
+    fn a_bulk_write_moves_only_the_bulk_stamp() {
+        let mut s = TestStorage::default();
+        s.push_typed(Position(1));
+        s.push_typed(Position(2));
+        let before = s.column_ticks::<Position>();
+
+        for p in s.values_mut::<Position>() {
+            p.0 += 10;
+        }
+
+        let after = s.column_ticks::<Position>();
+        assert!(after.bulk.is_newer_than(before.bulk));
+        assert_eq!(after.structural, before.structural);
+        assert_eq!(
+            s.changed_rows::<Position>(before.changed).count(),
+            0,
+            "per-row stamps cannot describe a bulk write",
+        );
+    }
+
+    // Adding or removing a row moves the structural stamp; a targeted write
+    // does not. Past a structural move, row positions and membership have
+    // shifted and the per-row stamps no longer describe the change alone.
+    #[test]
+    fn push_and_remove_move_the_structural_stamp() {
+        let mut s = TestStorage::default();
+        let a = s.push_typed(Position(1));
+        let before = s.column_ticks::<Position>();
+
+        s.get_mut::<Position>(a).unwrap().0 = 5;
+        assert_eq!(s.column_ticks::<Position>().structural, before.structural);
+
+        let b = s.push_typed(Position(2));
+        let grown = s.column_ticks::<Position>();
+        assert!(grown.structural.is_newer_than(before.structural));
+
+        s.remove_typed::<Position>(b);
+        assert!(
+            s.column_ticks::<Position>()
+                .structural
+                .is_newer_than(grown.structural)
+        );
+    }
+
+    // A `since` stale enough that the wrap-relative comparison would alias is
+    // pulled forward instead, so the scan over-reports rather than silently
+    // dropping a row that did change. Over-reporting costs a consumer extra
+    // work; under-reporting would leave it acting on data it believes current.
+    #[test]
+    fn changed_rows_pulls_a_stale_since_forward() {
+        let mut s = TestStorage::default();
+        let a = s.push_typed(Position(1));
+        let b = s.push_typed(Position(2));
+
+        // What a tick that fell more than half the range behind looks like
+        // against the storage's live (still small) tick.
+        let stale = crate::Tick(2_000_000_000);
+        assert!(
+            !crate::Tick(1).is_newer_than(stale),
+            "unclamped, the comparison aliases and drops these rows",
+        );
+
+        let seen: Vec<crate::Entity> = s.changed_rows::<Position>(stale).map(|(e, _)| e).collect();
+        assert_eq!(
+            seen,
+            vec![a, b],
+            "the clamp makes a stale window over-report"
+        );
     }
 
     #[test]

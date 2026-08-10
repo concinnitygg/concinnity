@@ -37,7 +37,7 @@ mod storage;
 mod tick;
 
 pub use access::Access;
-pub use column::{Column, StorageKind};
+pub use column::{Column, ColumnTicks, StorageKind};
 pub use command::{Command, CommandQueue, CommandTarget, Commands};
 pub use entity::{Entities, Entity};
 pub use event::{EventCursor, Events};

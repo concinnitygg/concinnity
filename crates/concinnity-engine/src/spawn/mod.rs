@@ -19,7 +19,7 @@ use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, Target, Visib
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
-use crate::gfx::draw_list;
+use crate::gfx::transform_propagation;
 use std::time::Instant;
 
 // Resolve a request target to a live entity. A named target goes through the
@@ -168,7 +168,7 @@ impl SpawnSystem {
             if req.parent.is_some() && parent.is_none() {
                 continue;
             }
-            draw_list::reparent(ctx, child, parent);
+            transform_propagation::reparent(ctx, child, parent);
         }
 
         // Runtime entity spawn: drain SpawnRequest events, resolve each

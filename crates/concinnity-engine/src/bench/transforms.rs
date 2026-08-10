@@ -11,11 +11,16 @@
 // the column change ticks and cost nothing, and a scene whose Transform column
 // moved must walk the hierarchy. Both are measured so the cache's worth is a
 // subtraction rather than a claim.
+//
+// The dirty rows scale with how much moved, not with the world, so they are
+// measured against the full resolve they replace: `full_resolve/*` forces the
+// fallback (a whole-column write) and is what a frame with structural churn
+// still costs.
 
 use super::{BenchWorld, bench};
 use crate::assets::{GlobalTransform, Parent, Prop, Transform};
 use crate::ecs::Entity;
-use crate::gfx::draw_list::{TransformCache, propagate_transforms_cached};
+use crate::gfx::transform_propagation::{TransformCache, propagate_transforms_cached};
 
 const FLAT: usize = 10_000;
 const CHAINS: usize = 1_250;
@@ -98,19 +103,82 @@ fn transform_propagation() {
     }
 
     // The same entity count arranged as chains, so each leaf composes through
-    // its ancestors instead of standing alone.
+    // its ancestors instead of standing alone. The touched entity is a leaf, so
+    // it has no descendants to carry the move down to.
     {
         let (mut world, entities) = chained_world(CHAINS, CHAIN_DEPTH);
         let mut cache = TransformCache::default();
-        let first = entities[0];
+        let leaf = entities[CHAIN_DEPTH - 1];
         let count = (CHAINS * CHAIN_DEPTH) as u64;
         bench(
             &format!("dirty_chains_depth{CHAIN_DEPTH}/10k"),
             count,
             || {
-                if let Some(t) = world.ctx().get_mut::<Transform>(first) {
+                if let Some(t) = world.ctx().get_mut::<Transform>(leaf) {
                     t.position[1] += 0.001;
                 }
+                propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            },
+        );
+    }
+
+    // A chain root instead: the move has to reach every link below it, so this
+    // is what a moved entity with descendants costs.
+    {
+        let (mut world, entities) = chained_world(CHAINS, CHAIN_DEPTH);
+        let mut cache = TransformCache::default();
+        let root = entities[0];
+        let count = (CHAINS * CHAIN_DEPTH) as u64;
+        bench(
+            &format!("dirty_chain_root_depth{CHAIN_DEPTH}/10k"),
+            count,
+            || {
+                if let Some(t) = world.ctx().get_mut::<Transform>(root) {
+                    t.position[1] += 0.001;
+                }
+                propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            },
+        );
+    }
+
+    // Enough entities moved to spend the dirty budget, so the pass gives up on
+    // the subtree walks and falls back to a full resolve. The row exists to
+    // show the fallback triggers rather than degrading past it.
+    {
+        let (mut world, entities) = flat_world(FLAT);
+        let mut cache = TransformCache::default();
+        let moved: Vec<Entity> = entities.iter().step_by(4).copied().collect();
+        bench("dirty_quarter_flat/10k", FLAT as u64, || {
+            for &e in &moved {
+                if let Some(t) = world.ctx().get_mut::<Transform>(e) {
+                    t.position[1] += 0.001;
+                }
+            }
+            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+        });
+    }
+
+    // The fallback itself, forced by a whole-column write (which is what a
+    // spawn, a despawn, or a reparent costs the pass as well): every entity's
+    // local matrix rebuilt, ordered by depth, and composed in one pass.
+    {
+        let (mut world, _) = flat_world(FLAT);
+        let mut cache = TransformCache::default();
+        bench("full_resolve_flat/10k", FLAT as u64, || {
+            world.ctx().query_slice_mut::<Transform>()[0].position[1] += 0.001;
+            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+        });
+    }
+
+    {
+        let (mut world, _) = chained_world(CHAINS, CHAIN_DEPTH);
+        let mut cache = TransformCache::default();
+        let count = (CHAINS * CHAIN_DEPTH) as u64;
+        bench(
+            &format!("full_resolve_chains_depth{CHAIN_DEPTH}/10k"),
+            count,
+            || {
+                world.ctx().query_slice_mut::<Transform>()[0].position[1] += 0.001;
                 propagate_transforms_cached(&mut world.ctx(), &mut cache);
             },
         );

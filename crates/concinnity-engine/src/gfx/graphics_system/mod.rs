@@ -304,9 +304,9 @@ pub struct GraphicsSystem {
     texture_cap: u32,
     texture_budget: u32,
     // Reused scratch + change-tracking for the per-frame transform propagation
-    // (`draw_list::propagate_transforms_cached`): buffers are refilled in place
+    // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
-    transform_cache: crate::gfx::draw_list::TransformCache,
+    transform_cache: crate::gfx::transform_propagation::TransformCache,
     // Last-pushed model matrix per draw slot / skinned instance plus the
     // frame's batched updates: a static slot costs a compare instead of a
     // backend call, and each family crosses the trait once per frame.
@@ -471,7 +471,7 @@ impl GraphicsSystem {
             occlusion_two_pass: false,
             texture_cap: 96,
             texture_budget: 4,
-            transform_cache: crate::gfx::draw_list::TransformCache::default(),
+            transform_cache: crate::gfx::transform_propagation::TransformCache::default(),
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),
             #[cfg(test)]
