@@ -62,6 +62,7 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
         "triggervolume" => physics::check(name, args),
         "audioemitter" => audio::check_emitter(name, args),
         "audiocue" => audio::check_cue(name, args),
+        "propbody" => audio::check_prop_body(name, args),
         _ => Ok(()),
     }
 }

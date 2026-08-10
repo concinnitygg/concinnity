@@ -112,6 +112,8 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
                 restitution: body.restitution,
                 gravity_scale: body.gravity_scale,
                 linear_damping: body.linear_damping,
+                impact_clip: body.impact_clip,
+                impact_volume: body.impact_volume,
             },
         );
     }

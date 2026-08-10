@@ -29,6 +29,11 @@ pub(crate) enum PendingPlay {
         gain: f32,
         priority: i32,
     },
+    SoundAt {
+        position: [f32; 3],
+        gain: f32,
+        priority: i32,
+    },
 }
 
 // Decode progress of one clip, without its payload.

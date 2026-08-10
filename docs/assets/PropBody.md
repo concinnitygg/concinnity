@@ -25,3 +25,5 @@ obstacle.
 - `restitution`: A float. Bounciness in [0, 1]. 0 is fully inelastic. Defaults to `0.0`.
 - `gravity_scale`: A float. Multiplier applied to world gravity for this body. 1.0 is normal. Defaults to `1.0`.
 - `linear_damping`: A float. Linear velocity damping, modelling air drag. Defaults to `0.05`.
+- `impact_clip`: A string. Optional [AudioClip](AudioClip.md) played at the contact point when this body collides hard enough to pass the world's `contact_min_impulse` (see [PhysicsConfig](PhysicsConfig.md)). Louder impacts play louder.
+- `impact_volume`: A float. Linear gain applied to the impact clip at full impulse. Defaults to `1.0`.

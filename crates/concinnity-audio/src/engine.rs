@@ -73,8 +73,11 @@ struct Active<B: Backend> {
     manager: AudioManager<B>,
     listener: ListenerHandle,
     buses: Buses,
-    // One spatial track per emitter, indexed by `EmitterId`.
-    emitters: Vec<Emitter>,
+    // One spatial track per emitter, indexed by `EmitterId` slot. A removed
+    // emitter leaves `None` and its slot returns through `free_slots`, so
+    // outstanding ids never shift onto another emitter.
+    emitters: Vec<Option<Emitter>>,
+    free_slots: Vec<usize>,
     // The looping music track, keyed by the caller's clip key so a replay of
     // the same clip keeps the track running instead of restarting it.
     music: Option<(u64, StaticSoundHandle)>,
@@ -171,6 +174,7 @@ impl<B: Backend> AudioEngine<B> {
             listener,
             buses,
             emitters: Vec::new(),
+            free_slots: Vec::new(),
             music: None,
             voices: VoiceSlots::new(MAX_VOICES),
             decoder: DecodeWorker::spawn(),
@@ -238,13 +242,36 @@ impl<B: Backend> AudioEngine<B> {
             .add_spatial_sub_track(&active.listener, vec3(position), builder)
             .map_err(|e| tracing::warn!("audio emitter add failed: {e}"))
             .ok()?;
-        let id = EmitterId(active.emitters.len());
-        active.emitters.push(Emitter {
+        let emitter = Emitter {
             track,
             filter,
             last_occlusion: 0.0,
-        });
+        };
+        let id = match active.free_slots.pop() {
+            Some(slot) => {
+                active.emitters[slot] = Some(emitter);
+                EmitterId(slot)
+            }
+            None => {
+                active.emitters.push(Some(emitter));
+                EmitterId(active.emitters.len() - 1)
+            }
+        };
         Some(id)
+    }
+
+    // Remove an emitter, stopping its playback (the spatial track unloads
+    // when its handle drops). No-op on a disabled engine or an unknown or
+    // already-removed id; the slot is recycled for a later emitter.
+    pub(crate) fn remove_emitter(&mut self, id: EmitterId) {
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        if let Some(slot) = active.emitters.get_mut(id.0)
+            && slot.take().is_some()
+        {
+            active.free_slots.push(id.0);
+        }
     }
 
     // Start an emitter's clip. If the clip is still decoding, playback
@@ -290,6 +317,26 @@ impl<B: Backend> AudioEngine<B> {
         )
     }
 
+    // Play a one-shot clip positioned in the world (impact sounds): a
+    // transient spatial track on the sfx bus that unloads itself when the
+    // sound finishes. Voice-pooled like `play_sound`.
+    pub(crate) fn play_sound_at(
+        &mut self,
+        position: [f32; 3],
+        key: u64,
+        gain: f32,
+        priority: i32,
+    ) -> bool {
+        self.request_play(
+            key,
+            PendingPlay::SoundAt {
+                position,
+                gain,
+                priority,
+            },
+        )
+    }
+
     // One-shot voices currently playing (or queued behind a decode).
     pub(crate) fn playing_sounds(&self) -> usize {
         self.active.as_ref().map_or(0, |a| a.voices.len())
@@ -316,7 +363,7 @@ impl<B: Backend> AudioEngine<B> {
     // Move an emitter. No-op on a disabled engine or an unknown id.
     pub(crate) fn set_emitter_position(&mut self, id: EmitterId, position: [f32; 3]) {
         if let Some(active) = self.active.as_mut()
-            && let Some(emitter) = active.emitters.get_mut(id.0)
+            && let Some(emitter) = active.emitters.get_mut(id.0).and_then(Option::as_mut)
         {
             emitter.track.set_position(vec3(position), Tween::default());
         }
@@ -329,7 +376,7 @@ impl<B: Backend> AudioEngine<B> {
         let Some(active) = self.active.as_mut() else {
             return;
         };
-        let Some(emitter) = active.emitters.get_mut(id.0) else {
+        let Some(emitter) = active.emitters.get_mut(id.0).and_then(Option::as_mut) else {
             return;
         };
         if (factor - emitter.last_occlusion).abs() < 1.0e-3 {
@@ -388,7 +435,7 @@ impl<B: Backend> Active<B> {
     fn play_now(&mut self, play: PendingPlay, data: &StaticSoundData) -> bool {
         match play {
             PendingPlay::Emitter { id, looping, gain } => {
-                let Some(emitter) = self.emitters.get_mut(id.0) else {
+                let Some(emitter) = self.emitters.get_mut(id.0).and_then(Option::as_mut) else {
                     return false;
                 };
                 let mut data = data.clone().volume(Decibels(gain_to_db(gain)));
@@ -447,6 +494,43 @@ impl<B: Backend> Active<B> {
                     }
                     Err(e) => {
                         tracing::warn!("sound play failed: {e}");
+                        false
+                    }
+                }
+            }
+            PendingPlay::SoundAt {
+                position,
+                gain,
+                priority,
+            } => {
+                match self.voices.make_room(priority) {
+                    Admission::Available => {}
+                    Admission::Steal(mut stolen) => stolen.stop(Tween::default()),
+                    Admission::Refused => return false,
+                }
+                // A transient spatial track: dropping its handle after the
+                // play leaves it alive only until the sound finishes.
+                let builder = SpatialTrackBuilder::new().persist_until_sounds_finish(true);
+                let track = self.buses.get_mut(AudioBus::Sfx).add_spatial_sub_track(
+                    &self.listener,
+                    vec3(position),
+                    builder,
+                );
+                let mut track = match track {
+                    Ok(track) => track,
+                    Err(e) => {
+                        tracing::warn!("positioned sound track failed: {e}");
+                        return false;
+                    }
+                };
+                let data = data.clone().volume(Decibels(gain_to_db(gain)));
+                match track.play(data) {
+                    Ok(handle) => {
+                        self.voices.admit(priority, handle);
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!("positioned sound play failed: {e}");
                         false
                     }
                 }
@@ -702,6 +786,53 @@ mod tests {
         engine.set_emitter_occlusion(id, 0.5);
         engine.set_emitter_occlusion(id, 0.5);
         engine.pump();
+    }
+
+    #[test]
+    fn removed_emitters_free_their_slot_without_shifting_ids() {
+        let mut engine = mock_engine();
+        let params = EmitterParams {
+            min_distance: 1.0,
+            max_distance: 50.0,
+            rolloff: Rolloff::Logarithmic,
+            bus: AudioBus::Sfx,
+        };
+        let first = engine.add_emitter([1.0, 0.0, 0.0], &params).unwrap();
+        let second = engine.add_emitter([2.0, 0.0, 0.0], &params).unwrap();
+        assert_ne!(first, second);
+
+        engine.remove_emitter(first);
+        // Removing again is a no-op, and the survivor still answers.
+        engine.remove_emitter(first);
+        engine.set_emitter_position(second, [3.0, 0.0, 0.0]);
+        engine.set_emitter_occlusion(second, 0.4);
+
+        // A play aimed at the removed emitter is refused, not misrouted.
+        engine.queue_clip(1, pcm_wav_mono(64));
+        engine.wait_ready(1);
+        assert!(!engine.play_emitter_clip(first, 1, true, 1.0));
+        assert!(engine.play_emitter_clip(second, 1, true, 1.0));
+
+        // The freed slot is recycled: the next emitter reuses `first`'s id.
+        let third = engine.add_emitter([4.0, 0.0, 0.0], &params).unwrap();
+        assert_eq!(third, first, "slot recycled");
+        assert!(engine.play_emitter_clip(third, 1, true, 1.0));
+    }
+
+    #[test]
+    fn positioned_one_shots_ride_transient_sfx_tracks_and_count_as_voices() {
+        let mut engine = mock_engine();
+        engine.queue_clip(1, pcm_wav_mono(4096));
+        engine.wait_ready(1);
+        assert!(engine.play_sound_at([2.0, 0.0, 1.0], 1, 0.8, 0));
+        assert_eq!(engine.playing_sounds(), 1, "voice-pooled");
+        let active = engine.active.as_ref().unwrap();
+        assert_eq!(
+            active.buses.sfx.num_sub_tracks(),
+            1,
+            "transient spatial track under sfx"
+        );
+        assert_eq!(active.buses.music.num_sub_tracks(), 0);
     }
 
     #[test]

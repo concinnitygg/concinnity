@@ -75,6 +75,19 @@ pub fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_bus(name, args)
 }
 
+// PropBody: the impact gain must be a non-negative finite number.
+pub fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), String> {
+    let Some(volume) = args.get("impact_volume").and_then(|v| v.as_f64()) else {
+        return Ok(());
+    };
+    if volume.is_finite() && volume >= 0.0 {
+        return Ok(());
+    }
+    Err(format!(
+        "Asset '{name}': impact_volume must be a non-negative gain, got {volume}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +131,12 @@ mod tests {
         assert!(check_emitter("e", &json!({"volume": -0.5})).is_err());
         assert!(check_cue("c", &json!({"volume": -1.0})).is_err());
         assert!(check_cue("c", &json!({"volume": 0.0})).is_ok());
+    }
+
+    #[test]
+    fn impact_volume_follows_the_gain_rules() {
+        assert!(check_prop_body("b", &json!({})).is_ok());
+        assert!(check_prop_body("b", &json!({"impact_volume": 0.5})).is_ok());
+        assert!(check_prop_body("b", &json!({"impact_volume": -1.0})).is_err());
     }
 }

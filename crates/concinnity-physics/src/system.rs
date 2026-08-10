@@ -1181,9 +1181,8 @@ mod tests {
         BodyDynamics {
             mass: 1.0,
             friction: 0.5,
-            restitution: 0.0,
-            gravity_scale: 1.0,
             linear_damping: 0.0,
+            ..Default::default()
         }
     }
 

@@ -18,6 +18,8 @@ mod clips;
 mod decode;
 // The kira-backed mixer facade.
 mod engine;
+// Contact-impulse to impact-gain mapping.
+mod impact;
 // Occlusion smoothing and its volume / lowpass mapping.
 mod occlusion;
 // Authored attenuation mapped onto kira's spatial parameters.

@@ -5,17 +5,17 @@
 // the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 // never opens an audio device.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::occlusion::OcclusionSmoother;
 use crate::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
 use concinnity_core::assets::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
-    Camera3D, CueKind, PlayCue, ScreenShown, Story, Transform,
+    BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    AudioClipHandle, EntityByName, EventCursor, PayloadLocator, PipelineContext, SimTiming,
+    AudioClipHandle, Entity, EntityByName, EventCursor, PayloadLocator, PipelineContext, SimTiming,
     StepResult, System,
 };
 use concinnity_core::resource::AudioClipTable;
@@ -29,10 +29,17 @@ pub struct AudioSystem {
     // the engine's audio gate (which owns the settings store) and handed in
     // at construction, so this crate needs no dependency on the engine.
     volumes: AudioVolumes,
-    // One entry per `AudioEmitter` in the world, in query order.
-    emitters: Vec<EmitterBinding>,
+    // One binding per live `AudioEmitter`, keyed by its entity. Emitters that
+    // appear after init (runtime adds) are adopted each step; bindings whose
+    // entity died are reaped, mirroring the physics prop-body lifecycle.
+    emitters: HashMap<Entity, EmitterBinding>,
     // Screen-triggered cues, keyed by the Screen whose activation fires them.
-    cues: std::collections::HashMap<AssetId, Vec<CueBinding>>,
+    cues: HashMap<AssetId, Vec<CueBinding>>,
+    // Clip payload locators snapshotted at init, indexed by handle, so a
+    // runtime-adopted emitter can still queue its clip.
+    clip_locators: Vec<Option<PayloadLocator>>,
+    // Clips already handed to the decode worker.
+    queued: HashSet<AudioClipHandle>,
     // Last listener position handed to the engine; the occlusion probes ray
     // from it.
     listener_position: [f32; 3],
@@ -43,12 +50,16 @@ pub struct AudioSystem {
     // Cursor into the Events<PlayCue> queue (direct play requests, e.g. the
     // story system's page audio).
     play_cue_cursor: EventCursor,
+    // Cursor into the Events<ContactEvent> queue (impact one-shots).
+    contact_cursor: EventCursor,
     // Cues that matched a shown screen so far; observable engine-independent
     // progress for headless tests (playback needs a device and a payload).
     cues_matched: usize,
-    // Distinct clips handed to the decode worker at init; the same kind of
+    // Distinct clips handed to the decode worker; the same kind of
     // engine-independent observable.
     clips_queued: usize,
+    // Contacts that resolved to an impact clip; same kind of observable.
+    impacts_played: usize,
 }
 
 // Links one engine emitter to the world data that positions it.
@@ -101,14 +112,18 @@ impl AudioSystem {
         Self {
             engine: AudioEngine::disabled(),
             volumes,
-            emitters: Vec::new(),
-            cues: std::collections::HashMap::new(),
+            emitters: HashMap::new(),
+            cues: HashMap::new(),
+            clip_locators: Vec::new(),
+            queued: HashSet::new(),
             listener_position: [0.0; 3],
             audio_cmd_cursor: EventCursor::default(),
             view_shown_cursor: EventCursor::default(),
             play_cue_cursor: EventCursor::default(),
+            contact_cursor: EventCursor::default(),
             cues_matched: 0,
             clips_queued: 0,
+            impacts_played: 0,
         }
     }
 
@@ -130,21 +145,21 @@ impl AudioSystem {
         self.engine.playing_sounds()
     }
 
+    // Contacts that resolved to an impact clip; the same kind of
+    // engine-independent observable as `cues_matched`.
+    pub fn impacts_played(&self) -> usize {
+        self.impacts_played
+    }
+
     // Read a clip's payload from the blob and hand it to the decode worker,
     // once per distinct clip. Returns false when the clip has no compiled
     // payload or the read failed (logged by the caller's context message).
-    fn queue_clip(
-        &mut self,
-        ctx: &mut PipelineContext,
-        locators: &[Option<PayloadLocator>],
-        queued: &mut HashSet<AudioClipHandle>,
-        clip: AudioClipHandle,
-    ) -> bool {
-        if !queued.insert(clip) {
+    fn queue_clip(&mut self, ctx: &mut PipelineContext, clip: AudioClipHandle) -> bool {
+        if !self.queued.insert(clip) {
             return true;
         }
-        let Some(locator) = locators.get(clip.index()).cloned().flatten() else {
-            queued.remove(&clip);
+        let Some(locator) = self.clip_locators.get(clip.index()).cloned().flatten() else {
+            self.queued.remove(&clip);
             return false;
         };
         match ctx.read_payload(&locator) {
@@ -155,10 +170,62 @@ impl AudioSystem {
             }
             Err(e) => {
                 tracing::warn!("AudioSystem: clip payload read failed: {e}");
-                queued.remove(&clip);
+                self.queued.remove(&clip);
                 false
             }
         }
+    }
+
+    // Bind one `AudioEmitter` living on `entity`: create its engine emitter,
+    // queue and start its clip, and attach its occlusion probe to the entity
+    // (so the probe despawns with it). Shared by init and runtime adoption.
+    fn bind_emitter(&mut self, ctx: &mut PipelineContext, entity: Entity, emitter: &AudioEmitter) {
+        let params = EmitterParams {
+            min_distance: emitter.min_distance,
+            max_distance: emitter.max_distance,
+            rolloff: emitter.rolloff,
+            bus: emitter.bus.unwrap_or(AudioBus::Sfx),
+        };
+        let id = self.engine.add_emitter(emitter.position, &params);
+        match emitter.clip {
+            Some(clip) => {
+                if self.queue_clip(ctx, clip)
+                    && let Some(id) = id
+                {
+                    // Starts on the tick the decode lands.
+                    self.engine.play_emitter_clip(
+                        id,
+                        clip.0 as u64,
+                        emitter.looping,
+                        emitter.volume,
+                    );
+                }
+            }
+            None => {
+                tracing::warn!("AudioSystem: emitter has no clip with a compiled payload, silent")
+            }
+        }
+        // PhysicsSystem answers the probe each frame when the world
+        // simulates physics.
+        if ctx.get::<AudioOcclusionProbe>(entity).is_none() {
+            ctx.insert(
+                entity,
+                AudioOcclusionProbe {
+                    from: [0.0; 3],
+                    to: emitter.position,
+                    blocked: None,
+                },
+            );
+        }
+        self.emitters.insert(
+            entity,
+            EmitterBinding {
+                id,
+                follows: emitter.prop,
+                position: emitter.position,
+                occlusion: OcclusionSmoother::new(),
+            },
+        );
     }
 }
 
@@ -172,8 +239,11 @@ impl System for AudioSystem {
         // resource stream, dense in handle order, so index N is the clip with
         // `AudioClipHandle(N)`. Collecting this owned Vec releases the resource
         // borrow before the `read_payload` calls below.
-        let emitter_snaps: Vec<AudioEmitter> = ctx.query::<AudioEmitter>().cloned().collect();
-        let clip_locators: Vec<Option<PayloadLocator>> = ctx
+        let emitter_snaps: Vec<(Entity, AudioEmitter)> = ctx
+            .query_with_entity::<AudioEmitter>()
+            .map(|(entity, e)| (entity, e.clone()))
+            .collect();
+        self.clip_locators = ctx
             .resource::<AudioClipTable>()
             .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
             .unwrap_or_default();
@@ -191,48 +261,8 @@ impl System for AudioSystem {
         self.engine
             .set_volume(AudioTarget::Voice, self.volumes.voice.unwrap_or(1.0));
 
-        let mut queued: HashSet<AudioClipHandle> = HashSet::new();
-
-        for (index, emitter) in emitter_snaps.into_iter().enumerate() {
-            let params = EmitterParams {
-                min_distance: emitter.min_distance,
-                max_distance: emitter.max_distance,
-                rolloff: emitter.rolloff,
-                bus: emitter.bus.unwrap_or(AudioBus::Sfx),
-            };
-            let id = self.engine.add_emitter(emitter.position, &params);
-            match emitter.clip {
-                Some(clip) => {
-                    if self.queue_clip(ctx, &clip_locators, &mut queued, clip)
-                        && let Some(id) = id
-                    {
-                        // Starts on the tick the decode lands.
-                        self.engine.play_emitter_clip(
-                            id,
-                            clip.0 as u64,
-                            emitter.looping,
-                            emitter.volume,
-                        );
-                    }
-                }
-                None => tracing::warn!(
-                    "AudioSystem: emitter has no clip with a compiled payload, silent"
-                ),
-            }
-            // One occlusion probe per emitter; PhysicsSystem answers it each
-            // frame when the world simulates physics.
-            ctx.push(AudioOcclusionProbe {
-                emitter: index as u32,
-                from: [0.0; 3],
-                to: emitter.position,
-                blocked: None,
-            });
-            self.emitters.push(EmitterBinding {
-                id,
-                follows: emitter.prop,
-                position: emitter.position,
-                occlusion: OcclusionSmoother::new(),
-            });
+        for (entity, emitter) in emitter_snaps {
+            self.bind_emitter(ctx, entity, &emitter);
         }
 
         // Bind the screen-triggered cues and queue their clips for decode, so
@@ -243,7 +273,7 @@ impl System for AudioSystem {
                 tracing::warn!("AudioSystem: cue without a screen and a clip, ignored");
                 continue;
             };
-            if !self.queue_clip(ctx, &clip_locators, &mut queued, clip) {
+            if !self.queue_clip(ctx, clip) {
                 tracing::warn!("AudioSystem: cue clip has no compiled payload, silent");
             }
             self.cues.entry(screen).or_default().push(CueBinding {
@@ -255,19 +285,23 @@ impl System for AudioSystem {
             });
         }
 
-        // Stories and behaviors play clips by direct PlayCue request rather
-        // than through screen-keyed cues, so queue every clip up front.
-        if ctx.query::<Story>().next().is_some()
+        // Stories and behaviors play clips by direct PlayCue request, and
+        // physics contacts play whatever impact clip the colliding body
+        // carries, so queue every remaining clip up front. Blob payloads are
+        // freed after init, so a clip skipped here cannot be queued later.
+        let plays_arbitrary_clips = ctx.query::<Story>().next().is_some()
             || ctx.query::<Behavior>().any(Behavior::plays_sound)
-        {
-            let clips: Vec<AudioClipHandle> = clip_locators
+            || ctx.query::<BodyDynamics>().any(|d| d.impact_clip.is_some());
+        if plays_arbitrary_clips {
+            let clips: Vec<AudioClipHandle> = self
+                .clip_locators
                 .iter()
                 .enumerate()
                 .filter_map(|(i, loc)| loc.as_ref().map(|_| AudioClipHandle(i as u32)))
                 .collect();
             for clip in clips {
-                if !self.queue_clip(ctx, &clip_locators, &mut queued, clip) {
-                    tracing::warn!("AudioSystem: story clip payload read failed");
+                if !self.queue_clip(ctx, clip) {
+                    tracing::warn!("AudioSystem: clip payload read failed");
                 }
             }
         }
@@ -289,6 +323,32 @@ impl System for AudioSystem {
         // Drain finished decodes (starting deferred plays) and release the
         // voice slots of finished one-shots.
         self.engine.tick();
+
+        // Reap bindings whose entity despawned (the spatial track stops and
+        // unloads; the probe died with the entity), then adopt emitters that
+        // appeared since init -- the same seen-set lifecycle the physics
+        // system runs for prop bodies.
+        let dead: Vec<Entity> = self
+            .emitters
+            .keys()
+            .filter(|entity| !ctx.is_alive(**entity))
+            .copied()
+            .collect();
+        for entity in dead {
+            if let Some(binding) = self.emitters.remove(&entity)
+                && let Some(id) = binding.id
+            {
+                self.engine.remove_emitter(id);
+            }
+        }
+        let adopted: Vec<(Entity, AudioEmitter)> = ctx
+            .query_with_entity::<AudioEmitter>()
+            .filter(|(entity, _)| !self.emitters.contains_key(entity))
+            .map(|(entity, e)| (entity, e.clone()))
+            .collect();
+        for (entity, emitter) in adopted {
+            self.bind_emitter(ctx, entity, &emitter);
+        }
 
         // Apply any live volume change sent this tick by GraphicsSystem,
         // which runs first. The last one per target this tick wins.
@@ -346,6 +406,28 @@ impl System for AudioSystem {
             }
         }
 
+        // Impact one-shots: a contact plays each colliding body's authored
+        // impact clip at the contact point, scaled by the impulse. Physics
+        // gates and debounces the events; the voice pool caps bursts.
+        if let Some(events) = ctx.events::<ContactEvent>() {
+            let contacts: Vec<ContactEvent> =
+                events.read(&mut self.contact_cursor).copied().collect();
+            for contact in contacts {
+                for entity in [Some(contact.a), contact.b].into_iter().flatten() {
+                    let Some(dynamics) = ctx.get::<BodyDynamics>(entity) else {
+                        continue;
+                    };
+                    let Some(clip) = dynamics.impact_clip else {
+                        continue;
+                    };
+                    let gain = crate::impact::gain(contact.impulse) * dynamics.impact_volume;
+                    self.impacts_played += 1;
+                    self.engine
+                        .play_sound_at(contact.point, clip.0 as u64, gain, 0);
+                }
+            }
+        }
+
         // The listener rides the camera.
         if let Some((pos, yaw, pitch)) = ctx
             .query::<Camera3D>()
@@ -358,8 +440,8 @@ impl System for AudioSystem {
 
         // Prop-bound emitters track their followed prop's current position,
         // read from its Transform via the name index.
-        if self.emitters.iter().any(|b| b.follows.is_some()) {
-            for binding in &mut self.emitters {
+        if self.emitters.values().any(|b| b.follows.is_some()) {
+            for binding in self.emitters.values_mut() {
                 if let Some(prop_id) = binding.follows
                     && let Some(entity) =
                         ctx.resource::<EntityByName>().and_then(|n| n.get(prop_id))
@@ -377,8 +459,8 @@ impl System for AudioSystem {
         // ray) through its smoother and into the mixer, and refresh the ray
         // endpoints for the next physics step. An unanswered probe (no
         // physics in the world) reads as clear.
-        for probe in ctx.query_mut::<AudioOcclusionProbe>() {
-            let Some(binding) = self.emitters.get_mut(probe.emitter as usize) else {
+        for (entity, probe) in ctx.query_mut_with_entity::<AudioOcclusionProbe>() {
+            let Some(binding) = self.emitters.get_mut(&entity) else {
                 continue;
             };
             probe.from = self.listener_position;
@@ -408,14 +490,14 @@ mod tests {
     use crate::occlusion::OcclusionSmoother;
     use crate::{AudioVolumes, EmitterId};
     use concinnity_core::assets::{
-        AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Camera3D,
-        CueKind, PlayCue, ScreenShown, Story, Transform,
+        AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget,
+        BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
     };
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
-        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, EntityByName, FrameContext,
-        PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult,
-        System,
+        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, Entity, EntityByName,
+        FrameContext, PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources,
+        StepResult, System,
     };
     use concinnity_core::gfx::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
@@ -460,8 +542,8 @@ mod tests {
             }
         }
 
-        fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
+        fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
+            self.components.push_typed(c)
         }
 
         // Add an audio clip whose payload is `bytes`, returning its handle (its
@@ -608,12 +690,12 @@ mod tests {
     }
 
     // init binds every emitter (device or not), queues its clip, and
-    // publishes one occlusion probe per emitter aimed at it.
+    // attaches one occlusion probe to each emitter's own entity, aimed at it.
     #[test]
     fn init_binds_emitters_and_publishes_occlusion_probes() {
         let mut w = AudioWorld::new();
         let clip = w.clip(b"loop-bytes");
-        w.push(AudioEmitter {
+        let entity = w.push(AudioEmitter {
             clip: Some(clip),
             position: [3.0, 1.0, -2.0],
             ..Default::default()
@@ -624,15 +706,115 @@ mod tests {
         sys.init(&mut sealed.ctx());
 
         assert_eq!(sys.emitters.len(), 1);
-        assert_eq!(sys.emitters[0].position, [3.0, 1.0, -2.0]);
+        let binding = sys.emitters.get(&entity).expect("binding keyed by entity");
+        assert_eq!(binding.position, [3.0, 1.0, -2.0]);
         assert_eq!(sys.clips_queued(), 1);
 
         let ctx = sealed.ctx();
-        let probes: Vec<&AudioOcclusionProbe> = ctx.query::<AudioOcclusionProbe>().collect();
-        assert_eq!(probes.len(), 1, "one probe per emitter");
-        assert_eq!(probes[0].emitter, 0);
-        assert_eq!(probes[0].to, [3.0, 1.0, -2.0]);
-        assert_eq!(probes[0].blocked, None, "unanswered until physics steps");
+        let probe = ctx
+            .get::<AudioOcclusionProbe>(entity)
+            .expect("probe rides the emitter's entity");
+        assert_eq!(probe.to, [3.0, 1.0, -2.0]);
+        assert_eq!(probe.blocked, None, "unanswered until physics steps");
+        assert_eq!(ctx.query::<AudioOcclusionProbe>().count(), 1);
+    }
+
+    // An AudioEmitter appearing after init is adopted on the next step, and
+    // a binding whose entity despawns is reaped (probe and all).
+    #[test]
+    fn step_adopts_new_emitters_and_reaps_despawned_ones() {
+        let mut w = AudioWorld::new();
+        let clip = w.clip(b"loop-bytes");
+        let first = w.push(AudioEmitter {
+            clip: Some(clip),
+            position: [1.0, 0.0, 0.0],
+            ..Default::default()
+        });
+        let mut sealed = w.seal();
+
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+        assert_eq!(sys.emitters.len(), 1);
+
+        // A second emitter appears at runtime; the next step binds it and
+        // attaches its probe.
+        let second = {
+            let ctx = sealed.ctx();
+            ctx.components.push_typed(AudioEmitter {
+                clip: Some(clip),
+                position: [7.0, 0.0, 0.0],
+                ..Default::default()
+            })
+        };
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.emitters.len(), 2);
+        assert_eq!(
+            sys.emitters.get(&second).map(|b| b.position),
+            Some([7.0, 0.0, 0.0])
+        );
+        assert!(
+            sealed.ctx().get::<AudioOcclusionProbe>(second).is_some(),
+            "adopted emitter got its probe"
+        );
+
+        // The first emitter despawns; its binding is reaped and it is not
+        // re-adopted.
+        sealed.ctx().despawn(first);
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.emitters.len(), 1);
+        assert!(sys.emitters.contains_key(&second), "survivor kept");
+        assert_eq!(sealed.ctx().query::<AudioOcclusionProbe>().count(), 1);
+    }
+
+    // A contact whose body carries an impact clip plays it; bodies without
+    // dynamics or without a clip are silent. The counter is the observable.
+    #[test]
+    fn step_plays_impact_clips_from_contacts() {
+        let mut w = AudioWorld::new();
+        let clip = w.clip(b"thud-bytes");
+        let mut sealed = w.seal();
+
+        let (crate_entity, bare_entity) = {
+            let mut ctx = sealed.ctx();
+            let crate_entity = ctx.components.spawn();
+            ctx.insert(
+                crate_entity,
+                BodyDynamics {
+                    impact_clip: Some(clip),
+                    ..Default::default()
+                },
+            );
+            let bare_entity = ctx.components.spawn();
+            ctx.insert(bare_entity, BodyDynamics::default());
+            (crate_entity, bare_entity)
+        };
+
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut sealed.ctx());
+        assert_eq!(sys.clips_queued(), 1, "impact clip queued up front");
+
+        {
+            let mut ctx = sealed.ctx();
+            let events = ctx.events_mut::<ContactEvent>();
+            // Both sides resolve: only the crate has a clip.
+            events.send(ContactEvent {
+                a: crate_entity,
+                b: Some(bare_entity),
+                point: [0.0, 0.5, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                impulse: 6.0,
+            });
+            // `a` has dynamics but no clip, and no `b`: silent.
+            events.send(ContactEvent {
+                a: bare_entity,
+                b: None,
+                point: [0.0; 3],
+                normal: [0.0, 1.0, 0.0],
+                impulse: 6.0,
+            });
+        }
+        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.impacts_played(), 1, "one clip-carrying side played");
     }
 
     // A blocked probe answer muffles gradually: the smoothed factor rises
@@ -659,8 +841,16 @@ mod tests {
                 probe.blocked = Some(true);
             }
         }
+        let occlusion_of = |sys: &AudioSystem| {
+            sys.emitters
+                .values()
+                .next()
+                .expect("one binding")
+                .occlusion
+                .current()
+        };
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
-        let after_one = sys.emitters[0].occlusion.current();
+        let after_one = occlusion_of(&sys);
         assert!(
             after_one > 0.0 && after_one < 0.5,
             "one tick moves partway: {after_one}"
@@ -668,7 +858,7 @@ mod tests {
         for _ in 0..120 {
             sys.step(&mut sealed.ctx());
         }
-        assert!(sys.emitters[0].occlusion.current() > 0.9, "settles blocked");
+        assert!(occlusion_of(&sys) > 0.9, "settles blocked");
 
         // The ray endpoints track the listener and emitter for next frame.
         let ctx = sealed.ctx();
@@ -786,16 +976,21 @@ mod tests {
         let mut sys = AudioSystem::new(AudioVolumes::default());
         // A live emitter that follows the prop, seeded directly (a real
         // emitter needs a device, which the headless test has no access to).
-        sys.emitters.push(EmitterBinding {
-            id: Some(EmitterId(0)),
-            follows: Some(prop),
-            position: [0.0; 3],
-            occlusion: OcclusionSmoother::new(),
-        });
+        // Keyed by a spare entity standing in for the emitter's own.
+        let emitter_entity = sealed.ctx().components.spawn();
+        sys.emitters.insert(
+            emitter_entity,
+            EmitterBinding {
+                id: Some(EmitterId(0)),
+                follows: Some(prop),
+                position: [0.0; 3],
+                occlusion: OcclusionSmoother::new(),
+            },
+        );
 
         assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
         assert_eq!(
-            sys.emitters[0].position,
+            sys.emitters[&emitter_entity].position,
             [3.0, 4.0, 5.0],
             "binding tracked the prop"
         );

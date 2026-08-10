@@ -130,7 +130,6 @@ mod tests {
 
         let mut w = ProbeWorld::new();
         let probe = |to: [f32; 3]| AudioOcclusionProbe {
-            emitter: 0,
             from: [0.0; 3],
             to,
             blocked: None,

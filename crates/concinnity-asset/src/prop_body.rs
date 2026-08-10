@@ -1,6 +1,6 @@
 // Dynamic physics body schema for a companion Prop.
 
-use crate::{AssetId, de_opt_asset_ref};
+use crate::{AssetId, AudioClipHandle, de_opt_asset_ref, de_opt_audio_clip_handle};
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
 ///
@@ -34,6 +34,13 @@ pub struct PropBody {
     pub gravity_scale: f32,
     /// Linear velocity damping, modelling air drag.
     pub linear_damping: f32,
+    /// Optional [AudioClip](#audioclip) played at the contact point when this
+    /// body collides hard enough to pass the world's `contact_min_impulse`
+    /// (see [PhysicsConfig](#physicsconfig)). Louder impacts play louder.
+    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
+    pub impact_clip: Option<AudioClipHandle>,
+    /// Linear gain applied to the impact clip at full impulse.
+    pub impact_volume: f32,
 }
 
 impl Default for PropBody {
@@ -45,6 +52,8 @@ impl Default for PropBody {
             restitution: 0.0,
             gravity_scale: 1.0,
             linear_damping: 0.05,
+            impact_clip: None,
+            impact_volume: 1.0,
         }
     }
 }

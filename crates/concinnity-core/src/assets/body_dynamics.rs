@@ -1,5 +1,7 @@
 // src/assets/body_dynamics.rs
 
+use crate::ecs::AudioClipHandle;
+
 /// Dynamic-body parameters attached to an entity with a `Collider`.
 ///
 /// Runtime-only. Carries the physical values a `PropBody` declares, resolved
@@ -17,6 +19,11 @@ pub struct BodyDynamics {
     pub gravity_scale: f32,
     /// Linear velocity damping, modelling air drag.
     pub linear_damping: f32,
+    /// Clip played at the contact point when this body collides hard enough
+    /// to publish a contact event.
+    pub impact_clip: Option<AudioClipHandle>,
+    /// Linear gain applied to the impact clip at full impulse.
+    pub impact_volume: f32,
 }
 
 impl Default for BodyDynamics {
@@ -27,6 +34,8 @@ impl Default for BodyDynamics {
             restitution: 0.0,
             gravity_scale: 1.0,
             linear_damping: 0.05,
+            impact_clip: None,
+            impact_volume: 1.0,
         }
     }
 }
