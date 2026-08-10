@@ -169,11 +169,7 @@ pub(super) fn create_cull_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = unsafe {
-        device.create_compute_pipelines(
-            vk::PipelineCache::null(),
-            std::slice::from_ref(&info),
-            None,
-        )
+        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create cull pipeline: {e}"))?[0];
     unsafe { device.destroy_shader_module(module, None) };
@@ -757,10 +753,9 @@ fn create_main_pipeline_filled(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create main pipeline: {e}"))?[0];
@@ -863,10 +858,9 @@ pub(super) fn create_shadow_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create shadow pipeline: {e}"))?[0];
@@ -987,10 +981,9 @@ fn create_skinned_pipeline_filled(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create skinned pipeline: {e}"))?[0];
@@ -1076,10 +1069,9 @@ pub(super) fn create_skinned_shadow_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create skinned shadow pipeline: {e}"))?[0];
@@ -1176,10 +1168,9 @@ pub(super) fn create_text_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create text pipeline: {e}"))?[0];
@@ -1272,10 +1263,9 @@ pub(super) fn create_composite_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create composite pipeline: {e}"))?[0];

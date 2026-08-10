@@ -227,7 +227,7 @@ fn create_simulate_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateComputePipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create particle simulate PSO: {e}"))
 }
 
@@ -299,7 +299,7 @@ fn create_render_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create particle render PSO: {e}"))
 }
 

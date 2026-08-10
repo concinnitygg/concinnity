@@ -400,7 +400,7 @@ fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPi
         },
         ..Default::default()
     };
-    let pso = unsafe { device.CreateComputePipelineState(&desc) }
+    let pso = unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create rt skin PSO: {e}"))?;
     Ok(SkinPipeline { root_sig, pso })
 }

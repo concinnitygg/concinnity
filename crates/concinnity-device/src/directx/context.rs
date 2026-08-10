@@ -2320,6 +2320,12 @@ impl crate::gfx::scene_flow::SceneControl for DxContext {
 impl Drop for DxContext {
     fn drop(&mut self) {
         self.wait_idle();
+        // Persist and release the pipeline library. `win_state` is `None` only
+        // on the outgoing context of a `reload_world`, whose successor keeps
+        // the device and the installed library.
+        if self.win_state.is_some() {
+            super::pso_library::shutdown();
+        }
         // Restore cursor clip + visibility so the OS isn't left in a bad state
         // if the caller didn't release explicitly. `None` on the outgoing context
         // of a `reload_world` (the window moved to its successor), so guard it.

@@ -24,6 +24,7 @@ mod instanced;
 mod light_cull;
 mod line;
 mod metallib;
+mod msl_cache;
 mod parallel_encoder;
 mod particle;
 mod pass_timing;

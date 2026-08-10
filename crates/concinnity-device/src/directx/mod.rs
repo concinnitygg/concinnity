@@ -30,6 +30,7 @@ mod pipeline;
 mod planar;
 mod post;
 mod probe;
+mod pso_library;
 mod quality;
 mod raymarch;
 mod raytrace;

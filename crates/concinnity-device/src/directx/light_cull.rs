@@ -122,7 +122,7 @@ pub(in crate::directx) fn create_light_cull_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateComputePipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create light cull PSO: {e}"))
 }
 

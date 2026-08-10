@@ -598,7 +598,7 @@ pub(super) fn create_composite_pso(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create composite PSO: {e}"))
 }
 
@@ -749,6 +749,6 @@ pub(super) fn create_text_pso(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create text PSO: {e}"))
 }

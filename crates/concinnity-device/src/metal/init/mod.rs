@@ -1410,6 +1410,9 @@ impl MtlContext {
             pooled.reserved_bytes / 1024,
             pooled.in_use_bytes / 1024,
         );
+        // Tally the raymarch metallib cache (the only shader-cache client on
+        // Metal; everything else precompiles at build time).
+        crate::shader_cache::report_init_and_prune();
         Ok(ctx)
     }
 

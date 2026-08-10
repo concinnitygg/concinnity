@@ -241,7 +241,7 @@ fn create_rt_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create rt reflections PSO: {e}"))
 }
 

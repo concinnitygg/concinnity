@@ -1165,7 +1165,7 @@ fn create_main_pso_filled(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create main PSO: {e}"))
 }
 
@@ -1222,7 +1222,7 @@ pub(in crate::directx) fn create_shadow_pso(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create shadow PSO: {e}"))
 }
 

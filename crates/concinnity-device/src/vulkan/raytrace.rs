@@ -702,11 +702,7 @@ pub(super) fn build_skin_pipeline(
         .stage(stage)
         .layout(pipeline_layout);
     let pipeline = unsafe {
-        device.create_compute_pipelines(
-            vk::PipelineCache::null(),
-            std::slice::from_ref(&info),
-            None,
-        )
+        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     };
     unsafe { device.destroy_shader_module(module, None) };
     let pipeline = pipeline.map_err(|(_, e)| {

@@ -351,7 +351,7 @@ fn create_raymarch_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch PSO: {e}"))
 }
 
@@ -486,7 +486,7 @@ fn create_raymarch_volumetric_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch volumetric PSO: {e}"))
 }
 
@@ -653,7 +653,7 @@ fn create_raymarch_shadow_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch shadow PSO: {e}"))
 }
 

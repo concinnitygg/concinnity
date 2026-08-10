@@ -606,10 +606,9 @@ fn create_taa_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create TAA pipeline: {e}"))?[0];

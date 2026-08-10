@@ -237,7 +237,7 @@ fn create_ssao_fullscreen_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create ssao {label} PSO: {e}"))
 }
 

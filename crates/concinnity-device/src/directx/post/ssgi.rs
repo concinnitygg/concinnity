@@ -216,7 +216,7 @@ fn create_ssgi_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create ssgi PSO: {e}"))
 }
 

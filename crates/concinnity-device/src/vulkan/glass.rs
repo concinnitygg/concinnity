@@ -918,10 +918,9 @@ fn create_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create glass pipeline: {e}"))?[0];

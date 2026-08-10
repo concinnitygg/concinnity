@@ -181,7 +181,7 @@ pub(in crate::directx) fn create_bloom_pso(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create bloom PSO: {e}"))
 }
 

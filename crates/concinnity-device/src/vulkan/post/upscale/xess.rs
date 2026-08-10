@@ -410,8 +410,14 @@ impl XessUpscaler {
         }
 
         let init_flags = XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE;
-        let rc =
-            unsafe { (xess.build_pipelines)(ctx, vk::PipelineCache::null(), true, init_flags) };
+        let rc = unsafe {
+            (xess.build_pipelines)(
+                ctx,
+                crate::vulkan::pipeline_cache::handle(),
+                true,
+                init_flags,
+            )
+        };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!(
                 "XeSS (Vulkan): xessVKBuildPipelines returned {rc}; trying the next backend"
@@ -433,7 +439,7 @@ impl XessUpscaler {
             buffer_heap_offset: 0,
             temp_texture_heap: vk::DeviceMemory::null(),
             texture_heap_offset: 0,
-            pipeline_cache: vk::PipelineCache::null(),
+            pipeline_cache: crate::vulkan::pipeline_cache::handle(),
         };
         let rc = unsafe { (xess.init)(ctx, &init_params) };
         if rc != XESS_RESULT_SUCCESS {

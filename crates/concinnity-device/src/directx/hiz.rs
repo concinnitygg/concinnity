@@ -175,7 +175,7 @@ fn create_hiz_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateComputePipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create {label} PSO: {e}"))
 }
 

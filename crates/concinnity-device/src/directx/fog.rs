@@ -335,7 +335,7 @@ fn create_fog_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create fog PSO: {e}"))
 }
 
@@ -357,7 +357,7 @@ fn create_fog_froxel_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateComputePipelineState(&desc) }
+    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create fog froxel PSO: {e}"))
 }
 

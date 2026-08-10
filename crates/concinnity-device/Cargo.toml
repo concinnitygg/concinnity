@@ -19,7 +19,6 @@ doctest = false
 # over the MoltenVK ICD and is a testing path, not a shipping one.
 vulkan = [
     "dep:ash",
-    "dep:sha2",
     "dep:shaderc",
     "concinnity-cpu/vulkan",
     "concinnity-render/vulkan",
@@ -38,12 +37,8 @@ rayon = "1"
 tracing = "0.1.44"
 # Backend shader hot-reload watches each backend's shader dir for edits.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
-
-# Keys the built-in shader binary cache (src/shader_cache.rs), which the DirectX
-# and Vulkan backends use to skip recompiling their embedded shaders every launch.
-# Metal reaches the same end at build time, so a default macOS build never
-# compiles the module and takes this only through the `vulkan` feature.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Keys the shader binary cache (src/shader_cache.rs): DirectX and Vulkan cache
+# their embedded built-ins, Metal its runtime-assembled raymarch metallibs.
 sha2 = "0.10.9"
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
@@ -77,9 +72,8 @@ shaderc = { version = "0.10.1", optional = true }
 # Activated by the `vulkan` feature for a Vulkan build on macOS, which runs over
 # the MoltenVK ICD. Windowing is the shared native AppKit layer (src/appkit),
 # the same one the Metal backend uses, so no GLFW is involved. `shaderc`
-# compiles GLSL to SPIR-V at runtime; `sha2` keys the resulting binary cache.
+# compiles GLSL to SPIR-V at runtime.
 ash = { version = "0.38", optional = true }
-sha2 = { version = "0.10.9", optional = true }
 shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
 
 block2 = "0.6.2"

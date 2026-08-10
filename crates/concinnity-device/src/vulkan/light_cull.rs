@@ -173,10 +173,9 @@ pub(in crate::vulkan) fn build_light_cull(
         .stage(stage)
         .layout(pipeline_layout);
     let pipeline = unsafe {
-        device.create_compute_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_compute_pipelines(
+            device,
             std::slice::from_ref(&pipeline_info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("light cull pipeline: {e}"))?[0];

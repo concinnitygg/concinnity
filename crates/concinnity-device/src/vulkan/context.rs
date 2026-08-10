@@ -2480,6 +2480,10 @@ impl Drop for VkContext {
         }
 
         if !self.reused_by_successor {
+            // Persist and destroy the device's pipeline cache before the
+            // device goes away. On a lost device the serialize inside is
+            // skipped and the previous blob stays valid.
+            super::pipeline_cache::shutdown(&self.device);
             unsafe { self.device.destroy_device(None) };
             unsafe { self.instance.destroy_instance(None) };
         }

@@ -34,6 +34,7 @@ mod math;
 mod parallel_encoder;
 mod particle;
 mod pipeline;
+mod pipeline_cache;
 mod planar;
 mod post;
 mod probe;

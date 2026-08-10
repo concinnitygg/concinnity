@@ -280,10 +280,9 @@ fn create_composite_pipeline(
         .render_pass(render_pass)
         .subpass(0);
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create reflection composite pso: {e}"))?[0];

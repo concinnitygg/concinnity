@@ -1,12 +1,15 @@
-// Content-addressed cache for the engine's built-in shader binaries.
+// Content-addressed cache for the shader binaries compiled after build time.
 //
 // The DirectX and Vulkan backends compile every built-in shader from embedded
 // source at renderer init, and that compile dominates startup: 993 ms of a
 // 1.58 s release init on DirectX (45 FXC invocations), and 369 ms on Vulkan (53
-// shaderc invocations). The output is a pure function of the source text, the
-// entry point, the compile target, and the compiler options, none of which
-// change between runs of an unedited binary -- so the second run of a given
-// build has no reason to compile anything.
+// shaderc invocations). Metal precompiles its built-ins into the binary but
+// assembles the raymarch libraries around world-authored SdfVolume fragments
+// at init, and caches those metallibs here (see `metal::msl_cache`). The
+// output is a pure function of the source text, the entry point, the compile
+// target, and the compiler options, none of which change between runs of an
+// unedited binary -- so the second run of a given build has no reason to
+// compile anything.
 //
 // Each artifact is stored under the hex digest of those inputs, which makes the
 // entry self-validating: a shader edit, a flag change, or a debug/release switch
@@ -99,6 +102,7 @@ pub(crate) fn cached(
 // How `ensure_in` satisfied a request: the artifact was already in the target
 // directory, was copied over from this machine's local cache tiers, or had to
 // be compiled fresh.
+#[cfg(any(backend_dx, backend_vk))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Ensured {
     Present,
@@ -110,6 +114,7 @@ pub(crate) enum Ensured {
 // compiling only when neither `dir` nor the local cache tiers already hold it.
 // A fresh compile is also stored locally, so repeated exports stay warm. Used
 // by the export-time precompile; the runtime path stays on `cached`.
+#[cfg(any(backend_dx, backend_vk))]
 pub(crate) fn ensure_in(
     dir: &Path,
     key: &Key<'_>,
@@ -401,6 +406,7 @@ mod tests {
         assert_eq!(evictions(&mut listing, 0).len(), 2);
     }
 
+    #[cfg(any(backend_dx, backend_vk))]
     #[test]
     fn ensure_in_compiles_once_then_finds_the_artifact_present() {
         let dir = std::env::temp_dir().join(format!("cn_sc_ensure_{}", std::process::id()));
@@ -417,6 +423,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(any(backend_dx, backend_vk))]
     #[test]
     fn ensure_in_propagates_a_compile_error_and_stores_nothing() {
         let dir = std::env::temp_dir().join(format!("cn_sc_ensure_err_{}", std::process::id()));

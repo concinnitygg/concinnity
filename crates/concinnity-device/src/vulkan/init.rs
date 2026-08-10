@@ -381,6 +381,11 @@ impl VkContext {
                 //  `directx::build_timestamp_resources`.
                 let device_props =
                     unsafe { instance.get_physical_device_properties(physical_device) };
+
+                //  Persisted pipeline cache: seeded from disk when a blob for
+                //  this device exists, handed to every pipeline creation below.
+                super::pipeline_cache::install(&device, &device_props);
+
                 let queue_family_props = unsafe {
                     instance.get_physical_device_queue_family_properties(physical_device)
                 };
@@ -4035,6 +4040,11 @@ impl VkContext {
             me.alloc.max_allocations(),
         );
         crate::shader_cache::report_init_and_prune();
+        // Persist the pipeline cache now that every init-built pipeline has
+        // populated it; a crash mid-session then still leaves the next launch
+        // warm.
+        super::pipeline_cache::serialize(&me.device);
+        crate::pipeline_cache::report_init(super::pipeline_cache::disk_state());
         Ok(me)
     }
 

@@ -176,7 +176,8 @@ pub(in crate::directx) fn create_cull_pso(
         },
         ..Default::default()
     };
-    unsafe { device.CreateComputePipelineState(&desc) }.map_err(|e| format!("create cull PSO: {e}"))
+    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
+        .map_err(|e| format!("create cull PSO: {e}"))
 }
 
 // Command signature for the GPU-driven main pass `ExecuteIndirect`: each

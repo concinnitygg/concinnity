@@ -211,6 +211,10 @@ impl DxContext {
                 hdr_pq,
             )?,
         };
+        // Persisted pipeline library: seeded from disk when a blob for this
+        // adapter exists, consulted by every PSO creation below. No-op on the
+        // reload path, where it is already installed.
+        super::pso_library::install(&device, adapter.as_ref());
         // Placement pool for every persistent buffer and CPU-uploaded texture.
         // Built before the first resource so nothing has to fall back to a
         // committed allocation.
@@ -2097,6 +2101,11 @@ impl DxContext {
         };
 
         crate::shader_cache::report_init_and_prune();
+        // Persist the pipeline library now that every init-built PSO has
+        // populated it; a crash mid-session then still leaves the next launch
+        // warm.
+        super::pso_library::serialize();
+        crate::pipeline_cache::report_init(super::pso_library::disk_state());
 
         let pooled = alloc.stats();
         tracing::info!(

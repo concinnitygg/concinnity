@@ -151,15 +151,8 @@ pub(in crate::metal) fn build_raymarch_pipeline(
         RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_TEMPLATE_MSL
     );
 
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(&wrapped), Some(&options))
-        .map_err(|e| {
-            format!(
-                "raymarch shader compile error for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
-        })?;
+    let library = super::msl_cache::compiled_library(device, &wrapped, asset_label)
+        .map_err(|e| format!("raymarch shader compile error for SdfVolume '{asset_label}': {e}"))?;
 
     let vert_fn = library
         .newFunctionWithName(&ns_str("raymarch_vertex"))
@@ -260,14 +253,9 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
         RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_SHADOW_MSL
     );
 
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(&wrapped), Some(&options))
-        .map_err(|e| {
-            format!(
-                "raymarch shadow shader compile error for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
+    let library =
+        super::msl_cache::compiled_library(device, &wrapped, asset_label).map_err(|e| {
+            format!("raymarch shadow shader compile error for SdfVolume '{asset_label}': {e}")
         })?;
 
     let vert_fn = library
@@ -355,14 +343,9 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         RAYMARCH_HELPERS_MSL, asset_label, user_source, RAYMARCH_VOLUMETRIC_MSL
     );
 
-    let options = objc2_metal::MTLCompileOptions::new();
-    let library = device
-        .newLibraryWithSource_options_error(&NSString::from_str(&wrapped), Some(&options))
-        .map_err(|e| {
-            format!(
-                "raymarch volumetric shader compile error for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
+    let library =
+        super::msl_cache::compiled_library(device, &wrapped, asset_label).map_err(|e| {
+            format!("raymarch volumetric shader compile error for SdfVolume '{asset_label}': {e}")
         })?;
 
     let vert_fn = library

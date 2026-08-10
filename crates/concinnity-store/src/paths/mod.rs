@@ -105,6 +105,16 @@ pub fn shader_cache_dir() -> PathBuf {
     writable_state_dir().join("shader-cache")
 }
 
+/// Directory the renderer persists driver pipeline blobs to (a serialized
+/// VkPipelineCache, a D3D12 pipeline library), keyed per adapter. Unlike
+/// [`shader_cache_dir`] artifacts these are machine code tied to one GPU and
+/// driver, so they resolve under the writable-state dir only and never ship in
+/// a bundle. A sibling of `shader-cache/` rather than a subdirectory, since the
+/// shader cache prunes its directory by age and would reclaim these.
+pub fn pipeline_cache_dir() -> PathBuf {
+    writable_state_dir().join("pipeline-cache")
+}
+
 /// Directory holding shader binaries shipped inside a bundle, read-only. `cn
 /// export` warms this so a player's first launch does not pay the compile;
 /// because the artifacts are backend IR (DXBC / SPIR-V) rather than machine

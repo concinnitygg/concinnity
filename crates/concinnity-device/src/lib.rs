@@ -52,11 +52,17 @@ pub(crate) mod win32;
 #[cfg(all(target_os = "macos", any(backend_metal, backend_vk)))]
 pub(crate) mod appkit;
 
-// Disk cache for the built-in shader binaries the DirectX and Vulkan backends
-// compile at init. Metal reaches its equivalent at build time (the toolchain
-// crate precompiles every `.metal` into the binary), so it has no use for this.
-#[cfg(any(backend_dx, backend_vk))]
+// Disk cache for shader binaries compiled after build time: the built-ins the
+// DirectX and Vulkan backends compile at init, and the Metal raymarch
+// libraries assembled from world-authored SdfVolume fragments (the rest of
+// Metal precompiles into the binary via the toolchain crate).
 pub(crate) mod shader_cache;
+
+// Disk persistence for driver pipeline blobs (VkPipelineCache, D3D12 pipeline
+// library). Metal needs none: its libraries are precompiled or cached above,
+// and the OS maintains the per-app pipeline binary cache.
+#[cfg(any(backend_dx, backend_vk))]
+pub(crate) mod pipeline_cache;
 
 // Export-time precompilation of the built-in shaders into a bundle's
 // shader-cache/. Backends whose shaders compile at renderer init (DX, VK)

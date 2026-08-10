@@ -656,11 +656,7 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = unsafe {
-        device.create_compute_pipelines(
-            vk::PipelineCache::null(),
-            std::slice::from_ref(&info),
-            None,
-        )
+        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create particle compute pipeline: {e}"))?[0];
     unsafe { device.destroy_shader_module(module, None) };
@@ -735,10 +731,9 @@ fn create_render_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
+        crate::vulkan::pipeline_cache::create_graphics_pipelines(
+            device,
             std::slice::from_ref(&info),
-            None,
         )
     }
     .map_err(|(_, e)| format!("create particle render pipeline: {e}"))?[0];

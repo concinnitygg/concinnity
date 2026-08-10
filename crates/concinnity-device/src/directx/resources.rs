@@ -203,7 +203,7 @@ fn create_skinned_pso_filled(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create skinned PSO: {e}"))
 }
 
@@ -260,7 +260,7 @@ fn create_skinned_shadow_pso(
         ..Default::default()
     };
 
-    unsafe { device.CreateGraphicsPipelineState(&pso_desc) }
+    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create skinned shadow PSO: {e}"))
 }
 
