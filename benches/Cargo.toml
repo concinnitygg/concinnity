@@ -1,0 +1,44 @@
+[package]
+name = "concinnity-bench"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "concinnity_bench"
+doctest = false
+bench = false
+
+# The harness installs the tracking allocator itself, so this crate must never
+# depend on concinnity-engine: linking it would install a second global
+# allocator and fail the build.
+[dependencies]
+concinnity-blob = { path = "../crates/concinnity-blob" }
+concinnity-cook = { path = "../crates/concinnity-cook" }
+concinnity-cpu = { path = "../crates/concinnity-cpu" }
+concinnity-eas = { path = "../crates/concinnity-eas" }
+concinnity-memory = { path = "../crates/concinnity-memory" }
+
+# Bench targets live in the package root rather than the conventional
+# benches/ subdirectory, which would read as benches/benches/ from the
+# workspace root.
+[[bench]]
+name = "anim"
+path = "anim.rs"
+harness = false
+
+[[bench]]
+name = "cook"
+path = "cook.rs"
+harness = false
+
+[[bench]]
+name = "ecs"
+path = "ecs.rs"
+harness = false
+
+[[bench]]
+name = "memory"
+path = "memory.rs"
+harness = false

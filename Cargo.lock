@@ -613,6 +613,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-bench"
+version = "0.18.2"
+dependencies = [
+ "concinnity-blob",
+ "concinnity-cook",
+ "concinnity-cpu",
+ "concinnity-eas",
+ "concinnity-memory",
+]
+
+[[package]]
 name = "concinnity-blob"
 version = "0.18.2"
 dependencies = [
