@@ -40,6 +40,12 @@ cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
   import-baked (61-key) and sparse (2-key) track densities, weighted pose
   blending, skinning-matrix resolution, the composed two-clip per-character
   cost, and the two-bone IK solve.
+- `physics`: the physics wrapper and rapier. Stepping benches rebuild an
+  identical stacked world and step it a fixed count per iteration, so the
+  measured work is bit-identical run to run (asserted, so a rapier upgrade
+  that breaks determinism fails loudly): sustained-contact settling,
+  contact-free fall, the sleeping-island idle step, world build, body
+  churn, raycasts, and the character-move solve.
 
 ## Reading the report
 

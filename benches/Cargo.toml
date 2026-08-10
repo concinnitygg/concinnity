@@ -19,6 +19,7 @@ concinnity-cook = { path = "../crates/concinnity-cook" }
 concinnity-cpu = { path = "../crates/concinnity-cpu" }
 concinnity-eas = { path = "../crates/concinnity-eas" }
 concinnity-memory = { path = "../crates/concinnity-memory" }
+concinnity-physics = { path = "../crates/concinnity-physics" }
 
 # Bench targets live in the package root rather than the conventional
 # benches/ subdirectory, which would read as benches/benches/ from the
@@ -41,4 +42,9 @@ harness = false
 [[bench]]
 name = "memory"
 path = "memory.rs"
+harness = false
+
+[[bench]]
+name = "physics"
+path = "physics.rs"
 harness = false

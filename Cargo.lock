@@ -621,6 +621,7 @@ dependencies = [
  "concinnity-cpu",
  "concinnity-eas",
  "concinnity-memory",
+ "concinnity-physics",
 ]
 
 [[package]]
