@@ -18,6 +18,7 @@ vulkan = ["example-common/vulkan"]
 [dependencies]
 # Shared host glue: compile a world.jsonl in memory and run it on the runtime.
 example-common = { path = "../common" }
+concinnity-memory = { path = "../../crates/concinnity-memory" }
 # First-run asset fetch. ureq downloads the archive (HTTP, already used
 # elsewhere in the workspace); zip unpacks it. deflate-only to keep the
 # dependency lean. These are example-only and never reach the engine crates.

@@ -40,6 +40,11 @@ cargo bench -p concinnity-bench -- --json out.json  # machine-readable report
   import-baked (61-key) and sparse (2-key) track densities, weighted pose
   blending, skinning-matrix resolution, the composed two-clip per-character
   cost, and the two-bone IK solve.
+- `engine`: the engine's public `World` surface, against the real registered
+  component set rather than the `ecs` target's synthetic three. World
+  populate (with and without the manifest pre-size), column iteration,
+  targeted lookups, and column drain. `World::despawn` is `#[cfg(test)]`
+  and so is not reachable here.
 - `render`: the GPU-free render-prep layer. BVH build and frustum query
   over a 10k-object scene, light packing for the clustered forward pass,
   the streaming planner's per-frame re-rank under sustained pool pressure
@@ -65,9 +70,6 @@ Call `Bench::run(name, items, body)` from a bench target. Name benchmarks
 `target/what/size`. Keep bodies self-contained: tear down what you build, or
 the heap column will show the drift. New targets are a file in the package
 root with a `[[bench]]` entry naming it via `path`, `harness = false`.
-
-This crate must not depend on `concinnity-engine`: the harness installs the
-tracking allocator itself, and linking the engine would install a second one.
 
 Whole-frame, whole-world measurements (system schedules, streaming, physics
 under load) are a different instrument: they run a real client against a

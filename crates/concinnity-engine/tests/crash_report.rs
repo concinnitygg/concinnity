@@ -4,6 +4,10 @@
 
 use std::process::Command;
 
+#[global_allocator]
+static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
+    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+
 #[test]
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]
 fn panicking_probe() {
@@ -55,7 +59,8 @@ fn crash_report_lands_for_a_panicking_process() {
     // The memory figures come from a real crashing process, so they must be
     // plausible rather than merely present: the tracked heap is a part of the
     // resident set, never the whole of it or more.
-    let heap_live = header_bytes(&text, "heap-live: ").expect("the engine installs the allocator");
+    let heap_live =
+        header_bytes(&text, "heap-live: ").expect("this test binary installs the allocator");
     let rss = header_bytes(&text, "rss: ").expect("RSS is queryable on a supported platform");
     assert!(heap_live > 0, "a running process holds a tracked heap");
     assert!(

@@ -49,6 +49,9 @@ pub fn init_logging() {
         .with(fmt)
         .with(crate::crash::RingLayer)
         .try_init();
+
+    // After the subscriber is up, so the warning is visible when it fires.
+    crate::heap::verify_installed();
 }
 
 // Production entry point (`cn run`). Reads the compiled binary blobs from

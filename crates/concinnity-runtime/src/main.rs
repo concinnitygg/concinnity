@@ -10,6 +10,10 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+#[global_allocator]
+static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
+    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+
 // Windows' system `d3d12.dll` reads these two symbols from the host EXE's PE
 // export table at process start to load the bundled Agility SDK D3D12 runtime
 // in place of the older OS copy (modern FidelityFX FSR3 needs it). The build
@@ -157,16 +161,16 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 mod tests {
     use super::*;
 
-    // The shipped player counts its own heap. The allocator arrives by linking
-    // the engine (`concinnity_engine::heap`) rather than being declared here,
-    // so this asserts the property survives all the way out to the binary that
-    // actually ships -- which no test inside a library can do for it.
+    // The shipped player counts its own heap. Nothing forces the declaration
+    // at the top of this file to exist, so this is what catches its removal:
+    // without it the player would run correctly while reporting no memory at
+    // all, and crash reports would ship without heap figures.
     #[test]
     fn the_shipped_player_tracks_its_own_heap() {
         const MIB: usize = 1 << 20;
 
         let before = concinnity_memory::stats()
-            .expect("linking the engine installs the allocator")
+            .expect("this binary declares the tracking allocator")
             .alloc_count;
         let held: Vec<u8> = core::hint::black_box(vec![0; MIB]);
         let after = concinnity_memory::stats().expect("the allocator stays installed");

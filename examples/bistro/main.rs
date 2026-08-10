@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 
 use example_common::{compile_world, init_logging, paths, run};
 
+#[global_allocator]
+static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
+    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+
 // The NVIDIA ORCA download. It redirects to the actual archive; ureq follows
 // redirects. Override with BISTRO_URL, or point BISTRO_ARCHIVE at an
 // already-downloaded archive to skip the download entirely.

@@ -14,12 +14,10 @@ vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
 concinnity-engine = { path = "../concinnity-engine" }
+concinnity-memory = { path = "../concinnity-memory" }
 
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }
 
 [dev-dependencies]
-# Only the heap-tracking test reads the counters; the player itself gets the
-# allocator by linking the engine and never names the crate.
-concinnity-memory = { path = "../concinnity-memory" }
 tempfile = "3"
