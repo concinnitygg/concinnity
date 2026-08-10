@@ -13,8 +13,10 @@
 pub mod assets;
 pub mod blob;
 pub mod ecs;
-// The process allocator, installed by linking this crate.
 mod heap;
+
+#[cfg(test)]
+mod bench;
 
 // Renderer-free foundation shared with the build/validate pipeline: the result
 // vocabulary from concinnity-core, the payload decoders and runtime geometry

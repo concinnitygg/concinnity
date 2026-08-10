@@ -31,6 +31,8 @@ mod save;
 mod trace;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
 
 use program::{Program, Val, VarTable};
