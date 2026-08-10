@@ -10,9 +10,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-#[global_allocator]
-static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
-    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+concinnity_memory::install_global_allocator!();
 
 // Windows' system `d3d12.dll` reads these two symbols from the host EXE's PE
 // export table at process start to load the bundled Agility SDK D3D12 runtime

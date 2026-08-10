@@ -8,11 +8,9 @@
 // program, so a library that declares one decides for every binary that links
 // it, and forbids any of them from choosing another -- including the test and
 // benchmark binaries that link the engine to measure it. Each Concinnity
-// binary therefore installs the tracking allocator itself:
+// binary therefore installs the tracking allocator itself, at its crate root:
 //
-//     #[global_allocator]
-//     static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
-//         concinnity_memory::TrackingAlloc::new(std::alloc::System);
+//     concinnity_memory::install_global_allocator!();
 //
 // Nothing forces that declaration at compile time, and a binary without it
 // runs correctly on Rust's default allocator while reporting no memory at all:
@@ -38,9 +36,7 @@ pub(crate) fn verify_installed() {
 // The engine's own test binary is a binary too, and unit tests and in-crate
 // benchmarks read allocation counts, so it installs the allocator here.
 #[cfg(test)]
-#[global_allocator]
-static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
-    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+concinnity_memory::install_global_allocator!();
 
 #[cfg(test)]
 mod tests {

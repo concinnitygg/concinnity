@@ -78,6 +78,26 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for TrackingAlloc<A> {
     }
 }
 
+/// Install [`TrackingAlloc`] over the system allocator as this program's
+/// `#[global_allocator]`.
+///
+/// `#[global_allocator]` is a per-program item, so every binary, test binary,
+/// and benchmark that should count its own heap invokes this once at its crate
+/// root. A program without it runs on Rust's default allocator and reports no
+/// memory at all, which is what [`crate::stats`] returning `None` means.
+///
+/// ```
+/// concinnity_memory::install_global_allocator!();
+/// ```
+#[macro_export]
+macro_rules! install_global_allocator {
+    () => {
+        #[global_allocator]
+        static CN_GLOBAL_ALLOC: $crate::TrackingAlloc<std::alloc::System> =
+            $crate::TrackingAlloc::new(std::alloc::System);
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

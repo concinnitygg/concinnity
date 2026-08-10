@@ -13,12 +13,12 @@
 
 use std::time::Instant;
 
-use concinnity_memory::{Realm, TrackingAlloc};
+use concinnity_memory::Realm;
 
-// The same tracking allocator every engine binary runs on, installed here so
-// the per-iteration allocation counts are real.
-#[global_allocator]
-static ALLOC: TrackingAlloc<std::alloc::System> = TrackingAlloc::new(std::alloc::System);
+// One declaration for every bench target in this package: the per-iteration
+// allocation counts are only real because the harness runs on the tracking
+// allocator.
+concinnity_memory::install_global_allocator!();
 
 const MAX_ITERS: u64 = 1 << 22;
 const DEFAULT_SAMPLES: usize = 25;

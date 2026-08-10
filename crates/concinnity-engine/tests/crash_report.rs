@@ -4,9 +4,10 @@
 
 use std::process::Command;
 
-#[global_allocator]
-static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
-    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+// An integration test links the engine as an ordinary dependency, so it
+// inherits nothing from the engine's own `#[cfg(test)]` allocator, and without
+// one the report below would carry no heap figures to assert on.
+concinnity_memory::install_global_allocator!();
 
 #[test]
 #[ignore = "probe body: spawned by crash_report_lands_for_a_panicking_process"]

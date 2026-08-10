@@ -36,9 +36,7 @@ pub static D3D12SDKVersion: u32 = 619;
 #[used]
 pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
 
-#[global_allocator]
-static ALLOC: concinnity_memory::TrackingAlloc<std::alloc::System> =
-    concinnity_memory::TrackingAlloc::new(std::alloc::System);
+concinnity_memory::install_global_allocator!();
 
 mod cli;
 mod entry;
