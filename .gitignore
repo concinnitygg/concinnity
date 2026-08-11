@@ -51,6 +51,7 @@ xcuserdata/
 *.suo
 *.tmp
 
+.actrc
 .DS_Store
 .env
 .envrc
