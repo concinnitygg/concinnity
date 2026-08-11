@@ -654,4 +654,265 @@ mod tests {
     fn missing_subcommand_is_an_error() {
         assert!(Cli::try_parse_from(["concinnity"]).is_err());
     }
+
+    // The argv enum exists only so concinnity-editor carries no clap dependency,
+    // which makes this conversion the seam between the two. It is applied in the
+    // dispatch, so cover every variant here rather than through a running
+    // `cn debug watch`.
+    #[test]
+    fn watch_target_arg_converts_every_variant() {
+        assert!(matches!(
+            WatchTarget::from(WatchTargetArg::Camera),
+            WatchTarget::Camera
+        ));
+        assert!(matches!(
+            WatchTarget::from(WatchTargetArg::State),
+            WatchTarget::State
+        ));
+        assert!(matches!(
+            WatchTarget::from(WatchTargetArg::Streaming),
+            WatchTarget::Streaming
+        ));
+        assert!(matches!(
+            WatchTarget::from(WatchTargetArg::Profile),
+            WatchTarget::Profile
+        ));
+    }
+
+    #[test]
+    fn every_watch_target_name_parses() {
+        for name in ["camera", "state", "streaming", "profile"] {
+            let cli = Cli::try_parse_from(["concinnity", "debug", "watch", name])
+                .unwrap_or_else(|e| panic!("{name} should parse: {e}"));
+            let Commands::Debug(a) = cli.command else {
+                panic!("expected debug");
+            };
+            assert!(matches!(a.client, Some(DebugClientCommand::Watch(_))));
+        }
+    }
+
+    #[test]
+    fn init_takes_no_arguments() {
+        let cli = Cli::try_parse_from(["concinnity", "init"]).unwrap();
+        assert!(matches!(cli.command, Commands::Init));
+        assert!(Cli::try_parse_from(["concinnity", "init", "extra"]).is_err());
+    }
+
+    #[test]
+    fn new_requires_a_path() {
+        assert!(Cli::try_parse_from(["concinnity", "new"]).is_err());
+        let cli = Cli::try_parse_from(["concinnity", "new", "my-app"]).unwrap();
+        let Commands::New(a) = cli.command else {
+            panic!("expected new");
+        };
+        assert_eq!(a.path, "my-app");
+    }
+
+    // `build` and `test` share the same optional --file, defaulting to discovery.
+    #[test]
+    fn build_and_test_take_an_optional_world_file() {
+        let cli = Cli::try_parse_from(["concinnity", "build"]).unwrap();
+        let Commands::Build(a) = cli.command else {
+            panic!("expected build");
+        };
+        assert!(a.file.is_none());
+
+        let cli = Cli::try_parse_from(["concinnity", "build", "-f", "w.jsonl"]).unwrap();
+        let Commands::Build(a) = cli.command else {
+            panic!("expected build");
+        };
+        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+
+        let cli = Cli::try_parse_from(["concinnity", "test", "--file", "w.jsonl"]).unwrap();
+        let Commands::Test(a) = cli.command else {
+            panic!("expected test");
+        };
+        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+    }
+
+    #[test]
+    fn list_flags_are_independent() {
+        let cli = Cli::try_parse_from(["concinnity", "list"]).unwrap();
+        let Commands::List(a) = cli.command else {
+            panic!("expected list");
+        };
+        assert!(!a.expanded);
+        assert!(!a.systems);
+
+        let cli = Cli::try_parse_from(["concinnity", "list", "--expanded", "--systems"]).unwrap();
+        let Commands::List(a) = cli.command else {
+            panic!("expected list");
+        };
+        assert!(a.expanded);
+        assert!(a.systems);
+    }
+
+    #[test]
+    fn explain_requires_a_name() {
+        assert!(Cli::try_parse_from(["concinnity", "explain"]).is_err());
+        let cli = Cli::try_parse_from(["concinnity", "explain", "gfx", "-f", "w.jsonl"]).unwrap();
+        let Commands::Explain(a) = cli.command else {
+            panic!("expected explain");
+        };
+        assert_eq!(a.name, "gfx");
+        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+    }
+
+    #[test]
+    fn rm_requires_a_name() {
+        assert!(Cli::try_parse_from(["concinnity", "rm"]).is_err());
+        let cli = Cli::try_parse_from(["concinnity", "rm", "my_llm"]).unwrap();
+        let Commands::Rm(a) = cli.command else {
+            panic!("expected rm");
+        };
+        assert_eq!(a.name, "my_llm");
+    }
+
+    #[test]
+    fn add_takes_a_scaffold_template() {
+        let cli = Cli::try_parse_from(["concinnity", "add", "scene.glb", "-t", "minimal-3d-world"])
+            .unwrap();
+        let Commands::Add(a) = cli.command else {
+            panic!("expected add");
+        };
+        assert_eq!(a.target, "scene.glb");
+        assert_eq!(a.template.as_deref(), Some("minimal-3d-world"));
+    }
+
+    #[test]
+    fn docs_root_defaults_to_the_current_directory() {
+        let cli = Cli::try_parse_from(["concinnity", "docs"]).unwrap();
+        let Commands::Docs(a) = cli.command else {
+            panic!("expected docs");
+        };
+        assert_eq!(a.root.as_deref(), Some("."));
+
+        let cli = Cli::try_parse_from(["concinnity", "docs", "--root", "/engine"]).unwrap();
+        let Commands::Docs(a) = cli.command else {
+            panic!("expected docs");
+        };
+        assert_eq!(a.root.as_deref(), Some("/engine"));
+    }
+
+    // Validation is tri-state: absent means "default for this build profile",
+    // so an explicit `false` must survive parsing as a value rather than
+    // collapsing into the absent case.
+    #[test]
+    fn run_validation_is_tri_state() {
+        let cli = Cli::try_parse_from(["concinnity", "run"]).unwrap();
+        let Commands::Run(a) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(a.validation, None);
+
+        for (arg, expected) in [("true", true), ("false", false)] {
+            let cli = Cli::try_parse_from(["concinnity", "run", "--validation", arg]).unwrap();
+            let Commands::Run(a) = cli.command else {
+                panic!("expected run");
+            };
+            assert_eq!(a.validation, Some(expected));
+        }
+    }
+
+    #[test]
+    fn editor_takes_a_file_debug_port_and_validation() {
+        let cli = Cli::try_parse_from(["concinnity", "editor"]).unwrap();
+        let Commands::Editor(a) = cli.command else {
+            panic!("expected editor");
+        };
+        assert!(a.file.is_none());
+        assert!(a.debug_port.is_none());
+        assert!(a.validation.is_none());
+
+        let cli = Cli::try_parse_from([
+            "concinnity",
+            "editor",
+            "-f",
+            "w.jsonl",
+            "--debug-port",
+            "9001",
+            "--validation",
+            "false",
+        ])
+        .unwrap();
+        let Commands::Editor(a) = cli.command else {
+            panic!("expected editor");
+        };
+        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(a.debug_port, Some(9001));
+        assert_eq!(a.validation, Some(false));
+    }
+
+    #[test]
+    fn export_flags_override_every_default() {
+        let cli = Cli::try_parse_from([
+            "concinnity",
+            "export",
+            "-f",
+            "w.jsonl",
+            "-n",
+            "My Game",
+            "--version",
+            "2.0.0",
+            "--platform",
+            "macos",
+            "--out",
+            "build",
+            "--format",
+            "dir",
+            "--dmg",
+        ])
+        .unwrap();
+        let Commands::Export(e) = cli.command else {
+            panic!("expected export");
+        };
+        assert_eq!(e.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(e.name.as_deref(), Some("My Game"));
+        assert_eq!(e.version.as_deref(), Some("2.0.0"));
+        assert_eq!(e.platform.as_deref(), Some("macos"));
+        assert_eq!(e.out, "build");
+        assert_eq!(e.format, "dir");
+        assert!(e.dmg);
+    }
+
+    #[test]
+    fn debug_takes_a_port_and_validation_without_a_client() {
+        let cli = Cli::try_parse_from([
+            "concinnity",
+            "debug",
+            "--debug-port",
+            "9100",
+            "--validation",
+            "true",
+        ])
+        .unwrap();
+        let Commands::Debug(a) = cli.command else {
+            panic!("expected debug");
+        };
+        assert!(a.client.is_none());
+        assert_eq!(a.debug_port, Some(9100));
+        assert_eq!(a.validation, Some(true));
+    }
+
+    // Only the paths that decline to re-exec are driven: the guard returns for a
+    // command that starts no renderer, and for a render command with validation
+    // explicitly off. Requesting validation would `exec` and replace the test
+    // process, so no case here leaves `validation` unset or true.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_validation_reexec_declines_when_not_requested() {
+        for args in [
+            ["concinnity", "run", "--validation", "false"],
+            ["concinnity", "editor", "--validation", "false"],
+            ["concinnity", "debug", "--validation", "false"],
+        ] {
+            reexec_with_metal_validation(&Cli::try_parse_from(args).unwrap());
+        }
+        // A `cn debug` client subcommand stands up no renderer, so it returns at
+        // the match rather than reaching the request check.
+        reexec_with_metal_validation(
+            &Cli::try_parse_from(["concinnity", "debug", "smoke"]).unwrap(),
+        );
+        reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "list"]).unwrap());
+    }
 }

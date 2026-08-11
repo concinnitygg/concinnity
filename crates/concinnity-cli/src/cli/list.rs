@@ -407,4 +407,35 @@ mod tests {
             write_world("{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
         assert!(list(Some(&path), true, false).is_err());
     }
+
+    // An unreadable world is reported rather than panicking. A directory stands
+    // in for the unreadable file: it passes the exists() check that selects the
+    // explicit path, then fails the read.
+    #[test]
+    fn list_of_an_unreadable_world_surfaces_the_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        assert!(list(Some(&path), false, false).is_err());
+    }
+
+    // An empty world expands to nothing (injection is conditional on what the
+    // world declares), so the expanded listing has no table to print.
+    #[test]
+    fn list_expanded_of_an_empty_world_is_ok() {
+        let (_dir, path) = write_world("");
+        list(Some(&path), true, false).unwrap();
+    }
+
+    // Likewise the schedule: with nothing declared, no system gates in.
+    #[test]
+    fn list_systems_of_an_empty_world_is_ok() {
+        let (_dir, path) = write_world("");
+        list(Some(&path), false, true).unwrap();
+    }
+
+    #[test]
+    fn manifest_lines_of_an_empty_world_are_empty() {
+        let world = concinnity_editor::build_world_from_str("").unwrap();
+        assert!(manifest_lines(&world).is_empty());
+    }
 }

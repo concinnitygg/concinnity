@@ -132,12 +132,15 @@ mod tests {
 
         fs::write(dir.join("Gone.md"), format!("{AUTOGEN_MARKER}\n\n# Gone\n")).unwrap();
         fs::write(dir.join("notes.md"), "hand written\n").unwrap();
+        // Non-Markdown neighbours are skipped outright, marker or not.
+        fs::write(dir.join("diagram.png"), format!("{AUTOGEN_MARKER}\n")).unwrap();
         docs(Some(root.to_str().unwrap())).expect("second run");
         assert!(!dir.join("Gone.md").exists(), "stale page should be pruned");
         assert!(
             dir.join("notes.md").exists(),
             "hand-authored page should stay"
         );
+        assert!(dir.join("diagram.png").exists(), "non-page should stay");
 
         fs::remove_dir_all(&root).ok();
     }
