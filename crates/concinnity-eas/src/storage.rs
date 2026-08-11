@@ -45,7 +45,6 @@ macro_rules! define_component_storage {
         impl $storage {
             // Push a statically-typed component into its column, minting a fresh
             // Entity for the new row and recording it in the join index.
-            #[allow(dead_code)]
             pub fn push_typed<C: $slot>(&mut self, c: C) -> $crate::Entity {
                 let entity = self.entities.alloc();
                 let tick = self.change_tick.bump();
@@ -69,13 +68,11 @@ macro_rules! define_component_storage {
 
             // Allocate a bare entity that owns no components yet. Useful for
             // gameplay-only entities and as the target of later `insert_typed`.
-            #[allow(dead_code)]
             pub fn spawn(&mut self) -> $crate::Entity {
                 self.entities.alloc()
             }
 
             // Whether a handle refers to a currently-live entity.
-            #[allow(dead_code)]
             pub fn is_alive(&self, entity: $crate::Entity) -> bool {
                 self.entities.is_alive(entity)
             }
@@ -84,7 +81,6 @@ macro_rules! define_component_storage {
             // not mint an entity: it is how an entity comes to own more than one
             // component. The entity must be alive and must not already have C
             // (a second row for the same (entity, C) would desync the join).
-            #[allow(dead_code)]
             pub fn insert_typed<C: $slot>(&mut self, entity: $crate::Entity, c: C) {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 debug_assert!(
@@ -106,7 +102,6 @@ macro_rules! define_component_storage {
             // other components intact), returning the value if present. Swap-
             // remove moves the column's last row into the freed slot, so the
             // moved row's owner has its recorded row patched.
-            #[allow(dead_code)]
             pub fn remove_typed<C: $slot>(&mut self, entity: $crate::Entity) -> Option<C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
@@ -125,7 +120,6 @@ macro_rules! define_component_storage {
             // Despawn an entity: swap-remove its row from every column it has,
             // patching each moved tail row, then recycle the entity id. This is
             // the structural-change primitive runtime despawn is built on.
-            #[allow(dead_code)]
             pub fn despawn(&mut self, entity: $crate::Entity) {
                 if !self.entities.is_alive(entity) {
                     return;
@@ -157,7 +151,6 @@ macro_rules! define_component_storage {
             // components stays alive with those intact and join-reachable. The
             // whole C column empties at once, so no per-row tail patch is needed
             // for C; only each owner's C entry in the join is cleared.
-            #[allow(dead_code)]
             pub fn drain<C: $slot>(&mut self) -> ::alloc::vec::Vec<C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let owners = C::slot(self).entities().to_vec();
@@ -174,7 +167,6 @@ macro_rules! define_component_storage {
 
             // Mutable slice of every component of type C, stamping the change
             // tick because any element may be written.
-            #[allow(dead_code)]
             pub fn values_mut<C: $slot>(&mut self) -> &mut [C] {
                 let tick = self.change_tick.bump();
                 C::slot_mut(self).values_mut(tick)
@@ -183,7 +175,6 @@ macro_rules! define_component_storage {
             // Mutable iteration over every component of type C paired with its
             // owning entity, stamping the change tick because any element may be
             // written. The mutable counterpart of the read-only column scan.
-            #[allow(dead_code)]
             pub fn values_mut_with_entities<C: $slot>(
                 &mut self,
             ) -> impl Iterator<Item = ($crate::Entity, &mut C)> {
@@ -194,7 +185,6 @@ macro_rules! define_component_storage {
             // The change tick of C's column: the tick at which any C was last
             // inserted, removed, or mutably accessed. Read-only, so it never
             // bumps the tick itself.
-            #[allow(dead_code)]
             pub fn changed_tick<C: $slot>(&self) -> $crate::Tick {
                 C::slot(self).changed_tick()
             }
@@ -221,7 +211,6 @@ macro_rules! define_component_storage {
             }
 
             // Borrow one entity's component C, if it has one.
-            #[allow(dead_code)]
             pub fn get<C: $slot>(&self, entity: $crate::Entity) -> Option<&C> {
                 let row = self.join.row(entity, $crate::ComponentId::new(C::DISCRIMINANT))?;
                 C::slot(self).get(row as usize)
@@ -230,7 +219,6 @@ macro_rules! define_component_storage {
             // Mutably borrow one entity's component C, stamping that row's
             // change tick (and the column's) but not the bulk tick, so
             // `changed_rows` can report exactly this entity.
-            #[allow(dead_code)]
             pub fn get_mut<C: $slot>(&mut self, entity: $crate::Entity) -> Option<&mut C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
@@ -243,7 +231,6 @@ macro_rules! define_component_storage {
             // yields both component refs. This is the multi-component query for
             // read paths (the draw-list push, scene visibility): one column scan
             // plus a join probe per row, no allocation.
-            #[allow(dead_code)]
             pub fn join2<'s, A: $slot, B: $slot>(
                 &'s self,
             ) -> impl Iterator<Item = ($crate::Entity, &'s A, &'s B)> + 's {
@@ -263,7 +250,6 @@ macro_rules! define_component_storage {
             }
 
             // Read-only join over three component types, lead on the first.
-            #[allow(dead_code)]
             pub fn join3<'s, A: $slot, B: $slot, C: $slot>(
                 &'s self,
             ) -> impl Iterator<Item = ($crate::Entity, &'s A, &'s B, &'s C)> + 's {
@@ -287,12 +273,10 @@ macro_rules! define_component_storage {
             }
 
             // Total number of components across all typed columns.
-            #[allow(dead_code)]
             pub fn len(&self) -> usize {
                 0 $( + self.$field.len() )+
             }
 
-            #[allow(dead_code)]
             pub fn is_empty(&self) -> bool {
                 true $( && self.$field.is_empty() )+
             }
@@ -329,6 +313,13 @@ macro_rules! define_component_storage {
 
 #[cfg(test)]
 mod tests {
+    // TestStorage is private to this module, so dead_code fires on whichever
+    // generated methods these tests happen not to call. Scoped here rather than
+    // emitted by the macro, which would put a suppression in every consumer's
+    // expansion. (The engine's own `ComponentStorage` is public API, so the
+    // lint never reaches it either way.)
+    #![allow(dead_code)]
+
     use std::vec::Vec;
     // `pub` so the generated `pub` columns don't expose a more-private type
     // (the real engine's component types are `pub`, so this never bites there).
