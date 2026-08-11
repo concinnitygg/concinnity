@@ -18,6 +18,7 @@
 // collide with this test binary's allocator and close a dependency cycle. The
 // numbers come from the same instruments either way.
 
+pub(crate) mod extraction;
 pub(crate) mod transforms;
 
 use std::time::Instant;

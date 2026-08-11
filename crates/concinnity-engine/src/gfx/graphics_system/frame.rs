@@ -1,12 +1,13 @@
-// GraphicsSystem per-frame step: transform/pose upload, scene-reel ticking, and
-// the backend draw call. Asset streaming + the camera-relative screen rebase run
-// in StreamingSystem, scheduled just before this system.
+// GraphicsSystem per-frame step: extraction of the frame's draw inputs from
+// world state into the owned RenderSnapshot, then submission of that snapshot
+// to the backend (see `submit`). Asset streaming + the camera-relative screen
+// rebase run in StreamingSystem, scheduled just before this system.
 
 use super::*;
 use crate::assets::{Camera3D, HitRegion, Sprite, TextLabel, WindowMode};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
-use crate::gfx::backend::FrameParams;
+use crate::gfx::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::gfx::{scene_flow, setting_action, settings, transform_propagation};
 // The settings-row helpers this system's init-time captures share with the
 // SettingCommand drain (which now lives in `settings_system`).
@@ -48,16 +49,51 @@ impl GraphicsSystem {
         let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(ctx.resources) else {
             return StepResult::Done;
         };
-        let result = self.step_with_backend(ctx, backend.as_mut());
+
+        // Fill the frame snapshot from world state, then submit it. The
+        // snapshot is taken out of `self` so extraction can borrow the change
+        // gates beside it; its buffers ride along and keep their capacity.
+        let mut snapshot = std::mem::take(&mut self.snapshot);
+        self.extract(ctx, &mut snapshot);
+        let outcome = super::submit::submit(&mut self.frame_policy, &snapshot, backend.as_mut());
+        self.snapshot = snapshot;
+
+        if outcome.memory_pressure {
+            publish_memory_pressure(ctx, self.frame_count);
+        }
+        if let Some(stats) = outcome.render_stats {
+            // Publish this frame's render stats for the profiler overlay.
+            // Backends without GPU-timed stats return the trait's default
+            // (all zeros), which the HUD displays as "--".
+            ctx.profile.render = stats;
+        }
+
+        let mut result = outcome.result;
+        if result == StepResult::Continue {
+            self.frame_count += 1;
+            if let Some(max) = self.max_frames
+                && self.frame_count >= max
+            {
+                tracing::info!("GraphicsSystem: max_frames ({}) reached", max);
+                backend.wait_idle();
+                // Stop, not Done: `Done` only retires this system and lets the
+                // world keep stepping the rest, which for a frame cap means the
+                // renderer shuts down and the process spins on headlessly. Stop
+                // ends the run, matching what closing the window does.
+                result = StepResult::Stop;
+            }
+        }
+
         crate::ecs::ActiveRenderBackend::put(ctx.resources, backend);
         result
     }
 
-    fn step_with_backend(
-        &mut self,
-        ctx: &mut PipelineContext,
-        backend: &mut dyn crate::gfx::backend::RenderBackend,
-    ) -> StepResult {
+    // Fill `snap` with everything this frame's draw consumes. All world-state
+    // reads on the frame path happen here; the backend is not borrowed, so
+    // extraction cannot reach the GPU and submission cannot reach the world.
+    pub(crate) fn extract(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
+        snap.clear();
+
         // The FPS-cap pacer runs at the App level before the world steps (see
         // `app::pacing`), so `elapsed` here already reflects the capped
         // interval.
@@ -104,299 +140,241 @@ impl GraphicsSystem {
             .unwrap_or_default();
         let menu_active = overlay.menu_active;
         // The editor's menu-state override also drives the backend's menu mode
-        // below (OverlaySystem already folded it into `menu_active`).
+        // (OverlaySystem already folded it into `menu_active`).
         let menu_override = ctx.resource::<crate::ecs::MenuOverride>().and_then(|m| m.0);
 
         // Hide the system cursor while an in-engine cursor sprite is shown
         // (edge-triggered in the backend, so this is cheap every frame).
-        backend.set_ui_cursor_hidden(overlay.want_ui_cursor);
-
+        snap.ui.cursor_hidden = overlay.want_ui_cursor;
         // The `MenuOverride` driver also needs the backend in menu mode so a
-        // click with a freed cursor fires a UI action instead of re-capturing the
-        // camera; a genuine menu-mode world already had this set at init.
-        if menu_override.is_some() {
-            backend.set_menu_mode(true);
-        }
+        // click with a freed cursor fires a UI action instead of re-capturing
+        // the camera; a genuine menu-mode world already had this set at init.
+        snap.ui.menu_mode = if menu_override.is_some() {
+            Some(true)
+        } else {
+            None
+        };
         // In menu mode (a MainMenu over a controlled camera, or an editor
         // override), capture the cursor for the camera unless a menu is active.
         // The editor's fly camera captures despite the active override: the
         // world stays frozen while the editor drives Camera3D from the
         // captured deltas. Edge-triggered in the backend, so this is cheap
         // every frame and a no-op in a plain first-person world.
-        if self.menu_mode || menu_override.is_some() {
+        snap.ui.camera_capture = if self.menu_mode || menu_override.is_some() {
             let fly = ctx.resource::<crate::ecs::FlyCam>().is_some_and(|f| f.0);
-            backend.set_camera_capture(!menu_active || fly);
-        }
-
-        // Runtime decal / emitter spawn (`cn debug` only) is drained + dispatched
-        // from the binary's `DebugHook::tick` (see `crate::debug::runtime_spawn`),
-        // not here. `cn run` has no debug hook, so this step never touches it.
-
-        // Asset / shader / world.jsonl hot-reload (`cn debug` only) is driven
-        // from the binary's `DebugHook::tick` (see the `debug` module), not
-        // here: it reaches the reload passes through
-        // `GraphicsSystem::hot_reload_drive`. `cn run` has no debug hook, so
-        // this per-frame path is reload-free.
-
-        let result = {
-            {
-                if backend.window_closed() {
-                    tracing::info!("GraphicsSystem: window closed");
-                    backend.wait_idle();
-                    return StepResult::Stop;
-                }
-
-                // Lifetime/Spawner ticks and the spawn / despawn / reparent
-                // drains run in SpawnSystem, scheduled immediately before this
-                // system, so the churn is already applied when transforms are
-                // pushed below.
-
-                // Push updated model matrices for any entity whose transform
-                // changed since last frame (physics, camera interact, reparent):
-                // resolve each entity's GlobalTransform from Transform + Parent
-                // (top-down so parents propagate to children), then queue it for
-                // the entity's GPU draw slots. The cached path reuses its scratch
-                // and skips the resolve entirely when no Transform / Parent
-                // changed; the push cache drops slots whose matrix is unchanged,
-                // so a static scene sends nothing.
-                transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
-                self.model_push.begin();
-                for (_entity, global, handle) in
-                    ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()
-                {
-                    for &slot in &handle.draws {
-                        self.model_push.push_changed(slot as usize, global.0);
-                    }
-                }
-
-                // Refresh the editor's viewport-pick index from the freshly
-                // propagated transforms. Candidates exist only when the editor
-                // opted in at init (an injected PickIndex resource); a shipped
-                // runtime skips this entirely. A despawned entity simply drops
-                // out of the index.
-                if !self.pick_candidates.is_empty() {
-                    // Editor-session hidden objects: overwrite their just-queued
-                    // model matrices with the degenerate one (nothing draws)
-                    // and keep them out of the pick index. Re-derived every
-                    // frame, so clearing the set restores them immediately: the
-                    // overwrite goes through the push cache, so un-hiding shows
-                    // up as a changed matrix and is re-sent.
-                    let hidden = ctx
-                        .resource::<crate::ecs::HiddenAssets>()
-                        .map(|h| h.0.clone())
-                        .unwrap_or_default();
-                    for c in self
-                        .pick_candidates
-                        .iter()
-                        .filter(|c| hidden.contains(&c.asset_id))
-                    {
-                        if let Some(handle) = ctx.get::<crate::assets::RenderHandle>(c.entity) {
-                            for &slot in &handle.draws {
-                                self.model_push.push_changed(slot as usize, HIDDEN_MODEL);
-                            }
-                        }
-                    }
-                    let entries: Vec<crate::ecs::PickEntry> = self
-                        .pick_candidates
-                        .iter()
-                        .filter(|c| !hidden.contains(&c.asset_id))
-                        .filter_map(|c| {
-                            let global = ctx.get::<crate::assets::GlobalTransform>(c.entity)?;
-                            let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(
-                                c.local_min,
-                                c.local_max,
-                                global.0,
-                            );
-                            Some(crate::ecs::PickEntry {
-                                asset_id: c.asset_id,
-                                bb_min,
-                                bb_max,
-                            })
-                        })
-                        .collect();
-                    ctx.insert_resource(crate::ecs::PickIndex { entries });
-                }
-                if !self.model_push.batch().is_empty() {
-                    backend.update_models(self.model_push.batch());
-                }
-
-                // Push the latest skinned poses to the GPU. AnimationSystem
-                // wrote them into the SkeletonPose components on the previous
-                // tick (flagging each pose it touched); the one-frame lag is
-                // invisible at animation rates. An untouched pose keeps its
-                // last upload, so an unanimated mesh uploads its bind pose
-                // once and never again. Skipped while a menu is open:
-                // animation is frozen, so nothing is flagged anyway and the
-                // skinned draw is skipped behind an opaque menu.
-                if !menu_active {
-                    for pose in ctx.query_mut::<crate::assets::SkeletonPose>() {
-                        if !pose.updated {
-                            continue;
-                        }
-                        backend.update_skinned_pose(pose.skinned_index, &pose.joint_matrices);
-                        if !pose.morph_weights.is_empty() {
-                            backend.update_morph_weights(pose.skinned_index, &pose.morph_weights);
-                        }
-                        pose.updated = false;
-                    }
-                    // Queue the model matrix for skinned instances that carry a
-                    // Transform (the runtime-spawned ones), so a moved instance
-                    // follows it. The authored templates have no Transform and keep
-                    // the model baked into their draw object at load.
-                    self.skinned_model_push.begin();
-                    for (_entity, pose, transform) in
-                        ctx.join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
-                    {
-                        self.skinned_model_push
-                            .push_changed(pose.skinned_index, transform.model_matrix());
-                    }
-                    // Move rig-driven meshes to their capsule's resolved
-                    // position (PhysicsSystem wrote it on the previous tick;
-                    // `moved` persists across a menu pause, so no motion is
-                    // lost while uploads are skipped).
-                    for rig in ctx.query_mut::<crate::assets::CharacterRig>() {
-                        if rig.moved {
-                            self.skinned_model_push.push(rig.skinned_index, rig.model());
-                            rig.moved = false;
-                        }
-                    }
-                    if !self.skinned_model_push.batch().is_empty() {
-                        backend.update_skinned_models(self.skinned_model_push.batch());
-                    }
-                }
-
-                // SceneCommand / SettingCommand application lives in
-                // SettingsSystem, scheduled just before this system, so a
-                // change is already on the backend for this frame's submit
-                // and a scene jump has primed the flow below.
-
-                // Advance any in-flight scene fade, sourcing visibility from
-                // the live per-entity components. An idle fade is a no-op in
-                // `tick_transitions`, so the snapshot is rebuilt only while a
-                // transition is actually running. The flow is the shared
-                // `ActiveSceneFlow` resource SettingsSystem also jumps; its
-                // `epoch` is the shared clock for the fade timing.
-                let fading = ctx
-                    .resource::<crate::ecs::ActiveSceneFlow>()
-                    .and_then(|f| f.flow.as_ref())
-                    .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
-                if fading {
-                    let (draws, scenes) = super::scene::decomposed_visibility_snapshot(ctx);
-                    if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
-                        let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
-                        scene_flow::tick_transitions(
-                            &mut slot.flow,
-                            &draws,
-                            &scenes,
-                            flow_elapsed,
-                            backend,
-                        );
-                    }
-                }
-
-                // Asset streaming (texture / mesh / voxel-world chunk pools)
-                // and the camera-relative screen rebase run in StreamingSystem,
-                // scheduled immediately before this system; the rebased
-                // `final_view` / `final_cam_pos` were read from its
-                // `CameraRelativeView` at the top of this step.
-
-                // World-space lines published this frame (the `cn editor`
-                // origin axes), expanded into ribbon geometry against the same
-                // camera the frame draws with. Empty when nothing published
-                // any, which keeps the pass out of the render graph entirely.
-                let lines = super::lines::build(
-                    ctx,
-                    super::lines::LineFrame {
-                        view: final_view,
-                        cam_pos: final_cam_pos,
-                        // Lines are authored in absolute world space; a
-                        // streaming voxel world draws rebased onto the chunk
-                        // render origin, so shift them into that same space.
-                        rebase: [
-                            final_cam_pos[0] - cam_pos[0],
-                            final_cam_pos[1] - cam_pos[1],
-                            final_cam_pos[2] - cam_pos[2],
-                        ],
-                        fov_y_radians,
-                        near,
-                        viewport: backend.logical_size(),
-                    },
-                );
-
-                // On Metal, pump_ns_events runs inside draw_frame, so update_view
-                // is called first so any key/mouse events that arrived since the
-                // last tick are in InputState before InputSystem's take_input()
-                // (scheduled right after this system) snapshots and clears it.
-                backend.update_view(final_view);
-                // The editor's view mode + show flags, when published; a
-                // shipped runtime has no resource and renders the lit default.
-                let view = ctx
-                    .resource::<crate::ecs::ViewOverrides>()
-                    .copied()
-                    .unwrap_or_default();
-                match backend.draw_frame(FrameParams {
-                    elapsed,
-                    fov_y_radians,
-                    near,
-                    far,
-                    cam_pos: final_cam_pos,
-                    text_calls: &overlay.calls,
-                    lines: &lines,
-                    world_hidden: overlay.world_hidden,
-                    view_mode: view.mode,
-                    show: view.show,
-                }) {
-                    Ok(()) => self.frame_policy.frame_succeeded(),
-                    Err(e) => {
-                        if matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_)) {
-                            publish_memory_pressure(ctx, self.frame_count);
-                        }
-                        match self.frame_policy.on_frame_error(&e) {
-                            super::frame_policy::FrameAction::SkipFrame => {}
-                            super::frame_policy::FrameAction::Shutdown => {
-                                backend.wait_idle();
-                                return StepResult::Stop;
-                            }
-                            // The device no longer services work; waiting for
-                            // it to idle would block on a queue that can never
-                            // signal, so stop without draining.
-                            super::frame_policy::FrameAction::ShutdownDeviceLost => {
-                                tracing::error!("GraphicsSystem: device lost, stopping: {}", e);
-                                crate::crash::report_device_lost(&e.to_string());
-                                return StepResult::Stop;
-                            }
-                        }
-                    }
-                }
-
-                // Publish this frame's render stats for the profiler overlay.
-                // Backends without GPU-timed stats return the trait's default
-                // (all zeros), which the HUD displays as "--".
-                ctx.profile.render = backend.render_stats();
-
-                // Input sampling + FrameInput publish live in InputSystem,
-                // which the schedule runs immediately after this system.
-
-                StepResult::Continue
-            }
+            Some(!menu_active || fly)
+        } else {
+            None
         };
 
-        if result == StepResult::Continue {
-            self.frame_count += 1;
-            if let Some(max) = self.max_frames
-                && self.frame_count >= max
-            {
-                tracing::info!("GraphicsSystem: max_frames ({}) reached", max);
-                backend.wait_idle();
-                // Stop, not Done: `Done` only retires this system and lets the
-                // world keep stepping the rest, which for a frame cap means the
-                // renderer shuts down and the process spins on headlessly. Stop
-                // ends the run, matching what closing the window does.
-                return StepResult::Stop;
+        // Runtime decal / emitter spawn and asset / shader / world.jsonl
+        // hot-reload (`cn debug` only) are driven from the binary's
+        // `DebugHook::tick` between world steps, not here. `cn run` has no
+        // debug hook, so this per-frame path never touches them.
+
+        // Lifetime/Spawner ticks and the spawn / despawn / reparent drains run
+        // in SpawnSystem, scheduled earlier this tick, so the churn is already
+        // applied when transforms are gathered below.
+
+        // Gather updated model matrices for any entity whose transform changed
+        // since last frame (physics, camera interact, reparent): resolve each
+        // entity's GlobalTransform from Transform + Parent (top-down so parents
+        // propagate to children), then queue it for the entity's GPU draw
+        // slots. The cached path reuses its scratch and skips the resolve
+        // entirely when no Transform / Parent changed; the push gate drops
+        // slots whose matrix is unchanged, so a static scene sends nothing.
+        transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
+        for (_entity, global, handle) in
+            ctx.join2::<crate::assets::GlobalTransform, crate::assets::RenderHandle>()
+        {
+            for &slot in &handle.draws {
+                self.model_push
+                    .push_changed(&mut snap.models, slot as usize, global.0);
             }
         }
 
-        result
+        // Refresh the editor's viewport-pick index from the freshly
+        // propagated transforms. Candidates exist only when the editor
+        // opted in at init (an injected PickIndex resource); a shipped
+        // runtime skips this entirely. A despawned entity simply drops
+        // out of the index.
+        if !self.pick_candidates.is_empty() {
+            let entries: Vec<crate::ecs::PickEntry> = {
+                // Editor-session hidden objects: overwrite their just-queued
+                // model matrices with the degenerate one (nothing draws) and
+                // keep them out of the pick index. Re-derived every frame, so
+                // clearing the set restores them immediately: the overwrite
+                // goes through the push gate, so un-hiding shows up as a
+                // changed matrix and is re-sent.
+                let empty = std::collections::BTreeSet::new();
+                let hidden = ctx
+                    .resource::<crate::ecs::HiddenAssets>()
+                    .map(|h| &h.0)
+                    .unwrap_or(&empty);
+                for c in self
+                    .pick_candidates
+                    .iter()
+                    .filter(|c| hidden.contains(&c.asset_id))
+                {
+                    if let Some(handle) = ctx.get::<crate::assets::RenderHandle>(c.entity) {
+                        for &slot in &handle.draws {
+                            self.model_push.push_changed(
+                                &mut snap.models,
+                                slot as usize,
+                                HIDDEN_MODEL,
+                            );
+                        }
+                    }
+                }
+                self.pick_candidates
+                    .iter()
+                    .filter(|c| !hidden.contains(&c.asset_id))
+                    .filter_map(|c| {
+                        let global = ctx.get::<crate::assets::GlobalTransform>(c.entity)?;
+                        let (bb_min, bb_max) =
+                            crate::gfx::frustum::transform_aabb(c.local_min, c.local_max, global.0);
+                        Some(crate::ecs::PickEntry {
+                            asset_id: c.asset_id,
+                            bb_min,
+                            bb_max,
+                        })
+                    })
+                    .collect()
+            };
+            ctx.insert_resource(crate::ecs::PickIndex { entries });
+        }
+
+        // Copy out the latest skinned poses. AnimationSystem wrote them into
+        // the SkeletonPose components on the previous tick (flagging each pose
+        // it touched); the one-frame lag is invisible at animation rates. An
+        // untouched pose keeps its last upload, so an unanimated mesh uploads
+        // its bind pose once and never again. Skipped while a menu is open:
+        // animation is frozen, so nothing is flagged anyway and the skinned
+        // draw is skipped behind an opaque menu.
+        if !menu_active {
+            for pose in ctx.query_mut::<crate::assets::SkeletonPose>() {
+                if !pose.updated {
+                    continue;
+                }
+                snap.poses.push(pose.skinned_index, &pose.joint_matrices);
+                if !pose.morph_weights.is_empty() {
+                    snap.morphs.push(pose.skinned_index, &pose.morph_weights);
+                }
+                pose.updated = false;
+            }
+            // Queue the model matrix for skinned instances that carry a
+            // Transform (the runtime-spawned ones), so a moved instance
+            // follows it. The authored templates have no Transform and keep
+            // the model baked into their draw object at load.
+            for (_entity, pose, transform) in
+                ctx.join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+            {
+                self.skinned_model_push.push_changed(
+                    &mut snap.skinned_models,
+                    pose.skinned_index,
+                    transform.model_matrix(),
+                );
+            }
+            // Move rig-driven meshes to their capsule's resolved position
+            // (PhysicsSystem wrote it on the previous tick; `moved` persists
+            // across a menu pause, so no motion is lost while uploads are
+            // skipped).
+            for rig in ctx.query_mut::<crate::assets::CharacterRig>() {
+                if rig.moved {
+                    self.skinned_model_push.push(
+                        &mut snap.skinned_models,
+                        rig.skinned_index,
+                        rig.model(),
+                    );
+                    rig.moved = false;
+                }
+            }
+        }
+
+        // SceneCommand / SettingCommand application lives in SettingsSystem,
+        // scheduled just before this system, so a change is already on the
+        // backend for this frame's submit and a scene jump has primed the
+        // flow below.
+
+        // Advance any in-flight scene fade, sourcing visibility from the live
+        // per-entity components and recording the resulting fade / visibility
+        // effects for submission. An idle fade is a no-op in
+        // `tick_transitions`, so the visibility pairs are rebuilt only while a
+        // transition is actually running. The flow is the shared
+        // `ActiveSceneFlow` resource SettingsSystem also jumps; its `epoch` is
+        // the shared clock for the fade timing.
+        let fading = ctx
+            .resource::<crate::ecs::ActiveSceneFlow>()
+            .and_then(|f| f.flow.as_ref())
+            .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
+        if fading {
+            let (draws, scenes) = super::scene::decomposed_visibility_snapshot(ctx);
+            if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
+                let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
+                let mut recorder = SceneOpRecorder(&mut snap.scene_ops);
+                scene_flow::tick_transitions(
+                    &mut slot.flow,
+                    &draws,
+                    &scenes,
+                    flow_elapsed,
+                    &mut recorder,
+                );
+            }
+        }
+
+        // The logical viewport the line builder maps ribbon widths with:
+        // refreshed from the FrameInput InputSystem published after the last
+        // draw (the same source all overlay layout uses), seeded from the
+        // backend at init. `[0, 0]` (backend not ready yet) keeps the seed.
+        if let Some(input) = ctx.query::<crate::assets::FrameInput>().next()
+            && input.viewport != [0.0, 0.0]
+        {
+            self.viewport = (input.viewport[0], input.viewport[1]);
+        }
+
+        // World-space lines published this frame (the `cn editor` origin
+        // axes), expanded into ribbon geometry against the same camera the
+        // frame draws with. Empty when nothing published any, which keeps the
+        // pass out of the render graph entirely.
+        snap.lines = super::lines::build(
+            ctx,
+            super::lines::LineFrame {
+                view: final_view,
+                cam_pos: final_cam_pos,
+                // Lines are authored in absolute world space; a streaming
+                // voxel world draws rebased onto the chunk render origin, so
+                // shift them into that same space.
+                rebase: [
+                    final_cam_pos[0] - cam_pos[0],
+                    final_cam_pos[1] - cam_pos[1],
+                    final_cam_pos[2] - cam_pos[2],
+                ],
+                fov_y_radians,
+                near,
+                viewport: self.viewport,
+            },
+        );
+
+        // The editor's view mode + show flags, when published; a shipped
+        // runtime has no resource and renders the lit default.
+        let view = ctx
+            .resource::<crate::ecs::ViewOverrides>()
+            .copied()
+            .unwrap_or_default();
+
+        snap.frame = FrameScalars {
+            elapsed,
+            fov_y_radians,
+            near,
+            far,
+            view: final_view,
+            cam_pos: final_cam_pos,
+            view_mode: view.mode,
+            show: view.show,
+            world_hidden: overlay.world_hidden,
+            menu_active,
+        };
+        snap.text_calls = overlay.calls;
     }
 
     // Capture each slider row's runtime bookkeeping from its drag HitRegion +
@@ -637,6 +615,300 @@ impl GraphicsSystem {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    use crate::assets::{GlobalTransform, RenderHandle, SkeletonPose};
+    use crate::blob::BlobData;
+    use crate::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
+    use crate::gfx::overlay::OverlayFrame;
+    use crate::gfx::profile::FrameProfile;
+    use crate::gfx::snapshot::SceneOp;
+
+    // Owns the storage a PipelineContext borrows from; extraction never reads
+    // the blob, so it stays empty.
+    struct ExtractWorld {
+        components: ComponentStorage,
+        blob: BlobData,
+        profile: FrameProfile,
+        resources: Resources,
+        scratch: crate::ecs::Arena,
+    }
+
+    impl ExtractWorld {
+        fn new() -> Self {
+            Self {
+                components: ComponentStorage::default(),
+                blob: BlobData::empty(),
+                profile: FrameProfile::default(),
+                resources: Resources::new(),
+                scratch: crate::ecs::Arena::with_capacity(64 * 1024),
+            }
+        }
+
+        fn ctx(&mut self) -> PipelineContext<'_> {
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+                frame: crate::ecs::FrameContext::new(&self.scratch),
+            }
+        }
+    }
+
+    fn extract_once(gs: &mut GraphicsSystem, world: &mut ExtractWorld) -> RenderSnapshot {
+        let mut snap = RenderSnapshot::default();
+        gs.extract(&mut world.ctx(), &mut snap);
+        snap
+    }
+
+    fn translated(x: f32) -> [[f32; 4]; 4] {
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [x, 0.0, 0.0, 1.0],
+        ]
+    }
+
+    fn bare_pose(skinned_index: usize, joints: usize) -> SkeletonPose {
+        SkeletonPose {
+            mesh_id: SkinnedMeshHandle(0),
+            skinned_index,
+            skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
+            joint_matrices: vec![translated(1.0); joints],
+            morph_weights: Vec::new(),
+            updated: true,
+            scratch: Default::default(),
+        }
+    }
+
+    // A changed model matrix lands in the snapshot once per draw slot; an
+    // unchanged frame extracts nothing for the same entity.
+    #[test]
+    fn extraction_gathers_changed_models_and_gates_repeats() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            ctx.insert(e, GlobalTransform(translated(2.0)));
+            ctx.insert(
+                e,
+                RenderHandle {
+                    draws: [3, 4].into(),
+                },
+            );
+        }
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(
+            snap.models,
+            vec![(3, translated(2.0)), (4, translated(2.0))]
+        );
+
+        let snap = extract_once(&mut gs, &mut world);
+        assert!(snap.models.is_empty(), "static frame re-extracts nothing");
+    }
+
+    // An updated pose is copied into the snapshot spans and its handshake flag
+    // cleared, so the next frame extracts nothing for it. Morph weights ride
+    // along only when present.
+    #[test]
+    fn extraction_copies_updated_poses_and_clears_the_flag() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            let mut pose = bare_pose(5, 2);
+            pose.morph_weights = vec![0.25, 0.75];
+            ctx.insert(e, pose);
+        }
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        let poses: Vec<(usize, usize)> = snap.poses.iter().map(|(idx, m)| (idx, m.len())).collect();
+        assert_eq!(poses, vec![(5, 2)]);
+        let morphs: Vec<(usize, Vec<f32>)> = snap
+            .morphs
+            .iter()
+            .map(|(idx, w)| (idx, w.to_vec()))
+            .collect();
+        assert_eq!(morphs, vec![(5, vec![0.25, 0.75])]);
+
+        let snap = extract_once(&mut gs, &mut world);
+        assert!(snap.poses.is_empty(), "consumed pose is not re-extracted");
+        assert!(snap.morphs.is_empty());
+    }
+
+    // While a menu is open the skinned families are skipped entirely, and the
+    // frame scalars + overlay adoption reflect the menu state.
+    #[test]
+    fn extraction_skips_skinned_families_while_a_menu_is_open() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            ctx.insert(e, bare_pose(0, 1));
+            ctx.insert_resource(OverlayFrame {
+                calls: Vec::new(),
+                want_ui_cursor: true,
+                menu_active: true,
+                world_hidden: true,
+            });
+        }
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert!(snap.poses.is_empty(), "menu freezes pose extraction");
+        assert!(snap.frame.menu_active);
+        assert!(snap.frame.world_hidden);
+        assert!(snap.ui.cursor_hidden);
+        assert!(
+            world.resources.get::<OverlayFrame>().is_none(),
+            "the overlay build is consumed so a stale one is never redrawn"
+        );
+
+        // The pose is still flagged, so closing the menu extracts it.
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.poses.iter().count(), 1);
+    }
+
+    // The camera-relative view published by StreamingSystem wins over the
+    // absolute Camera3D values; projection parameters come from the camera.
+    #[test]
+    fn extraction_prefers_the_camera_relative_view() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            ctx.insert(
+                e,
+                crate::assets::Camera3D {
+                    fov_y_degrees: 90.0,
+                    near: 0.1,
+                    far: 500.0,
+                    view_matrix: translated(1.0),
+                    position: [1.0, 2.0, 3.0],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    desired_move: [0.0; 3],
+                    jump_requested: false,
+                    interact_requested: false,
+                    controller: None,
+                },
+            );
+            ctx.insert_resource(crate::gfx::streaming_system::CameraRelativeView {
+                view: translated(7.0),
+                cam_pos: [7.0, 0.0, 0.0],
+            });
+        }
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.frame.view, translated(7.0));
+        assert_eq!(snap.frame.cam_pos, [7.0, 0.0, 0.0]);
+        assert!((snap.frame.fov_y_radians - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert_eq!(snap.frame.near, 0.1);
+        assert_eq!(snap.frame.far, 500.0);
+    }
+
+    // An in-flight fade records its effects as scene ops instead of touching a
+    // backend; an idle flow records nothing.
+    #[test]
+    fn extraction_records_fade_effects_as_scene_ops() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            ctx.insert_resource(crate::ecs::ActiveSceneFlow {
+                flow: Some(scene_flow::SceneFlow {
+                    scenes: vec![AssetId(1), AssetId(2)],
+                    current: AssetId(1),
+                    fade: scene_flow::FadePhase::ToBlack {
+                        started_at: 0.0,
+                        next: AssetId(2),
+                    },
+                }),
+                epoch: std::time::Instant::now(),
+            });
+        }
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert!(
+            matches!(snap.scene_ops.first(), Some(SceneOp::SetFade(_))),
+            "an in-flight fade records its fade value"
+        );
+
+        // Clear the fade: nothing is recorded on an idle flow.
+        if let Some(slot) = world.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
+            slot.flow.as_mut().unwrap().fade = scene_flow::FadePhase::None;
+        }
+        let snap = extract_once(&mut gs, &mut world);
+        assert!(snap.scene_ops.is_empty());
+    }
+
+    // The editor's menu override resolves to submit intents; without it (a
+    // shipped runtime, no menu-mode world) both intents stay None.
+    #[test]
+    fn extraction_resolves_menu_override_into_ui_intents() {
+        let mut world = ExtractWorld::new();
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.ui.menu_mode, None);
+        assert_eq!(snap.ui.camera_capture, None);
+
+        world
+            .resources
+            .insert(crate::ecs::MenuOverride(Some(false)));
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.ui.menu_mode, Some(true));
+        assert_eq!(
+            snap.ui.camera_capture,
+            Some(true),
+            "no active menu screen, so the camera captures"
+        );
+    }
+
+    // Editor-session hidden objects overwrite their queued models with the
+    // degenerate matrix and drop out of the published pick index; without the
+    // editor's resources nothing of the sort is extracted.
+    #[test]
+    fn extraction_applies_editor_hides_and_pick_index_only_when_opted_in() {
+        let mut world = ExtractWorld::new();
+        let entity = {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            ctx.insert(e, GlobalTransform(translated(2.0)));
+            ctx.insert(e, RenderHandle { draws: [9].into() });
+            e
+        };
+        // A shipped runtime: no candidates, so no pick index is published.
+        let mut gs = GraphicsSystem::new();
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(snap.models, vec![(9, translated(2.0))]);
+        assert!(world.resources.get::<crate::ecs::PickIndex>().is_none());
+
+        // The editor opted in and hid the asset: the queued model is
+        // overwritten in order and the index excludes it.
+        gs.pick_candidates.push(super::super::PickCandidate {
+            asset_id: AssetId(42),
+            entity,
+            local_min: [-1.0; 3],
+            local_max: [1.0; 3],
+        });
+        world.resources.insert(crate::ecs::HiddenAssets(
+            [AssetId(42)].into_iter().collect(),
+        ));
+        {
+            let mut ctx = world.ctx();
+            if let Some(g) = ctx.get_mut::<GlobalTransform>(entity) {
+                g.0 = translated(3.0);
+            }
+        }
+        let snap = extract_once(&mut gs, &mut world);
+        assert_eq!(
+            snap.models,
+            vec![(9, translated(3.0)), (9, HIDDEN_MODEL)],
+            "the hide overwrite follows the move so it wins on the backend"
+        );
+        let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+        assert!(index.entries.is_empty(), "a hidden asset is not pickable");
+    }
 
     // A gated value label pulls in every element of the scroll row that holds
     // it (the row's background, name, value, and stepper glyphs), so the whole

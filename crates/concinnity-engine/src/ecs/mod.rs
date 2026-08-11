@@ -519,8 +519,8 @@ impl World {
 
     // Seed (or replace) a singleton resource that persists across steps. The
     // `cn editor` drive publishes `MenuOverride` through this each frame; it also
-    // stands in for the GraphicsSystem-published resources (e.g. `MenuActive`) in
-    // system tests that drive a later system directly without a GraphicsSystem.
+    // stands in for the render-block-published resources (e.g. OverlaySystem's
+    // `MenuActive`) in system tests that drive a later system directly.
     pub fn insert_resource<T: std::any::Any>(&mut self, value: T) {
         self.resources.insert(value);
     }

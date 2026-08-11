@@ -5,7 +5,7 @@
 //
 //   queue     a process-wide command queue the debug WS handlers push onto
 //             (`enqueue`) and the per-frame debug drive drains (`drain`).
-//   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_hot_reload`
+//   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_runtime_commands`
 //             against the live backend + the init-captured texture-name table.
 //
 // The WS server pushes commands off the engine thread; the drive applies them

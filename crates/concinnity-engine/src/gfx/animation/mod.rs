@@ -306,7 +306,7 @@ impl System for AnimationSystem {
 
         // Freeze while a menu is open: skip all sampling so animation stops
         // consuming CPU/GPU behind the menu, recording when the pause began.
-        // The flag is published by GraphicsSystem, which runs first this tick.
+        // The flag is published by OverlaySystem, which runs first this tick.
         let paused = ctx
             .resource::<crate::ecs::MenuActive>()
             .is_some_and(|m| m.0);

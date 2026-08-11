@@ -7,7 +7,10 @@
 //   mod.rs       struct + System/Debug trait impls (init/step delegate out)
 //   init.rs      run_init: one-time backend + draw-list setup
 //   lines.rs     published world-space lines -> ribbon geometry
-//   frame.rs     run_step: the per-frame transform upload + draw submit
+//   frame.rs     run_step: extraction of the frame's draw inputs into the
+//                owned RenderSnapshot (the only per-frame world reads)
+//   submit.rs    replay of one RenderSnapshot onto the backend (no world
+//                access by construction)
 //   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
 //                (the per-frame drive lives in gfx::streaming_system)
 //   scene.rs     scene-flow wiring + scene visibility
@@ -307,11 +310,19 @@ pub struct GraphicsSystem {
     // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
     transform_cache: crate::gfx::transform_propagation::TransformCache,
-    // Last-pushed model matrix per draw slot / skinned instance plus the
-    // frame's batched updates: a static slot costs a compare instead of a
-    // backend call, and each family crosses the trait once per frame.
+    // Last-pushed model matrix per draw slot / skinned instance: a static
+    // slot costs a compare instead of a snapshot entry, and each family
+    // crosses the backend trait once per frame.
     model_push: model_push::ModelPushCache,
     skinned_model_push: model_push::ModelPushCache,
+    // The owned per-frame draw inputs `extract` fills from world state and
+    // `submit` replays onto the backend. Held here so its buffers keep their
+    // capacity across frames; taken out of `self` for the duration of one
+    // step.
+    snapshot: crate::gfx::snapshot::RenderSnapshot,
+    // Logical viewport size the line builder maps ribbon widths with. Seeded
+    // from the backend at init, refreshed each frame from `FrameInput`.
+    viewport: (f32, f32),
     // Test-only injection seam: pre-resolved settings, a fabricated GPU
     // profile, and a mock backend factory, so unit tests can drive
     // run_init / run_step without a GPU device or the on-disk settings store.
@@ -474,6 +485,8 @@ impl GraphicsSystem {
             transform_cache: crate::gfx::transform_propagation::TransformCache::default(),
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),
+            snapshot: crate::gfx::snapshot::RenderSnapshot::default(),
+            viewport: (0.0, 0.0),
             #[cfg(test)]
             test_hooks: None,
         }
@@ -724,5 +737,6 @@ mod lines;
 mod model_push;
 pub(crate) mod scene;
 mod streaming;
+mod submit;
 #[cfg(test)]
 mod tests;

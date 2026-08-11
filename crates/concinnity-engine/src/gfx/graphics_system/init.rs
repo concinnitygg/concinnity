@@ -3058,17 +3058,20 @@ impl GraphicsSystem {
         // Hand the overlay build inputs assembled above (font atlases, sprite
         // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
         // draw list from them each frame before this system submits it.
+        // Seed the frame extraction's viewport from the live backend;
+        // FrameInput refreshes it once InputSystem starts publishing.
+        self.viewport = self
+            .backend
+            .as_ref()
+            .map(|b| b.logical_size())
+            .unwrap_or((0.0, 0.0));
         ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
             fonts: std::mem::take(&mut self.loaded_fonts),
             sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
             debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
             stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
             clip_rects: std::mem::take(&mut self.clip_rects),
-            initial_viewport: self
-                .backend
-                .as_ref()
-                .map(|b| b.logical_size())
-                .unwrap_or((0.0, 0.0)),
+            initial_viewport: self.viewport,
         });
 
         self.publish_settings_state(ctx);

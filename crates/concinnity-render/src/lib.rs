@@ -62,6 +62,7 @@ pub mod scene_residency;
 pub mod shadow_schedule;
 pub mod skinned_pool;
 pub mod slot_rewrites;
+pub mod snapshot;
 pub mod spot_shadow;
 pub mod sprite;
 pub mod streaming;

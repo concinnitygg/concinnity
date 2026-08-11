@@ -31,7 +31,7 @@ pub use concinnity_cpu::gfx::{
 // this crate). `pub` for the pieces the editor / app crates name, `pub(crate)`
 // for the rest.
 pub use concinnity_render::{
-    backend, backend_init, decal, error, input, particles, scene_flow, scene_residency,
+    backend, backend_init, decal, error, input, particles, scene_flow, scene_residency, snapshot,
     volumetric_fog,
 };
 pub(crate) use concinnity_render::{
