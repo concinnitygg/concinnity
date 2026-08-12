@@ -85,7 +85,7 @@ pub(crate) enum Call {
     },
     UpdateSkinnedPose(usize),
     UpdateSkinnedModel(usize),
-    SeedSkinnedInstancePool(usize),
+    RevealSkinnedInstance(usize),
     EvictTextureSlot(usize),
     UpdateTextureSlot {
         slot: usize,
@@ -157,9 +157,6 @@ pub(crate) struct MockState {
     // rows the device cannot honour. Set before `init_graphics` to stand in for
     // a device missing a feature.
     pub caps: DeviceCapabilities,
-    // Next slot index clone_static_draw_object / add_chunk_mesh hand out;
-    // seeded by the factory to the init draw count.
-    pub next_slot: usize,
 }
 
 impl Default for MockState {
@@ -174,7 +171,6 @@ impl Default for MockState {
             fail_reload: None,
             next_input: RenderInput::default(),
             logical_size: (1280.0, 720.0),
-            next_slot: 0,
             caps: DeviceCapabilities::ALL,
         }
     }
@@ -218,7 +214,6 @@ pub(crate) struct MockBackend {
 // snapshots and a test can tell which one ran by which state was written.
 fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
     let mut s = state.lock().unwrap();
-    s.next_slot = init.scene.draw_objects.len();
     s.init = Some(InitSnapshot {
         shader_stage_lens: init
             .shaders
@@ -418,8 +413,8 @@ impl RenderBackend for MockBackend {
         self.record(Call::UpdateSkinnedPose(skinned_index));
     }
 
-    fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>) {
-        self.record(Call::SeedSkinnedInstancePool(reservations.len()));
+    fn reveal_skinned_instance(&mut self, instance_index: usize, _model: [[f32; 4]; 4]) {
+        self.record(Call::RevealSkinnedInstance(instance_index));
     }
 
     fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
@@ -481,12 +476,13 @@ impl RenderBackend for MockBackend {
         Ok(())
     }
 
-    fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> RenderResult<usize> {
-        let mut s = self.state.lock().unwrap();
-        let idx = s.next_slot;
-        s.next_slot += 1;
-        s.calls.push(Call::AddChunkMesh);
-        Ok(idx)
+    fn add_chunk_mesh(
+        &mut self,
+        _mesh: ChunkMesh<'_>,
+        _dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> RenderResult<()> {
+        self.record(Call::AddChunkMesh);
+        Ok(())
     }
 
     fn remove_chunk_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
@@ -575,15 +571,17 @@ impl RenderBackend for MockBackend {
         &mut self,
         src_draw_idx: usize,
         _model: [[f32; 4]; 4],
-    ) -> Result<usize, String> {
-        let mut s = self.state.lock().unwrap();
-        let new_idx = s.next_slot;
-        s.next_slot += 1;
-        s.calls.push(Call::CloneStaticDrawObject {
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
+        use crate::gfx::draw_slot::SlotAlloc;
+        let new_idx = match dst {
+            SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
+        };
+        self.record(Call::CloneStaticDrawObject {
             src: src_draw_idx,
             new_idx,
         });
-        Ok(new_idx)
+        Ok(())
     }
 
     fn set_draw_material(

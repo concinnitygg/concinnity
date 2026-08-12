@@ -91,6 +91,7 @@ impl MtlContext {
             vsync,
             clear_color,
             hot_reload,
+            capture,
             scene:
                 SceneData {
                     vertices,
@@ -599,7 +600,7 @@ impl MtlContext {
                 height,
                 title_bar,
                 geometry_less,
-                capture_enabled: hot_reload,
+                capture_enabled: capture,
             },
             window::HdrRequest {
                 display_requested: hdr_display_requested,
@@ -994,10 +995,9 @@ impl MtlContext {
 
         let (cull_bvh, always_draw) = crate::gfx::bvh::partition_draw_objects(&draw_objects);
 
-        // Seed the draw-slot allocator and the always_draw membership map from
-        // the initial draw set so runtime spawn/despawn can recycle vacated
-        // slots and add a recycled slot to always_draw exactly once.
-        let draw_slots = crate::gfx::draw_slot::DrawSlotAllocator::with_len(draw_objects.len());
+        // Seed the always_draw membership map from the initial draw set so a
+        // recycled slot is added to always_draw exactly once. (Draw-slot
+        // allocation itself lives engine-side.)
         let mut always_draw_member = vec![false; draw_objects.len()];
         for &idx in &always_draw {
             always_draw_member[idx as usize] = true;
@@ -1313,6 +1313,7 @@ impl MtlContext {
                 last_elapsed: 0.0,
             },
             hot_reload,
+            capture,
             shader_reload_pending,
             shader_watcher,
             prev_draw_models,
@@ -1334,10 +1335,6 @@ impl MtlContext {
             mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
             chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
             chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            draw_slots,
-            // Seeded later by `seed_skinned_instance_pool` once skinned geometry
-            // (with its pre-reserved copies) has been uploaded.
-            skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             win: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
                 window,
                 // The shared layer drives the view through NSView alone; the

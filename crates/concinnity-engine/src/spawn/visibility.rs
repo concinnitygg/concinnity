@@ -8,11 +8,11 @@
 
 use crate::assets::{Hidden, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
-use crate::gfx::backend::RenderBackend;
+use crate::gfx::ops::RenderOps;
 
 pub(super) fn set_subtree_visibility(
     ctx: &mut PipelineContext,
-    backend: &mut dyn RenderBackend,
+    ops: &mut RenderOps,
     root: Entity,
     visible: bool,
 ) {
@@ -29,7 +29,7 @@ pub(super) fn set_subtree_visibility(
             .map(|h| h.draws.clone())
             .unwrap_or_default();
         for slot in slots {
-            backend.update_visibility(slot as usize, visible);
+            ops.record(move |backend| backend.update_visibility(slot as usize, visible));
         }
     }
 }

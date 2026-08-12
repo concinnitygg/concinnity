@@ -81,6 +81,9 @@ impl DxContext {
             vsync,
             clear_color,
             hot_reload,
+            // DirectX retains the presented back-buffer index unconditionally,
+            // so capture needs no arming here.
+            capture: _,
             scene:
                 SceneData {
                     vertices,
@@ -1870,7 +1873,6 @@ impl DxContext {
             }
             member
         };
-        let draw_slots = crate::gfx::draw_slot::DrawSlotAllocator::with_len(draw_objects.len());
 
         // Per-frame instance upload buffers. One persistently-mapped buffer
         // per (frame, cluster). Sized to hold cluster.instances.len() float4x4
@@ -2246,7 +2248,6 @@ impl DxContext {
                 morph_weight_buffers: Vec::new(),
                 morph_weight_ptrs: Vec::new(),
             },
-            skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             uniforms: DxUniforms {
                 view_ubo_resources,
                 view_ubo_ptrs,
@@ -2377,7 +2378,6 @@ impl DxContext {
             cull_bvh,
             always_draw,
             always_draw_member,
-            draw_slots,
             visible_scratch: RefCell::new(Vec::new()),
             frame_graph_cache: RefCell::new(None),
             draw_objects,

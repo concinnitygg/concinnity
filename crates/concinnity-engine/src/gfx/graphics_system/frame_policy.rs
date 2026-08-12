@@ -7,7 +7,7 @@ use crate::gfx::error::RenderError;
 
 // What the frame loop does with a failed frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FrameAction {
+pub(crate) enum FrameAction {
     // Drop this frame's output and try again next tick.
     SkipFrame,
     // Controlled stop. The device still services work, so the loop may drain
@@ -29,7 +29,7 @@ const OOM_BOUND: u32 = 5;
 const OTHER_BOUND: u32 = 3;
 
 #[derive(Debug, Default)]
-pub(super) struct FramePolicy {
+pub(crate) struct FramePolicy {
     swapchain_streak: u32,
     oom_streak: u32,
     other_streak: u32,
@@ -37,11 +37,11 @@ pub(super) struct FramePolicy {
 
 impl FramePolicy {
     // A frame drew successfully; every failure streak resets.
-    pub(super) fn frame_succeeded(&mut self) {
+    pub(crate) fn frame_succeeded(&mut self) {
         *self = Self::default();
     }
 
-    pub(super) fn on_frame_error(&mut self, error: &RenderError) -> FrameAction {
+    pub(crate) fn on_frame_error(&mut self, error: &RenderError) -> FrameAction {
         match error {
             RenderError::DeviceLost { .. } => FrameAction::ShutdownDeviceLost,
             RenderError::SwapchainOutOfDate => {

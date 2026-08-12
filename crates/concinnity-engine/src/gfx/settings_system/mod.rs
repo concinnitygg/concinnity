@@ -2,27 +2,28 @@
 //
 // SettingsSystem: applies the runtime command batches UiInputSystem produces
 // -- SettingCommand (settings-menu changes: graphics toggles, sliders, key
-// rebinds, volume) and SceneCommand (imperative scene jumps) -- against the
-// world's parked render backend, owns the in-memory settings snapshot + the
-// background disk writer, and publishes the per-frame HUD-preference state:
+// rebinds, volume) and SceneCommand (imperative scene jumps) -- recording
+// their backend effects into the frame's op queue, owns the in-memory
+// settings snapshot + the background disk writer, and publishes the per-frame
+// HUD-preference state:
 //   mod.rs    system + state + scene jumps + HUD-state publish
 //   apply.rs  the SettingCommand drain (one arm per settings row)
 //   rows.rs   row helpers shared with GraphicsSystem's init-time captures
 //   writer.rs background disk writer for settings changes
 //
-// Scheduled after SpawnSystem and before GraphicsSystem, so a change lands on
-// the backend before this frame's submit (visible the same frame, as it was
-// when the drain ran inside the graphics step) and the HUD-preference
-// resources are fresh for StatHud / UiInput later this tick. The state is
-// resolved by GraphicsSystem's init (world config + persisted overrides +
-// backend capabilities) and parked here as the `SettingsState` resource; each
-// step takes it and puts it back, so the state and the `PipelineContext` are
-// never borrowed together.
+// Scheduled after SpawnSystem and before GraphicsSystem, so a change's
+// recorded op lands on the backend before this frame's draw (visible the same
+// frame, as it was when the drain called the backend directly) and the
+// HUD-preference resources are fresh for StatHud / UiInput later this tick.
+// The state is resolved by GraphicsSystem's init (world config + persisted
+// overrides + backend capabilities) and parked here as the `SettingsState`
+// resource; each step takes it and puts it back, so the state and the
+// `PipelineContext` are never borrowed together.
 
 use crate::assets::SceneCommand;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
-use crate::gfx::backend::RenderBackend;
+use crate::ecs::{PipelineContext, StepResult, System};
+use crate::gfx::ops::RenderOps;
 use crate::gfx::scene_flow;
 
 mod apply;
@@ -141,18 +142,18 @@ impl std::fmt::Debug for SettingsState {
 
 impl System for SettingsSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // No parked state (graphics init has not succeeded) or backend:
+        // No parked state (graphics init has not succeeded) or op queue:
         // nothing to apply against; the queued commands wait in retention.
         let Some(mut state) = ctx.resources.remove::<SettingsState>() else {
             return StepResult::Continue;
         };
-        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
+        let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(ctx.resources) else {
             ctx.resources.insert(state);
             return StepResult::Continue;
         };
-        state.apply_scene_commands(ctx, backend.as_mut());
-        state.apply_setting_commands(ctx, backend.as_mut());
-        ActiveRenderBackend::put(ctx.resources, backend);
+        state.apply_scene_commands(ctx, &mut queues.ops);
+        state.apply_setting_commands(ctx, &mut queues.ops);
+        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         state.publish_hud_state(ctx);
         ctx.resources.insert(state);
         StepResult::Continue
@@ -161,11 +162,12 @@ impl System for SettingsSystem {
 
 impl SettingsState {
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
-    // out of the event queue so the borrow is released before the jump touches
-    // the backend. The flow lives in the shared `ActiveSceneFlow` resource
-    // (GraphicsSystem ticks its fades later this same tick, so a jump's fade
-    // starts on this frame).
-    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, backend: &mut dyn RenderBackend) {
+    // out of the event queue so the borrow is released before the jump runs.
+    // The flow lives in the shared `ActiveSceneFlow` resource (GraphicsSystem
+    // ticks its fades later this same tick, so a jump's fade starts on this
+    // frame); the jump's fade / visibility effects are recorded through the
+    // same `SceneOp` recorder the fade tick uses, then queued as one op.
+    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
             Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
             None => Vec::new(),
@@ -181,7 +183,9 @@ impl SettingsState {
             return;
         };
         let elapsed = slot.epoch.elapsed().as_secs_f32();
+        let mut scene_ops: Vec<crate::gfx::snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
+            let mut recorder = crate::gfx::snapshot::SceneOpRecorder(&mut scene_ops);
             scene_flow::jump_to_scene(
                 &mut slot.flow,
                 &draws,
@@ -189,8 +193,20 @@ impl SettingsState {
                 elapsed,
                 cmd.scene,
                 &cmd.transition,
-                backend,
+                &mut recorder,
             );
+        }
+        if !scene_ops.is_empty() {
+            ops.record(move |backend| {
+                for op in scene_ops {
+                    match op {
+                        crate::gfx::snapshot::SceneOp::SetFade(fade) => backend.set_fade(fade),
+                        crate::gfx::snapshot::SceneOp::Visibility { draw_idx, visible } => {
+                            backend.update_visibility(draw_idx, visible)
+                        }
+                    }
+                }
+            });
         }
     }
 

@@ -729,7 +729,7 @@ pub(crate) fn derive_quality_settings(
 }
 
 mod frame;
-mod frame_policy;
+pub(crate) mod frame_policy;
 mod helpers;
 pub mod hot_reload_sources;
 mod init;
@@ -737,6 +737,6 @@ mod lines;
 mod model_push;
 pub(crate) mod scene;
 mod streaming;
-mod submit;
+pub(crate) mod submit;
 #[cfg(test)]
 mod tests;

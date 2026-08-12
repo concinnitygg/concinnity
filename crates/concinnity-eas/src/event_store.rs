@@ -12,14 +12,15 @@ use core::any::{Any, TypeId};
 use crate::event::Events;
 
 // Object-safe view of one queue: rotation without knowing the event type,
-// plus downcast access back to the concrete `Events<E>`.
-trait AnyEventQueue {
+// plus downcast access back to the concrete `Events<E>`. `Send` so the store
+// (inside the world) can move to a simulation thread.
+trait AnyEventQueue: Send {
     fn update(&mut self);
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-impl<E: 'static> AnyEventQueue for Events<E> {
+impl<E: Send + 'static> AnyEventQueue for Events<E> {
     fn update(&mut self) {
         Events::update(self);
     }
@@ -50,7 +51,7 @@ impl EventStore {
 
     // Mutably borrow the queue for event type E, creating an empty one on
     // first access so writers and readers never miss it.
-    pub fn get_mut_or_create<E: 'static>(&mut self) -> &mut Events<E> {
+    pub fn get_mut_or_create<E: Send + 'static>(&mut self) -> &mut Events<E> {
         self.queues
             .entry(TypeId::of::<E>())
             .or_insert_with(|| Box::new(Events::<E>::new()))

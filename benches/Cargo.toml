@@ -11,6 +11,9 @@ name = "concinnity_bench"
 doctest = false
 bench = false
 
+[build-dependencies]
+concinnity-toolchain = { path = "../crates/concinnity-toolchain" }
+
 [dependencies]
 concinnity-asset = { path = "../crates/concinnity-asset" }
 concinnity-blob = { path = "../crates/concinnity-blob" }

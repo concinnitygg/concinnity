@@ -21,6 +21,28 @@ use crate::gfx::settings_system::rows::{
 // point and nothing rasterizes (shadow passes included).
 const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
 
+// Deposit a sampled input packet for InputSystem (scheduled right after
+// GraphicsSystem), merging onto an unconsumed one so no edge is lost.
+fn deposit_input(ctx: &mut PipelineContext, packet: crate::gfx::input::InputPacket) {
+    match ctx.resource_mut::<crate::ecs::InputMailbox>() {
+        Some(mailbox) => mailbox.deposit(packet),
+        None => {
+            let mut mailbox = crate::ecs::InputMailbox::default();
+            mailbox.deposit(packet);
+            ctx.insert_resource(mailbox);
+        }
+    }
+}
+
+// The engine-owned skinned instance pool's free count, for the profiler's
+// pool chip.
+fn skinned_pool_free(ctx: &PipelineContext) -> u32 {
+    ctx.resource::<crate::ecs::ActiveRenderQueues>()
+        .and_then(|slot| slot.0.as_ref())
+        .map(|queues| queues.slots.skinned_free() as u32)
+        .unwrap_or(0)
+}
+
 // Record a device-memory failure in the shared [`GpuMemoryPressure`] resource,
 // where the streaming valve can observe it.
 fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
@@ -44,6 +66,11 @@ impl GraphicsSystem {
         if self.failed {
             return StepResult::Done;
         }
+        // Pipelined frames: the backend lives with the render half on the
+        // main thread; extract and send the snapshot instead of submitting.
+        if ctx.resources.contains::<crate::ecs::PipelinedFrames>() {
+            return self.run_step_pipelined(ctx);
+        }
         // Take the parked backend for this step (see `ActiveRenderBackend`);
         // it is a plain local from here on, so `ctx` stays freely borrowable.
         let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(ctx.resources) else {
@@ -55,16 +82,29 @@ impl GraphicsSystem {
         // gates beside it; its buffers ride along and keep their capacity.
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.extract(ctx, &mut snapshot);
-        let outcome = super::submit::submit(&mut self.frame_policy, &snapshot, backend.as_mut());
+        let outcome =
+            super::submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
         self.snapshot = snapshot;
 
-        if outcome.memory_pressure {
+        if outcome.memory_pressure || outcome.replay.memory_pressure {
             publish_memory_pressure(ctx, self.frame_count);
         }
-        if let Some(stats) = outcome.render_stats {
+        // Op failures the simulation side must roll back (streamed-mesh
+        // uploads, chunk adds); StreamingSystem drains them next tick.
+        if !outcome.replay.failures.is_empty() {
+            match ctx.resource_mut::<crate::ecs::RenderOpFailures>() {
+                Some(pending) => pending.0.extend_from_slice(&outcome.replay.failures),
+                None => {
+                    ctx.insert_resource(crate::ecs::RenderOpFailures(outcome.replay.failures));
+                }
+            }
+        }
+        if let Some(mut stats) = outcome.render_stats {
             // Publish this frame's render stats for the profiler overlay.
             // Backends without GPU-timed stats return the trait's default
-            // (all zeros), which the HUD displays as "--".
+            // (all zeros), which the HUD displays as "--". The skinned pool
+            // chip reads the engine-owned instance pool.
+            stats.skinned_pool_free = skinned_pool_free(ctx);
             ctx.profile.render = stats;
         }
 
@@ -84,8 +124,72 @@ impl GraphicsSystem {
             }
         }
 
+        // Sample the window input the draw's event pump just produced and
+        // deposit it for InputSystem (scheduled right after this system), so
+        // sampling keeps the freshness it had when InputSystem polled the
+        // backend itself.
+        if result == StepResult::Continue {
+            deposit_input(
+                ctx,
+                crate::gfx::input::InputPacket::sample(backend.as_mut()),
+            );
+        }
+
         crate::ecs::ActiveRenderBackend::put(ctx.resources, backend);
         result
+    }
+
+    // The pipelined step: extract into a recycled snapshot, hand it to the
+    // render half (a rendezvous send, so at most one frame is in flight), and
+    // apply the feedback the render half produced for the previous frame --
+    // which the completed send guarantees has already arrived. A closed
+    // channel in either direction means the render half stopped.
+    fn run_step_pipelined(&mut self, ctx: &mut PipelineContext) -> StepResult {
+        let Some(pipe) = crate::ecs::PipelinedFrames::take(ctx.resources) else {
+            return StepResult::Done;
+        };
+        let mut snapshot = std::mem::take(&mut self.snapshot);
+        self.extract(ctx, &mut snapshot);
+        if pipe.snapshot_tx.send(snapshot).is_err() {
+            return StepResult::Stop;
+        }
+
+        let mut stop = false;
+        while let Ok(feedback) = pipe.feedback_rx.try_recv() {
+            stop |= feedback.stop;
+            self.frame_count += 1;
+            deposit_input(ctx, feedback.input);
+            if feedback.replay.memory_pressure {
+                publish_memory_pressure(ctx, self.frame_count);
+            }
+            if !feedback.replay.failures.is_empty() {
+                match ctx.resource_mut::<crate::ecs::RenderOpFailures>() {
+                    Some(pending) => pending.0.extend_from_slice(&feedback.replay.failures),
+                    None => {
+                        ctx.insert_resource(crate::ecs::RenderOpFailures(feedback.replay.failures));
+                    }
+                }
+            }
+            let mut stats = feedback.render_stats;
+            stats.skinned_pool_free = skinned_pool_free(ctx);
+            ctx.profile.render = stats;
+            self.snapshot = feedback.recycled;
+        }
+
+        if !stop
+            && let Some(max) = self.max_frames
+            && self.frame_count >= max
+        {
+            tracing::info!("GraphicsSystem: max_frames ({}) reached", max);
+            stop = true;
+        }
+
+        crate::ecs::PipelinedFrames::put(ctx.resources, pipe);
+        if stop {
+            StepResult::Stop
+        } else {
+            StepResult::Continue
+        }
     }
 
     // Fill `snap` with everything this frame's draw consumes. All world-state
@@ -93,6 +197,17 @@ impl GraphicsSystem {
     // extraction cannot reach the GPU and submission cannot reach the world.
     pub(crate) fn extract(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
         snap.clear();
+
+        // The backend effects the earlier systems recorded this tick (spawn
+        // slot ops, settings appliers, streaming uploads) move into the
+        // snapshot; submission replays them in record order before the draw.
+        if let Some(queues) = ctx
+            .resources
+            .get_mut::<crate::ecs::ActiveRenderQueues>()
+            .and_then(|slot| slot.0.as_mut())
+        {
+            queues.ops.drain_into(&mut snap.ops);
+        }
 
         // The FPS-cap pacer runs at the App level before the world steps (see
         // `app::pacing`), so `elapsed` here already reflects the capped
@@ -908,6 +1023,93 @@ mod tests {
         );
         let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden asset is not pickable");
+    }
+
+    // The pipelined step: the extracted snapshot crosses the channel, the
+    // render half's feedback is applied (input mailbox, stats, recycled
+    // buffer), and a feedback-flagged stop propagates as StepResult::Stop.
+    #[test]
+    fn pipelined_step_sends_the_snapshot_and_applies_feedback() {
+        let mut world = ExtractWorld::new();
+        {
+            let mut ctx = world.ctx();
+            let e = ctx.components.spawn();
+            ctx.insert(e, GlobalTransform(translated(2.0)));
+            ctx.insert(e, RenderHandle { draws: [3].into() });
+        }
+        let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
+        let (feedback_tx, feedback_rx) = std::sync::mpsc::channel();
+        world.resources.insert(crate::ecs::PipelinedFrames(Some(
+            crate::ecs::PipelineChannels {
+                snapshot_tx,
+                feedback_rx,
+            },
+        )));
+        // Stand-in render half: consume each snapshot and reply with a
+        // feedback whose second frame flags a stop.
+        let consumer = std::thread::spawn(move || {
+            for stop in [false, true] {
+                let snapshot = snapshot_rx.recv().expect("a snapshot arrives");
+                let mut input = crate::gfx::input::InputPacket::default();
+                input.raw.jump = true;
+                let render_stats = crate::gfx::profile::RenderStats {
+                    draw_calls: 7,
+                    ..Default::default()
+                };
+                feedback_tx
+                    .send(crate::gfx::feedback::FrameFeedback {
+                        input,
+                        render_stats,
+                        replay: Default::default(),
+                        recycled: snapshot,
+                        stop,
+                    })
+                    .expect("feedback is consumed");
+            }
+        });
+
+        let mut gs = GraphicsSystem::new();
+        // Frame 0: the send completes, but its feedback may or may not have
+        // landed yet; either way the step continues.
+        assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Continue);
+        // Frame 1: the rendezvous completing proves feedback 0 arrived; the
+        // second feedback carries the stop, applied this frame or next.
+        let mut result = gs.run_step(&mut world.ctx());
+        if result == StepResult::Continue {
+            result = gs.run_step(&mut world.ctx());
+        }
+        assert_eq!(result, StepResult::Stop, "the feedback stop propagates");
+        consumer.join().expect("the stand-in render half exits");
+
+        let mut ctx = world.ctx();
+        assert!(
+            ctx.resource_mut::<crate::ecs::InputMailbox>()
+                .and_then(|m| m.0.take())
+                .is_some_and(|p| p.raw.jump),
+            "the feedback's input packet reached the mailbox"
+        );
+        assert_eq!(
+            ctx.profile.render.draw_calls, 7,
+            "the feedback's render stats reached the profile"
+        );
+    }
+
+    // With the render half gone (channel closed), the pipelined step stops
+    // instead of blocking or panicking.
+    #[test]
+    fn pipelined_step_stops_when_the_render_half_is_gone() {
+        let mut world = ExtractWorld::new();
+        let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
+        let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
+        world.resources.insert(crate::ecs::PipelinedFrames(Some(
+            crate::ecs::PipelineChannels {
+                snapshot_tx,
+                feedback_rx,
+            },
+        )));
+        drop(snapshot_rx);
+        let mut gs = GraphicsSystem::new();
+        assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Stop);
     }
 
     // A gated value label pulls in every element of the scroll row that holds

@@ -128,11 +128,12 @@ impl VkContext {
     }
 
     // Place one streamed chunk's geometry in the chunk headroom region and
-    // add (or recycle) a `DrawObject` for it; returns the draw-list index.
+    // write its `DrawObject` at the engine-allocated destination slot.
     pub fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
-    ) -> crate::gfx::error::RenderResult<usize> {
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> crate::gfx::error::RenderResult<()> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -207,16 +208,21 @@ impl VkContext {
             shader_bucket: 0,
         };
 
-        // Reuse a vacated draw slot when one is free, else append. A slot
-        // recycled from a culled static prop is not yet in `always_draw`;
+        // Write at the engine-allocated destination slot. A slot recycled from
+        // a culled static prop is not yet in `always_draw`;
         // `ensure_always_draw` adds it, while one recycled from another chunk /
         // clone already is.
-        let draw_idx = match self.draw_slots.allocate() {
+        let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw_objects[slot] = obj;
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+                debug_assert_eq!(
+                    slot,
+                    self.draw_objects.len(),
+                    "appended draw slot must match the draw-object count"
+                );
                 self.draw_objects.push(obj);
                 self.always_draw_member.push(false);
                 slot
@@ -234,7 +240,7 @@ impl VkContext {
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt_topology_dirty = true;
-        Ok(draw_idx)
+        Ok(())
     }
 
     // Free a streamed chunk's geometry region and retire its `DrawObject`
@@ -253,7 +259,6 @@ impl VkContext {
         let obj = &mut self.draw_objects[draw_idx];
         obj.visible = false;
         obj.resident = false;
-        self.draw_slots.free(draw_idx);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt_topology_dirty = true;

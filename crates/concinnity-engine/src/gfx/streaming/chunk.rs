@@ -216,16 +216,17 @@ impl ChunkStreamer {
         plan.to_evict
     }
 
-    // Apply every completed background generation via `upload`, which adds the
-    // chunk's geometry to the renderer. Returns the number of chunks brought
-    // resident this call.
+    // Apply every completed background generation via `upload`, which
+    // receives the chunk's geometry by value so it can carry it into a
+    // recorded backend op. Returns the number of chunks brought resident this
+    // call.
     //
     // A chunk evicted while its generation was still in flight is dropped --
     // the window no longer tracks it, so its mesh is discarded rather than
     // uploaded into a chunk the camera has already left behind.
     pub fn drain_completed(
         &mut self,
-        mut upload: impl FnMut(ChunkCoord, &[Vertex], &[u16]),
+        mut upload: impl FnMut(ChunkCoord, Vec<Vertex>, Vec<u16>),
     ) -> usize {
         let mut applied = 0;
         while let Ok(result) = self.result_rx.try_recv() {
@@ -237,7 +238,7 @@ impl ChunkStreamer {
                     // Resident GPU footprint: the decoded vertex + index buffers.
                     let bytes = mesh.vertices.len() * std::mem::size_of::<Vertex>()
                         + mesh.indices.len() * std::mem::size_of::<u16>();
-                    upload(result.coord, &mesh.vertices, &mesh.indices);
+                    upload(result.coord, mesh.vertices, mesh.indices);
                     self.window.mark_resident(result.coord, bytes as u64);
                     applied += 1;
                 }

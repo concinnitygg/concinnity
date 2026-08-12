@@ -462,6 +462,10 @@ pub struct MtlContext {
     // `reload-shaders` debug command or the filesystem watcher). False under
     // `cn run`: production keeps the static include_str!-baked path.
     pub(super) hot_reload: bool,
+    // Keep each presented drawable's texture retained so `screenshot` can
+    // blit it back (the view is blit-readable under the same flag). On under
+    // the dev loop and `cn run --screenshot`; false in plain production.
+    pub(super) capture: bool,
     // Atomic flag set by the `notify` filesystem watcher or the debug WS
     // `reload-shaders` command. Polled at the top of `draw_frame`; when set,
     // `MtlContext::reload_shaders` rebuilds every built-in pipeline before
@@ -494,17 +498,6 @@ pub struct MtlContext {
     // collides with static geometry. Empty until `setup_chunk_streaming` runs.
     pub(super) chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub(super) chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    // Free list of `draw_objects` slots vacated by removed chunks or retired
-    // (despawned) draws, reused by the next `add_chunk_mesh` or runtime
-    // `clone_static_draw_object` so the draw list does not grow without bound as
-    // the camera roams or entities churn at runtime.
-    pub(super) draw_slots: crate::gfx::draw_slot::DrawSlotAllocator,
-    // Free pool of pre-reserved skinned instance slots, keyed by template.
-    // Seeded at load from `SkinnedMesh.max_instances` (one entry per hidden
-    // bind-pose copy expanded into the skinned geometry); a runtime skinned
-    // spawn claims one, a despawn returns it. Empty when no skinned mesh opted
-    // into runtime spawning.
-    pub(super) skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool,
     // The shared AppKit window + input layer (crate::appkit), which also owns
     // the NSWindow, the fullscreen tracking, and the display-mode hold. Holds
     // the same view as `mtk_view` below, upcast to `NSView`.
@@ -1091,6 +1084,9 @@ impl MtlContext {
             ray_tracing: super::raytrace::raytracing_supported(&self.device),
             // Upscaling always goes through MetalFX; there is no selector.
             selectable_upscaler: false,
+            // The per-frame RT topology refresh re-admits recycled build-time
+            // slots, so every retired slot may be reused.
+            reuses_build_slots: true,
         }
     }
 
@@ -1152,14 +1148,42 @@ impl MtlContext {
     // Retire a draw object for a despawned entity: clear `visible` (drops it
     // from the main / shadow / velocity passes) and `resident` (drops it from
     // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
-    // any pass. The geometry buffers stay allocated, but the slot is returned to
-    // the free list so the next runtime clone recycles it. Has no effect if the
-    // index is out of range.
+    // any pass. The geometry buffers stay allocated; the engine's draw-slot
+    // allocator recycles the index. Has no effect if the index is out of range.
     pub fn retire_draw_object(&mut self, index: usize) {
         if let Some(obj) = self.draw_objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
-            self.draw_slots.free(index);
+        }
+    }
+
+    // Write a draw object at the destination slot the engine's allocator
+    // chose: overwrite a reused slot in place, or append a new one (the
+    // engine's allocator mirrors this vec's length, so an Append index always
+    // equals it).
+    pub(super) fn place_draw_object(
+        &mut self,
+        obj: DrawObject,
+        model: [[f32; 4]; 4],
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> usize {
+        match dst {
+            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
+                self.draw_objects[slot] = obj;
+                self.prev_draw_models[slot] = model;
+                slot
+            }
+            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+                debug_assert_eq!(
+                    slot,
+                    self.draw_objects.len(),
+                    "appended draw slot must match the draw-object count"
+                );
+                self.draw_objects.push(obj);
+                self.prev_draw_models.push(model);
+                self.always_draw_member.push(false);
+                slot
+            }
         }
     }
 
@@ -1184,16 +1208,16 @@ impl MtlContext {
     // re-use the source slot's geometry region (vertex/index offsets,
     // base_vertex, LOD alternates) and copy its texture slots, material, and
     // cull distance, swapping only the model matrix. Driven by runtime entity
-    // spawn (`SpawnRequest`). The copy recycles a slot freed by
-    // `retire_draw_object` before growing `draw_objects`. It is marked
-    // non-cullable (sentinel AABB) and joins `always_draw` since the init-time
-    // BVH cannot refit; the copy is drawn every frame like a streamed chunk.
-    // Returns the new draw_idx.
+    // spawn (`SpawnRequest`); the destination slot comes from the engine's
+    // allocator. The copy is marked non-cullable (sentinel AABB) and joins
+    // `always_draw` since the init-time BVH cannot refit; it is drawn every
+    // frame like a streamed chunk.
     pub fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<usize, String> {
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
         let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
@@ -1219,26 +1243,13 @@ impl MtlContext {
             cull_distance: src.cull_distance,
             lod_alternates: src.lod_alternates.clone(),
         };
-        // Recycle a vacated slot when one is free, else append a new one.
-        let idx = match self.draw_slots.allocate() {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
-                self.prev_draw_models[slot] = model;
-                slot
-            }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
-                self.draw_objects.push(obj);
-                self.prev_draw_models.push(model);
-                self.always_draw_member.push(false);
-                slot
-            }
-        };
+        let idx = self.place_draw_object(obj, model, dst);
         self.ensure_always_draw(idx);
         // The cloned prop joins the RT-relevant draw set; the next RT update
         // folds it into the BVH (it reuses the source mesh's geometry slice, so
         // only this clone's BLAS is built).
         self.rt.topology_dirty = true;
-        Ok(idx)
+        Ok(())
     }
 
     // Rewrite a draw slot's material parameters + texture/normal-map pool

@@ -6,12 +6,13 @@
 use super::frame_policy::{FrameAction, FramePolicy};
 use crate::ecs::StepResult;
 use crate::gfx::backend::{FrameParams, RenderBackend};
+use crate::gfx::ops::ReplayOutcome;
 use crate::gfx::profile::RenderStats;
 use crate::gfx::snapshot::{RenderSnapshot, SceneOp};
 
 // What one frame's submission produced, applied to the world by `run_step`
 // after the backend is parked again.
-pub(super) struct SubmitOutcome {
+pub(crate) struct SubmitOutcome {
     pub result: StepResult,
     // The backend's stats for a drawn (or skipped) frame; `None` when the
     // step stopped before reaching the draw.
@@ -19,6 +20,12 @@ pub(super) struct SubmitOutcome {
     // A device-memory failure occurred; the caller records it where the
     // streaming valve can observe it.
     pub memory_pressure: bool,
+    // What the snapshot's op replay produced (failures to roll back,
+    // memory pressure from an upload).
+    pub replay: ReplayOutcome,
+    // The stop was a device loss: the queue can never signal, so no caller
+    // may wait_idle on the way out.
+    pub device_lost: bool,
 }
 
 impl SubmitOutcome {
@@ -27,15 +34,22 @@ impl SubmitOutcome {
             result: StepResult::Stop,
             render_stats: None,
             memory_pressure: false,
+            replay: ReplayOutcome::default(),
+            device_lost: false,
         }
     }
 }
 
-pub(super) fn submit(
+pub(crate) fn submit(
     policy: &mut FramePolicy,
-    snap: &RenderSnapshot,
+    snap: &mut RenderSnapshot,
     backend: &mut dyn RenderBackend,
 ) -> SubmitOutcome {
+    // Replay the tick's recorded backend effects first, in record order:
+    // spawn slot ops, settings appliers, and streaming uploads all landed
+    // before the draw when they ran in-place, and still do here.
+    let replay = snap.ops.replay(backend);
+
     backend.set_ui_cursor_hidden(snap.ui.cursor_hidden);
     if let Some(on) = snap.ui.menu_mode {
         backend.set_menu_mode(on);
@@ -47,7 +61,10 @@ pub(super) fn submit(
     if backend.window_closed() {
         tracing::info!("GraphicsSystem: window closed");
         backend.wait_idle();
-        return SubmitOutcome::stop();
+        return SubmitOutcome {
+            replay,
+            ..SubmitOutcome::stop()
+        };
     }
 
     if !snap.models.is_empty() {
@@ -102,6 +119,7 @@ pub(super) fn submit(
                     backend.wait_idle();
                     return SubmitOutcome {
                         memory_pressure,
+                        replay,
                         ..SubmitOutcome::stop()
                     };
                 }
@@ -113,6 +131,8 @@ pub(super) fn submit(
                     crate::crash::report_device_lost(&e.to_string());
                     return SubmitOutcome {
                         memory_pressure,
+                        replay,
+                        device_lost: true,
                         ..SubmitOutcome::stop()
                     };
                 }
@@ -124,5 +144,7 @@ pub(super) fn submit(
         result: StepResult::Continue,
         render_stats: Some(backend.render_stats()),
         memory_pressure,
+        replay,
+        device_lost: false,
     }
 }

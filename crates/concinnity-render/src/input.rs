@@ -72,6 +72,54 @@ pub struct RenderInput {
     pub typed_char: Option<char>,
 }
 
+/// One frame's sampled window input, taken beside the backend right after the
+/// draw (whose event pump produced it) and consumed by the input system. In
+/// serial execution it is deposited and consumed within the same tick; the
+/// pipelined driver ships it across the thread boundary instead.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct InputPacket {
+    pub raw: RenderInput,
+    pub cursor_outside_window: bool,
+    /// Logical window size, for UI hit-testing and overlay layout.
+    pub viewport: (f32, f32),
+}
+
+impl InputPacket {
+    /// Sample the backend's accumulated input, cursor containment, and
+    /// logical size into one packet. Called right after the draw so the
+    /// frame's event pump is reflected.
+    pub fn sample(backend: &mut dyn crate::backend::RenderBackend) -> Self {
+        Self {
+            raw: backend.take_input(),
+            cursor_outside_window: backend.cursor_outside_window(),
+            viewport: backend.logical_size(),
+        }
+    }
+
+    /// Fold a newer packet onto this one without losing edges: one-frame
+    /// pulses OR together, deltas accumulate, positions and held states take
+    /// the newer value. Only needed when a consumer misses a frame (startup,
+    /// a stall); steady state is one packet per tick.
+    pub fn merge_from(&mut self, newer: InputPacket) {
+        let old = self.raw;
+        let mut raw = newer.raw;
+        raw.interact |= old.interact;
+        raw.jump |= old.jump;
+        raw.left_click |= old.left_click;
+        raw.right_click |= old.right_click;
+        raw.hud_toggle |= old.hud_toggle;
+        raw.escape |= old.escape;
+        raw.mouse_dx += old.mouse_dx;
+        raw.mouse_dy += old.mouse_dy;
+        raw.scroll_delta += old.scroll_delta;
+        raw.captured_key = raw.captured_key.or(old.captured_key);
+        raw.typed_char = raw.typed_char.or(old.typed_char);
+        self.raw = raw;
+        self.cursor_outside_window = newer.cursor_outside_window;
+        self.viewport = newer.viewport;
+    }
+}
+
 // Scroll units emitted per physical wheel notch on backends whose wheel events
 // arrive as discrete notches (DirectX WM_MOUSEWHEEL, GLFW Scroll). macOS reports
 // precise (often large) scroll deltas directly, so Metal feeds scrollingDeltaY
@@ -92,6 +140,56 @@ pub fn wheel_notches_to_scroll_delta(notches: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A missed consume must not lose edges: pulses OR, deltas accumulate,
+    // positions and held state take the newer value, and an earlier one-frame
+    // Option pulse survives a newer empty poll.
+    #[test]
+    fn packet_merge_keeps_pulses_and_accumulates_deltas() {
+        let mut pending = InputPacket {
+            raw: RenderInput {
+                jump: true,
+                left_click: true,
+                mouse_dx: 2.0,
+                scroll_delta: 1.0,
+                mouse_x: 10.0,
+                left_button_down: true,
+                typed_char: Some('a'),
+                ..Default::default()
+            },
+            cursor_outside_window: true,
+            viewport: (100.0, 100.0),
+        };
+        pending.merge_from(InputPacket {
+            raw: RenderInput {
+                interact: true,
+                mouse_dx: 3.0,
+                scroll_delta: -0.5,
+                mouse_x: 42.0,
+                left_button_down: false,
+                ..Default::default()
+            },
+            cursor_outside_window: false,
+            viewport: (200.0, 150.0),
+        });
+        assert!(pending.raw.jump, "the earlier pulse survives");
+        assert!(pending.raw.left_click);
+        assert!(pending.raw.interact, "the newer pulse is present");
+        assert_eq!(pending.raw.mouse_dx, 5.0, "deltas accumulate");
+        assert_eq!(pending.raw.scroll_delta, 0.5);
+        assert_eq!(pending.raw.mouse_x, 42.0, "position takes the newer value");
+        assert!(
+            !pending.raw.left_button_down,
+            "held state takes the newer value"
+        );
+        assert_eq!(
+            pending.raw.typed_char,
+            Some('a'),
+            "the typed pulse survives"
+        );
+        assert!(!pending.cursor_outside_window);
+        assert_eq!(pending.viewport, (200.0, 150.0));
+    }
 
     #[test]
     fn wheel_notch_sign_and_scale() {

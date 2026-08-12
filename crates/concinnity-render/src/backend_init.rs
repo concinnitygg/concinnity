@@ -154,6 +154,11 @@ pub struct BackendInit<'a> {
     pub clear_color: [f32; 4],
     // True only under `cn debug`: disk-first shader resolution + watcher.
     pub hot_reload: bool,
+    // Keep the presented frame blit-readable so `screenshot` can capture it.
+    // On under the dev loop, and armed by `cn run --screenshot`; production
+    // otherwise pays nothing for it (Metal leaves the drawable
+    // framebuffer-only and retains nothing).
+    pub capture: bool,
     pub scene: SceneData<'a>,
     // One entry per world Shader, indexed by the dense ShaderHandle value a
     // DrawObject's `shader_bucket` carries; entry 0 is the world default

@@ -509,7 +509,8 @@ impl VkContext {
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<usize, String> {
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
         use super::super::context::MAX_CLONE_DRAWS;
 
         let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
@@ -607,8 +608,8 @@ impl VkContext {
             offset
         };
 
-        // Recycle a vacated draw slot when one is free, else append.
-        let new_idx = match self.draw_slots.allocate() {
+        // Write at the engine-allocated destination slot.
+        let new_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw_objects[slot] = obj;
                 // Seed the velocity prepass's previous-model snapshot so a
@@ -624,6 +625,11 @@ impl VkContext {
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+                debug_assert_eq!(
+                    slot,
+                    self.draw_objects.len(),
+                    "appended draw slot must match the draw-object count"
+                );
                 self.draw_objects.push(obj);
                 self.always_draw_member.push(false);
                 slot
@@ -635,6 +641,6 @@ impl VkContext {
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).
         self.rt_topology_dirty = true;
-        Ok(new_idx)
+        Ok(())
     }
 }

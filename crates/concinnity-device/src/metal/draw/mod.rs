@@ -119,7 +119,8 @@ impl MtlContext {
             .iter()
             .filter(|o| o.visible)
             .count() as u32;
-        self.frame_stats.skinned_pool_free = self.skinned_pool.total_free() as u32;
+        // skinned_pool_free is filled in by the engine, which owns the
+        // instance pool.
         // Current GPU memory footprint. On Apple Silicon's unified memory this
         // is the Metal device's allocation within system RAM.
         self.frame_stats.vram_bytes = self.device.currentAllocatedSize() as u64;
@@ -869,7 +870,7 @@ impl MtlContext {
         // composite pass that wrote it committed earlier on the same queue, so
         // same-queue FIFO order guarantees it is fully rendered, and a
         // read-only blit may run alongside the compositor's scan-out.
-        if self.hot_reload {
+        if self.capture {
             use objc2_quartz_core::CAMetalDrawable;
             self.last_present_texture = Some(drawable.texture());
         }

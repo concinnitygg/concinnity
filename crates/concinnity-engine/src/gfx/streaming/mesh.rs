@@ -383,46 +383,33 @@ impl MeshStreamer {
         plan.to_evict
     }
 
-    // Apply every completed background load via `upload`, which uploads the
-    // decoded geometry into the renderer's mesh region. Returns the number of
-    // meshes brought resident this call.
+    // Apply every completed background load via `upload`, which receives the
+    // decoded geometry by value so it can carry it into a recorded backend
+    // op. Returns the number of meshes marked resident this call.
     //
-    // `upload` returns `Err` for a *transient* failure -- the shrinkable seed
-    // headroom is momentarily full because freed regions still await their
-    // retire frame. Such a mesh is rolled back to `Unloaded` so the planner
-    // retries it once an eviction's space is reclaimed, rather than being
-    // marked resident with no geometry on the GPU. A failed *fetch* (decode /
-    // disk error) is terminal and marked resident so the planner stops
-    // retrying a payload that will never decode.
+    // The mesh is marked resident when its upload is handed off; a transient
+    // upload refusal (the shrinkable seed headroom momentarily full) surfaces
+    // later as an op failure, which `note_upload_failed` rolls back to
+    // `Unloaded` so the planner retries once freed space reclaims. A failed
+    // *fetch* (decode / disk error) is terminal and marked resident so the
+    // planner stops retrying a payload that will never decode.
     pub fn drain_completed(
         &mut self,
         frame: u64,
-        mut upload: impl FnMut(usize, &[Vertex], &[u16]) -> crate::gfx::error::RenderResult<()>,
+        mut upload: impl FnMut(usize, Vec<Vertex>, Vec<u16>),
     ) -> usize {
         let mut applied = 0;
         while let Ok(result) = self.result_rx.try_recv() {
             match result.decoded {
-                Ok(mesh) => match upload(result.id, &mesh.vertices, &mesh.indices) {
-                    Ok(()) => {
-                        // Resident footprint is the vertex + index buffer bytes.
-                        let bytes = (mesh.vertices.len() * core::mem::size_of::<Vertex>()
-                            + mesh.indices.len() * core::mem::size_of::<u16>())
-                            as u64;
-                        self.planner.mark_resident(result.id, frame, bytes);
-                        applied += 1;
-                    }
-                    Err(e) => {
-                        // Transient alloc miss: keep the mesh Unloaded so the
-                        // planner re-dispatches it once freed space is
-                        // reclaimed.
-                        tracing::debug!(
-                            "mesh stream: upload of mesh {} deferred: {}",
-                            result.id,
-                            e
-                        );
-                        self.planner.mark_unloaded(result.id);
-                    }
-                },
+                Ok(mesh) => {
+                    // Resident footprint is the vertex + index buffer bytes.
+                    let bytes = (mesh.vertices.len() * core::mem::size_of::<Vertex>()
+                        + mesh.indices.len() * core::mem::size_of::<u16>())
+                        as u64;
+                    upload(result.id, mesh.vertices, mesh.indices);
+                    self.planner.mark_resident(result.id, frame, bytes);
+                    applied += 1;
+                }
                 Err(e) => {
                     tracing::warn!("mesh stream: load of mesh {} failed: {}", result.id, e);
                     // Treat a failed fetch as terminally resident so the
@@ -433,6 +420,15 @@ impl MeshStreamer {
             }
         }
         applied
+    }
+
+    // Roll a mesh whose recorded upload was refused (transient region
+    // exhaustion) back to `Unloaded`, so the planner re-dispatches it once an
+    // eviction's space reclaims. Unloading removes its bytes from the
+    // resident sum (`resident_bytes` counts Resident items only).
+    pub fn note_upload_failed(&mut self, id: usize) {
+        tracing::debug!("mesh stream: upload of mesh {} deferred, will retry", id);
+        self.planner.mark_unloaded(id);
     }
 
     // `(resident, pending, unloaded)` mesh counts -- for diagnostics.
@@ -537,7 +533,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut uploads = 0;
         while std::time::Instant::now() < deadline {
-            uploads += streamer.drain_completed(frame, |_, _, _| Ok(()));
+            uploads += streamer.drain_completed(frame, |_, _, _| {});
             if streamer.stats().0 >= want {
                 break;
             }
@@ -612,8 +608,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline && seen.is_none() {
             streamer.drain_completed(1, |id, verts, idxs| {
-                seen = Some((id, verts.len(), idxs.to_vec()));
-                Ok(())
+                seen = Some((id, verts.len(), idxs));
             });
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -625,7 +620,9 @@ mod tests {
         let centers = vec![vec![[1.0, 0.0, 0.0]]];
         let mut streamer = MeshStreamer::new(Arc::new(ConstSource), centers, 4, 8);
 
-        // Frame 1: dispatch, then fail the upload (transient seed-full miss).
+        // Frame 1: dispatch and drain (the mesh is marked resident on
+        // handoff), then report the deferred upload failure (transient
+        // seed-full miss), which rolls it back.
         streamer.update_scores([0.0, 0.0, 0.0], 1);
         streamer.plan_and_dispatch();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -633,13 +630,11 @@ mod tests {
         while std::time::Instant::now() < deadline && !drained {
             streamer.drain_completed(1, |_, _, _| {
                 drained = true;
-                Err(crate::gfx::error::RenderError::OutOfDeviceMemory(
-                    "no free space".to_string(),
-                ))
             });
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(drained, "worker should have produced a result");
+        streamer.note_upload_failed(0);
         // Not resident: the planner rolled it back to Unloaded for retry.
         assert_eq!(streamer.stats(), (0, 0, 1));
 
@@ -747,8 +742,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline && seen.is_none() {
             streamer.drain_completed(1, |id, verts, idxs| {
-                seen = Some((id, verts.len(), idxs.to_vec()));
-                Ok(())
+                seen = Some((id, verts.len(), idxs));
             });
             std::thread::sleep(std::time::Duration::from_millis(1));
         }

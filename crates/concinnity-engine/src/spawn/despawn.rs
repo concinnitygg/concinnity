@@ -7,7 +7,8 @@
 
 use crate::assets::{Children, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, PipelineContext};
-use crate::gfx::backend::RenderBackend;
+use crate::gfx::ops::RenderOps;
+use crate::gfx::render_slots::RenderSlots;
 
 // Collect an entity together with every descendant reachable through Children
 // edges, pre-order, de-duplicated. A read-only walk: the caller hides each
@@ -69,17 +70,24 @@ fn despawn_collected(
     entities.len()
 }
 
-// Despawn `root` and its descendants, hiding each entity's GPU slots (static
-// draw slots and skinned instance slots) through the backend. Returns the
-// number of entities removed.
+// Despawn `root` and its descendants: return each entity's GPU slots to the
+// engine allocator and record the backend hides into the frame's op queue.
+// Returns the number of entities removed.
 pub(super) fn despawn_subtree(
     ctx: &mut PipelineContext,
-    backend: &mut dyn RenderBackend,
+    ops: &mut RenderOps,
+    slots: &mut RenderSlots,
     root: Entity,
 ) -> usize {
     despawn_collected(ctx, root, |slot| match slot {
-        RetiredSlot::Draw(i) => backend.retire_draw_object(i),
-        RetiredSlot::Skinned(i) => backend.retire_skinned_draw_object(i),
+        RetiredSlot::Draw(i) => {
+            slots.free_draw(i);
+            ops.record(move |backend| backend.retire_draw_object(i));
+        }
+        RetiredSlot::Skinned(i) => {
+            slots.release_skinned(i);
+            ops.record(move |backend| backend.retire_skinned_draw_object(i));
+        }
     })
 }
 

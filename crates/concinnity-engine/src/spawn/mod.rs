@@ -2,8 +2,9 @@
 //
 // SpawnSystem: the per-frame entity churn. Ticks Lifetime countdowns and
 // Spawner cadences, and drains the runtime DespawnRequest / ReparentRequest /
-// SpawnRequest events, retiring and recycling GPU draw slots through the
-// world's parked render backend:
+// SpawnRequest events. GPU slot decisions come from the engine's `RenderSlots`
+// allocator; the backend effects are recorded into the frame's op queue and
+// replayed at submission:
 //   mod.rs      system + the per-frame drains
 //   template.rs instantiate a copy of a placement (static or skinned)
 //   despawn.rs  subtree removal + draw-slot retirement
@@ -17,8 +18,9 @@
 
 use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, Target, VisibilityRequest};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
-use crate::gfx::backend::RenderBackend;
+use crate::ecs::{ActiveRenderQueues, PipelineContext, StepResult, System};
+use crate::gfx::ops::RenderOps;
+use crate::gfx::render_slots::RenderSlots;
 use crate::gfx::transform_propagation;
 use std::time::Instant;
 
@@ -44,6 +46,45 @@ fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<crate::ecs::Enti
 mod despawn;
 mod template;
 mod visibility;
+
+// Allocate a destination draw slot and record the backend clone for it: the
+// `clone_slot` seam `template::spawn_from_template` drives. The slot index is
+// known immediately (the engine owns allocation); the GPU copy applies when
+// the frame's ops replay. A clone that fails at replay leaves a hidden slot,
+// logged there.
+fn record_clone_static(
+    ops: &mut RenderOps,
+    slots: &mut RenderSlots,
+    src: usize,
+    model: [[f32; 4]; 4],
+) -> Option<usize> {
+    use crate::gfx::draw_slot::SlotAlloc;
+    let dst = slots.allocate_draw();
+    let idx = match dst {
+        SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
+    };
+    ops.record(move |backend| {
+        if let Err(e) = backend.clone_static_draw_object(src, model, dst) {
+            tracing::warn!("SpawnSystem: draw-slot clone of {} failed: {}", src, e);
+        }
+    });
+    Some(idx)
+}
+
+// Claim a pre-reserved skinned instance and record its reveal: the
+// `acquire_slot` seam `template::spawn_skinned_from_template` drives. `None`
+// when the template's reserve is exhausted, exactly like the old backend
+// claim.
+fn record_skinned_claim(
+    ops: &mut RenderOps,
+    slots: &mut RenderSlots,
+    template: usize,
+    model: [[f32; 4]; 4],
+) -> Option<usize> {
+    let instance = slots.claim_skinned(template)?;
+    ops.record(move |backend| backend.reveal_skinned_instance(instance, model));
+    Some(instance)
+}
 
 #[derive(Debug, Default)]
 pub struct SpawnSystem {
@@ -73,19 +114,21 @@ impl SpawnSystem {
 
 impl System for SpawnSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // No parked backend (graphics failed, or the editor transplanted it
-        // away): no draw slots to retire or clone, so the churn waits.
-        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
+        // The recording surfaces graphics init published; absent means
+        // graphics never inited, so there are no draw slots to churn. Taken
+        // out for the drain (see `ActiveRenderQueues`) so `ctx` stays freely
+        // borrowable.
+        let Some(mut queues) = ActiveRenderQueues::take(ctx.resources) else {
             return StepResult::Continue;
         };
-        self.drain(ctx, backend.as_mut());
-        ActiveRenderBackend::put(ctx.resources, backend);
+        self.drain(ctx, &mut queues.ops, &mut queues.slots);
+        ActiveRenderQueues::put(ctx.resources, queues);
         StepResult::Continue
     }
 }
 
 impl SpawnSystem {
-    fn drain(&mut self, ctx: &mut PipelineContext, backend: &mut dyn RenderBackend) {
+    fn drain(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps, slots: &mut RenderSlots) {
         let elapsed = self
             .start_time
             .get_or_insert_with(Instant::now)
@@ -113,7 +156,7 @@ impl SpawnSystem {
         if !menu_active {
             let expired = template::tick_lifetimes(ctx, dt);
             for entity in expired {
-                despawn::despawn_subtree(ctx, backend, entity);
+                despawn::despawn_subtree(ctx, ops, slots, entity);
             }
         }
 
@@ -131,7 +174,7 @@ impl SpawnSystem {
         };
         for &target in &despawn_targets {
             if let Some(entity) = resolve_target(ctx, target) {
-                despawn::despawn_subtree(ctx, backend, entity);
+                despawn::despawn_subtree(ctx, ops, slots, entity);
             }
         }
 
@@ -145,7 +188,7 @@ impl SpawnSystem {
         };
         for &req in &vis_reqs {
             if let Some(entity) = resolve_target(ctx, req.target) {
-                visibility::set_subtree_visibility(ctx, backend, entity, req.visible);
+                visibility::set_subtree_visibility(ctx, ops, entity, req.visible);
             }
         }
 
@@ -196,7 +239,7 @@ impl SpawnSystem {
                     req.name,
                     req.transform,
                     req.lifetime_secs,
-                    |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
+                    |tmpl, model| record_skinned_claim(ops, slots, tmpl, model),
                 );
             } else {
                 template::spawn_from_template(
@@ -205,7 +248,7 @@ impl SpawnSystem {
                     req.name,
                     req.transform,
                     req.lifetime_secs,
-                    |src, model| backend.clone_static_draw_object(src, model).ok(),
+                    |src, model| record_clone_static(ops, slots, src, model),
                 );
             }
         }
@@ -233,7 +276,7 @@ impl SpawnSystem {
                     None,
                     due.transform,
                     due.lifetime,
-                    |tmpl, model| backend.spawn_skinned_instance(tmpl, model),
+                    |tmpl, model| record_skinned_claim(ops, slots, tmpl, model),
                 );
             } else {
                 template::spawn_from_template(
@@ -242,7 +285,7 @@ impl SpawnSystem {
                     None,
                     due.transform,
                     due.lifetime,
-                    |src, model| backend.clone_static_draw_object(src, model).ok(),
+                    |src, model| record_clone_static(ops, slots, src, model),
                 );
             }
         }

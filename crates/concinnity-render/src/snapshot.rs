@@ -118,6 +118,10 @@ impl SceneControl for SceneOpRecorder<'_> {
 pub struct RenderSnapshot {
     pub frame: FrameScalars,
     pub ui: UiIntents,
+    /// Backend effects recorded by the simulation systems this tick (spawn
+    /// slot ops, settings appliers, streaming uploads), replayed in record
+    /// order before the frame's draw.
+    pub ops: crate::ops::RenderOps,
     /// Changed static draw-slot model matrices, in push order (a slot pushed
     /// twice keeps both entries; the last write wins on the backend).
     pub models: Vec<(u32, Mat4)>,
@@ -141,6 +145,7 @@ impl RenderSnapshot {
     pub fn clear(&mut self) {
         self.frame = FrameScalars::default();
         self.ui = UiIntents::default();
+        self.ops.clear();
         self.models.clear();
         self.skinned_models.clear();
         self.poses.clear();

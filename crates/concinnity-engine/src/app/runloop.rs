@@ -79,9 +79,9 @@ pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut A
 // CFRunLoopRunInMode is called with returnAfterSourceHandled=true so it returns
 // as soon as one source is handled (result == kCFRunLoopRunHandledSource == 4);
 // any other result means the queue is empty, so the drain stops and control
-// returns to the world step.
+// returns to the world step (or, pipelined, to the render half's wait).
 #[cfg(target_os = "macos")]
-fn drain_cocoa_events() {
+pub(crate) fn drain_cocoa_events() {
     use core_foundation::runloop::{CFRunLoopRunInMode, kCFRunLoopDefaultMode};
     loop {
         let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true as u8) };

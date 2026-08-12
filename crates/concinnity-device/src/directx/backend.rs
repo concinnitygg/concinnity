@@ -80,8 +80,7 @@ impl RenderBackend for DxContext {
         fn retire_draw_object(&mut self, draw_idx: usize);
         fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
         fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]);
-        fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>);
-        fn spawn_skinned_instance(&mut self, template_skinned_index: usize, model: [[f32; 4]; 4]) -> Option<usize>;
+        fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
@@ -104,7 +103,7 @@ impl RenderBackend for DxContext {
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u16, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4]) -> Result<usize, String>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: crate::gfx::draw_slot::SlotAlloc) -> Result<(), String>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -167,9 +166,13 @@ impl RenderBackend for DxContext {
         )?)
     }
 
-    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> crate::gfx::error::RenderResult<usize> {
+    fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> crate::gfx::error::RenderResult<()> {
         debug_assert_main_thread("add_chunk_mesh");
-        Ok(DxContext::add_chunk_mesh(self, mesh)?)
+        DxContext::add_chunk_mesh(self, mesh, dst)
     }
 
     fn update_environment_map(&mut self, payload: &[u8]) -> crate::gfx::error::RenderResult<()> {

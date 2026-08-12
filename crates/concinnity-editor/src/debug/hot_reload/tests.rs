@@ -765,8 +765,9 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn add_chunk_mesh(
             &mut self,
             _: crate::gfx::backend::ChunkMesh<'_>,
-        ) -> crate::gfx::error::RenderResult<usize> {
-            Ok(0)
+            _: crate::gfx::draw_slot::SlotAlloc,
+        ) -> crate::gfx::error::RenderResult<()> {
+            Ok(())
         }
         fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
             Ok(())
@@ -921,8 +922,9 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn add_chunk_mesh(
         &mut self,
         _: crate::gfx::backend::ChunkMesh<'_>,
-    ) -> crate::gfx::error::RenderResult<usize> {
-        Ok(0)
+        _: crate::gfx::draw_slot::SlotAlloc,
+    ) -> crate::gfx::error::RenderResult<()> {
+        Ok(())
     }
     fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
         Ok(())

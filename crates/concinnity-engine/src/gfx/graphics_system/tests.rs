@@ -1463,10 +1463,28 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // world's parked backend -- without the rest of the frame, so a test can seed
 // the world clock's inputs (Lifetime / Spawner / MenuActive) and observe just
 // the churn.
+// One SpawnSystem step followed by a replay of its recorded ops onto the
+// parked backend, so the mock's call log reflects what submission would apply.
 fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut TestWorld) {
     use crate::ecs::System;
-    let mut ctx = world.ctx();
-    spawn.step(&mut ctx);
+    {
+        let mut ctx = world.ctx();
+        spawn.step(&mut ctx);
+    }
+    replay_pending_ops(world);
+}
+
+// Replay the recorded op queue onto the parked backend (both restored after),
+// standing in for the submit-path replay in tests that step one system.
+fn replay_pending_ops(world: &mut TestWorld) {
+    let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(&mut world.resources) else {
+        return;
+    };
+    if let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(&mut world.resources) {
+        queues.ops.replay(backend.as_mut());
+        crate::ecs::ActiveRenderBackend::put(&mut world.resources, backend);
+    }
+    crate::ecs::ActiveRenderQueues::put(&mut world.resources, queues);
 }
 
 // The entity a name resolves to through the decomposition's name index.
@@ -1480,15 +1498,16 @@ fn entity_named(world: &mut TestWorld, name: AssetId) -> crate::ecs::Entity {
         .expect("name resolves to an entity")
 }
 
-// With no parked backend (graphics failed, or the editor transplanted it away)
-// there are no draw slots to retire or clone, so the churn waits rather than
-// dropping the events on the floor.
+// With no op queue / slot allocator (graphics never inited) there are no draw
+// slots to retire or clone, so the churn waits rather than dropping the
+// events on the floor.
 #[test]
-fn spawn_system_without_a_backend_leaves_the_churn_pending() {
+fn spawn_system_without_graphics_leaves_the_churn_pending() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
-    crate::ecs::ActiveRenderBackend::take(&mut world.resources).expect("backend was parked");
+    crate::ecs::ActiveRenderQueues::take(&mut world.resources)
+        .expect("the recording surfaces were published");
 
     {
         let mut ctx = world.ctx();
@@ -1502,7 +1521,7 @@ fn spawn_system_without_a_backend_leaves_the_churn_pending() {
     assert_eq!(
         world.ctx().query::<RenderHandle>().count(),
         1,
-        "the despawn never ran without a backend to retire its slot"
+        "the despawn never ran without the slot allocator to retire into"
     );
 }
 
@@ -3325,9 +3344,16 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
         "each reserved copy owns a distinct vertex region: {:?}",
         s.calls
     );
-    assert!(
-        s.saw(&Call::SeedSkinnedInstancePool(3)),
-        "the backend's instance pool is seeded with the reserved copies"
+    assert_eq!(
+        world
+            .resources
+            .get::<crate::ecs::ActiveRenderQueues>()
+            .and_then(|slot| slot.0.as_ref())
+            .expect("graphics init publishes the recording surfaces")
+            .slots
+            .skinned_free(),
+        3,
+        "the engine's instance pool is seeded with the reserved copies"
     );
     assert_eq!(s.init.as_ref().unwrap().n_skinned, 4);
 }
@@ -3737,7 +3763,17 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
         "an LOD alternate shares its slot's vertex region: {:?}",
         s.calls
     );
-    assert!(s.saw(&Call::SeedSkinnedInstancePool(1)));
+    assert_eq!(
+        world
+            .resources
+            .get::<crate::ecs::ActiveRenderQueues>()
+            .and_then(|slot| slot.0.as_ref())
+            .expect("graphics init publishes the recording surfaces")
+            .slots
+            .skinned_free(),
+        1,
+        "the engine's instance pool is seeded with the reserved copy"
+    );
 }
 
 // A world declaring no Window / GraphicsConfig still builds against the system's

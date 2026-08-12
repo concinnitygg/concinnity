@@ -898,11 +898,6 @@ pub struct DxContext {
     // Skinned (skeletally animated) mesh rendering. All `None` / empty until
     // `upload_skinned` runs.
     pub(super) skinned: SkinnedState,
-    // Free pool for the pre-reserved skinned instance slots a runtime skinned
-    // spawn claims. Seeded once from `seed_skinned_instance_pool` with the hidden
-    // bind-pose copies `upload_skinned` uploaded; empty for a world with no
-    // skinned mesh opting into runtime spawning.
-    pub(super) skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool,
 
     // Constant buffers (view + shadow per-frame persistent-mapped, light once).
     // See `DxUniforms`.
@@ -1083,13 +1078,6 @@ pub struct DxContext {
     // A slot vacated by a culled static prop is not yet in `always_draw`; one
     // recycled from a chunk / clone already is.
     pub(super) always_draw_member: Vec<bool>,
-    // Free-list allocator over `draw_objects` slots. `retire_draw_object` /
-    // `remove_chunk_mesh` push a vacated slot; `clone_static_draw_object` /
-    // `add_chunk_mesh` pop one before growing the vec, so runtime spawn/despawn
-    // and chunk streaming reuse slots instead of leaking them. Indices stay
-    // stable (RenderHandle stores raw indices into draw_objects), so this is a
-    // free-list, never a compaction.
-    pub(super) draw_slots: crate::gfx::draw_slot::DrawSlotAllocator,
     // Per-frame scratch for the legacy CPU draw path's visible set
     // (BVH-culled cullables + always_draw fallback). Wrapped in a RefCell
     // because `record_frame` is &self (matches the existing per-frame
@@ -1422,7 +1410,8 @@ impl DxContext {
             .iter()
             .filter(|o| o.visible)
             .count() as u32;
-        let skinned_pool_free = self.skinned_pool.total_free() as u32;
+        // Filled in by the engine, which owns the skinned instance pool.
+        let skinned_pool_free = 0u32;
         // Current GPU memory residency, in bytes. `Local` is the dedicated VRAM
         // budget on a discrete GPU and the local-process system-memory budget on
         // an integrated GPU; either way, `CurrentUsage` is what the HUD's
@@ -1848,17 +1837,10 @@ impl DxContext {
             if let Some(offset) = self.clone.slot_by_draw_idx.remove(&index) {
                 self.clone.free_offsets.push(offset);
             }
-            // Only the runtime-append region (streamed chunks + spawned clones,
-            // `index >= n_objects`) recycles its draw slots. A build-time slot
-            // stays allocated when hidden: the init-time cull BVH and the RT
-            // acceleration structure's `object_indices` are keyed to fixed
-            // build-time slot indices and cannot refit, so reusing one would
-            // mis-key them. (Metal recycles build-time slots too because its
-            // per-frame RT topology refresh re-admits them; DX has no such
-            // refresh -- tracked as the RT incremental topology parity item.)
-            if index >= self.n_objects {
-                self.draw_slots.free(index);
-            }
+            // Slot recycling lives in the engine's draw-slot allocator; only
+            // the runtime-append region recycles here (`reuses_build_slots` is
+            // false because the init-time cull BVH and RT `object_indices` key
+            // fixed build-time slots and cannot refit).
         }
     }
 
@@ -2226,6 +2208,10 @@ impl DxContext {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
             selectable_upscaler: true,
+            // The cull BVH + RT tables key fixed build-time slot indices and
+            // cannot refit; only the runtime-append region recycles (tracked
+            // as the RT incremental topology parity item).
+            reuses_build_slots: false,
         }
     }
 

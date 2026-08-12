@@ -602,7 +602,8 @@ impl DxContext {
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<usize, String> {
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
         let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
@@ -679,8 +680,8 @@ impl DxContext {
             self.srv_slot_cpu(normal_slot),
         );
 
-        // Recycle a vacated draw slot when one is free, else append.
-        let new_idx = match self.draw_slots.allocate() {
+        // Write at the engine-allocated destination slot.
+        let new_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw_objects[slot] = obj;
                 // Seed the velocity prepass's previous-model snapshot so a
@@ -697,6 +698,11 @@ impl DxContext {
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+                debug_assert_eq!(
+                    slot,
+                    self.draw_objects.len(),
+                    "appended draw slot must match the draw-object count"
+                );
                 self.draw_objects.push(obj);
                 self.always_draw_member.push(false);
                 slot
@@ -708,7 +714,7 @@ impl DxContext {
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).
         self.rt_topology_dirty = true;
-        Ok(new_idx)
+        Ok(())
     }
 
     // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.
@@ -1174,7 +1180,7 @@ impl DxContext {
     }
 
     // Place one streamed chunk's geometry in the chunk headroom region and
-    // add (or recycle) a `DrawObject` for it; returns the draw-list index.
+    // write its `DrawObject` at the engine-allocated destination slot.
     //
     // The chunk is non-cullable and joins the `always_draw` set: the streaming
     // window already bounds the resident chunk count. Indices stay
@@ -1183,7 +1189,11 @@ impl DxContext {
     // range still renders. `frame` reclaims retired deferred frees first.
     // `wait_idle` runs before the geometry copy so the whole-resource
     // COPY_DEST transition races no in-flight command list.
-    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+    pub fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> crate::gfx::error::RenderResult<()> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -1194,7 +1204,7 @@ impl DxContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".to_string());
+            return Err("add_chunk_mesh: empty chunk geometry".into());
         }
         self.chunk_stream.vtx_alloc.reclaim(frame);
         self.chunk_stream.idx_alloc.reclaim(frame);
@@ -1208,10 +1218,10 @@ impl DxContext {
             .vtx_alloc
             .alloc(v_len as u64)
             .ok_or_else(|| {
-                format!(
+                crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk vertex space for {} bytes",
                     v_len
-                )
+                ))
             })? as usize;
         let i_off = match self.chunk_stream.idx_alloc.alloc(i_len as u64) {
             Some(o) => o as usize,
@@ -1219,10 +1229,10 @@ impl DxContext {
                 self.chunk_stream
                     .vtx_alloc
                     .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
+                return Err(crate::gfx::error::RenderError::OutOfDeviceMemory(format!(
                     "add_chunk_mesh: no free chunk index space for {} bytes",
                     i_len
-                ));
+                )));
             }
         };
 
@@ -1274,16 +1284,21 @@ impl DxContext {
             shader_bucket: 0,
         };
 
-        // Reuse a vacated draw slot when one is free, else append. A slot
-        // recycled from a culled static prop is not yet in `always_draw`;
+        // Write at the engine-allocated destination slot. A slot recycled from
+        // a culled static prop is not yet in `always_draw`;
         // `ensure_always_draw` adds it, while one recycled from another chunk /
         // clone already is.
-        let draw_idx = match self.draw_slots.allocate() {
+        let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
                 self.draw_objects[slot] = obj;
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
+                debug_assert_eq!(
+                    slot,
+                    self.draw_objects.len(),
+                    "appended draw slot must match the draw-object count"
+                );
                 self.draw_objects.push(obj);
                 self.always_draw_member.push(false);
                 slot
@@ -1303,7 +1318,7 @@ impl DxContext {
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt_topology_dirty = true;
-        Ok(draw_idx)
+        Ok(())
     }
 
     // Free a streamed chunk's geometry region and retire its `DrawObject`
@@ -1330,7 +1345,6 @@ impl DxContext {
         let obj = &mut self.draw_objects[draw_idx];
         obj.visible = false;
         obj.resident = false;
-        self.draw_slots.free(draw_idx);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt_topology_dirty = true;
@@ -1764,49 +1778,30 @@ impl DxContext {
         }
     }
 
-    // Seed the skinned instance pool from `(template_index, instance_index)`
-    // pairs built at load, each instance being a hidden bind-pose copy of its
-    // template that `upload_skinned` already uploaded (its own vertex region,
-    // joint buffer, and SRV pair). Called once after `upload_skinned`, before any
-    // runtime skinned spawn. With no skinned mesh opting into runtime spawning the
-    // list is empty and the pool stays empty. Mirrors the Metal path.
-    pub fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>) {
-        for (template, instance) in reservations {
-            self.skinned_pool.reserve(template, instance);
-        }
-    }
-
-    // Claim a free pre-reserved copy of the skinned object at
-    // `template_skinned_index`, reveal it at `model`, and reset its joint palette
-    // to the bind pose so it does not flash its previous occupant's last frame
-    // (the owning `SkeletonPose`'s first pose push replaces it next frame). The
-    // copy's deformed region is already valid because `encode_skin` folds every
-    // pre-reserved copy each frame. Returns the claimed slot's skinned index, or
-    // `None` when the template reserved no pool or the pool is exhausted.
-    pub fn spawn_skinned_instance(
-        &mut self,
-        template_skinned_index: usize,
-        model: [[f32; 4]; 4],
-    ) -> Option<usize> {
-        let slot = self.skinned_pool.acquire(template_skinned_index)?;
-        let obj = self.skinned.draw_objects.get_mut(slot)?;
+    // Reveal the pre-reserved skinned instance at `instance_index` (the
+    // engine's instance pool decided which): show it at `model` and reset its
+    // joint palette to the bind pose so it does not flash its previous
+    // occupant's last frame (the owning `SkeletonPose`'s first pose push
+    // replaces it next frame). The copy's deformed region is already valid
+    // because `encode_skin` folds every pre-reserved copy each frame. A no-op
+    // if the index is out of range. Mirrors the Metal path.
+    pub fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+        let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
+            return;
+        };
         obj.model = model;
         obj.visible = true;
-        if let Some(palette) = self.skinned.joint_matrices.get_mut(slot) {
+        if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY4);
         }
-        Some(slot)
     }
 
-    // Hide a skinned object and, if it was a pre-reserved instance, return its
-    // slot to the pool so a later spawn can claim it. An authored template slot
-    // is simply hidden (it owns no pool entry). A no-op if the index is out of
-    // range. Mirrors the Metal path.
+    // Hide a skinned object; the engine's instance pool recycles the slot. A
+    // no-op if the index is out of range. Mirrors the Metal path.
     pub fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
         if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
             obj.visible = false;
         }
-        self.skinned_pool.release(skinned_index);
     }
 
     // Push the model-to-world matrices of the given skinned objects, one

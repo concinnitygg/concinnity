@@ -2086,7 +2086,7 @@ impl GraphicsSystem {
             indices: skinned_indices,
             draw_objects: mut skinned_draw_objects,
             skeletons: skinned_skeletons,
-            pool_reservations: mut skinned_pool_reservations,
+            pool_reservations: skinned_pool_reservations,
             morphs: mut skinned_morphs,
             source_map: skinned_mesh_source_map,
         } = match self.assemble_skinned_meshes(
@@ -2626,6 +2626,9 @@ impl GraphicsSystem {
         // leaves it off; the backend then never spawns the filesystem watcher
         // and shader sources stay strictly include_str!-baked.
         let hot_reload = crate::app::dev_flags::enabled();
+        // Frame capture: always available under the dev loop, and armed for a
+        // production run that asked for an exit screenshot.
+        let capture = hot_reload || crate::app::dev_flags::capture();
         // Worst-case resident chunk count for the streaming VoxelWorld (0 for a
         // non-voxel world). Threaded into the backend so its GPU-cull buffers
         // reserve a chunk record region at init; resident chunks fold into the
@@ -2688,6 +2691,7 @@ impl GraphicsSystem {
             vsync: self.vsync,
             clear_color: self.clear_color,
             hot_reload,
+            capture,
             scene: SceneData {
                 vertices: &all_vertices,
                 indices: &all_indices,
@@ -2939,9 +2943,8 @@ impl GraphicsSystem {
                 if skinned_morphs.iter().any(|m| m.is_some()) {
                     backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs));
                 }
-                // Seed the backend's skinned instance pool with the hidden copies
-                // reserved above, so a runtime skinned spawn can claim one.
-                backend.seed_skinned_instance_pool(std::mem::take(&mut skinned_pool_reservations));
+                // The hidden copies reserved above seed the engine-side
+                // skinned instance pool (`RenderSlots`), published below.
             }
             let skinned_count = skinned_skeletons.len();
             for SkinnedSkeletonEntry {
@@ -3110,6 +3113,21 @@ impl GraphicsSystem {
             last_drift_verdict: None,
             heartbeats: Default::default(),
         });
+
+        // The recording surfaces the render-block systems take each tick: the
+        // op queue backend effects accumulate into, and the slot-allocation
+        // authority (draw-slot free list seeded with the build-time draw
+        // count; skinned instance pool seeded with the pre-reserved copies).
+        ctx.insert_resource(crate::ecs::ActiveRenderQueues(Some(
+            crate::ecs::RenderQueues {
+                ops: Default::default(),
+                slots: crate::gfx::render_slots::RenderSlots::new(
+                    draw_object_count,
+                    self.caps.reuses_build_slots,
+                    &skinned_pool_reservations,
+                ),
+            },
+        )));
 
         // Init-time wiring is done: park the backend in the world's shared
         // slot, where each per-step user (this system's frame encode,

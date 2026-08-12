@@ -56,6 +56,9 @@ impl VkContext {
             vsync,
             clear_color,
             hot_reload,
+            // Vulkan retains the presented swapchain index unconditionally, so
+            // capture needs no arming here.
+            capture: _,
             scene:
                 SceneData {
                     vertices,
@@ -3680,7 +3683,6 @@ impl VkContext {
             }
             member
         };
-        let draw_slots = crate::gfx::draw_slot::DrawSlotAllocator::with_len(draw_objects.len());
 
         let shadow_pipeline_layout_field = if shadow_pipeline_opt.is_some() {
             Some(shadow_pipeline_layout)
@@ -3954,7 +3956,6 @@ impl VkContext {
                 morph_weight_buffers: Vec::new(),
                 deformed_primed: std::sync::atomic::AtomicBool::new(false),
             },
-            skinned_pool: crate::gfx::skinned_pool::SkinnedInstancePool::new(),
             uniforms: VkUniforms {
                 view_ubo_buffers,
                 probe_set_ubo_buffers,
@@ -3981,7 +3982,6 @@ impl VkContext {
             cull_bvh,
             always_draw,
             always_draw_member,
-            draw_slots,
             visible_scratch: Vec::new(),
             frame_graph_cache: None,
             draw_objects,

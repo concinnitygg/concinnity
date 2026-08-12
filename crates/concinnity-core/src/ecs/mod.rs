@@ -320,7 +320,7 @@ impl<'a> PipelineContext<'a> {
 
     // Install (or replace) the singleton resource of type T, returning the
     // previous instance if one was present.
-    pub fn insert_resource<T: core::any::Any>(&mut self, value: T) -> Option<T> {
+    pub fn insert_resource<T: core::any::Any + Send>(&mut self, value: T) -> Option<T> {
         self.resources.insert(value)
     }
 
@@ -333,7 +333,7 @@ impl<'a> PipelineContext<'a> {
     // Mutably borrow the event queue for event type E, creating an empty one on
     // first access so writers and readers never miss it. All queues live in the
     // `EventStore` resource, which the frame driver rotates wholesale.
-    pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
+    pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
         if !self.resources.contains::<EventStore>() {
             self.resources.insert(EventStore::new());
         }

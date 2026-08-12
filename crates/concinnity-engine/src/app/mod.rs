@@ -14,6 +14,8 @@ pub mod dev_flags;
 // Long-session drift of process memory against the tracked heap.
 pub mod mem_drift;
 pub(crate) mod pacing;
+// Pipelined frame driver: sim thread + render half + the channel pair.
+pub(crate) mod pipeline;
 pub mod run;
 pub mod runloop;
 pub mod state;

@@ -74,5 +74,5 @@ pub fn compile_world(content: &str) -> std::io::Result<World> {
 pub fn run(world: World) -> std::io::Result<()> {
     let mut app = App::new();
     *app.world_mut() = world;
-    concinnity_engine::app::run::start_runtime(app)
+    concinnity_engine::app::run::start_runtime(app, Default::default())
 }

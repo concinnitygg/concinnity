@@ -31,20 +31,21 @@ pub use concinnity_cpu::gfx::{
 // this crate). `pub` for the pieces the editor / app crates name, `pub(crate)`
 // for the rest.
 pub use concinnity_render::{
-    backend, backend_init, decal, error, input, particles, scene_flow, scene_residency, snapshot,
-    volumetric_fog,
+    backend, backend_init, decal, error, feedback, input, ops, particles, scene_flow,
+    scene_residency, snapshot, volumetric_fog,
 };
 pub(crate) use concinnity_render::{
     chunk_window, cursor, display_mode, keymap, lights, sprite, text,
 };
 // Seeded / driven by the client's GraphicsSystem on Metal today; the other
 // backends' probe + planar ports have not landed, so unused off macOS.
+pub use concinnity_render::draw_slot;
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
-// Consumed only by the runtime-spawn unit tests (draw-slot allocator +
-// skinned-instance pool); the production spawn path lives in the backends.
+// Consumed by the runtime-spawn unit tests, which drive the template seams
+// with a bare pool instead of the RenderSlots resource.
 #[cfg(test)]
-pub(crate) use concinnity_render::{draw_slot, skinned_pool};
+pub(crate) use concinnity_render::skinned_pool;
 
 // Skeletal animation playback. Internal system, constructed by `World::start`
 // when the world declares any `Animation`; produces per-frame skinning matrices.
@@ -67,6 +68,9 @@ pub(crate) mod input_system;
 // 2D overlay draw-list build + menu-state publish. Internal system,
 // constructed alongside GraphicsSystem (same gate) and scheduled first.
 pub(crate) mod overlay;
+// Engine-side allocation authority for backend draw slots + pre-reserved
+// skinned instances (the `RenderSlots` resource).
+pub(crate) mod render_slots;
 // SettingCommand / SceneCommand application + settings snapshot ownership.
 // Internal system, constructed alongside GraphicsSystem (same gate) and
 // scheduled just before it.

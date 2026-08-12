@@ -213,7 +213,8 @@ impl Fixture {
         }
     }
 
-    // Queue `cmds` and run one drain over them.
+    // Queue `cmds` and run one drain over them, replaying the recorded ops
+    // onto the mock backend so the call assertions keep working.
     fn apply(&mut self, cmds: Vec<SettingCommand>) {
         {
             let mut ctx = self.world.ctx();
@@ -223,8 +224,9 @@ impl Fixture {
             }
         }
         let mut ctx = self.world.ctx();
-        self.state
-            .apply_setting_commands(&mut ctx, &mut self.backend);
+        let mut ops = crate::gfx::ops::RenderOps::default();
+        self.state.apply_setting_commands(&mut ctx, &mut ops);
+        ops.replay(&mut self.backend);
     }
 
     // Cycle a row forward once, routing the value label back to the row.
@@ -1202,10 +1204,11 @@ fn step_without_a_backend_puts_the_state_back() {
     );
 }
 
-// The full step drains against the parked backend, publishes the HUD state, and
-// parks both the backend and the state again for the next tick.
+// The full step drains into the parked op queue, publishes the HUD state, and
+// parks both the queue and the state again for the next tick; replaying the
+// queue applies the drained command to the backend.
 #[test]
-fn step_drains_against_the_parked_backend_and_reparks() {
+fn step_drains_into_the_op_queue_and_reparks() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
     {
@@ -1213,7 +1216,14 @@ fn step_drains_against_the_parked_backend_and_reparks() {
         ctx.events_mut::<SettingCommand>()
             .send(cycle("vsync", SettingOp::Next));
     }
-    crate::ecs::ActiveRenderBackend::put(&mut f.world.resources, Box::new(f.backend));
+    f.world
+        .resources
+        .insert(crate::ecs::ActiveRenderQueues(Some(
+            crate::ecs::RenderQueues {
+                ops: Default::default(),
+                slots: crate::gfx::render_slots::RenderSlots::new(0, true, &[]),
+            },
+        )));
     f.world.resources.insert(f.state);
 
     assert_eq!(
@@ -1221,14 +1231,13 @@ fn step_drains_against_the_parked_backend_and_reparks() {
         crate::ecs::StepResult::Continue
     );
 
-    assert!(
-        f.calls.lock().unwrap().saw(&Call::SetVsync(true)),
-        "the command reached the backend"
-    );
     assert!(f.world.ctx().resource::<crate::ecs::HudPrefs>().is_some());
     assert!(f.world.ctx().resources.get_mut::<SettingsState>().is_some());
+    let mut queues = crate::ecs::ActiveRenderQueues::take(&mut f.world.resources)
+        .expect("the op queue is parked again");
+    queues.ops.replay(&mut f.backend);
     assert!(
-        crate::ecs::ActiveRenderBackend::take(&mut f.world.resources).is_some(),
-        "the backend is parked again"
+        f.calls.lock().unwrap().saw(&Call::SetVsync(true)),
+        "the drained command reaches the backend at replay"
     );
 }

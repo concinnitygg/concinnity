@@ -4,8 +4,10 @@
 // type. The home for engine-wide singletons (frame input, the render backend,
 // the profiler) that would otherwise be faked as one-element collections.
 //
-// Values are only required to be `Any`, not `Send`, so a main-thread-only
-// resource (the Metal backend) can live here alongside the rest.
+// Values are required to be `Send` so the world that owns the store can move
+// to a simulation thread. Thread-affine state (a GPU backend) may still be
+// stored behind a `Send` handle, but its owner must keep it on the thread its
+// invariants require.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -13,7 +15,7 @@ use core::any::{Any, TypeId};
 
 #[derive(Default)]
 pub struct Resources {
-    map: BTreeMap<TypeId, Box<dyn Any>>,
+    map: BTreeMap<TypeId, Box<dyn Any + Send>>,
 }
 
 impl Resources {
@@ -23,7 +25,7 @@ impl Resources {
 
     // Insert a resource, returning the previous instance of the same type if
     // one was present.
-    pub fn insert<T: Any>(&mut self, value: T) -> Option<T> {
+    pub fn insert<T: Any + Send>(&mut self, value: T) -> Option<T> {
         self.map
             .insert(TypeId::of::<T>(), Box::new(value))
             .and_then(downcast::<T>)
@@ -32,13 +34,13 @@ impl Resources {
     pub fn get<T: Any>(&self) -> Option<&T> {
         self.map
             .get(&TypeId::of::<T>())
-            .and_then(|boxed| boxed.downcast_ref::<T>())
+            .and_then(|boxed| (boxed.as_ref() as &dyn Any).downcast_ref::<T>())
     }
 
     pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.map
             .get_mut(&TypeId::of::<T>())
-            .and_then(|boxed| boxed.downcast_mut::<T>())
+            .and_then(|boxed| (boxed.as_mut() as &mut dyn Any).downcast_mut::<T>())
     }
 
     pub fn remove<T: Any>(&mut self) -> Option<T> {
@@ -50,8 +52,8 @@ impl Resources {
     }
 }
 
-fn downcast<T: Any>(boxed: Box<dyn Any>) -> Option<T> {
-    boxed.downcast::<T>().ok().map(|value| *value)
+fn downcast<T: Any>(boxed: Box<dyn Any + Send>) -> Option<T> {
+    (boxed as Box<dyn Any>).downcast::<T>().ok().map(|v| *v)
 }
 
 #[cfg(test)]

@@ -173,6 +173,12 @@ pub struct DeviceCapabilities {
     // rather than fixed. DirectX and Vulkan offer the selection; Metal always
     // upscales through MetalFX, so the row has nothing to pick.
     pub selectable_upscaler: bool,
+    // Whether a retired build-time draw slot may be recycled by a runtime
+    // clone. Metal's per-frame RT topology refresh re-admits recycled
+    // build-time slots; DirectX / Vulkan key their cull BVH + RT tables to
+    // fixed build-time indices and cannot refit, so only the runtime-append
+    // region recycles there. Read by the engine's draw-slot allocator.
+    pub reuses_build_slots: bool,
 }
 
 impl DeviceCapabilities {
@@ -182,6 +188,7 @@ impl DeviceCapabilities {
     pub const ALL: Self = Self {
         ray_tracing: true,
         selectable_upscaler: true,
+        reuses_build_slots: true,
     };
 }
 
@@ -355,9 +362,9 @@ pub trait RenderBackend: SceneControl + Send {
     // Retire a draw object: hide it from every pass (main, shadow, velocity)
     // and exclude it from the ray-tracing acceleration structure, so a
     // despawned entity's slot leaves no ghost. The slot's geometry buffers are
-    // untouched, but the slot index is returned to the draw-slot free list so
-    // the next `clone_static_draw_object` can recycle it. A no-op if the index
-    // is out of range.
+    // untouched; the engine's draw-slot allocator returns the index to its
+    // free list so a later `clone_static_draw_object` can recycle it. A no-op
+    // if the index is out of range.
     fn retire_draw_object(&mut self, draw_idx: usize);
 
     // Skinning. `vert_bytes` and `shadow_bytes` are Metal-only payloads;
@@ -394,27 +401,16 @@ pub trait RenderBackend: SceneControl + Send {
     // fallback for a backend that has not wired runtime skinned spawn, where a
     // skinned SpawnRequest finds nothing to claim and is dropped.
 
-    // Seed the backend's skinned instance pool from `(template_index,
-    // instance_index)` pairs built at load, where each instance is a hidden
-    // bind-pose copy of its template. Lets a later `spawn_skinned_instance`
-    // claim a copy without growing any GPU buffer.
-    fn seed_skinned_instance_pool(&mut self, _reservations: Vec<(usize, usize)>) {}
+    // Reveal the pre-reserved skinned instance at `instance_index` (a hidden
+    // bind-pose copy expanded at load): show it at `model` and reset its
+    // palette to bind so it does not flash a previous occupant's pose. Which
+    // instance to use is decided by the engine's instance pool; the backend
+    // only applies it. A no-op if the index is out of range.
+    fn reveal_skinned_instance(&mut self, _instance_index: usize, _model: [[f32; 4]; 4]) {}
 
-    // Claim a free pre-reserved copy of the skinned object at
-    // `template_skinned_index`, reveal it at `model`, reset its pose to bind,
-    // and return the claimed slot's skinned index. `None` when the template
-    // reserved no pool or the pool is exhausted.
-    fn spawn_skinned_instance(
-        &mut self,
-        _template_skinned_index: usize,
-        _model: [[f32; 4]; 4],
-    ) -> Option<usize> {
-        None
-    }
-
-    // Hide a live skinned instance and return its slot to the pool so a later
-    // spawn can claim it. A no-op if the index is out of range or was not a
-    // pre-reserved instance slot.
+    // Hide a live skinned instance. The engine's instance pool returns the
+    // slot for reuse; the backend only hides it. A no-op if the index is out
+    // of range.
     fn retire_skinned_draw_object(&mut self, _skinned_index: usize) {}
 
     // Push this frame's changed skinned model-to-world matrices, one
@@ -474,7 +470,14 @@ pub trait RenderBackend: SceneControl + Send {
         texture_slot: usize,
         normal_map_slot: usize,
     ) -> RenderResult<()>;
-    fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> RenderResult<usize>;
+    // The destination draw slot comes from the engine's allocator, like
+    // `clone_static_draw_object`; the freed slot is likewise returned to it by
+    // the caller of `remove_chunk_mesh`.
+    fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+        dst: crate::draw_slot::SlotAlloc,
+    ) -> RenderResult<()>;
     fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
     fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
 
@@ -887,19 +890,23 @@ pub trait RenderBackend: SceneControl + Send {
     // / `index_offset` / `index_count` / `base_vertex` / `lod_alternates`) and
     // copy its texture slots, material, and cull distance, swapping only the
     // model matrix. The new slot reuses one freed by `retire_draw_object` before
-    // growing the draw-object vec. Returned index is the new `DrawObject` slot.
-    // Driven by runtime entity spawn (`SpawnRequest`). The copy is non-cullable
-    // (sentinel AABB) and drawn every frame, since the init-time BVH cannot
-    // refit to admit a slot added at runtime; moving copies (the common case)
-    // opt out of the static BVH exactly like streamed chunks and held items.
-    // Default no-op (returns `Err`): backends without an implementation leave
-    // the spawn path logged + skipped at the caller.
+    // growing the draw-object vec. The destination slot comes from the
+    // engine's draw-slot allocator: `Reuse` overwrites a vacated entry,
+    // `Append` grows the vec (the index always equals the current length,
+    // which implementations debug-assert). Driven by runtime entity spawn
+    // (`SpawnRequest`). The copy is non-cullable (sentinel AABB) and drawn
+    // every frame, since the init-time BVH cannot refit to admit a slot added
+    // at runtime; moving copies (the common case) opt out of the static BVH
+    // exactly like streamed chunks and held items. Default no-op (returns
+    // `Err`): backends without an implementation leave the spawn path
+    // logged + skipped at the caller.
     fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<usize, String> {
-        let _ = (src_draw_idx, model);
+        dst: crate::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
+        let _ = (src_draw_idx, model, dst);
         Err("clone_static_draw_object: not implemented on this backend".to_string())
     }
 
@@ -1046,6 +1053,102 @@ pub trait RenderBackend: SceneControl + Send {
         Err(RenderError::Other(
             "reload_world: not supported on this backend".to_string(),
         ))
+    }
+}
+
+// A do-nothing backend used to exercise the trait's provided (default) method
+// bodies without a GPU: the smallest valid bodies for the required methods,
+// no defaults overridden. Shared by this module's tests and the ops tests.
+#[cfg(test)]
+pub(crate) mod test_stub {
+    use super::*;
+
+    pub(crate) struct StubBackend;
+
+    impl SceneControl for StubBackend {
+        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
+        fn set_fade(&mut self, _fade: f32) {}
+    }
+
+    impl RenderBackend for StubBackend {
+        fn window_closed(&mut self) -> bool {
+            false
+        }
+        fn capture_cursor(&mut self) {}
+        fn take_input(&mut self) -> RenderInput {
+            RenderInput::default()
+        }
+        fn wait_idle(&self) {}
+        fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
+            Ok(())
+        }
+        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
+        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
+        fn retire_draw_object(&mut self, _draw_idx: usize) {}
+        fn upload_skinned(
+            &mut self,
+            _vertices: &[SkinnedVertex],
+            _indices: &[u16],
+            _draw_objects: Vec<SkinnedDrawObject>,
+            _vert_bytes: &[u8],
+            _frag_bytes: &[u8],
+            _shadow_bytes: &[u8],
+        ) -> RenderResult<()> {
+            Ok(())
+        }
+        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
+            Ok(())
+        }
+        fn update_texture_slot(
+            &mut self,
+            _slot: usize,
+            _image: &crate::build::texture::TextureImage,
+        ) -> RenderResult<()> {
+            Ok(())
+        }
+        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn upload_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _verts: &[Vertex],
+            _idxs: &[u16],
+            _frame: u64,
+        ) -> RenderResult<()> {
+            Ok(())
+        }
+        fn setup_chunk_streaming(
+            &mut self,
+            _chunk_vtx_bytes: usize,
+            _chunk_idx_bytes: usize,
+            _texture_slot: usize,
+            _normal_map_slot: usize,
+        ) -> RenderResult<()> {
+            Ok(())
+        }
+        fn add_chunk_mesh(
+            &mut self,
+            _mesh: ChunkMesh<'_>,
+            _dst: crate::draw_slot::SlotAlloc,
+        ) -> RenderResult<()> {
+            Ok(())
+        }
+        fn remove_chunk_mesh(
+            &mut self,
+            _draw_idx: usize,
+            _retire_frame: u64,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_chunk_model(
+            &mut self,
+            _draw_idx: usize,
+            _model: [[f32; 4]; 4],
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 }
 
@@ -1206,93 +1309,7 @@ mod tests {
         );
     }
 
-    // A do-nothing backend used to exercise the trait's provided (default)
-    // method bodies without a GPU. It supplies the smallest valid bodies for
-    // the required methods and overrides none of the defaults, so calling a
-    // defaulted method runs the trait's own body.
-    struct StubBackend;
-
-    impl SceneControl for StubBackend {
-        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
-        fn set_fade(&mut self, _fade: f32) {}
-    }
-
-    impl RenderBackend for StubBackend {
-        fn window_closed(&mut self) -> bool {
-            false
-        }
-        fn capture_cursor(&mut self) {}
-        fn take_input(&mut self) -> RenderInput {
-            RenderInput::default()
-        }
-        fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
-            Ok(())
-        }
-        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
-        fn retire_draw_object(&mut self, _draw_idx: usize) {}
-        fn upload_skinned(
-            &mut self,
-            _vertices: &[SkinnedVertex],
-            _indices: &[u16],
-            _draw_objects: Vec<SkinnedDrawObject>,
-            _vert_bytes: &[u8],
-            _frag_bytes: &[u8],
-            _shadow_bytes: &[u8],
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
-        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
-            Ok(())
-        }
-        fn update_texture_slot(
-            &mut self,
-            _slot: usize,
-            _image: &crate::build::texture::TextureImage,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
-            Ok(())
-        }
-        fn upload_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _verts: &[Vertex],
-            _idxs: &[u16],
-            _frame: u64,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn setup_chunk_streaming(
-            &mut self,
-            _chunk_vtx_bytes: usize,
-            _chunk_idx_bytes: usize,
-            _texture_slot: usize,
-            _normal_map_slot: usize,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn add_chunk_mesh(&mut self, _mesh: ChunkMesh<'_>) -> RenderResult<usize> {
-            Ok(0)
-        }
-        fn remove_chunk_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _retire_frame: u64,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-        fn set_chunk_model(
-            &mut self,
-            _draw_idx: usize,
-            _model: [[f32; 4]; 4],
-        ) -> Result<(), String> {
-            Ok(())
-        }
-    }
+    pub(crate) use super::test_stub::StubBackend;
 
     const IDENTITY: [[f32; 4]; 4] = [
         [1.0, 0.0, 0.0, 0.0],
@@ -1346,9 +1363,8 @@ mod tests {
     fn default_mutators_are_noops_and_fallible_hooks_report_defaults() {
         let mut backend = StubBackend;
 
-        // Runtime skinned-spawn fallbacks: no pool, nothing to claim.
-        backend.seed_skinned_instance_pool(vec![]);
-        assert!(backend.spawn_skinned_instance(0, IDENTITY).is_none());
+        // Runtime skinned-spawn fallbacks: nothing to reveal or hide.
+        backend.reveal_skinned_instance(0, IDENTITY);
         backend.retire_skinned_draw_object(0);
         backend.update_skinned_models(&[(0, IDENTITY)]);
 
@@ -1393,7 +1409,11 @@ mod tests {
 
         // Fallible hooks a bare backend does not implement: they report Err.
         assert!(backend.screenshot("unused.png").is_err());
-        assert!(backend.clone_static_draw_object(0, IDENTITY).is_err());
+        assert!(
+            backend
+                .clone_static_draw_object(0, IDENTITY, crate::draw_slot::SlotAlloc::Append(0))
+                .is_err()
+        );
         assert!(backend.add_decal(stub_decal()).is_err());
         assert!(backend.remove_decal(0).is_err());
         assert!(backend.add_emitter(stub_emitter()).is_err());
@@ -1419,6 +1439,7 @@ mod tests {
             vsync: false,
             clear_color: [0.0; 4],
             hot_reload: false,
+            capture: false,
             scene: SceneData {
                 vertices: &[],
                 indices: &[],

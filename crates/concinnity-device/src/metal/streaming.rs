@@ -60,12 +60,16 @@ impl MtlContext {
     }
 
     // Place one streamed chunk's geometry in the chunk headroom region and
-    // add (or recycle) a `DrawObject` for it; returns the draw-list index.
+    // write its `DrawObject` at the engine-allocated destination slot.
     //
     // The chunk is non-cullable and joins the `always_draw` set: the streaming
     // window already bounds the resident chunk count, so the renderer draws
     // every resident chunk. `frame` reclaims retired deferred frees first.
-    pub fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>) -> Result<usize, String> {
+    pub fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+        dst: crate::gfx::draw_slot::SlotAlloc,
+    ) -> Result<(), String> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -143,28 +147,15 @@ impl MtlContext {
             lod_alternates: Vec::new(),
         };
 
-        // Recycle a vacated slot when one is free, else append. ensure_always_draw
-        // adds a slot recycled from a culled static prop (not yet a member); a
-        // slot reused from another chunk is already in always_draw and is left
-        // alone.
-        let draw_idx = match self.draw_slots.allocate() {
-            crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
-                self.prev_draw_models[slot] = model;
-                slot
-            }
-            crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
-                self.draw_objects.push(obj);
-                self.prev_draw_models.push(model);
-                self.always_draw_member.push(false);
-                slot
-            }
-        };
+        // ensure_always_draw adds a slot recycled from a culled static prop
+        // (not yet a member); a slot reused from another chunk is already in
+        // always_draw and is left alone.
+        let draw_idx = self.place_draw_object(obj, model, dst);
         self.ensure_always_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
         self.rt.topology_dirty = true;
-        Ok(draw_idx)
+        Ok(())
     }
 
     // Free a streamed chunk's geometry region and retire its `DrawObject`
@@ -191,7 +182,6 @@ impl MtlContext {
             .free(v_off as u64, v_len as u64, retire_frame);
         self.chunk_idx_alloc
             .free(i_off as u64, i_len as u64, retire_frame);
-        self.draw_slots.free(draw_idx);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;

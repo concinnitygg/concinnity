@@ -413,50 +413,30 @@ impl VkContext {
         }
     }
 
-    // Seed the skinned instance pool from `(template_index, instance_index)`
-    // pairs built at load, each instance being a hidden bind-pose copy of its
-    // template that `upload_skinned` already uploaded (its own vertex region,
-    // joint buffers, and object descriptor set). Called once after
-    // `upload_skinned`, before any runtime skinned spawn. With no skinned mesh
-    // opting into runtime spawning the list is empty and the pool stays empty.
-    // Mirrors the Metal path.
-    pub fn seed_skinned_instance_pool(&mut self, reservations: Vec<(usize, usize)>) {
-        for (template, instance) in reservations {
-            self.skinned_pool.reserve(template, instance);
-        }
-    }
-
-    // Claim a free pre-reserved copy of the skinned object at
-    // `template_skinned_index`, reveal it at `model`, and reset its joint palette
-    // to the bind pose so it does not flash its previous occupant's last frame
-    // (the owning `SkeletonPose`'s first pose push replaces it next frame). The
-    // copy's deformed region is already valid because `encode_skin` folds every
-    // pre-reserved copy each frame. Returns the claimed slot's skinned index, or
-    // `None` when the template reserved no pool or the pool is exhausted.
-    pub fn spawn_skinned_instance(
-        &mut self,
-        template_skinned_index: usize,
-        model: [[f32; 4]; 4],
-    ) -> Option<usize> {
-        let slot = self.skinned_pool.acquire(template_skinned_index)?;
-        let obj = self.skinned.draw_objects.get_mut(slot)?;
+    // Reveal the pre-reserved skinned instance at `instance_index` (the
+    // engine's instance pool decided which): show it at `model` and reset its
+    // joint palette to the bind pose so it does not flash its previous
+    // occupant's last frame (the owning `SkeletonPose`'s first pose push
+    // replaces it next frame). The copy's deformed region is already valid
+    // because `encode_skin` folds every pre-reserved copy each frame. A no-op
+    // if the index is out of range. Mirrors the Metal path.
+    pub fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+        let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
+            return;
+        };
         obj.model = model;
         obj.visible = true;
-        if let Some(palette) = self.skinned.joint_matrices.get_mut(slot) {
+        if let Some(palette) = self.skinned.joint_matrices.get_mut(instance_index) {
             palette.iter_mut().for_each(|m| *m = IDENTITY4);
         }
-        Some(slot)
     }
 
-    // Hide a skinned object and, if it was a pre-reserved instance, return its
-    // slot to the pool so a later spawn can claim it. An authored template slot
-    // is simply hidden (it owns no pool entry). A no-op if the index is out of
-    // range. Mirrors the Metal path.
+    // Hide a skinned object; the engine's instance pool recycles the slot. A
+    // no-op if the index is out of range. Mirrors the Metal path.
     pub fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
         if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
             obj.visible = false;
         }
-        self.skinned_pool.release(skinned_index);
     }
 
     // Push the model-to-world matrices of the given skinned objects, one

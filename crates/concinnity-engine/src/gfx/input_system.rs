@@ -1,13 +1,13 @@
 // src/gfx/input_system.rs
 //
-// Samples the window backend's input once per frame, merges the active
+// Consumes the frame's `InputMailbox` packet (sampled beside the backend
+// right after the draw, whose event pump produced it), merges the active
 // gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
 // as the component column) plus the `CursorState` resource. Runs immediately
-// after GraphicsSystem in the schedule: on Metal the OS event pump runs inside
-// draw_frame, so sampling right after the draw snapshots every event that
-// arrived up to and including this frame's pump -- the same freshness the
-// sample had when it sat at the end of GraphicsSystem's own step. Every input
-// consumer (camera controllers, UI, text input) runs later in the same tick.
+// after GraphicsSystem in the schedule, so the packet it takes is the one
+// that system just deposited -- the same freshness the sample had when this
+// system polled the backend itself. Every input consumer (camera controllers,
+// UI, text input) runs later in the same tick.
 //
 // The gamepad is polled here, not per render backend, so all backends share
 // one implementation. Digital buttons merge into the existing boolean fields
@@ -16,7 +16,7 @@
 // `move_axis` / `look_axis` fields.
 
 use crate::assets::{FrameInput, GamepadButton, GamepadMap, NavDirection};
-use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
+use crate::ecs::{InputMailbox, PipelineContext, StepResult, System};
 use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
 use crate::input::nav::NavRepeat;
 use concinnity_render::input::RenderInput;
@@ -126,17 +126,20 @@ impl System for InputSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // No parked backend (graphics failed, or the editor transplanted it
-        // away): nothing to sample; consumers keep the last snapshot.
-        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
+        // No deposited packet (graphics failed, the editor transplanted the
+        // backend away, or the frame stopped before sampling): nothing to
+        // consume; consumers keep the last snapshot.
+        let Some(packet) = ctx
+            .resource_mut::<InputMailbox>()
+            .and_then(|mailbox| mailbox.0.take())
+        else {
             return StepResult::Continue;
         };
-        let raw = backend.take_input();
-        let cursor_outside = backend.cursor_outside_window();
+        let raw = packet.raw;
+        let cursor_outside = packet.cursor_outside_window;
         // Live viewport for UiInputSystem's overlay hit-testing, so a scaled
         // menu's HitRegions map back to the cursor consistently.
-        let (vp_w, vp_h) = backend.logical_size();
-        ActiveRenderBackend::put(ctx.resources, backend);
+        let (vp_w, vp_h) = packet.viewport;
 
         // The cursor position + window-bounds state for next frame's draw
         // list (`follow_cursor` sprites are positioned a frame after the input

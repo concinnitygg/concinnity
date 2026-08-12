@@ -1201,9 +1201,10 @@ mod tests {
         }
         fn add_chunk_mesh(
             &mut self,
-            _mesh: crate::gfx::backend::ChunkMesh<'_>,
-        ) -> crate::gfx::error::RenderResult<usize> {
-            Ok(0)
+            _: crate::gfx::backend::ChunkMesh<'_>,
+            _: crate::gfx::draw_slot::SlotAlloc,
+        ) -> crate::gfx::error::RenderResult<()> {
+            Ok(())
         }
         fn remove_chunk_mesh(
             &mut self,

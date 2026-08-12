@@ -1,16 +1,21 @@
 // src/gfx/streaming_system/mod.rs
 //
 // StreamingSystem: drives the asset-streaming pools (albedo/normal texture,
-// mesh geometry, and infinite voxel-world chunks) against the world's parked
-// render backend, and publishes the camera-relative view the draw consumes.
+// mesh geometry, and infinite voxel-world chunks), and publishes the
+// camera-relative view the draw consumes. Streaming policy (scoring, dispatch,
+// residency) runs here; the GPU effects are recorded into the frame's op
+// queue with owned payloads and replayed at submission, with slot decisions
+// from the engine's `RenderSlots` allocator. An upload the backend refuses
+// comes back one tick later as a `RenderOpFailures` entry and is rolled back
+// at the top of the next step.
 //
 // Scheduled immediately before GraphicsSystem, so a chunk world's view rebase
 // (see `CameraRelativeView`) is ready for this same frame's submit, and any
-// texture / mesh upload lands before the draw. GraphicsSystem's init builds the
-// streamers (world content + backend support) and parks them here as the
-// `StreamingState` resource; each step takes it and puts it back, so the state
-// and the `PipelineContext` are never borrowed together (the same handoff the
-// backend, settings, and overlay states use).
+// recorded texture / mesh upload lands before the draw. GraphicsSystem's init
+// builds the streamers (world content + backend support) and parks them here
+// as the `StreamingState` resource; each step takes it and puts it back, so
+// the state and the `PipelineContext` are never borrowed together (the same
+// handoff the settings and overlay states use).
 //
 // The streamers themselves (the OS-coupled worker threads + channels) live in
 // `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
@@ -18,9 +23,11 @@
 
 use crate::assets::Camera3D;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ActiveRenderBackend, PipelineContext, StepResult, System};
-use crate::gfx::backend::{ChunkMesh, RenderBackend};
+use crate::ecs::{PipelineContext, RenderOpFailures, StepResult, System};
+use crate::gfx::backend::ChunkMesh;
+use crate::gfx::ops::{OpFailure, RenderOps};
 use crate::gfx::overlay::OverlayFrame;
+use crate::gfx::render_slots::RenderSlots;
 use crate::gfx::scene_residency::{CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency};
 
 pub(crate) mod accounting;
@@ -238,9 +245,11 @@ impl System for StreamingSystem {
                 pins
             });
 
-        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
-            // Init succeeded but the backend was taken (should not happen in the
-            // schedule): publish the absolute view so the draw is still driven.
+        // The recording surfaces graphics init published beside this state.
+        // Taken out for the drive so `ctx` stays freely borrowable.
+        let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(ctx.resources) else {
+            // Should not happen (published together with this state): publish
+            // the absolute view so the draw is still driven.
             ctx.insert_resource(CameraRelativeView {
                 view: view_matrix,
                 cam_pos,
@@ -249,15 +258,23 @@ impl System for StreamingSystem {
             return StepResult::Continue;
         };
 
+        // Roll back the ops that failed at the previous frame's replay (a
+        // refused streamed-mesh upload, a failed chunk add) before planning,
+        // so this frame's dispatch sees the corrected residency.
+        if let Some(failures) = ctx.resources.remove::<RenderOpFailures>() {
+            state.apply_op_failures(&failures.0, &mut queues.slots);
+        }
+
         let (view, cam_pos) = state.drive(
-            backend.as_mut(),
+            &mut queues.ops,
+            &mut queues.slots,
             cam_pos,
             view_matrix,
             world_hidden,
             scene_pins.as_deref(),
         );
 
-        ActiveRenderBackend::put(ctx.resources, backend);
+        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         // Republish each pool's device footprint under the shared tags, so a
         // readout can name what VRAM is holding.
         accounting::publish(concinnity_memory::ledger(), state.pool_reports());
@@ -286,7 +303,7 @@ impl StreamingState {
     // the bindless entry points) is recorded resident anyway after the error:
     // its draws stay skipped, but the owning scene finishes loading instead of
     // holding its loading screen open forever on work that will never succeed.
-    fn drive_shader_warmup(&mut self, backend: &mut dyn RenderBackend) {
+    fn drive_shader_warmup(&mut self, ops: &mut RenderOps) {
         let Some((bucket, want_resident)) =
             self.shader_warmup.as_ref().and_then(|w| w.next_pending())
         else {
@@ -295,30 +312,33 @@ impl StreamingState {
         let resident = if want_resident {
             match self.shader_warmup.as_ref().map(|w| w.load(bucket)) {
                 Some(Ok(stages)) => {
-                    let shader = crate::gfx::backend_init::ShaderBytes {
-                        vert: &stages.vert,
-                        frag: &stages.frag,
-                        shadow: &[],
-                        vert_instanced: &stages.vert_instanced,
-                        // The payload is in hand; this install is what ends the
-                        // deferral.
-                        deferred: false,
-                    };
-                    let started = std::time::Instant::now();
-                    match backend.install_world_shader(bucket, shader) {
-                        // The elapsed time is the frame cost this warmup keeps
-                        // out of gameplay.
-                        Ok(()) => tracing::info!(
-                            "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
-                            bucket,
-                            started.elapsed().as_secs_f32() * 1000.0
-                        ),
-                        Err(e) => tracing::error!(
-                            "StreamingSystem: shader bucket {} pipeline build failed: {}",
-                            bucket,
-                            e
-                        ),
-                    }
+                    // The payload is in hand; the recorded install is what
+                    // ends the deferral. Pipeline creation is device work, so
+                    // it runs (and is timed) at replay beside the draw.
+                    ops.record(move |backend| {
+                        let shader = crate::gfx::backend_init::ShaderBytes {
+                            vert: &stages.vert,
+                            frag: &stages.frag,
+                            shadow: &[],
+                            vert_instanced: &stages.vert_instanced,
+                            deferred: false,
+                        };
+                        let started = std::time::Instant::now();
+                        match backend.install_world_shader(bucket, shader) {
+                            // The elapsed time is the frame cost this warmup
+                            // keeps out of gameplay.
+                            Ok(()) => tracing::info!(
+                                "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
+                                bucket,
+                                started.elapsed().as_secs_f32() * 1000.0
+                            ),
+                            Err(e) => tracing::error!(
+                                "StreamingSystem: shader bucket {} pipeline build failed: {}",
+                                bucket,
+                                e
+                            ),
+                        }
+                    });
                 }
                 Some(Err(e)) => tracing::error!(
                     "StreamingSystem: shader bucket {} payload unreadable: {}",
@@ -329,11 +349,13 @@ impl StreamingState {
             }
             true
         } else {
-            backend.evict_world_shader(bucket);
-            tracing::info!(
-                "StreamingSystem: shader bucket {} pipeline released",
-                bucket
-            );
+            ops.record(move |backend| {
+                backend.evict_world_shader(bucket);
+                tracing::info!(
+                    "StreamingSystem: shader bucket {} pipeline released",
+                    bucket
+                );
+            });
             false
         };
         if let Some(w) = self.shader_warmup.as_mut() {
@@ -344,12 +366,44 @@ impl StreamingState {
         }
     }
 
+    // Roll back the recorded ops that failed at the previous frame's replay:
+    // a refused streamed-mesh upload returns to `Unloaded` (retried once
+    // freed space reclaims), a failed chunk add drops its tracking and frees
+    // its draw slot.
+    pub(crate) fn apply_op_failures(&mut self, failures: &[OpFailure], slots: &mut RenderSlots) {
+        for &failure in failures {
+            match failure {
+                OpFailure::MeshUpload { stream_id } => {
+                    if let Some(streamer) = &mut self.mesh_streamer {
+                        streamer.note_upload_failed(stream_id);
+                    }
+                    if let Some(residency) = &mut self.scene_residency {
+                        residency.note_resident((CHANNEL_MESH, stream_id as u32), false);
+                    }
+                }
+                OpFailure::ChunkAdd { coord } => {
+                    if let Some(cs) = &mut self.chunk_stream
+                        && let Some(draw_idx) = cs.draws.remove(&coord)
+                    {
+                        slots.free_draw(draw_idx);
+                        tracing::warn!(
+                            "StreamingSystem: chunk add ({},{}) rolled back",
+                            coord.x,
+                            coord.z
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Score, dispatch, and apply this frame's streaming for every active pool,
     // then return the camera-relative view + position the draw should use
     // (absolute unless a `VoxelWorld` rebases them). Advances the frame clock.
     fn drive(
         &mut self,
-        backend: &mut dyn RenderBackend,
+        ops: &mut RenderOps,
+        slots: &mut RenderSlots,
         cam_pos: [f32; 3],
         view_matrix: [[f32; 4]; 4],
         world_hidden: bool,
@@ -389,11 +443,11 @@ impl StreamingState {
             }
         }
 
-        // Warm (or release) one shader bucket's pipeline per frame. Pipeline
-        // creation is device work on this thread, so a scene owning several
-        // shaders spreads it over the frames its loading screen is already up
-        // rather than stalling one of them.
-        self.drive_shader_warmup(backend);
+        // Warm (or release) one shader bucket's pipeline per frame, so a
+        // scene owning several shaders spreads the device work over the
+        // frames its loading screen is already up rather than stalling one of
+        // them.
+        self.drive_shader_warmup(ops);
 
         // A pinned scene mid-load keeps the pools dispatching even while the
         // world is hidden, so a loading screen's opaque backdrop does not
@@ -413,9 +467,11 @@ impl StreamingState {
             streamer.update_scores(cam_pos, self.frame_count);
             if !loads_frozen {
                 for slot in streamer.plan_and_dispatch() {
-                    if let Err(e) = backend.evict_texture_slot(slot) {
-                        tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
-                    }
+                    ops.record(move |backend| {
+                        if let Err(e) = backend.evict_texture_slot(slot) {
+                            tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
+                        }
+                    });
                     if let Some(residency) = self.scene_residency.as_mut() {
                         residency.note_resident((CHANNEL_TEXTURE, slot as u32), false);
                     }
@@ -423,9 +479,11 @@ impl StreamingState {
             }
             let residency = &mut self.scene_residency;
             streamer.drain_completed(self.frame_count, |slot, image| {
-                if let Err(e) = backend.update_texture_slot(slot, image) {
-                    tracing::warn!("StreamingSystem: texture upload slot {}: {}", slot, e);
-                }
+                ops.record(move |backend| {
+                    if let Err(e) = backend.update_texture_slot(slot, &image) {
+                        tracing::warn!("StreamingSystem: texture upload slot {}: {}", slot, e);
+                    }
+                });
                 if let Some(residency) = residency.as_mut() {
                     residency.note_resident((CHANNEL_TEXTURE, slot as u32), true);
                 }
@@ -457,10 +515,16 @@ impl StreamingState {
                 // in-flight command buffers that drew it retire.
                 let retire_frame = self.frame_count + self.frames_in_flight as u64;
                 for stream_id in streamer.plan_and_dispatch() {
-                    if let Some(&draw_idx) = self.mesh_stream_draw_indices.get(stream_id)
-                        && let Err(e) = backend.evict_mesh(draw_idx, retire_frame)
-                    {
-                        tracing::warn!("StreamingSystem: mesh evict draw {}: {}", draw_idx, e);
+                    if let Some(&draw_idx) = self.mesh_stream_draw_indices.get(stream_id) {
+                        ops.record(move |backend| {
+                            if let Err(e) = backend.evict_mesh(draw_idx, retire_frame) {
+                                tracing::warn!(
+                                    "StreamingSystem: mesh evict draw {}: {}",
+                                    draw_idx,
+                                    e
+                                );
+                            }
+                        });
                     }
                     if let Some(residency) = self.scene_residency.as_mut() {
                         residency.note_resident((CHANNEL_MESH, stream_id as u32), false);
@@ -471,20 +535,26 @@ impl StreamingState {
             let frame = self.frame_count;
             let residency = &mut self.scene_residency;
             streamer.drain_completed(self.frame_count, |stream_id, verts, idxs| {
-                let result = match draw_indices.get(stream_id) {
-                    // Return the upload result so the streamer can roll a
-                    // transient seed-full miss back to Unloaded and retry it once
-                    // freed regions reclaim, rather than marking the mesh
-                    // resident with no GPU geometry.
-                    Some(&draw_idx) => backend.upload_mesh(draw_idx, verts, idxs, frame),
-                    None => Ok(()),
-                };
-                if result.is_ok()
-                    && let Some(residency) = residency.as_mut()
-                {
+                // The mesh is marked resident on handoff; a transient
+                // seed-full refusal comes back as an op failure and
+                // `apply_op_failures` rolls it back to Unloaded next tick.
+                if let Some(&draw_idx) = draw_indices.get(stream_id) {
+                    ops.record_with(move |backend, out| {
+                        if let Err(e) = backend.upload_mesh(draw_idx, &verts, &idxs, frame) {
+                            tracing::debug!(
+                                "StreamingSystem: mesh upload draw {} deferred: {}",
+                                draw_idx,
+                                e
+                            );
+                            out.memory_pressure |=
+                                matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_));
+                            out.failures.push(OpFailure::MeshUpload { stream_id });
+                        }
+                    });
+                }
+                if let Some(residency) = residency.as_mut() {
                     residency.note_resident((CHANNEL_MESH, stream_id as u32), true);
                 }
-                result
             });
             if let Some((resident, pending, unloaded)) = self
                 .heartbeats
@@ -523,15 +593,18 @@ impl StreamingState {
             // planning under a reduced byte budget, so the window clamp evicts.
             if !loads_frozen {
                 for coord in cs.streamer.plan_and_dispatch(camera_chunk) {
-                    if let Some(draw_idx) = cs.draws.remove(&coord)
-                        && let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame)
-                    {
-                        tracing::warn!(
-                            "StreamingSystem: chunk remove ({},{}): {}",
-                            coord.x,
-                            coord.z,
-                            e
-                        );
+                    if let Some(draw_idx) = cs.draws.remove(&coord) {
+                        slots.free_draw(draw_idx);
+                        ops.record(move |backend| {
+                            if let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame) {
+                                tracing::warn!(
+                                    "StreamingSystem: chunk remove ({},{}): {}",
+                                    coord.x,
+                                    coord.z,
+                                    e
+                                );
+                            }
+                        });
                     }
                 }
             }
@@ -542,14 +615,16 @@ impl StreamingState {
             if camera_chunk != cs.origin_chunk {
                 for (&coord, &draw_idx) in &cs.draws {
                     let model = chunk_model_matrix(coord, camera_chunk, cs.chunk_w, cs.chunk_d);
-                    if let Err(e) = backend.set_chunk_model(draw_idx, model) {
-                        tracing::warn!(
-                            "StreamingSystem: chunk rebase ({},{}): {}",
-                            coord.x,
-                            coord.z,
-                            e
-                        );
-                    }
+                    ops.record(move |backend| {
+                        if let Err(e) = backend.set_chunk_model(draw_idx, model) {
+                            tracing::warn!(
+                                "StreamingSystem: chunk rebase ({},{}): {}",
+                                coord.x,
+                                coord.z,
+                                e
+                            );
+                        }
+                    });
                 }
                 cs.origin_chunk = camera_chunk;
             }
@@ -558,24 +633,45 @@ impl StreamingState {
             let (tex, nm, mat) = (cs.texture_slot, cs.normal_map_slot, cs.material);
             let mut added: Vec<(crate::gfx::chunk_coord::ChunkCoord, usize)> = Vec::new();
             cs.streamer.drain_completed(|coord, verts, idxs| {
-                let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
-                match backend.add_chunk_mesh(ChunkMesh {
-                    verts,
-                    idxs,
-                    model,
-                    texture_slot: tex,
-                    normal_map_slot: nm,
-                    material: mat,
-                    frame,
-                }) {
-                    Ok(draw_idx) => added.push((coord, draw_idx)),
-                    Err(e) => tracing::warn!(
-                        "StreamingSystem: chunk add ({},{}): {}",
+                if verts.is_empty() || idxs.is_empty() {
+                    tracing::warn!(
+                        "StreamingSystem: chunk add ({},{}): empty chunk geometry",
                         coord.x,
-                        coord.z,
-                        e
-                    ),
+                        coord.z
+                    );
+                    return;
                 }
+                let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
+                let dst = slots.allocate_draw();
+                let draw_idx = match dst {
+                    crate::gfx::draw_slot::SlotAlloc::Reuse(i)
+                    | crate::gfx::draw_slot::SlotAlloc::Append(i) => i,
+                };
+                added.push((coord, draw_idx));
+                // A failed add comes back as an op failure; the rollback drops
+                // the tracking and frees the slot.
+                ops.record_with(move |backend, out| {
+                    let mesh = ChunkMesh {
+                        verts: &verts,
+                        idxs: &idxs,
+                        model,
+                        texture_slot: tex,
+                        normal_map_slot: nm,
+                        material: mat,
+                        frame,
+                    };
+                    if let Err(e) = backend.add_chunk_mesh(mesh, dst) {
+                        tracing::warn!(
+                            "StreamingSystem: chunk add ({},{}): {}",
+                            coord.x,
+                            coord.z,
+                            e
+                        );
+                        out.memory_pressure |=
+                            matches!(e, crate::gfx::error::RenderError::OutOfDeviceMemory(_));
+                        out.failures.push(OpFailure::ChunkAdd { coord });
+                    }
+                });
             });
             for (coord, draw_idx) in added {
                 cs.draws.insert(coord, draw_idx);
@@ -783,7 +879,7 @@ pub(crate) fn chunk_model_matrix(
 mod tests {
     use super::*;
     use crate::blob::BlobData;
-    use crate::ecs::{ActiveRenderBackend, ComponentStorage, Resources};
+    use crate::ecs::{ComponentStorage, Resources};
     use crate::gfx::chunk_coord::ChunkCoord;
     use crate::gfx::chunk_window::ChunkDetail;
     use crate::gfx::mesh_payload::Vertex;
@@ -938,14 +1034,37 @@ mod tests {
     // Drive frames until `done` holds. Yields (never sleeps) between frames
     // while the pools' workers decode; panics rather than hanging if the state
     // is never reached.
+    // One drive with a throwaway op queue + slot allocator, replaying the
+    // recorded ops onto the mock backend, for tests that assert per-frame
+    // behavior rather than the multi-frame pump `drive_until` covers.
+    fn drive_once(
+        state: &mut StreamingState,
+        backend: &mut MockBackend,
+        cam: [f32; 3],
+        view: [[f32; 4]; 4],
+        world_hidden: bool,
+        pins: Option<&[AssetId]>,
+    ) -> ([[f32; 4]; 4], [f32; 3]) {
+        let mut slots = RenderSlots::new(0, true, &[]);
+        let mut ops = RenderOps::default();
+        let out = state.drive(&mut ops, &mut slots, cam, view, world_hidden, pins);
+        let outcome = ops.replay(backend);
+        state.apply_op_failures(&outcome.failures, &mut slots);
+        out
+    }
+
     fn drive_until(
         state: &mut StreamingState,
         backend: &mut MockBackend,
         cam: [f32; 3],
         done: impl Fn(&StreamingState) -> bool,
     ) {
+        let mut slots = RenderSlots::new(0, true, &[]);
         for _ in 0..MAX_DRIVE_SPINS {
-            state.drive(backend, cam, IDENTITY4, false, None);
+            let mut ops = RenderOps::default();
+            state.drive(&mut ops, &mut slots, cam, IDENTITY4, false, None);
+            let outcome = ops.replay(backend);
+            state.apply_op_failures(&outcome.failures, &mut slots);
             if done(state) {
                 return;
             }
@@ -984,10 +1103,15 @@ mod tests {
             self
         }
 
-        fn park_backend(&mut self) {
-            let (_recorded, backend) = recording_backend();
-            self.resources
-                .insert(ActiveRenderBackend(Some(Box::new(backend))));
+        // Publish the op queue + slot allocator the step takes and reparks
+        // (the pair graphics init publishes in production).
+        fn park_render_queues(&mut self) {
+            self.resources.insert(crate::ecs::ActiveRenderQueues(Some(
+                crate::ecs::RenderQueues {
+                    ops: Default::default(),
+                    slots: RenderSlots::new(0, true, &[]),
+                },
+            )));
         }
 
         fn step(&mut self) -> StepResult {
@@ -1221,8 +1345,8 @@ mod tests {
     fn drive_advances_the_frame_clock() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = empty_state();
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
         assert_eq!(state.frame_count, 2);
     }
 
@@ -1232,7 +1356,7 @@ mod tests {
     fn a_hidden_world_dispatches_no_loads() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, true, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, true, None);
         assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
     }
@@ -1241,7 +1365,7 @@ mod tests {
     fn a_visible_world_dispatches_texture_and_mesh_loads() {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
         // Dispatch moves an item off Unloaded the same frame it is planned.
         assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
         assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
@@ -1281,7 +1405,14 @@ mod tests {
         // Pin scene A: its members stream in; B's stay blocked out.
         let pins_a = [scene_a];
         for _ in 0..MAX_DRIVE_SPINS {
-            state.drive(&mut backend, [0.0; 3], IDENTITY4, false, Some(&pins_a));
+            drive_once(
+                &mut state,
+                &mut backend,
+                [0.0; 3],
+                IDENTITY4,
+                false,
+                Some(&pins_a),
+            );
             let r = state.scene_residency.as_ref().unwrap();
             if r.state(scene_a) == Some(SceneLoadState::Resident) {
                 break;
@@ -1300,7 +1431,14 @@ mod tests {
         // Switch the pin to scene B: A drains off the GPU, B streams in.
         let pins_b = [scene_b];
         for _ in 0..MAX_DRIVE_SPINS {
-            state.drive(&mut backend, [0.0; 3], IDENTITY4, false, Some(&pins_b));
+            drive_once(
+                &mut state,
+                &mut backend,
+                [0.0; 3],
+                IDENTITY4,
+                false,
+                Some(&pins_b),
+            );
             let r = state.scene_residency.as_ref().unwrap();
             if r.state(scene_b) == Some(SceneLoadState::Resident)
                 && r.state(scene_a) == Some(SceneLoadState::Unloaded)
@@ -1325,7 +1463,7 @@ mod tests {
         state.chunk_stream = Some(chunk_state(Arc::new(ConstChunk), 0, 0));
         state.pressure_stage = StreamPressureStage::Gate;
 
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
         assert_eq!(state.texture_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(state.mesh_streamer.as_ref().unwrap().stats(), (0, 0, 2));
         assert_eq!(
@@ -1341,7 +1479,7 @@ mod tests {
         let (_recorded, mut backend) = recording_backend();
         let mut state = pooled_state(8);
         state.pressure_stage = StreamPressureStage::Evict;
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
         assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
         assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
     }
@@ -1414,7 +1552,14 @@ mod tests {
         recorded.lock().unwrap().calls.clear();
 
         // Item 1's center is now the near one, so item 0 is displaced.
-        state.drive(&mut backend, [100.0, 0.0, 0.0], IDENTITY4, false, None);
+        drive_once(
+            &mut state,
+            &mut backend,
+            [100.0, 0.0, 0.0],
+            IDENTITY4,
+            false,
+            None,
+        );
         let s = recorded.lock().unwrap();
         assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
         assert!(s.saw(&Call::EvictMesh(10)), "{:?}", s.calls);
@@ -1427,7 +1572,7 @@ mod tests {
         let view = translation_view(-40.0, -5.0, 40.0);
         let cam = [40.0, 5.0, -40.0];
         assert_eq!(
-            state.drive(&mut backend, cam, view, false, None),
+            drive_once(&mut state, &mut backend, cam, view, false, None),
             (view, cam)
         );
     }
@@ -1442,7 +1587,7 @@ mod tests {
         // 16-unit chunks: floor(40/16) = 2, floor(-40/16) = -3.
         let cam = [40.0, 5.0, -40.0];
         let view = translation_view(-40.0, -5.0, 40.0);
-        let (out_view, out_cam) = state.drive(&mut backend, cam, view, false, None);
+        let (out_view, out_cam) = drive_once(&mut state, &mut backend, cam, view, false, None);
 
         let origin = [32.0, 0.0, -48.0];
         assert_eq!(out_cam, [8.0, 5.0, 8.0]);
@@ -1469,7 +1614,14 @@ mod tests {
         cs.draws.insert(ChunkCoord::new(1, 0), 4);
         state.chunk_stream = Some(cs);
 
-        state.drive(&mut backend, [20.0, 0.0, 0.0], IDENTITY4, false, None);
+        drive_once(
+            &mut state,
+            &mut backend,
+            [20.0, 0.0, 0.0],
+            IDENTITY4,
+            false,
+            None,
+        );
         {
             let s = recorded.lock().unwrap();
             assert!(s.saw(&Call::SetChunkModel(3)));
@@ -1481,7 +1633,14 @@ mod tests {
         );
 
         recorded.lock().unwrap().calls.clear();
-        state.drive(&mut backend, [21.0, 0.0, 0.0], IDENTITY4, false, None);
+        drive_once(
+            &mut state,
+            &mut backend,
+            [21.0, 0.0, 0.0],
+            IDENTITY4,
+            false,
+            None,
+        );
         assert!(
             !recorded
                 .lock()
@@ -1504,9 +1663,16 @@ mod tests {
         state.chunk_stream = Some(cs);
 
         // Frame 1 at the origin puts (0, 0) in the window.
-        state.drive(&mut backend, [0.0; 3], IDENTITY4, false, None);
+        drive_once(&mut state, &mut backend, [0.0; 3], IDENTITY4, false, None);
         // Frame 2 far east: (0, 0) is past the evict band.
-        state.drive(&mut backend, [800.0, 0.0, 0.0], IDENTITY4, false, None);
+        drive_once(
+            &mut state,
+            &mut backend,
+            [800.0, 0.0, 0.0],
+            IDENTITY4,
+            false,
+            None,
+        );
 
         assert!(recorded.lock().unwrap().saw(&Call::RemoveChunkMesh(9)));
         assert!(
@@ -1560,25 +1726,25 @@ mod tests {
     fn a_step_without_a_camera_publishes_the_identity_view() {
         let mut w = StepWorld::new();
         w.resources.insert(empty_state());
-        w.park_backend();
+        w.park_render_queues();
 
         w.step();
         assert_eq!(w.view().view, IDENTITY4);
         assert_eq!(w.view().cam_pos, [0.0; 3]);
     }
 
-    // The backend is taken for the step and parked again for the systems that
-    // follow, and the frame clock ticks once per step.
+    // The op queue + slot allocator are taken for the step and parked again
+    // for the systems that follow, and the frame clock ticks once per step.
     #[test]
-    fn a_step_drives_the_backend_and_parks_it_again() {
+    fn a_step_drives_the_pools_and_reparks_the_queues() {
         let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
         w.resources.insert(pooled_state(8));
-        w.park_backend();
+        w.park_render_queues();
 
         w.step();
         assert!(
             w.resources
-                .get::<ActiveRenderBackend>()
+                .get::<crate::ecs::ActiveRenderQueues>()
                 .is_some_and(|slot| slot.0.is_some())
         );
         assert_eq!(w.parked_state().frame_count, 1);
@@ -1600,7 +1766,7 @@ mod tests {
     fn an_opaque_overlay_suspends_streaming_without_consuming_the_frame() {
         let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
         w.resources.insert(pooled_state(8));
-        w.park_backend();
+        w.park_render_queues();
         w.resources.insert(OverlayFrame {
             world_hidden: true,
             ..Default::default()

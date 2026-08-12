@@ -54,10 +54,31 @@ pub fn init_logging() {
     crate::heap::verify_installed();
 }
 
+// Whether the runtime overlaps simulation and rendering on separate threads
+// (the default) or steps both serially on the main thread (the editor's mode,
+// and `cn run --serial` for A/B comparison and as an escape hatch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PipelineMode {
+    #[default]
+    Pipelined,
+    Serial,
+}
+
+// Runtime launch options beyond the world itself.
+#[derive(Debug, Default)]
+pub struct RunOptions {
+    pub mode: PipelineMode,
+    // Capture the last presented frame to this path when the run stops, for
+    // headless verification of the runtime path (`cn run --screenshot`).
+    pub screenshot: Option<String>,
+    // Override the world's `GraphicsConfig.max_frames`, bounding the run.
+    pub max_frames: Option<u64>,
+}
+
 // Production entry point (`cn run`). Reads the compiled binary blobs from
 // data/, written by a prior `cn build`. No debug server, no WebSocket command
 // channel: a shipped run is neither remotely inspectable nor remotely driven.
-pub fn run() -> std::io::Result<()> {
+pub fn run(options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
     let mut app = App::new();
@@ -71,7 +92,7 @@ pub fn run() -> std::io::Result<()> {
         return Ok(());
     }
 
-    start_runtime(app)
+    start_runtime(app, options)
 }
 
 // Production entry point for a shipped app: like `run`, but with the state root
@@ -93,22 +114,32 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
             ),
         )
     })?;
-    start_runtime(app)
+    start_runtime(app, RunOptions::default())
 }
 
 // Startup and loop entry once the App's world is populated from a compiled
 // blob. Registers the CTRL+C handler, activates AppKit on macOS, starts the
-// app, then runs the world loop until the window closes, a system stops the
-// world, or CTRL+C is received.
-pub fn start_runtime(mut app: App) -> std::io::Result<()> {
+// app, then drives frames -- pipelined (sim thread + render half) or serial
+// (the single-threaded world loop) -- until the window closes, a system stops
+// the world, or CTRL+C is received.
+pub fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
     tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&app);
 
     // Resolved before `start()` (while the GraphicsConfig is still present) and
-    // reused after, so the post-start render-loop choice doesn't depend on the
-    // config component, which `start()` drains. Only the macOS path branches.
-    #[cfg(target_os = "macos")]
+    // reused after, so the post-start loop choice doesn't depend on the config
+    // component, which `start()` drains.
     let renders = app.world().renders();
+
+    if let Some(max) = options.max_frames {
+        for config in app.world_mut().query_mut::<crate::assets::GraphicsConfig>() {
+            config.max_frames = Some(max);
+        }
+    }
+    if options.screenshot.is_some() {
+        // Before `start()`, so graphics init arms the blit-readable path.
+        crate::app::dev_flags::set_capture(true);
+    }
 
     #[cfg(target_os = "macos")]
     if renders {
@@ -120,14 +151,33 @@ pub fn start_runtime(mut app: App) -> std::io::Result<()> {
         std::process::exit(1);
     }
 
-    // The runtime has no per-tick hook; a rendering macOS world pumps the Cocoa
-    // run loop, every other case uses the tight loop.
-    #[cfg(target_os = "macos")]
-    runloop::run_loop(&mut app, renders, |_| {});
-    #[cfg(not(target_os = "macos"))]
-    runloop::run_loop(&mut app, false, |_| {});
+    match options.mode {
+        PipelineMode::Pipelined if renders => {
+            crate::app::pipeline::run_pipelined(app, options.screenshot.as_deref());
+        }
+        _ => {
+            // The serial loop: no per-tick hook; a rendering macOS world pumps
+            // the Cocoa run loop, every other case uses the tight loop.
+            runloop::run_loop(&mut app, cfg!(target_os = "macos") && renders, |_| {});
+            capture_exit_screenshot(&mut app, options.screenshot.as_deref());
+        }
+    }
 
     Ok(())
+}
+
+// Capture the last presented frame on the way out of a serial run, when
+// requested. The backend is still parked in the world after the loop ends.
+fn capture_exit_screenshot(app: &mut App, path: Option<&str>) {
+    let Some(path) = path else { return };
+    let Some(mut backend) = app.world_mut().take_render_backend() else {
+        tracing::warn!("screenshot skipped: no live backend at exit");
+        return;
+    };
+    match backend.screenshot(path) {
+        Ok(saved) => tracing::info!("screenshot saved: {}", saved),
+        Err(e) => tracing::warn!("screenshot failed: {}", e),
+    }
 }
 
 #[cfg(test)]

@@ -224,13 +224,13 @@ impl TextureStreamer {
         plan.to_evict
     }
 
-    // Apply every completed background load via `upload`, which uploads the
-    // decoded pixels into the renderer's texture slot. Returns the number of
-    // slots brought resident this call.
+    // Apply every completed background load via `upload`, which receives the
+    // decoded image by value so it can carry it into a recorded backend op.
+    // Returns the number of slots brought resident this call.
     pub fn drain_completed(
         &mut self,
         frame: u64,
-        mut upload: impl FnMut(usize, &TextureImage),
+        mut upload: impl FnMut(usize, TextureImage),
     ) -> usize {
         let mut applied = 0;
         while let Ok(result) = self.result_rx.try_recv() {
@@ -238,7 +238,7 @@ impl TextureStreamer {
                 Ok(tex) => {
                     // Resident footprint is the sum of every mip level's bytes.
                     let bytes = tex.image.byte_len() as u64;
-                    upload(result.id, &tex.image);
+                    upload(result.id, tex.image);
                     self.planner.mark_resident(result.id, frame, bytes);
                     applied += 1;
                 }

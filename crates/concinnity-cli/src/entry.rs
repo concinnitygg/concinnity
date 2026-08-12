@@ -271,6 +271,19 @@ pub struct RunArgs {
     // this flag; set `MTL_SHADER_VALIDATION=1` in the environment for that.
     #[arg(long)]
     pub validation: Option<bool>,
+
+    /// Step simulation and rendering serially on one thread instead of
+    /// pipelining them (A/B comparison, escape hatch)
+    #[arg(long)]
+    pub serial: bool,
+
+    /// Capture the last presented frame to this PNG when the run stops
+    #[arg(long)]
+    pub screenshot: Option<String>,
+
+    /// Stop after this many frames (overrides GraphicsConfig.max_frames)
+    #[arg(long)]
+    pub frames: Option<u64>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -454,7 +467,15 @@ pub fn run() -> std::io::Result<()> {
         Commands::Build(args) => cli::build(args.file.as_deref()),
         Commands::Run(args) => {
             dev_flags::set_validation(args.validation);
-            concinnity_engine::app::run()
+            concinnity_engine::app::run(concinnity_engine::app::run::RunOptions {
+                mode: if args.serial {
+                    concinnity_engine::app::run::PipelineMode::Serial
+                } else {
+                    concinnity_engine::app::run::PipelineMode::Pipelined
+                },
+                screenshot: args.screenshot.clone(),
+                max_frames: args.frames,
+            })
         }
         // A client subcommand talks to an already running server; its absence
         // means start the server (the interpreted run below).

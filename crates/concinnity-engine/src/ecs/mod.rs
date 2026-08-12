@@ -69,6 +69,93 @@ pub use concinnity_core::ecs::{StepResult, System};
 // runtime never publishes it; it exists only on the editor's live-update path.
 pub struct PendingBackend(pub Box<dyn crate::gfx::backend::RenderBackend>);
 
+// The frame's sampled window input, deposited beside the backend right after
+// the draw (whose event pump produced it) and taken by InputSystem later the
+// same tick. The pipelined driver deposits it from the render half's feedback
+// instead; a missed consume merges into the next deposit so no edge is lost.
+#[derive(Default)]
+pub struct InputMailbox(pub Option<concinnity_render::input::InputPacket>);
+
+impl InputMailbox {
+    // Deposit a fresh packet, merging onto an unconsumed one.
+    pub fn deposit(&mut self, packet: concinnity_render::input::InputPacket) {
+        match &mut self.0 {
+            Some(pending) => pending.merge_from(packet),
+            None => self.0 = Some(packet),
+        }
+    }
+}
+
+// The frame's recording surfaces, taken and re-parked together by each
+// recording system (the same handoff `ActiveRenderBackend` uses, so a step
+// never re-boxes them into the resource map): the op queue the tick's backend
+// effects accumulate into (drained into the frame snapshot by GraphicsSystem's
+// extract, replayed in record order before the draw) and the slot-allocation
+// authority ops name destinations from. Published by graphics init; absent in
+// a world with no graphics, so recording systems no-op.
+pub struct RenderQueues {
+    pub ops: concinnity_render::ops::RenderOps,
+    pub slots: crate::gfx::render_slots::RenderSlots,
+}
+
+// The world's parked `RenderQueues` slot. `None` only while a step has it
+// taken.
+pub struct ActiveRenderQueues(pub Option<RenderQueues>);
+
+impl ActiveRenderQueues {
+    // Take the parked queues for the duration of one system step.
+    pub(crate) fn take(resources: &mut Resources) -> Option<RenderQueues> {
+        resources.get_mut::<Self>()?.0.take()
+    }
+
+    // Park the queues again at the end of the step that took them.
+    pub(crate) fn put(resources: &mut Resources, queues: RenderQueues) {
+        match resources.get_mut::<Self>() {
+            Some(slot) => slot.0 = Some(queues),
+            None => {
+                resources.insert(Self(Some(queues)));
+            }
+        }
+    }
+}
+
+// Recorded backend effects that failed at replay and need a simulation-side
+// rollback (a streamed-mesh upload refused by a full region, a chunk add).
+// Written by GraphicsSystem after submission; StreamingSystem drains it at the
+// top of its next step.
+#[derive(Default)]
+pub struct RenderOpFailures(pub Vec<concinnity_render::ops::OpFailure>);
+
+// The pipelined driver's channel pair, published (parked, so the per-step
+// take never re-boxes) before the world moves to the simulation thread.
+// Present exactly when frames are pipelined: GraphicsSystem's step extracts
+// and sends the snapshot through it instead of submitting against a parked
+// backend (which the render half owns), and applies the render half's
+// feedback. Absent in serial execution.
+pub struct PipelinedFrames(pub Option<PipelineChannels>);
+
+pub struct PipelineChannels {
+    pub snapshot_tx: std::sync::mpsc::SyncSender<concinnity_render::snapshot::RenderSnapshot>,
+    pub feedback_rx: std::sync::mpsc::Receiver<concinnity_render::feedback::FrameFeedback>,
+}
+
+impl PipelinedFrames {
+    // Take the parked channels for the duration of one step.
+    pub(crate) fn take(resources: &mut Resources) -> Option<PipelineChannels> {
+        resources.get_mut::<Self>()?.0.take()
+    }
+
+    // Park the channels again at the end of the step that took them.
+    pub(crate) fn put(resources: &mut Resources, channels: PipelineChannels) {
+        match resources.get_mut::<Self>() {
+            Some(slot) => slot.0 = Some(channels),
+            None => {
+                resources.insert(Self(Some(channels)));
+            }
+        }
+    }
+}
+
 // The world's live render backend, parked here between system steps.
 // GraphicsSystem's init builds it and parks it; each system that drives the
 // GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
@@ -247,6 +334,13 @@ pub struct World {
     internal_systems_built: bool,
 }
 
+// The world must stay movable to the simulation thread; a !Send member in any
+// system, component, or resource breaks the pipelined driver's thread handoff.
+const _: () = {
+    const fn require_send<T: Send>() {}
+    require_send::<World>()
+};
+
 impl std::fmt::Debug for World {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("World")
@@ -411,7 +505,7 @@ impl World {
     // Mutably borrow (creating if absent) the event queue for event type E.
     // Mirror of `PipelineContext::events_mut`, for code holding a `World`
     // directly: tests, and the editor's debug-driven command injection.
-    pub fn events_mut<E: 'static>(&mut self) -> &mut Events<E> {
+    pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
         if !self.resources.contains::<EventStore>() {
             self.resources.insert(EventStore::new());
         }
@@ -521,7 +615,7 @@ impl World {
     // `cn editor` drive publishes `MenuOverride` through this each frame; it also
     // stands in for the render-block-published resources (e.g. OverlaySystem's
     // `MenuActive`) in system tests that drive a later system directly.
-    pub fn insert_resource<T: std::any::Any>(&mut self, value: T) {
+    pub fn insert_resource<T: std::any::Any + Send>(&mut self, value: T) {
         self.resources.insert(value);
     }
 
