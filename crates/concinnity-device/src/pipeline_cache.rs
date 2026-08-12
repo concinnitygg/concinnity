@@ -70,21 +70,22 @@ fn load_in(path: &std::path::Path) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-// Persist `bytes` for `name` when they hold more than `previous` (the blob
-// this run loaded or last wrote). Growth is the only reliable "new content"
-// signal: a driver cache only accumulates, but its serialization is not
+// Persist `bytes` for `name` when they hold more than `previous_len` (the size
+// of the blob this run loaded or last wrote). Growth is the only reliable "new
+// content" signal: a driver cache only accumulates, but its serialization is not
 // deterministic (MoltenVK shuffles entry order run to run), so a byte compare
-// would rewrite an unchanged cache every launch. Returns whether a write
-// happened, for the caller's bookkeeping.
-pub(crate) fn store_if_grown(name: &str, bytes: &[u8], previous: Option<&[u8]>) -> bool {
+// would rewrite an unchanged cache every launch. A length is all the check needs,
+// and holding one frees callers from keeping the previous blob alive. Returns
+// whether a write happened, for the caller's bookkeeping.
+pub(crate) fn store_if_grown(name: &str, bytes: &[u8], previous_len: usize) -> bool {
     if !enabled() {
         return false;
     }
-    store_in(&file_path(name), bytes, previous)
+    store_in(&file_path(name), bytes, previous_len)
 }
 
-fn store_in(path: &std::path::Path, bytes: &[u8], previous: Option<&[u8]>) -> bool {
-    if bytes.is_empty() || bytes.len() <= previous.map_or(0, <[u8]>::len) {
+fn store_in(path: &std::path::Path, bytes: &[u8], previous_len: usize) -> bool {
+    if bytes.is_empty() || bytes.len() <= previous_len {
         return false;
     }
     let Some(dir) = path.parent() else {
@@ -123,7 +124,7 @@ mod tests {
     fn a_blob_round_trips_through_a_file() {
         let path = temp_file("roundtrip").join("adapter.bin");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(store_in(&path, &[1, 2, 3], None));
+        assert!(store_in(&path, &[1, 2, 3], 0));
         assert_eq!(load_in(&path), Some(vec![1, 2, 3]));
         let leftovers = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
@@ -138,19 +139,19 @@ mod tests {
     fn only_growth_rewrites_the_blob() {
         let path = temp_file("growth").join("adapter.bin");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(store_in(&path, &[5, 5], None));
+        assert!(store_in(&path, &[5, 5], 0));
         let first_write = std::fs::metadata(&path).unwrap().modified().unwrap();
         // Same or reshuffled content of equal length is not new content: the
         // driver's serialization is nondeterministic, so equal-length bytes
         // must leave the file untouched (byte-stable warm launches).
-        assert!(!store_in(&path, &[5, 5], Some(&[5, 5])));
-        assert!(!store_in(&path, &[6, 5], Some(&[5, 5])), "reshuffled");
-        assert!(!store_in(&path, &[5], Some(&[5, 5])), "shrunk");
+        assert!(!store_in(&path, &[5, 5], 2));
+        assert!(!store_in(&path, &[6, 5], 2), "reshuffled");
+        assert!(!store_in(&path, &[5], 2), "shrunk");
         assert_eq!(
             std::fs::metadata(&path).unwrap().modified().unwrap(),
             first_write
         );
-        assert!(store_in(&path, &[5, 5, 6], Some(&[5, 5])), "growth writes");
+        assert!(store_in(&path, &[5, 5, 6], 2), "growth writes");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -158,7 +159,7 @@ mod tests {
     fn an_empty_blob_is_neither_stored_nor_loaded() {
         let path = temp_file("empty").join("adapter.bin");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert!(!store_in(&path, &[], None));
+        assert!(!store_in(&path, &[], 0));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, []).unwrap();
         assert_eq!(load_in(&path), None);

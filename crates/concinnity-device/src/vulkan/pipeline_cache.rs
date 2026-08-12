@@ -28,9 +28,11 @@ static STATE: Mutex<Option<Persisted>> = Mutex::new(None);
 
 struct Persisted {
     file: String,
-    // The bytes currently on disk (loaded at install, updated per serialize),
-    // so an unchanged cache never rewrites the file.
-    disk: Option<Vec<u8>>,
+    // Size of the blob currently on disk (loaded at install, updated per
+    // serialize), so an unchanged cache never rewrites the file. Only the
+    // length is kept: `vkCreatePipelineCache` copies the seed bytes, so nothing
+    // here has to outlive `install`.
+    written: usize,
     warm: bool,
 }
 
@@ -109,8 +111,13 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
     match created {
         Ok(cache) => {
             let warm = disk.is_some();
+            let written = disk.as_ref().map_or(0, Vec::len);
             CURRENT.store(cache.as_raw(), Ordering::Relaxed);
-            *state = Some(Persisted { file, disk, warm });
+            *state = Some(Persisted {
+                file,
+                written,
+                warm,
+            });
         }
         Err(e) => {
             // Every creation site tolerates a null cache, so init proceeds
@@ -143,8 +150,8 @@ pub(in crate::vulkan) fn serialize(device: &Device) {
     let Ok(data) = (unsafe { device.get_pipeline_cache_data(current()) }) else {
         return;
     };
-    if crate::pipeline_cache::store_if_grown(&persisted.file, &data, persisted.disk.as_deref()) {
-        persisted.disk = Some(data);
+    if crate::pipeline_cache::store_if_grown(&persisted.file, &data, persisted.written) {
+        persisted.written = data.len();
     }
 }
 

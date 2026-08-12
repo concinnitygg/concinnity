@@ -33,11 +33,16 @@ thread_local! {
 }
 
 struct State {
-    // Declared before `disk`: D3D12 parses the initial blob in place, so the
+    // Declared before `_seed`: D3D12 parses the initial blob in place, so the
     // library must drop before its backing bytes.
     library: ID3D12PipelineLibrary,
     file: String,
-    disk: Option<Vec<u8>>,
+    // The blob `CreatePipelineLibrary` parsed in place. Never read from Rust and
+    // never replaced: the library keeps reading it for its whole life, so this
+    // owns it until the library is gone.
+    _seed: Option<Vec<u8>>,
+    // Size of the blob last written for `file`; the growth check's baseline.
+    written: usize,
     warm: bool,
 }
 
@@ -86,10 +91,12 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
         match created {
             Ok(library) => {
                 let warm = disk.is_some();
+                let written = disk.as_ref().map_or(0, Vec::len);
                 *state = Some(State {
                     library,
                     file,
-                    disk,
+                    _seed: disk,
+                    written,
                     warm,
                 });
             }
@@ -195,9 +202,9 @@ pub(super) fn serialize() {
             let mut bytes = vec![0u8; size];
             let serialized = unsafe { state.library.Serialize(&mut bytes) };
             if serialized.is_ok()
-                && crate::pipeline_cache::store_if_grown(&state.file, &bytes, state.disk.as_deref())
+                && crate::pipeline_cache::store_if_grown(&state.file, &bytes, state.written)
             {
-                state.disk = Some(bytes);
+                state.written = bytes.len();
             }
         }
     });
