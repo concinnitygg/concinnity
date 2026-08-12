@@ -1,0 +1,17 @@
+[package]
+name = "concinnity-font"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "concinnity_font"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+concinnity-cpu = { path = "../concinnity-cpu" }
+
+fontdue = "0.9"

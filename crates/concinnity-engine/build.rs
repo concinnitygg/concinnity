@@ -15,10 +15,34 @@
 //    and must resolve their NGX symbols when this crate's test binaries link.
 //    That is `SdkOptions { bundle_dlls: false }`.
 
+// 3. Bake the bundled default font into an SDF atlas the crate embeds, so the
+//    startup error screen can draw text with no compiled world data present --
+//    the font asset it would normally use lives in the blob that failed to load.
+
 use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+
+// Rasterisation size of the embedded atlas. The field is signed-distance, so a
+// single size scales cleanly over the range the error screen needs.
+const ERROR_SCREEN_FONT_PX: u32 = 24;
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
     setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    bake_error_screen_font();
+}
+
+// Compile the bundled face into `OUT_DIR`, where `error_screen::font` embeds it.
+fn bake_error_screen_font() {
+    let payload = concinnity_font::compile(
+        concinnity_font::BUILTIN_FONT_BYTES,
+        ERROR_SCREEN_FONT_PX,
+        concinnity_font::BUILTIN_FONT_FILE,
+    )
+    .expect("bundled face compiles");
+
+    let out = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR is set"))
+        .join("error_screen_font.bin");
+    std::fs::write(&out, payload).expect("write baked font atlas");
+    println!("cargo:rerun-if-changed=build.rs");
 }

@@ -18,6 +18,7 @@ concinnity-store = { path = "../concinnity-store" }
 concinnity-blob = { path = "../concinnity-blob" }
 concinnity-world = { path = "../concinnity-world" }
 concinnity-docs = { path = "../concinnity-docs" }
+concinnity-font = { path = "../concinnity-font" }
 
 bytemuck = "1"
 serde = { version = "1", features = ["derive"] }
@@ -26,7 +27,6 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 fbxcel = { version = "0.9.0", default-features = false, features = ["tree"] }
-fontdue = "0.9"
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras"] }
 jpeg-decoder = "0.3"
 kira = "0.12"

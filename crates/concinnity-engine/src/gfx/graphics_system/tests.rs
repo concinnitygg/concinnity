@@ -3173,9 +3173,11 @@ fn a_backend_that_fails_to_build_marks_graphics_failed() {
     assert!(gs.failed);
     assert!(!backend_parked(&world));
     assert!(lock(&state).init.is_none());
-    // A failed system is Done on its next step rather than drawing.
+    // A failed system stops the run rather than drawing. `Done` would retire
+    // only this system and leave the world stepping every other one forever,
+    // with no window and no frame pacing.
     let mut gs = gs;
-    assert_eq!(step(&mut gs, &mut world), StepResult::Done);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
 }
 
 // A two-triangle skinned strip bound to a two-joint chain, in the compiled

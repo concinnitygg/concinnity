@@ -18,6 +18,9 @@ pub(crate) mod pacing;
 pub(crate) mod pipeline;
 pub mod run;
 pub mod runloop;
+// Classification of fatal startup failures into a log line plus a sentence for
+// the error screen. `pub` so a host binary can report one the same way.
+pub mod startup_error;
 pub mod state;
 // Host-memory queries backing the memory budget + the live-usage readout.
 pub mod syscpu;

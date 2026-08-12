@@ -64,7 +64,11 @@ fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
 impl GraphicsSystem {
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if self.failed {
-            return StepResult::Done;
+            // Stop, not Done: `Done` only retires this system and lets the world
+            // keep stepping the rest, which for a failed init means the process
+            // spins on headlessly with no window and no frame pacing. The run
+            // has nothing left to present, so it ends.
+            return StepResult::Stop;
         }
         // Pipelined frames: the backend lives with the render half on the
         // main thread; extract and send the snapshot instead of submitting.

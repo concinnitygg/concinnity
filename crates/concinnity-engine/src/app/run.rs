@@ -15,6 +15,7 @@
 // the command channel lives in the editor crate.
 
 use crate::app::runloop;
+use crate::app::startup_error::StartupError;
 use crate::app::state::App;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
@@ -88,15 +89,28 @@ pub fn run(options: RunOptions) -> std::io::Result<()> {
     let mut app = App::new();
 
     if let Err(e) = app.load_blob() {
-        tracing::info!(
-            "No blob found (data/0): {:?} -- run `concinnity build` first",
-            e
-        );
-
+        report_startup_error(StartupError::from_blob_failure(primary_blob_path(), e));
         return Ok(());
     }
 
     start_runtime(app, options)
+}
+
+// The primary blob's path, which is what a load failure is reported against.
+fn primary_blob_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(concinnity_store::blob::blob_path(0))
+}
+
+// Report a fatal startup failure: always to the log, and on screen as well when
+// a window can be stood up, so a packaged app that a user double-clicked says
+// something rather than exiting silently. The screen blocks until dismissed.
+fn report_startup_error(error: StartupError) {
+    tracing::error!("{}", error.log_line());
+    if !crate::error_screen::show("Concinnity", &error.user_message()) {
+        // No window, so the log line above is the whole report; repeat it on
+        // stderr, which a console user sees regardless of the tracing filter.
+        eprintln!("{}", error.log_line());
+    }
 }
 
 // Production entry point for a shipped app: like `run`, but with the state root
@@ -109,15 +123,16 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
     concinnity_store::paths::set_state_dir(state_dir);
 
     let mut app = App::new();
-    app.load_blob().map_err(|e| {
-        std::io::Error::new(
+    if let Err(e) = app.load_blob() {
+        let error = StartupError::from_blob_failure(primary_blob_path(), e);
+        report_startup_error(error.clone());
+        // The process still exits non-zero: the screen is how the user learns
+        // what happened, not a substitute for failing.
+        return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!(
-                "no compiled world data under {}: {e}",
-                concinnity_store::paths::data_dir().display()
-            ),
-        )
-    })?;
+            error.log_line(),
+        ));
+    }
     start_runtime(app, RunOptions::default())
 }
 

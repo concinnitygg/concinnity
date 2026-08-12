@@ -10,6 +10,7 @@
 | `concinnity-engine`    | lib       |                    | Runtime engine: ECS schedule, graphics/spawn/streaming, allocator.   |
 | `concinnity-device`    | lib       |                    | GPU backends (Metal/Vulkan/DX) behind a device facade.               |
 | `concinnity-shader`    | lib       |                    | Build-time shader compilers for the backend being built.             |
+| `concinnity-font`      | lib       |                    | Build-time glyph atlas rasteriser for cook and the engine binary.    |
 | `concinnity-render`    | lib       |                    | GPU-free render preparation.                                         |
 | `concinnity-physics`   | lib       |                    | Physics system (wraps [rapier3d]).                                   |
 | `concinnity-audio`     | lib       |                    | Audio system (wraps [kira]).                                         |
@@ -49,7 +50,8 @@ space:3
 engine
 space:1
 cook
-space:3
+space:2
+font
 
 space:9
 
@@ -131,6 +133,7 @@ editor --> world
 cook --> blob
 cook --> core
 cook --> cpu
+cook --> font
 cook --> store
 cook --> world
 cook --> docs

@@ -50,6 +50,9 @@ pub mod shutdown;
 // `pub` so the binaries install the hooks and the editor composes the
 // recent-log ring layer into its tracing subscriber.
 pub mod crash;
+// The standalone startup-error window. `pub` so a host binary can report a
+// fatal startup failure through it before any world exists.
+pub mod error_screen;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;

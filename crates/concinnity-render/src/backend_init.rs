@@ -240,7 +240,88 @@ impl RenderRequirements {
     }
 }
 
-impl BackendInit<'_> {
+impl<'a> BackendInit<'a> {
+    /// A backend carrying nothing but a window and glyph atlases: no geometry,
+    /// no textures, no lights, no effects. The single shader entry has empty
+    /// stage bytes, which every backend resolves to its built-in default
+    /// program. `resolve_requirements` then trims every scene-scoped feature.
+    ///
+    /// This is the startup error screen's path, which has to stand up a window
+    /// with no compiled world data at all. Keeping it here means the field
+    /// defaulting is maintained beside the struct it fills.
+    pub fn minimal(window: &'a WindowArgs, text_atlases: Vec<(u32, u32, Vec<u8>)>) -> Self {
+        let mut init = Self {
+            window,
+            validation: false,
+            frames_in_flight: 2,
+            vsync: true,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            hot_reload: false,
+            capture: false,
+            scene: SceneData {
+                vertices: &[],
+                indices: &[],
+                draw_objects: Vec::new(),
+                instanced_clusters: Vec::new(),
+                n_skinned: 0,
+                n_chunk_max: 0,
+            },
+            shaders: vec![ShaderBytes {
+                vert: &[],
+                frag: &[],
+                shadow: &[],
+                vert_instanced: &[],
+                deferred: false,
+            }],
+            media: MediaPayloads {
+                textures: &[],
+                text_atlases,
+                env_map_bytes: None,
+                color_lut_bytes: None,
+            },
+            light_uniforms: LightUniforms::DEFAULT,
+            local_lights: Vec::new(),
+            spot_shadows: Vec::new(),
+            area_lights: Vec::new(),
+            shadows: ShadowParams {
+                map_size: 0,
+                update: ShadowUpdate::default(),
+                distance: 0,
+                cascades: 1,
+            },
+            anisotropy: 1,
+            planar_planes: 0,
+            post: PostSettings {
+                post_process: PostProcessParams::DEFAULT,
+                taa_enabled: false,
+                ssao: None,
+                ssr: None,
+                ssgi: None,
+                rt_reflections: None,
+                reflection_blur_scale: 1,
+                auto_exposure: None,
+                auto_exposure_bias_ev: 0.0,
+                hdr_display: false,
+                hdr_pq: false,
+                temporal_upscaling: false,
+                upscale_scale: 1.0,
+                upscale_backend: UpscalerBackend::Auto,
+                occlusion_two_pass: false,
+            },
+            fx: WorldFx {
+                decals: Vec::new(),
+                particles: Vec::new(),
+                fog: None,
+                water_surfaces: Vec::new(),
+                glass_panels: Vec::new(),
+                sdf_volumes: Vec::new(),
+            },
+            requirements: Default::default(),
+        };
+        init.resolve_requirements();
+        init
+    }
+
     // The swapchain-level configuration this world needs. Compared against a
     // transplanted backend's `RenderBackend::hot_swap_config` to decide whether
     // a live SAVE can reuse the existing window (`reload_world`) or must rebuild.
@@ -349,6 +430,29 @@ mod tests {
     fn text_only_world_derives_no_scene() {
         let req = RenderRequirements::derive(&empty_scene(), &empty_fx());
         assert!(!req.scene);
+    }
+
+    #[test]
+    fn minimal_carries_only_a_window_and_its_atlases() {
+        let window = WindowArgs::default();
+        let atlas = vec![(2u32, 2u32, vec![255u8; 2 * 2 * 4])];
+        let init = BackendInit::minimal(&window, atlas);
+
+        // The text pipeline is the one thing it keeps: backends gate that pass
+        // on a non-empty atlas list.
+        assert_eq!(init.media.text_atlases.len(), 1);
+        // One shader entry with empty stage bytes, so every backend resolves it
+        // to its built-in default program rather than leaving bucket 0 unbuilt.
+        assert_eq!(init.shaders.len(), 1);
+        assert!(init.shaders[0].vert.is_empty());
+        assert!(!init.shaders[0].deferred);
+        // No scene content, so `resolve_requirements` ran and trimmed the
+        // scene-scoped features.
+        assert!(!init.requirements.scene);
+        assert_eq!(init.shadows.map_size, 0);
+        assert!(!init.post.taa_enabled);
+        assert!(init.post.ssao.is_none());
+        assert_eq!(init.planar_planes, 0);
     }
 
     #[test]
