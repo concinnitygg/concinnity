@@ -1528,6 +1528,16 @@ impl VkContext {
             }
         }
 
+        // Minimised window: the client area is 0x0. Vulkan rejects every
+        // zero-extent operation (swapchain, render area, viewport, image copy),
+        // so park the whole frame (no acquire / record / submit / present) until
+        // the window is restored. `window_closed` keeps pumping the message loop
+        // each tick, so the restore is picked up. Mirrors the DirectX backend,
+        // which skips its resize + present while minimised.
+        if self.is_minimized() {
+            return Ok(());
+        }
+
         let frame = self.current_frame;
         // Cheap-cloneable handle (ash::Device is Arc-like). Holding a local
         // copy avoids tying the rest of the function to `&self.device` while
@@ -1878,6 +1888,18 @@ impl VkContext {
         self.window
             .as_mut()
             .expect("VkContext window taken by reload_world")
+    }
+
+    // True while the window is minimised: the client area has collapsed to 0x0
+    // (WM_SIZE reports zero on minimise; the GLFW / AppKit windows report the
+    // same). Vulkan forbids a zero-extent swapchain, render area, viewport, or
+    // image copy, so `draw_frame` and `rebuild_swapchain` park their work until
+    // the window is restored. Mirrors the DirectX backend, whose
+    // `maybe_handle_resize` skips the rebuild (and thus the frame) at 0x0.
+    #[inline]
+    pub(super) fn is_minimized(&self) -> bool {
+        let (w, h) = self.window().framebuffer_size();
+        extent_minimized(w, h)
     }
 
     // Re-point the combined-image-sampler at `binding` of `set` to `view`.
@@ -2471,5 +2493,31 @@ impl Drop for VkContext {
             unsafe { self.device.destroy_device(None) };
             unsafe { self.instance.destroy_instance(None) };
         }
+    }
+}
+
+// Whether a client-area extent counts as minimised (collapsed): a zero, or
+// defensively negative, width or height. Split from `is_minimized` so the
+// minimise gate is unit-testable without a live window / surface.
+fn extent_minimized(width: i32, height: i32) -> bool {
+    width <= 0 || height <= 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extent_minimized;
+
+    #[test]
+    fn extent_minimized_gates_on_zero_or_negative_dimensions() {
+        // A live window (both dimensions positive) is not minimised.
+        assert!(!extent_minimized(1280, 720));
+        assert!(!extent_minimized(1, 1));
+        // Minimise collapses one or both dimensions to zero.
+        assert!(extent_minimized(0, 0));
+        assert!(extent_minimized(1280, 0));
+        assert!(extent_minimized(0, 720));
+        // Negative dimensions never form a valid extent either.
+        assert!(extent_minimized(-1, 720));
+        assert!(extent_minimized(1280, -1));
     }
 }

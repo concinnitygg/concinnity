@@ -73,6 +73,16 @@ impl VkContext {
     }
 
     pub(super) fn rebuild_swapchain(&mut self) -> Result<(), String> {
+        // A minimised window has a 0x0 client area, and a zero-extent swapchain
+        // (with every attachment / framebuffer sized from it) is invalid. Skip
+        // the rebuild and leave the existing resources at their last non-zero
+        // size. `draw_frame` already parks the whole frame while minimised, so
+        // the frame-loop callers never reach here at 0x0; this guards the
+        // out-of-band callers (set_vsync, quality changes) as defence in depth.
+        // Mirrors DirectX `maybe_handle_resize`'s minimise skip.
+        if self.is_minimized() {
+            return Ok(());
+        }
         self.wait_idle();
         // The previous swapchain's images are about to be destroyed; invalidate
         // the screenshot read-back index until the next present repopulates it.
