@@ -11,7 +11,7 @@ use crate::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH};
 pub fn parse_cnb(data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
     let meta_len = parse_header(data)? as usize;
 
-    let stored = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    let stored = le_u32(data, 4).ok_or(BlobError::TooShort)?;
     if stored != SCHEMA_HASH {
         return Err(BlobError::SchemaMismatch(stored));
     }
@@ -39,10 +39,10 @@ pub fn parse_payload_section_start(header: &[u8]) -> Result<u64, BlobError> {
 // header points past its end, yields an empty section. Overflow blobs carry no
 // metadata and reach here without a magic or version check.
 pub fn payload_section(data: &[u8]) -> &[u8] {
-    if data.len() < HEADER_SIZE {
+    let Some(meta_len) = le_u64(data, 8) else {
         return &[];
-    }
-    let meta_len = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
+    };
+    let meta_len = meta_len as usize;
     HEADER_SIZE
         .checked_add(meta_len)
         .and_then(|start| data.get(start..))
@@ -55,10 +55,26 @@ fn parse_header(data: &[u8]) -> Result<u64, BlobError> {
     if data.len() < HEADER_SIZE {
         return Err(BlobError::TooShort);
     }
-    if data[0..4] != BLOB_MAGIC {
+    if data.get(..4) != Some(&BLOB_MAGIC[..]) {
         return Err(BlobError::BadMagic);
     }
-    Ok(u64::from_le_bytes(data[8..16].try_into().unwrap()))
+    le_u64(data, 8).ok_or(BlobError::TooShort)
+}
+
+// The little-endian u32 at `at`, or `None` if the buffer ends first.
+fn le_u32(data: &[u8], at: usize) -> Option<u32> {
+    data.get(at..)?
+        .first_chunk::<4>()
+        .copied()
+        .map(u32::from_le_bytes)
+}
+
+// The little-endian u64 at `at`, or `None` if the buffer ends first.
+fn le_u64(data: &[u8], at: usize) -> Option<u64> {
+    data.get(at..)?
+        .first_chunk::<8>()
+        .copied()
+        .map(u64::from_le_bytes)
 }
 
 #[cfg(test)]

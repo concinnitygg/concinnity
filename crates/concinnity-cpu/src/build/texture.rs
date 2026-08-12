@@ -24,7 +24,12 @@
 // upload it verbatim, since no runtime BCn encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
-use crate::build::payload::HeaderReader;
+use crate::decode::{ByteReader, checked_product};
+
+// A u32 dimension bottoms out at 1x1 after at most this many halvings, so a
+// file or payload declaring more levels than this is malformed rather than
+// large. Decoders bound a declared mip count against it before reserving.
+pub const MAX_MIP_LEVELS: usize = 32;
 
 pub const TEXTURE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"TEX2");
 const HEADER_BYTES: usize = 12;
@@ -79,14 +84,20 @@ impl TextureFormat {
     }
 
     // Byte length one mip of `width` x `height` occupies in this format.
-    pub fn mip_byte_len(self, width: u32, height: u32) -> usize {
+    // Dimensions are read out of the file being decoded, so a footprint that
+    // overflows `usize` is reported rather than wrapped into a small length
+    // that would pass the caller's bounds check.
+    pub fn mip_byte_len(self, width: u32, height: u32) -> Result<usize, String> {
         match self.block_bytes() {
-            None => (width as usize) * (height as usize) * 4,
-            Some(block) => {
-                let bx = width.div_ceil(4) as usize;
-                let by = height.div_ceil(4) as usize;
-                bx * by * block
-            }
+            None => checked_product("texture mip", &[width as usize, height as usize, 4]),
+            Some(block) => checked_product(
+                "texture mip",
+                &[
+                    width.div_ceil(4) as usize,
+                    height.div_ceil(4) as usize,
+                    block,
+                ],
+            ),
         }
     }
 }
@@ -179,53 +190,38 @@ pub fn serialise(image: &TextureImage) -> Vec<u8> {
 // Called by GraphicsSystem at runtime to recover texture format, dimensions,
 // and mip data before uploading to the GPU.
 pub fn deserialise(bytes: &[u8]) -> Result<TextureImage, String> {
-    let mut header = HeaderReader::open(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
-    let format_id = header.u32();
+    let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
+    let format_id = r.u32()?;
     let format = TextureFormat::from_id(format_id)
         .ok_or_else(|| format!("texture payload has unknown format_id {}", format_id))?;
-    let mip_count = header.u32() as usize;
-    if mip_count == 0 {
-        return Err("texture payload declares zero mip levels".into());
+    // Bounded before it reaches `with_capacity`: the count is payload-supplied
+    // and reserving for a u32 of them would abort on the allocation alone.
+    let mip_count = r.u32()? as usize;
+    if mip_count == 0 || mip_count > MAX_MIP_LEVELS {
+        return Err(format!(
+            "texture payload declares {} mip levels (expected 1..={})",
+            mip_count, MAX_MIP_LEVELS
+        ));
     }
 
+    r.seek(HEADER_BYTES)?;
     let mut mips = Vec::with_capacity(mip_count);
-    let mut cursor = HEADER_BYTES;
     for level in 0..mip_count {
-        if cursor + 12 > bytes.len() {
-            return Err(format!(
-                "texture payload truncated in mip {} header (offset {}, len {})",
-                level,
-                cursor,
-                bytes.len()
-            ));
-        }
-        let width = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
-        let height = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap());
-        let byte_len =
-            u32::from_le_bytes(bytes[cursor + 8..cursor + 12].try_into().unwrap()) as usize;
-        cursor += 12;
-        let expected = format.mip_byte_len(width, height);
+        let width = r.u32()?;
+        let height = r.u32()?;
+        let byte_len = r.u32()? as usize;
+        let expected = format.mip_byte_len(width, height)?;
         if byte_len != expected {
             return Err(format!(
                 "texture payload mip {} ({}x{} {:?}) declares {} bytes, format needs {}",
                 level, width, height, format, byte_len, expected
             ));
         }
-        if cursor + byte_len > bytes.len() {
-            return Err(format!(
-                "texture payload truncated in mip {} data: need {} bytes at offset {}, have {}",
-                level,
-                byte_len,
-                cursor,
-                bytes.len()
-            ));
-        }
         mips.push(TextureMip {
             width,
             height,
-            data: bytes[cursor..cursor + byte_len].to_vec(),
+            data: r.take(byte_len)?.to_vec(),
         });
-        cursor += byte_len;
     }
 
     Ok(TextureImage { format, mips })
@@ -351,6 +347,78 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 8]);
         let err = deserialise(&bytes).unwrap_err();
         assert!(err.contains("format needs 16"), "got: {err}");
+    }
+
+    // A one-mip header with caller-chosen fields and no mip body behind it.
+    fn header(format: TextureFormat, mip_count: u32, width: u32, height: u32, len: u32) -> Vec<u8> {
+        let mut bytes = TEXTURE_PAYLOAD_MAGIC.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&format.id().to_le_bytes());
+        bytes.extend_from_slice(&mip_count.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&len.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn deserialise_rejects_a_payload_shorter_than_the_header() {
+        let full = serialise(&TextureImage::rgba8(1, 1, vec![0; 4]));
+        for len in 0..HEADER_BYTES {
+            assert!(deserialise(&full[..len]).is_err(), "len {} decoded", len);
+        }
+    }
+
+    #[test]
+    fn deserialise_rejects_a_truncated_mip_header() {
+        let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
+        bytes.truncate(HEADER_BYTES + 6);
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("unexpected end"), "got: {err}");
+    }
+
+    #[test]
+    fn deserialise_rejects_truncated_mip_data() {
+        let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
+        bytes.extend_from_slice(&[0u8; 8]);
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("unexpected end"), "got: {err}");
+    }
+
+    // `width * height * 4` wraps for these dimensions; the declared length
+    // must be rejected on the overflow rather than compared against a
+    // wrapped-around footprint.
+    #[test]
+    fn deserialise_rejects_dimensions_that_overflow_the_footprint() {
+        let bytes = header(TextureFormat::Rgba8, 1, u32::MAX, u32::MAX, 16);
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("overflow"), "got: {err}");
+    }
+
+    // A mip count near u32::MAX must be rejected on the declared value, not
+    // by attempting to reserve for it.
+    #[test]
+    fn deserialise_rejects_an_absurd_mip_count() {
+        let bytes = header(TextureFormat::Rgba8, u32::MAX, 1, 1, 4);
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("mip levels"), "got: {err}");
+    }
+
+    #[test]
+    fn deserialise_rejects_zero_mips() {
+        let bytes = header(TextureFormat::Rgba8, 0, 1, 1, 4);
+        assert!(deserialise(&bytes).is_err());
+    }
+
+    #[test]
+    fn mip_byte_len_reports_overflow_for_max_dimensions() {
+        assert!(
+            TextureFormat::Rgba8
+                .mip_byte_len(u32::MAX, u32::MAX)
+                .is_err()
+        );
+        assert!(TextureFormat::Bc7.mip_byte_len(u32::MAX, u32::MAX).is_err());
+        assert_eq!(TextureFormat::Rgba8.mip_byte_len(2, 2).unwrap(), 16);
+        assert_eq!(TextureFormat::Bc7.mip_byte_len(4, 4).unwrap(), 16);
     }
 
     #[test]

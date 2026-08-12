@@ -528,7 +528,9 @@ fn write_upload_ring<T: Copy>(
         );
         *cap = needed;
     }
-    let buf = slot.as_ref().unwrap();
+    let buf = slot
+        .as_ref()
+        .expect("the upload buffer was just allocated or already met the capacity");
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     unsafe {
         buf.Map(0, None, Some(&mut ptr))
@@ -1298,9 +1300,15 @@ impl RtAccelData {
             slot.tlas = Some(create_as_buffer(device, tlas_needed)?);
             slot.tlas_cap = tlas_needed;
         }
-        let instance_buffer = slot.instance.clone().unwrap();
-        let geom_table = slot.geom.clone().unwrap();
-        let tlas = slot.tlas.clone().unwrap();
+        let instance_buffer = slot
+            .instance
+            .clone()
+            .expect("RT instance buffer was sized by write_upload_ring above");
+        let geom_table = slot
+            .geom
+            .clone()
+            .expect("RT geometry table was sized by write_upload_ring above");
+        let tlas = slot.tlas.clone().expect("RT TLAS buffer was sized above");
 
         // Record the fresh draw-BLAS builds (UAV-barrier-serialised over the shared
         // scratch), then the TLAS build. Infallible from here on.
@@ -1407,9 +1415,15 @@ impl RtAccelData {
             slot.tlas = Some(create_as_buffer(device, self.tlas_size)?);
             slot.tlas_cap = self.tlas_size;
         }
-        let instance_buffer = slot.instance.clone().unwrap();
-        let geom_table = slot.geom.clone().unwrap();
-        let tlas = slot.tlas.clone().unwrap();
+        let instance_buffer = slot
+            .instance
+            .clone()
+            .expect("RT instance buffer was sized by write_upload_ring above");
+        let geom_table = slot
+            .geom
+            .clone()
+            .expect("RT geometry table was sized by write_upload_ring above");
+        let tlas = slot.tlas.clone().expect("RT TLAS buffer was sized above");
 
         let cmd4: ID3D12GraphicsCommandList4 = cmd
             .cast()
@@ -1519,7 +1533,10 @@ impl RtAccelData {
             )?);
             ring.deformed_cap = deformed_bytes;
         }
-        let deformed_verts = ring.deformed.clone().unwrap();
+        let deformed_verts = ring
+            .deformed
+            .clone()
+            .expect("deformed vertex buffer was sized above");
         let deformed_gva = unsafe { deformed_verts.GetGPUVirtualAddress() };
 
         // A freshly (re)allocated buffer rests in COMMON; a reused one rests in
@@ -1663,8 +1680,14 @@ impl RtAccelData {
             &geom_entries,
             "RT geometry table",
         )?;
-        let instance_buffer = ring.instance.clone().unwrap();
-        let geom_table = ring.geom.clone().unwrap();
+        let instance_buffer = ring
+            .instance
+            .clone()
+            .expect("RT instance buffer was sized by write_upload_ring above");
+        let geom_table = ring
+            .geom
+            .clone()
+            .expect("RT geometry table was sized by write_upload_ring above");
 
         // Size the TLAS + scratch in the ring (>= the largest skinned BLAS + the
         // TLAS). The skinned instance count can change frame to frame, so size the
@@ -1681,8 +1704,11 @@ impl RtAccelData {
             ring.scratch = Some(create_scratch(device, scratch_needed)?);
             ring.scratch_cap = scratch_needed;
         }
-        let tlas = ring.tlas.clone().unwrap();
-        let scratch = ring.scratch.clone().unwrap();
+        let tlas = ring.tlas.clone().expect("RT TLAS buffer was sized above");
+        let scratch = ring
+            .scratch
+            .clone()
+            .expect("RT scratch buffer was sized above");
         let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
 
         // Record the skinned BLAS builds (UAV-barrier-serialised over the shared

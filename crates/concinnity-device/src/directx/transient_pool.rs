@@ -335,7 +335,11 @@ fn group_by_plan(specs: Vec<ResourceSpec>, ssao_enabled: bool) -> Vec<SlotSpec> 
         .map(|g| SlotSpec {
             members: g
                 .into_iter()
-                .map(|si| specs_opt[si].take().unwrap())
+                .map(|si| {
+                    specs_opt[si]
+                        .take()
+                        .expect("each spec index appears in exactly one alias group")
+                })
                 .collect(),
         })
         .collect()

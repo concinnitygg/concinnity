@@ -9,6 +9,7 @@
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
 
 use concinnity_cpu::build::texture::TextureFormat;
+use concinnity_cpu::decode::checked_product;
 
 // Expand a 16-bit 565 colour to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {
@@ -106,7 +107,10 @@ where
 {
     let bx = width.div_ceil(4);
     let by = height.div_ceil(4);
-    let needed = bx as usize * by as usize * block_bytes;
+    let needed = checked_product(
+        "block-compressed data",
+        &[bx as usize, by as usize, block_bytes],
+    )?;
     if data.len() < needed {
         return Err(format!(
             "block-compressed data too short: have {}, need {} for {}x{}",
@@ -117,7 +121,13 @@ where
         ));
     }
 
-    let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+    let mut out = vec![
+        0u8;
+        checked_product(
+            "block-compressed output",
+            &[width as usize, height as usize, 4]
+        )?
+    ];
     for byi in 0..by {
         for bxi in 0..bx {
             let off = (byi as usize * bx as usize + bxi as usize) * block_bytes;
@@ -128,7 +138,9 @@ where
                     let y = byi * 4 + ry;
                     if x < width && y < height {
                         let pi = (ry * 4 + rx) as usize;
-                        let oi = ((y * width + x) * 4) as usize;
+                        // Indexed in usize: `y * width` alone overflows u32
+                        // once the image is larger than about 65535 square.
+                        let oi = (y as usize * width as usize + x as usize) * 4;
                         out[oi..oi + 4].copy_from_slice(&px[pi]);
                     }
                 }

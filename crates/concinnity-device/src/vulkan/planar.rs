@@ -264,7 +264,13 @@ fn create_framebuffers(
     let mut out = Vec::with_capacity(targets.len());
     for target in targets {
         let attachments: Vec<vk::ImageView> = if msaa {
-            vec![color.unwrap().view, depth.view, target.view]
+            vec![
+                color
+                    .expect("a multisampled planar target has a colour image")
+                    .view,
+                depth.view,
+                target.view,
+            ]
         } else {
             vec![target.view, depth.view]
         };

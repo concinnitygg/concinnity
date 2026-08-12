@@ -28,6 +28,11 @@
 // This crate never needs to change when a new asset type is added.
 
 #![no_std]
+// This crate parses bytes the process did not produce, so a panic here is a
+// crash on a corrupt file rather than a bug. Invariants that genuinely cannot
+// fail use `expect` with the invariant named; tests unwrap freely.
+#![warn(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 
 extern crate alloc;
 

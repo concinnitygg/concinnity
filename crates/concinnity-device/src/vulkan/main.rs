@@ -229,10 +229,15 @@ impl VkContext {
         let use_bindless = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
         if use_bindless {
             let pipeline = self.wireframe_or(
-                self.cull.bindless_pipeline.unwrap(),
+                self.cull
+                    .bindless_pipeline
+                    .expect("bindless pipeline is live"),
                 self.wireframe.bindless,
             );
-            let layout = self.cull.bindless_pipeline_layout.unwrap();
+            let layout = self
+                .cull
+                .bindless_pipeline_layout
+                .expect("bindless pipeline layout is live alongside its pipeline");
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 device.cmd_bind_descriptor_sets(

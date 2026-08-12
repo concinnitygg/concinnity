@@ -34,7 +34,7 @@
 //
 // Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
-use crate::build::payload::HeaderReader;
+use crate::decode::{ByteReader, checked_product};
 
 use crate::geometry::vec3::{cross as cross3, dot as dot3};
 
@@ -444,42 +444,40 @@ pub struct EnvMapView<'a> {
 // the buffer. The runtime upload path uses this to feed the per-face slices
 // to the GPU without copying. Called by every backend at init time, and by
 // the Metal hot-reload path via `update_environment_map`.
+// Bytes the six RGBA32F faces of a cube with edge length `edge` occupy.
+fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
+    checked_product(label, &[6, edge as usize, edge as usize, 4, 4])
+}
+
 pub fn deserialise(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
-    let mut header = HeaderReader::open(
+    let mut r = ByteReader::open_payload(
         bytes,
         ENVMAP_PAYLOAD_MAGIC,
         ENVMAP_PAYLOAD_HEADER_BYTES,
         "envmap",
     )?;
-    let format = header.u32();
+    let format = r.u32()?;
     if format != ENVMAP_FORMAT_RGBA32F {
         return Err(format!("envmap format_id {} unsupported", format));
     }
-    let irradiance_face = header.u32();
-    let prefilter_face = header.u32();
-    let prefilter_mips = header.u32();
+    let irradiance_face = r.u32()?;
+    let prefilter_face = r.u32()?;
+    let prefilter_mips = r.u32()?;
     if prefilter_mips == 0 || prefilter_mips > 12 {
         return Err(format!(
             "envmap prefilter_mips {} out of range",
             prefilter_mips
         ));
     }
-    let mut off = ENVMAP_PAYLOAD_HEADER_BYTES;
-    let irr_size = 6 * (irradiance_face as usize).pow(2) * 4 * 4;
-    if off + irr_size > bytes.len() {
-        return Err("envmap payload truncated in irradiance section".into());
-    }
-    let irradiance_bytes = &bytes[off..off + irr_size];
-    off += irr_size;
+    // Face edges are payload-supplied, so each section's footprint is checked
+    // before it is used as a length. The seek skips the header's trailing pad.
+    r.seek(ENVMAP_PAYLOAD_HEADER_BYTES)?;
+    let irradiance_bytes = r.take(cube_face_bytes("envmap irradiance", irradiance_face)?)?;
     let mut prefilter_mip_bytes = Vec::with_capacity(prefilter_mips as usize);
     for mip in 0..prefilter_mips {
-        let s = (prefilter_face >> mip) as usize;
-        let mip_size = 6 * s * s * 4 * 4;
-        if off + mip_size > bytes.len() {
-            return Err(format!("envmap payload truncated in prefilter mip {}", mip));
-        }
-        prefilter_mip_bytes.push(&bytes[off..off + mip_size]);
-        off += mip_size;
+        let edge = prefilter_face >> mip;
+        let mip_size = cube_face_bytes("envmap prefilter mip", edge)?;
+        prefilter_mip_bytes.push(r.take(mip_size)?);
     }
     Ok(EnvMapView {
         irradiance_face,
@@ -757,5 +755,73 @@ mod tests {
         assert_eq!(max_mip_count(16), 3); // 16, 8, 4
         assert_eq!(max_mip_count(8), 2); // 8, 4
         assert_eq!(max_mip_count(4), 1); // 4
+    }
+
+    // A header with plausible fields but no body behind them.
+    fn header_only(irradiance_face: u32, prefilter_face: u32, prefilter_mips: u32) -> Vec<u8> {
+        let mut buf = ENVMAP_PAYLOAD_MAGIC.to_le_bytes().to_vec();
+        buf.extend_from_slice(&ENVMAP_FORMAT_RGBA32F.to_le_bytes());
+        buf.extend_from_slice(&irradiance_face.to_le_bytes());
+        buf.extend_from_slice(&prefilter_face.to_le_bytes());
+        buf.extend_from_slice(&prefilter_mips.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn rejects_a_payload_shorter_than_the_header() {
+        let full = header_only(4, 8, 2);
+        for len in 0..ENVMAP_PAYLOAD_HEADER_BYTES {
+            assert!(deserialise(&full[..len]).is_err(), "len {} decoded", len);
+        }
+    }
+
+    #[test]
+    fn rejects_a_bad_magic() {
+        let mut bytes = header_only(4, 8, 2);
+        bytes[..4].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        assert!(deserialise(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_a_payload_truncated_in_the_irradiance_section() {
+        let mut bytes = header_only(4, 8, 2);
+        bytes.extend(std::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4 - 8));
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("unexpected end"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_a_payload_truncated_in_a_prefilter_mip() {
+        let mut bytes = header_only(4, 8, 2);
+        bytes.extend(std::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4));
+        bytes.extend(std::iter::repeat_n(0u8, 6 * 8 * 8 * 4 * 4));
+        // Second mip (4x4 faces) is missing entirely.
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("unexpected end"), "{}", err);
+    }
+
+    // A face edge near u32::MAX makes `6 * edge * edge * 16` wrap; the wrapped
+    // product would be small enough to pass a length check and hand out a
+    // slice unrelated to the real section.
+    #[test]
+    fn rejects_an_irradiance_face_that_overflows_its_footprint() {
+        let bytes = header_only(u32::MAX, 8, 2);
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("overflow"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_a_prefilter_face_that_overflows_its_footprint() {
+        let mut bytes = header_only(4, u32::MAX, 2);
+        bytes.extend(std::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4));
+        let err = deserialise(&bytes).unwrap_err();
+        assert!(err.contains("overflow"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_out_of_range_mip_counts() {
+        assert!(deserialise(&header_only(4, 8, 0)).is_err());
+        assert!(deserialise(&header_only(4, 8, 13)).is_err());
     }
 }

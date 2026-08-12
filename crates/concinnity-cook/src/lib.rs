@@ -10,8 +10,14 @@
 // so code moved here keeps resolving its `crate::{assets,ecs,gfx,result}`
 // paths. The payload *decoders* and shared payload types live in
 // `concinnity_cpu::build`; this crate's modules call back into them.
+// The source importers parse artist-supplied files, so a panic here is a crash
+// on a malformed asset rather than a bug. Invariants that genuinely cannot fail
+// use `expect` with the invariant named; tests unwrap freely.
+#![warn(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 pub(crate) use concinnity_core::{assets, result};
-pub(crate) use concinnity_cpu::{build, gfx};
+pub(crate) use concinnity_cpu::gfx;
 
 // The vocabulary's ECS surface, with the build-time name interner shadowing its
 // `asset_id`: the interner keeps a per-thread table, so it lives in

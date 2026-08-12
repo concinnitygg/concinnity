@@ -278,7 +278,10 @@ impl VkContext {
                     device,
                     MeshPipelineTargets {
                         render_pass: self.main_render_pass,
-                        layout: self.cull.bindless_pipeline_layout.unwrap(),
+                        layout: self
+                            .cull
+                            .bindless_pipeline_layout
+                            .expect("bindless pipeline layout is live alongside its pipeline"),
                         vert_spv: &bvs,
                         frag_spv: &bps,
                     },
@@ -291,7 +294,13 @@ impl VkContext {
             self.cull.cull_pipeline_layout.is_some() && self.cull.cull_pipeline.is_some(),
             {
                 let cs = compile_cull_shader(hr)?;
-                create_cull_pipeline(device, self.cull.cull_pipeline_layout.unwrap(), &cs)
+                create_cull_pipeline(
+                    device,
+                    self.cull
+                        .cull_pipeline_layout
+                        .expect("cull pipeline layout is live alongside its pipeline"),
+                    &cs,
+                )
             }
         );
         // Phase-2 cull (two-pass occlusion), rebuilt alongside phase 1 from the
@@ -300,7 +309,13 @@ impl VkContext {
             self.cull.cull_pipeline_layout.is_some() && self.cull.cull_pipeline_phase2.is_some(),
             {
                 let cs = compile_cull_shader_phase2(hr)?;
-                create_cull_pipeline(device, self.cull.cull_pipeline_layout.unwrap(), &cs)
+                create_cull_pipeline(
+                    device,
+                    self.cull
+                        .cull_pipeline_layout
+                        .expect("cull pipeline layout is live alongside its phase-2 pipeline"),
+                    &cs,
+                )
             }
         );
         // Hi-Z build kernels (live alongside the cull pipeline).
@@ -309,7 +324,7 @@ impl VkContext {
             self.cull
                 .hiz
                 .as_ref()
-                .unwrap()
+                .expect("hi-Z resources are live alongside the cull pipeline")
                 .recompile_pipelines(device, hr)
         );
 
@@ -317,7 +332,10 @@ impl VkContext {
         // + average compute pipelines; the trailing `.map` tuples them so the
         // whole build is one Result expression for the macro.
         let auto_exposure_pipelines = rebuild_if_live!(self.auto_exposure.is_some(), {
-            let ae = self.auto_exposure.as_ref().unwrap();
+            let ae = self
+                .auto_exposure
+                .as_ref()
+                .expect("auto-exposure resources are live");
             let (build_cs, average_cs) = compile_auto_exposure_shaders(hr)?;
             let build = AutoExposureResources::create_compute_pipeline(
                 device,
@@ -338,7 +356,7 @@ impl VkContext {
             self.decals_state.is_some(),
             super::decal::rebuild_decal_pipeline(
                 device,
-                self.decals_state.as_ref().unwrap(),
+                self.decals_state.as_ref().expect("decal state is live"),
                 self.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )
@@ -349,7 +367,10 @@ impl VkContext {
             self.lines.resources.is_some(),
             super::line::rebuild_line_pipeline(
                 device,
-                self.lines.resources.as_ref().unwrap(),
+                self.lines
+                    .resources
+                    .as_ref()
+                    .expect("line resources are live"),
                 self.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )
@@ -359,7 +380,7 @@ impl VkContext {
         // fullscreen render pipeline and the froxel-volume compute kernel; the
         // trailing `.map` tuples them into one Result for the macro.
         let fog_pipelines = rebuild_if_live!(self.fog_resources.is_some(), {
-            let fog = self.fog_resources.as_ref().unwrap();
+            let fog = self.fog_resources.as_ref().expect("fog resources are live");
             let render = super::fog::rebuild_fog_pipeline(
                 device,
                 fog,
@@ -373,14 +394,22 @@ impl VkContext {
         // static / instanced / skinned + kernel + blur in one shot.
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.is_some(),
-            rebuild_ssao_pipelines(device, self.ssao.as_ref().unwrap(), hr)
+            rebuild_ssao_pipelines(
+                device,
+                self.ssao.as_ref().expect("SSAO resources are live"),
+                hr
+            )
         );
 
         // SSR (only when PostProcessConfig opted in). Rebuilds prepass
         // static / instanced / skinned + resolve in one shot.
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.is_some(),
-            rebuild_ssr_pipelines(device, self.ssr.as_ref().unwrap(), hr)
+            rebuild_ssr_pipelines(
+                device,
+                self.ssr.as_ref().expect("SSR resources are live"),
+                hr
+            )
         );
 
         // SSGI (only when indirect_lighting: ssgi). Rebuilds gather + composite.
@@ -388,7 +417,7 @@ impl VkContext {
             self.ssgi.is_some(),
             crate::vulkan::post::ssgi::rebuild_ssgi_pipelines(
                 device,
-                self.ssgi.as_ref().unwrap(),
+                self.ssgi.as_ref().expect("SSGI resources are live"),
                 hr,
             )
         );
@@ -399,7 +428,9 @@ impl VkContext {
             self.rt_reflections.is_some(),
             crate::vulkan::post::rt_reflections::rebuild_rt_pipelines(
                 device,
-                self.rt_reflections.as_ref().unwrap(),
+                self.rt_reflections
+                    .as_ref()
+                    .expect("RT reflection resources are live"),
                 hr,
             )
         );
@@ -410,7 +441,9 @@ impl VkContext {
             self.reflection_composite.is_some(),
             crate::vulkan::post::reflection_composite::rebuild_reflection_composite_pipelines(
                 device,
-                self.reflection_composite.as_ref().unwrap(),
+                self.reflection_composite
+                    .as_ref()
+                    .expect("reflection composite resources are live"),
                 hr,
             )
         );
@@ -419,7 +452,11 @@ impl VkContext {
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            rebuild_taa_pipelines(device, self.taa.as_ref().unwrap(), hr)
+            rebuild_taa_pipelines(
+                device,
+                self.taa.as_ref().expect("TAA resources are live"),
+                hr
+            )
         );
 
         // Unified G-buffer pre-pass (only when any screen-space consumer is on).
@@ -429,7 +466,7 @@ impl VkContext {
             self.gbuffer.is_some(),
             crate::vulkan::post::gbuffer::rebuild_gbuffer_pipelines(
                 device,
-                self.gbuffer.as_ref().unwrap(),
+                self.gbuffer.as_ref().expect("G-buffer resources are live"),
                 hr,
             )
         );
@@ -441,7 +478,7 @@ impl VkContext {
             self.particle_resources.is_some(),
             self.particle_resources
                 .as_ref()
-                .unwrap()
+                .expect("particle resources are live")
                 .rebuild_pipelines(device, hr)
         );
 

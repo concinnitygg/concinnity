@@ -5,6 +5,8 @@
 // grayscale. Colour-mapped images are not supported. The image-descriptor origin
 // bit is honoured so bottom-left-origin files are flipped to top-row-first.
 
+use concinnity_cpu::decode::checked_product;
+
 const HEADER_LEN: usize = 18;
 
 // Decode a TGA byte buffer into (width, height, RGBA8 pixels).
@@ -36,7 +38,7 @@ pub fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         other => return Err(format!("unsupported TGA bit depth {}", other)),
     };
 
-    let pixel_count = (width * height) as usize;
+    let pixel_count = checked_product("TGA", &[width as usize, height as usize])?;
     let data_start = HEADER_LEN + id_len;
     if data_start > bytes.len() {
         return Err("TGA id field exceeds file length".to_string());
@@ -52,7 +54,7 @@ pub fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
     // Convert source channel order to RGBA, then flip rows if the origin is at
     // the bottom-left (the TGA default) so callers always get top-row-first.
-    let mut rgba = vec![0u8; pixel_count * 4];
+    let mut rgba = vec![0u8; checked_product("TGA output", &[pixel_count, 4])?];
     let src = raw.chunks_exact(channels);
     let dst = rgba.chunks_exact_mut(4);
     match channels {
@@ -81,7 +83,7 @@ pub fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 fn decode_raw(data: &[u8], pixel_count: usize, channels: usize) -> Result<Vec<u8>, String> {
-    let needed = pixel_count * channels;
+    let needed = checked_product("TGA pixel data", &[pixel_count, channels])?;
     if data.len() < needed {
         return Err(format!(
             "TGA pixel data too short: have {}, need {}",
@@ -93,9 +95,13 @@ fn decode_raw(data: &[u8], pixel_count: usize, channels: usize) -> Result<Vec<u8
 }
 
 fn decode_rle(data: &[u8], pixel_count: usize, channels: usize) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(pixel_count * channels);
+    let total = checked_product("TGA RLE", &[pixel_count, channels])?;
+    // Reserved against the compressed length, not the declared pixel count: a
+    // header claiming 65535x65535 would otherwise reserve gigabytes before a
+    // single packet is read.
+    let mut out = Vec::with_capacity(data.len().min(total));
     let mut p = 0usize;
-    while out.len() < pixel_count * channels {
+    while out.len() < total {
         if p >= data.len() {
             return Err("TGA RLE stream ended early".to_string());
         }
@@ -146,6 +152,31 @@ mod tests {
         v[16] = bpp;
         v[17] = if top_origin { 0x20 } else { 0 };
         v
+    }
+
+    // A maximal declared size in an otherwise empty RLE file. The decoder must
+    // report the short stream; reserving for the declared pixel count up front
+    // would ask the allocator for gigabytes off an 19-byte input.
+    #[test]
+    fn rle_with_maximal_dimensions_reports_a_short_stream() {
+        let mut v = header(10, u16::MAX, u16::MAX, 32, true);
+        v.push(0x80);
+        let err = decode_tga(&v).unwrap_err();
+        assert!(err.contains("RLE"), "{}", err);
+    }
+
+    #[test]
+    fn uncompressed_with_maximal_dimensions_reports_short_pixel_data() {
+        let v = header(2, u16::MAX, u16::MAX, 32, true);
+        let err = decode_tga(&v).unwrap_err();
+        assert!(err.contains("too short"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_an_id_field_past_the_end() {
+        let mut v = header(2, 1, 1, 24, true);
+        v[0] = 200;
+        assert!(decode_tga(&v).is_err());
     }
 
     #[test]

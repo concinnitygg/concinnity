@@ -30,20 +30,24 @@ use concinnity_cpu::build::color_lut::{
 };
 use concinnity_store::source::resolve_source_path as resolve_lut_source;
 
-// Validate that args specify a `ColorLut` source with a supported extension.
-pub fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), String> {
+// The `source` path a `ColorLut`'s args declare.
+fn color_lut_source(args: &serde_json::Value) -> Result<&str, String> {
     let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("");
     if source.is_empty() {
         return Err("ColorLut requires a `source` path".into());
     }
-    classify_source(source)?;
+    Ok(source)
+}
+
+// Validate that args specify a `ColorLut` source with a supported extension.
+pub fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), String> {
+    classify_source(color_lut_source(args)?)?;
     Ok(())
 }
 
 // Compile a `ColorLut` component's JSON args into a packed binary payload.
 pub fn compile_color_lut_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    validate_color_lut_args(args)?;
-    let source = args.get("source").and_then(|v| v.as_str()).unwrap();
+    let source = color_lut_source(args)?;
     let format = classify_source(source)?;
     let resolved = resolve_lut_source(source);
 

@@ -34,7 +34,10 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     // misses this entry rather than matching it.
     let memoizable = stamp.settled();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(&(s, h)) = memo.lock().unwrap().get(path)
+    if let Some(&(s, h)) = memo
+        .lock()
+        .expect("file-stamp memo lock is not poisoned")
+        .get(path)
         && s == stamp
     {
         return Some(h);
@@ -44,7 +47,9 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     hasher.update(&bytes);
     let hash: [u8; 32] = hasher.finalize().into();
     if memoizable {
-        memo.lock().unwrap().insert(path.to_string(), (stamp, hash));
+        memo.lock()
+            .expect("file-stamp memo lock is not poisoned")
+            .insert(path.to_string(), (stamp, hash));
     }
     Some(hash)
 }

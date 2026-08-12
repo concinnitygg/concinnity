@@ -128,7 +128,7 @@ fn compile_block_format(
     let mut mips = Vec::with_capacity(level_blocks.len());
     for (level, blocks) in level_blocks.into_iter().enumerate() {
         let (mw, mh) = mip_dims(width, height, level as u32);
-        let expected = tex_format.mip_byte_len(mw, mh);
+        let expected = tex_format.mip_byte_len(mw, mh)?;
         if blocks.len() < expected {
             return Err(format!(
                 "KTX2 level {} ({}x{} {:?}) is {} bytes, needs {}",
@@ -209,7 +209,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
                 level, target, e
             )
         })?;
-        let expected = tex_format.mip_byte_len(info.width, info.height);
+        let expected = tex_format.mip_byte_len(info.width, info.height)?;
         if data.len() != expected {
             return Err(format!(
                 "KTX2 Basis level {} transcoded to {} bytes, {:?} needs {}",
@@ -849,12 +849,12 @@ mod tests {
         assert_eq!((image.width(), image.height()), (4, 4));
         assert_eq!(
             image.mips[0].data.len(),
-            TextureFormat::Bc7.mip_byte_len(4, 4)
+            TextureFormat::Bc7.mip_byte_len(4, 4).unwrap()
         );
         assert_eq!((image.mips[1].width, image.mips[1].height), (2, 2));
         assert_eq!(
             image.mips[1].data.len(),
-            TextureFormat::Bc7.mip_byte_len(2, 2)
+            TextureFormat::Bc7.mip_byte_len(2, 2).unwrap()
         );
     }
 
@@ -1001,7 +1001,10 @@ mod tests {
         for (level, mip) in image.mips.iter().enumerate() {
             let (mw, mh) = mip_dims(256, 256, level as u32);
             assert_eq!((mip.width, mip.height), (mw, mh));
-            assert_eq!(mip.data.len(), TextureFormat::Bc1.mip_byte_len(mw, mh));
+            assert_eq!(
+                mip.data.len(),
+                TextureFormat::Bc1.mip_byte_len(mw, mh).unwrap()
+            );
         }
     }
 
@@ -1014,7 +1017,7 @@ mod tests {
         assert_eq!(image.mips.len(), 9);
         assert_eq!(
             image.mips[0].data.len(),
-            TextureFormat::Bc7.mip_byte_len(256, 256)
+            TextureFormat::Bc7.mip_byte_len(256, 256).unwrap()
         );
     }
 }

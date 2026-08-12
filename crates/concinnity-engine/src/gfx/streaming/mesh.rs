@@ -24,6 +24,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use super::{StreamPlanner, StreamState};
 use crate::gfx::mesh_payload::Vertex;
+use concinnity_cpu::decode::ByteReader;
 
 // A mesh payload decoded to GPU-ready vertex and index data.
 //
@@ -232,41 +233,27 @@ fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
 // than panics on a truncated record, so a corrupt scratch file fails the
 // load loudly instead of reading out of bounds.
 fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, String> {
-    let read_u32 = |at: usize| -> Result<u32, String> {
-        bytes
-            .get(at..at + 4)
-            .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
-            .ok_or_else(|| "truncated mesh record".to_string())
-    };
+    const VERTEX_BYTES: usize = size_of::<Vertex>();
 
-    let vertex_count = read_u32(0)? as usize;
-    let verts_end = 4 + vertex_count * 56;
-    if bytes.len() < verts_end {
-        return Err("truncated mesh vertex data".to_string());
-    }
-    let mut vertices = Vec::with_capacity(vertex_count);
-    for v in 0..vertex_count {
-        let base = 4 + v * 56;
-        let f = |o: usize| f32::from_le_bytes(bytes[base + o..base + o + 4].try_into().unwrap());
+    let mut r = ByteReader::new(bytes, "mesh record");
+    // Counts are read from the record, so each reservation is capped at what
+    // the buffer could actually hold rather than what it claims.
+    let vertex_count = r.u32()? as usize;
+    let mut vertices = Vec::with_capacity(vertex_count.min(r.remaining() / VERTEX_BYTES));
+    for _ in 0..vertex_count {
         vertices.push(Vertex {
-            pos: [f(0), f(4), f(8)],
-            normal: [f(12), f(16), f(20)],
-            tangent: [f(24), f(28), f(32)],
-            color: [f(36), f(40), f(44)],
-            uv: [f(48), f(52)],
+            pos: [r.f32()?, r.f32()?, r.f32()?],
+            normal: [r.f32()?, r.f32()?, r.f32()?],
+            tangent: [r.f32()?, r.f32()?, r.f32()?],
+            color: [r.f32()?, r.f32()?, r.f32()?],
+            uv: [r.f32()?, r.f32()?],
         });
     }
 
-    let index_count = read_u32(verts_end)? as usize;
-    let idx_start = verts_end + 4;
-    let idx_end = idx_start + index_count * 2;
-    if bytes.len() < idx_end {
-        return Err("truncated mesh index data".to_string());
-    }
-    let mut indices = Vec::with_capacity(index_count);
-    for i in 0..index_count {
-        let at = idx_start + i * 2;
-        indices.push(u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()));
+    let index_count = r.u32()? as usize;
+    let mut indices = Vec::with_capacity(index_count.min(r.remaining() / 2));
+    for _ in 0..index_count {
+        indices.push(r.u16()?);
     }
 
     Ok(DecodedMesh { vertices, indices })
@@ -671,6 +658,20 @@ mod tests {
         assert!(decode_mesh(&[9, 0, 0, 0]).is_err());
         // an empty buffer has not even a vertex count
         assert!(decode_mesh(&[]).is_err());
+    }
+
+    // A count near u32::MAX must fail on the missing data, without first
+    // reserving one `Vertex` per claimed entry.
+    #[test]
+    fn decode_mesh_errors_on_an_absurd_vertex_count() {
+        assert!(decode_mesh(&u32::MAX.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn decode_mesh_errors_on_an_absurd_index_count() {
+        let mut bytes = 0u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_mesh(&bytes).is_err());
     }
 
     #[test]

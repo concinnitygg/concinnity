@@ -22,8 +22,8 @@ use crate::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
 };
 
-// Validate that args specify either a supported source extension or omit it.
-pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
+// The `source` path a `CubemapTexture`'s args declare, checked for extension.
+fn cubemap_source(args: &serde_json::Value) -> Result<&str, String> {
     let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("");
     if source.is_empty() {
         return Err("CubemapTexture requires a `source` path".into());
@@ -34,6 +34,12 @@ pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
             source
         ));
     }
+    Ok(source)
+}
+
+// Validate that args specify either a supported source extension or omit it.
+pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
+    cubemap_source(args)?;
     let face_size = args
         .get("face_size")
         .and_then(|v| v.as_u64())
@@ -56,7 +62,7 @@ pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
 // Compile a CubemapTexture component's JSON args into a packed binary payload.
 pub fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     validate_cubemap_args(args)?;
-    let source = args.get("source").and_then(|v| v.as_str()).unwrap();
+    let source = cubemap_source(args)?;
     let face_size = args
         .get("face_size")
         .and_then(|v| v.as_u64())

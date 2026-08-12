@@ -1015,12 +1015,18 @@ impl VkContext {
             );
             self.rt_accel = Some(accel);
         }
-        let accel = self.rt_accel.as_ref().unwrap();
+        let accel = self
+            .rt_accel
+            .as_ref()
+            .expect("RT acceleration structures are live");
         let (geom_buffer, geom_size) = accel.geom_table();
         let tlas = accel.tlas();
         let deformed = accel.deformed_verts();
         let skinned_indices = accel.skinned_indices();
-        let rt = self.rt_reflections.as_ref().unwrap();
+        let rt = self
+            .rt_reflections
+            .as_ref()
+            .expect("RT reflection resources are live");
         rt.wire_dynamic(
             &device,
             frame_idx,

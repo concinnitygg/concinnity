@@ -1056,7 +1056,14 @@ impl BakeResources {
             None
         };
         let fb_attachments: Vec<vk::ImageView> = if msaa {
-            vec![color.view, depth.view, resolve.as_ref().unwrap().view]
+            vec![
+                color.view,
+                depth.view,
+                resolve
+                    .as_ref()
+                    .expect("a multisampled probe target has a resolve image")
+                    .view,
+            ]
         } else {
             vec![color.view, depth.view]
         };
@@ -1152,7 +1159,11 @@ impl BakeResources {
         let cull_set = alloc_descriptor_sets(
             device,
             pool,
-            std::slice::from_ref(&ctx.cull.cull_set_layout.unwrap()),
+            std::slice::from_ref(
+                &ctx.cull
+                    .cull_set_layout
+                    .expect("cull descriptor set layout exists once culling is initialised"),
+            ),
         )?[0];
         write_storage(device, cull_set, 0, object_buf.buffer(), object_size);
         write_storage(device, cull_set, 1, draw_args_buf.buffer(), args_size);
@@ -1164,7 +1175,12 @@ impl BakeResources {
         // written from the live pool right before that face records
         // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
         // a pending set.
-        let bindless_layouts = vec![ctx.cull.bindless_set_layout.unwrap(); PROBE_FACE_COUNT];
+        let bindless_layouts = vec![
+            ctx.cull.bindless_set_layout.expect(
+                "bindless descriptor set layout exists once culling is initialised"
+            );
+            PROBE_FACE_COUNT
+        ];
         let bindless_sets = alloc_descriptor_sets(device, pool, &bindless_layouts)?;
         {
             let obj_info = vk::DescriptorBufferInfo::default()

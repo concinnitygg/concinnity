@@ -9,7 +9,8 @@
 // `decode_dds_blocks` reads the container's block-compressed mip chain for
 // passthrough into the compressed texture payload.
 
-use concinnity_cpu::build::texture::{TextureFormat, TextureMip};
+use concinnity_cpu::build::texture::{MAX_MIP_LEVELS, TextureFormat, TextureMip};
+use concinnity_cpu::decode::ByteReader;
 
 const MAGIC: &[u8; 4] = b"DDS ";
 const HEADER_LEN: usize = 124;
@@ -33,29 +34,30 @@ pub fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
         format,
     } = parse_dds_header(bytes)?;
 
+    let mut r = ByteReader::new(bytes, "DDS");
+    r.seek(PIXELDATA_OFFSET)?;
     let mut mips = Vec::with_capacity(mip_count as usize);
-    let mut cursor = PIXELDATA_OFFSET;
     for level in 0..mip_count {
         let mw = (width >> level).max(1);
         let mh = (height >> level).max(1);
-        let len = format.mip_byte_len(mw, mh);
-        if cursor + len > bytes.len() {
-            return Err(format!(
+        let len = format.mip_byte_len(mw, mh)?;
+        let at = r.position();
+        let data = r.take(len).map_err(|_| {
+            format!(
                 "DDS mip {} ({}x{}) needs {} bytes at offset {}, file has {}",
                 level,
                 mw,
                 mh,
                 len,
-                cursor,
+                at,
                 bytes.len()
-            ));
-        }
+            )
+        })?;
         mips.push(TextureMip {
             width: mw,
             height: mh,
-            data: bytes[cursor..cursor + len].to_vec(),
+            data: data.to_vec(),
         });
-        cursor += len;
     }
     Ok(DdsBlocks { format, mips })
 }
@@ -90,7 +92,15 @@ fn parse_dds_header(bytes: &[u8]) -> Result<DdsHeader, String> {
     }
     let height = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
     let width = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    // The count is file-supplied and drives a reservation, so it is bounded
+    // here rather than trusted. Zero is common and means a single level.
     let mip_count = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]).max(1);
+    if mip_count as usize > MAX_MIP_LEVELS {
+        return Err(format!(
+            "DDS declares {} mip levels (expected at most {})",
+            mip_count, MAX_MIP_LEVELS
+        ));
+    }
     if width == 0 || height == 0 {
         return Err(format!("DDS has zero dimension {}x{}", width, height));
     }
@@ -163,6 +173,48 @@ mod tests {
         decode_dds_blocks(bytes)
             .err()
             .expect("expected decode_dds_blocks to fail")
+    }
+
+    // A mip count near u32::MAX must be rejected on the declared value rather
+    // than reserving one `TextureMip` per claimed level.
+    #[test]
+    fn rejects_an_absurd_mip_count() {
+        let bytes = wrap_dds_mips(b"DXT1", 4, 4, u32::MAX, &bc1_red_block());
+        let err = blocks_err(&bytes);
+        assert!(err.contains("mip levels"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_a_mip_count_past_the_dimension_limit() {
+        let bytes = wrap_dds_mips(b"DXT1", 4, 4, 33, &bc1_red_block());
+        assert!(blocks_err(&bytes).contains("mip levels"));
+    }
+
+    // At maximal dimensions a 16-byte block format needs 2^64 bytes exactly,
+    // one past what `usize` holds. The footprint has to be reported rather
+    // than wrapped to zero and compared against the file length.
+    #[test]
+    fn rejects_dimensions_that_overflow_the_block_footprint() {
+        let bytes = wrap_dds_mips(b"DXT5", u32::MAX, u32::MAX, 1, &[0u8; 16]);
+        let err = blocks_err(&bytes);
+        assert!(err.contains("overflow"), "{}", err);
+    }
+
+    // The same dimensions with 8-byte blocks stay inside `usize`, so this one
+    // is a plain shortfall and must name the size it wanted.
+    #[test]
+    fn reports_the_required_size_when_the_footprint_still_fits() {
+        let bytes = wrap_dds_mips(b"DXT1", u32::MAX, u32::MAX, 1, &bc1_red_block());
+        let err = blocks_err(&bytes);
+        assert!(err.contains("needs"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_a_mip_chain_truncated_partway() {
+        // Declares four levels of an 8x8 BC1 image but stores only level 0.
+        let bytes = wrap_dds_mips(b"DXT1", 8, 8, 4, &[0u8; 32]);
+        let err = blocks_err(&bytes);
+        assert!(err.contains("needs"), "{}", err);
     }
 
     #[test]

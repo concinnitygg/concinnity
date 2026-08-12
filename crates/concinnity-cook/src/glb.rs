@@ -40,9 +40,7 @@ pub fn import_skinned_from_doc(
     source: &str,
     skin_index: u32,
 ) -> Result<ImportedSkinnedMesh, String> {
-    let node = skinned_node(doc, source, skin_index)?;
-    let mesh = node.mesh().unwrap();
-    let skin = node.skin().unwrap();
+    let SkinnedNode { mesh, skin, .. } = skinned_node(doc, source, skin_index)?;
 
     let skeleton = import_skeleton(&skin)?;
     let (vertices, indices, morph_deltas) = import_geometry(&mesh, doc, &skeleton.remap)?;
@@ -614,7 +612,7 @@ pub fn import_glb_animations_from_doc(
     // Morph-weight channels target the mesh node itself, so the node index
     // travels with the skeleton.
     let node = skinned_node(doc, source, skin_index)?;
-    let (mesh_node, skin) = (node.index(), node.skin().unwrap());
+    let (mesh_node, skin) = (node.index, node.skin);
     let skeleton = import_skeleton(&skin)?;
     Ok(doc
         .doc
@@ -674,16 +672,30 @@ pub fn import_glb_animation_from_doc(
 // The selector counts skinned NODES, not entries in the glTF `skins` array:
 // exporters share one skin across every mesh bound to an armature, so a
 // character's body and hair typically differ only by node.
+// A glTF node carrying both a mesh and a skin, with both already resolved so
+// callers never re-derive them from the node.
+pub struct SkinnedNode<'a> {
+    pub index: usize,
+    pub mesh: gltf::Mesh<'a>,
+    pub skin: gltf::Skin<'a>,
+}
+
 pub fn skinned_node<'a>(
     doc: &'a GltfDoc,
     source: &str,
     skin_index: u32,
-) -> Result<gltf::Node<'a>, String> {
-    let skinned: Vec<gltf::Node<'a>> = doc
+) -> Result<SkinnedNode<'a>, String> {
+    let skinned: Vec<SkinnedNode<'a>> = doc
         .doc
         .document
         .nodes()
-        .filter(|n| n.mesh().is_some() && n.skin().is_some())
+        .filter_map(|n| {
+            Some(SkinnedNode {
+                index: n.index(),
+                mesh: n.mesh()?,
+                skin: n.skin()?,
+            })
+        })
         .collect();
     if skinned.is_empty() {
         return Err(format!("'{}': no node with both a mesh and a skin", source));

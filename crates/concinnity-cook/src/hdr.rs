@@ -17,6 +17,8 @@
 //   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z. The equirect is resampled into
 // six cube faces using bilinear interpolation in HDR space.
 
+use concinnity_cpu::decode::{ByteReader, checked_product};
+
 pub const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub const CUBE_FORMAT_RGBA32F: u32 = 0;
 pub const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
@@ -25,15 +27,15 @@ pub const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
 // The byte slice returned is borrowed from the input; callers can reinterpret
 // it as `&[f32]` after a length check.
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
-    let mut header = crate::build::payload::HeaderReader::open(
+    let mut r = ByteReader::open_payload(
         bytes,
         CUBE_PAYLOAD_MAGIC,
         CUBE_PAYLOAD_HEADER_BYTES,
         "cubemap",
     )?;
-    let face_size = header.u32();
-    let mip_count = header.u32();
-    let format_id = header.u32();
+    let face_size = r.u32()?;
+    let mip_count = r.u32()?;
+    let format_id = r.u32()?;
     if mip_count != 1 {
         return Err(format!(
             "cubemap payload mip_count {} unsupported (only single-mip supported today)",
@@ -46,17 +48,22 @@ pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
             format_id
         ));
     }
-    let face_bytes = (face_size as usize) * (face_size as usize) * 4 * 4;
-    let expected = CUBE_PAYLOAD_HEADER_BYTES + 6 * face_bytes;
-    if bytes.len() < expected {
-        return Err(format!(
+    // `face_size` comes from the payload, so the six-face footprint is checked
+    // rather than computed.
+    let cube_bytes = checked_product(
+        "cubemap",
+        &[6, face_size as usize, face_size as usize, 4, 4],
+    )?;
+    r.seek(CUBE_PAYLOAD_HEADER_BYTES)?;
+    let faces = r.take(cube_bytes).map_err(|_| {
+        format!(
             "cubemap payload too short for face_size {}: need {} bytes, got {}",
             face_size,
-            expected,
+            CUBE_PAYLOAD_HEADER_BYTES + cube_bytes,
             bytes.len()
-        ));
-    }
-    Ok((face_size, &bytes[CUBE_PAYLOAD_HEADER_BYTES..expected]))
+        )
+    })?;
+    Ok((face_size, faces))
 }
 
 // Read a Radiance `.hdr` file off disk and decode it to a linear-light image.
@@ -556,6 +563,18 @@ mod tests {
             err,
             "cubemap payload too short for face_size 4: need 1552 bytes, got 1040"
         );
+    }
+
+    // `6 * face_size^2 * 16` wraps at this face size. The footprint must be
+    // reported rather than wrapped into a length the payload appears to hold.
+    #[test]
+    fn deserialise_rejects_a_face_size_that_overflows_its_footprint() {
+        let mut v = CUBE_PAYLOAD_MAGIC.to_le_bytes().to_vec();
+        v.extend_from_slice(&u32::MAX.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&CUBE_FORMAT_RGBA32F.to_le_bytes());
+        let err = deserialise(&v).unwrap_err();
+        assert!(err.contains("overflow"), "got: {err}");
     }
 
     // Radiance header errors

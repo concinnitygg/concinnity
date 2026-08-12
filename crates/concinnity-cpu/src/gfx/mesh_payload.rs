@@ -21,99 +21,29 @@
 // readers keep working unchanged. `deserialise_with_lods` reads the trailer
 // when present and returns the additional LODs alongside LOD0.
 
-// Sequential little-endian reader over a packed payload. Every deserialiser
-// below shares one bounds check per field instead of redeclaring its own read
-// closures; `label` names the payload kind in the error message.
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-    label: &'static str,
+use crate::decode::{ByteReader, checked_product};
+
+// The little-endian f32 at byte offset `at` of a fixed-size chunk.
+fn chunk_f32(chunk: &[u8], at: usize) -> f32 {
+    f32::from_le_bytes([chunk[at], chunk[at + 1], chunk[at + 2], chunk[at + 3]])
 }
 
-impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8], label: &'static str) -> Self {
-        Self {
-            bytes,
-            pos: 0,
-            label,
-        }
-    }
-
-    // Consume `n` bytes, or report where the payload ran out.
-    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .ok_or_else(|| format!("{} length overflow", self.label))?;
-        if end > self.bytes.len() {
-            return Err(format!(
-                "unexpected end of {} at offset {}",
-                self.label, self.pos
-            ));
-        }
-        let out = &self.bytes[self.pos..end];
-        self.pos = end;
-        Ok(out)
-    }
-
-    fn u32(&mut self) -> Result<u32, String> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-
-    fn i32(&mut self) -> Result<i32, String> {
-        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-
-    fn f32(&mut self) -> Result<f32, String> {
-        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-
-    fn skip(&mut self, n: usize) -> Result<(), String> {
-        self.take(n).map(|_| ())
-    }
-
-    // Whether the next four bytes are `magic`, without consuming them.
-    fn peek_magic(&self, magic: &[u8; 4]) -> bool {
-        self.bytes
-            .get(self.pos..self.pos + 4)
-            .is_some_and(|b| b == magic)
-    }
+// The little-endian u16 at byte offset `at` of a fixed-size chunk.
+fn chunk_u16(chunk: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([chunk[at], chunk[at + 1]])
 }
 
 // Read a length-prefixed UTF-8 name, bounds-checking the whole block once.
-fn read_name(cur: &mut Cursor<'_>, len: usize, what: &str) -> Result<String, String> {
-    if cur.pos + len > cur.bytes.len() {
-        return Err(format!(
-            "{} too short for {} (need {} bytes, have {})",
-            cur.label,
-            what,
-            cur.pos + len,
-            cur.bytes.len()
-        ));
-    }
+fn read_name(cur: &mut ByteReader<'_>, len: usize, what: &str) -> Result<String, String> {
     core::str::from_utf8(cur.take(len)?)
         .map_err(|e| format!("{what} is not valid utf-8: {e}"))
         .map(str::to_string)
 }
 
 // Read `n` little-endian u16 indices, bounds-checking the whole block once.
-fn read_indices(cur: &mut Cursor<'_>, n: usize, what: &str) -> Result<Vec<u16>, String> {
-    let needed = n * 2;
-    if cur.pos + needed > cur.bytes.len() {
-        return Err(format!(
-            "{} too short for {} {} (need {} bytes, have {})",
-            cur.label,
-            n,
-            what,
-            cur.pos + needed,
-            cur.bytes.len()
-        ));
-    }
-    let block = cur.take(needed)?;
-    Ok(block
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
-        .collect())
+fn read_indices(cur: &mut ByteReader<'_>, n: usize, what: &str) -> Result<Vec<u16>, String> {
+    let block = cur.take(checked_product(what, &[n, 2])?)?;
+    Ok(block.chunks_exact(2).map(|c| chunk_u16(c, 0)).collect())
 }
 
 // Vertex layout shared by all mesh producers and both GPU backends.
@@ -249,7 +179,7 @@ pub fn serialise_heightfield_trailer(rows: usize, cols: usize, heights: &[f32]) 
 // block. Returns `Ok(None)` for any payload without the trailer (i.e. every
 // non-heightfield mesh) so callers can treat absence as "no baked collider".
 pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, String> {
-    let mut cur = Cursor::new(bytes, "mesh payload");
+    let mut cur = ByteReader::new(bytes, "mesh payload");
 
     // Vertex block (56 bytes each), then LOD0 indices (2 bytes each).
     let vertex_count = cur.u32()? as usize;
@@ -259,7 +189,7 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
 
     // Optional LOD trailer: skip the whole block when present so the cursor
     // lands on the HFLD trailer (if any) that follows it.
-    if cur.peek_magic(LODS_MAGIC) {
+    if cur.peek(LODS_MAGIC) {
         cur.skip(4)?;
         let alt_count = cur.u32()? as usize;
         for _ in 0..alt_count {
@@ -270,7 +200,7 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
     }
 
     // Optional HFLD trailer.
-    if !cur.peek_magic(HFLD_MAGIC) {
+    if !cur.peek(HFLD_MAGIC) {
         return Ok(None);
     }
     cur.skip(4)?;
@@ -282,10 +212,7 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
     let block = cur
         .take(count * 4)
         .map_err(|_| format!("heightfield trailer too short for {rows} x {cols} grid"))?;
-    let heights = block
-        .chunks_exact(4)
-        .map(|h| f32::from_le_bytes(h.try_into().unwrap()))
-        .collect();
+    let heights = block.chunks_exact(4).map(|h| chunk_f32(h, 0)).collect();
     Ok(Some(HeightfieldGrid {
         rows,
         cols,
@@ -492,7 +419,7 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
     if bytes.len() < 8 || &bytes[0..4] != SKINNED_MAGIC {
         return Err("skinned mesh payload missing SKMV magic header".to_string());
     }
-    let mut cur = Cursor::new(bytes, "skinned mesh payload");
+    let mut cur = ByteReader::new(bytes, "skinned mesh payload");
     cur.skip(4)?;
 
     let vertex_count = cur.u32()? as usize;
@@ -530,7 +457,7 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
 
     // Optional morph-target block: names, then dense target-major deltas.
     let mut morphs = PayloadMorphs::default();
-    if cur.peek_magic(MORPH_MAGIC) {
+    if cur.peek(MORPH_MAGIC) {
         cur.skip(4)?;
         let target_count = cur.u32()? as usize;
         for _ in 0..target_count {
@@ -539,19 +466,10 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
                 .names
                 .push(read_name(&mut cur, name_len, "morph target name")?);
         }
-        let delta_count = target_count * vertex_count;
-        let delta_bytes = delta_count * 24;
-        if cur.pos + delta_bytes > bytes.len() {
-            return Err(format!(
-                "skinned mesh payload too short for {} morph deltas (need {} bytes, have {})",
-                delta_count,
-                cur.pos + delta_bytes,
-                bytes.len()
-            ));
-        }
-        let block = cur.take(delta_bytes)?;
+        let delta_count = checked_product("morph deltas", &[target_count, vertex_count])?;
+        let block = cur.take(checked_product("morph deltas", &[delta_count, 24])?)?;
         morphs.deltas.extend(block.chunks_exact(24).map(|d| {
-            let f = |i: usize| f32::from_le_bytes(d[i * 4..i * 4 + 4].try_into().unwrap());
+            let f = |i: usize| chunk_f32(d, i * 4);
             MorphDelta {
                 position: [f(0), f(1), f(2)],
                 normal: [f(3), f(4), f(5)],
@@ -563,7 +481,7 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
     // single-LOD payloads end at the joint block; if the next four bytes
     // are the `LODS` magic, the alternates follow.
     let mut alternates: Vec<(f32, Vec<u16>)> = Vec::new();
-    if cur.peek_magic(LODS_MAGIC) {
+    if cur.peek(LODS_MAGIC) {
         cur.skip(4)?;
         let alt_count = cur.u32()? as usize;
         alternates.reserve(alt_count);
@@ -591,7 +509,7 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
 // preserved: `alternates[i]` is LOD `i + 1` and applies at camera
 // distance ≥ `alternates[i].0`.
 pub fn deserialise_with_lods(bytes: &[u8]) -> Result<DeserialisedStatic, String> {
-    let mut cur = Cursor::new(bytes, "mesh payload");
+    let mut cur = ByteReader::new(bytes, "mesh payload");
 
     let vertex_count = cur.u32()? as usize;
     let vertices = read_vertices(&mut cur, vertex_count)?;
@@ -602,7 +520,7 @@ pub fn deserialise_with_lods(bytes: &[u8]) -> Result<DeserialisedStatic, String>
     // Optional LOD trailer. The legacy single-LOD payload ends here; check
     // for the `LODS` magic before reading anything more.
     let mut alternates = Vec::new();
-    if cur.peek_magic(LODS_MAGIC) {
+    if cur.peek(LODS_MAGIC) {
         cur.skip(4)?;
         let alt_count = cur.u32()? as usize;
         alternates.reserve(alt_count);
@@ -619,23 +537,17 @@ pub fn deserialise_with_lods(bytes: &[u8]) -> Result<DeserialisedStatic, String>
 
 // Read `count` interleaved skinned vertices (14 floats + 4 u16 joints + 4
 // weights = 80 bytes), bounds-checking the whole block once.
-fn read_skinned_vertices(cur: &mut Cursor<'_>, count: usize) -> Result<Vec<SkinnedVertex>, String> {
-    let vertex_bytes = count * 80;
-    if cur.pos + vertex_bytes > cur.bytes.len() {
-        return Err(format!(
-            "skinned mesh payload too short for {} vertices (need {} bytes, have {})",
-            count,
-            cur.pos + vertex_bytes,
-            cur.bytes.len()
-        ));
-    }
-    let block = cur.take(vertex_bytes)?;
+fn read_skinned_vertices(
+    cur: &mut ByteReader<'_>,
+    count: usize,
+) -> Result<Vec<SkinnedVertex>, String> {
+    let block = cur.take(checked_product("skinned vertices", &[count, 80])?)?;
     Ok(block
         .chunks_exact(80)
         .map(|v| {
-            let f = |i: usize| f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
-            let j = |i: usize| u16::from_le_bytes(v[56 + i * 2..58 + i * 2].try_into().unwrap());
-            let w = |i: usize| f32::from_le_bytes(v[64 + i * 4..68 + i * 4].try_into().unwrap());
+            let f = |i: usize| chunk_f32(v, i * 4);
+            let j = |i: usize| chunk_u16(v, 56 + i * 2);
+            let w = |i: usize| chunk_f32(v, 64 + i * 4);
             SkinnedVertex {
                 pos: [f(0), f(1), f(2)],
                 normal: [f(3), f(4), f(5)],
@@ -651,21 +563,12 @@ fn read_skinned_vertices(cur: &mut Cursor<'_>, count: usize) -> Result<Vec<Skinn
 
 // Read `count` interleaved 14-float vertices, bounds-checking the whole block
 // once rather than per field.
-fn read_vertices(cur: &mut Cursor<'_>, count: usize) -> Result<Vec<Vertex>, String> {
-    let vertex_bytes = count * 56;
-    if cur.pos + vertex_bytes > cur.bytes.len() {
-        return Err(format!(
-            "mesh payload too short for {} vertices (need {} bytes, have {})",
-            count,
-            cur.pos + vertex_bytes,
-            cur.bytes.len()
-        ));
-    }
-    let block = cur.take(vertex_bytes)?;
+fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, String> {
+    let block = cur.take(checked_product("vertices", &[count, 56])?)?;
     Ok(block
         .chunks_exact(56)
         .map(|v| {
-            let f = |i: usize| f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
+            let f = |i: usize| chunk_f32(v, i * 4);
             Vertex {
                 pos: [f(0), f(1), f(2)],
                 normal: [f(3), f(4), f(5)],

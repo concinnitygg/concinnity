@@ -1140,14 +1140,20 @@ impl VkContext {
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
-            self.particle_resources.as_ref().unwrap(),
+            self.particle_resources
+                .as_ref()
+                .expect("particle resources are live"),
             &record,
         )?;
 
         // Write the albedo binding from the live texture pool.
         let last_tex = self.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
-        let sampler = self.particle_resources.as_ref().unwrap().sampler;
+        let sampler = self
+            .particle_resources
+            .as_ref()
+            .expect("particle resources are live")
+            .sampler;
         write_render_albedo_binding(
             &self.device,
             gpu_state.render_set,

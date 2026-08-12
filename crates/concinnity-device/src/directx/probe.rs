@@ -586,7 +586,10 @@ impl DxContext {
         // Cull this face's frustum into the reserved indirect buffer, then render.
         self.encode_probe_cull(&cmd, slot, &frustum, eye);
         let (rtv, dsv) = {
-            let bake = self.probe_rendering.as_ref().unwrap();
+            let bake = self
+                .probe_rendering
+                .as_ref()
+                .expect("probe bake targets are live while a bake is recording");
             (bake.rtv, bake.dsv)
         };
         let indirect = &self.cull.indirect_cmd_buffers[slot];
@@ -642,7 +645,10 @@ impl DxContext {
         face: usize,
         sample_count: u32,
     ) -> Result<(), String> {
-        let bake = self.probe_rendering.as_ref().unwrap();
+        let bake = self
+            .probe_rendering
+            .as_ref()
+            .expect("probe bake targets are live while a bake is recording");
         let layout = bake.readback_layout;
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
             pResource: unsafe { std::mem::transmute_copy(&bake.readbacks[face]) },
@@ -652,7 +658,10 @@ impl DxContext {
             },
         };
         if sample_count > 1 {
-            let resolve = bake.resolve.as_ref().unwrap();
+            let resolve = bake
+                .resolve
+                .as_ref()
+                .expect("a multisampled probe bake has a resolve image");
             unsafe {
                 cmd.ResourceBarrier(&[
                     transition_barrier(
@@ -850,9 +859,21 @@ impl DxContext {
             object_gva,
         } = draw;
         let FaceExtent { width, height } = extent;
-        let bindless_pso = self.cull.main_bindless_pso.as_ref().unwrap();
-        let bindless_root = self.cull.main_bindless_root_sig.as_ref().unwrap();
-        let cull_sig = self.cull.cull_command_signature.as_ref().unwrap();
+        let bindless_pso = self
+            .cull
+            .main_bindless_pso
+            .as_ref()
+            .expect("bindless PSO is live");
+        let bindless_root = self
+            .cull
+            .main_bindless_root_sig
+            .as_ref()
+            .expect("bindless root signature is live alongside its PSO");
+        let cull_sig = self
+            .cull
+            .cull_command_signature
+            .as_ref()
+            .expect("cull command signature is live alongside the bindless PSO");
         let local_lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
 
         unsafe {

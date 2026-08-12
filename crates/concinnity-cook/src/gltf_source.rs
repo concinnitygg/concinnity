@@ -167,7 +167,10 @@ pub fn referenced_files(source: &str) -> Vec<String> {
     // misses this entry rather than matching it.
     let memoizable = stamp.settled();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((s, files)) = memo.lock().unwrap().get(&path)
+    if let Some((s, files)) = memo
+        .lock()
+        .expect("glTF source memo lock is not poisoned")
+        .get(&path)
         && *s == stamp
     {
         return files.clone();
@@ -175,7 +178,9 @@ pub fn referenced_files(source: &str) -> Vec<String> {
 
     let files = scan_referenced_files(&path);
     if memoizable {
-        memo.lock().unwrap().insert(path, (stamp, files.clone()));
+        memo.lock()
+            .expect("glTF source memo lock is not poisoned")
+            .insert(path, (stamp, files.clone()));
     }
     files
 }

@@ -1405,7 +1405,8 @@ impl VkContext {
         };
 
         let (instanced_pipeline_opt, instanced_pipeline_layout_opt) = if need_instanced {
-            let instance_set_layout = instance_set_layout_opt.unwrap();
+            let instance_set_layout = instance_set_layout_opt
+                .expect("instance set layout was created because instanced draws are needed");
             let instanced_set_layouts = [global_set_layout, object_set_layout, instance_set_layout];
             let instanced_pl = unsafe {
                 device.create_pipeline_layout(
@@ -3059,7 +3060,8 @@ impl VkContext {
             Vec::with_capacity(frames);
         let mut instance_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
         if !instanced_clusters.is_empty() {
-            let instance_set_layout = instance_set_layout_opt.unwrap();
+            let instance_set_layout = instance_set_layout_opt
+                .expect("instance set layout was created because instanced draws are needed");
             for _ in 0..frames {
                 let mut bufs: Vec<super::allocator::PooledBuffer> =
                     Vec::with_capacity(instanced_clusters.len());

@@ -264,7 +264,10 @@ impl DxContext {
                     info_queue,
                     super::init::pipelines::create_main_pso(
                         device,
-                        self.cull.main_bindless_root_sig.as_ref().unwrap(),
+                        self.cull
+                            .main_bindless_root_sig
+                            .as_ref()
+                            .expect("bindless root signature is live alongside its PSO"),
                         &bvs,
                         &bps,
                         super::texture::HDR_FORMAT,
@@ -281,7 +284,10 @@ impl DxContext {
                     info_queue,
                     super::cull::create_cull_pso(
                         device,
-                        self.cull.cull_root_sig.as_ref().unwrap(),
+                        self.cull
+                            .cull_root_sig
+                            .as_ref()
+                            .expect("cull root signature is live alongside its PSO"),
                         &cs,
                     ),
                 )
@@ -297,7 +303,10 @@ impl DxContext {
                     info_queue,
                     super::cull::create_cull_pso(
                         device,
-                        self.cull.cull_root_sig.as_ref().unwrap(),
+                        self.cull
+                            .cull_root_sig
+                            .as_ref()
+                            .expect("cull root signature is live alongside its phase-2 PSO"),
                         &cs2,
                     ),
                 )
@@ -376,7 +385,12 @@ impl DxContext {
             self.decal.state.is_some(),
             super::decal::rebuild_decal_pso(
                 device,
-                &self.decal.state.as_ref().unwrap().root_sig,
+                &self
+                    .decal
+                    .state
+                    .as_ref()
+                    .expect("decal state is live")
+                    .root_sig,
                 self.hdr.msaa_samples,
                 hr,
                 info_queue,
@@ -388,7 +402,10 @@ impl DxContext {
             self.lines.resources.is_some(),
             super::line::rebuild_line_pso(
                 device,
-                self.lines.resources.as_ref().unwrap(),
+                self.lines
+                    .resources
+                    .as_ref()
+                    .expect("line resources are live"),
                 self.hdr.msaa_samples,
                 hr,
                 info_queue,
@@ -400,7 +417,11 @@ impl DxContext {
             self.glass.is_some(),
             super::glass::rebuild_glass_pso(
                 device,
-                &self.glass.as_ref().unwrap().root_sig,
+                &self
+                    .glass
+                    .as_ref()
+                    .expect("glass resources are live")
+                    .root_sig,
                 self.hdr.msaa_samples,
                 hr,
                 info_queue,
@@ -415,7 +436,12 @@ impl DxContext {
             self.fog.resources.is_some(),
             super::fog::rebuild_fog_pso(
                 device,
-                &self.fog.resources.as_ref().unwrap().root_sig,
+                &self
+                    .fog
+                    .resources
+                    .as_ref()
+                    .expect("fog resources are live")
+                    .root_sig,
                 self.hdr.msaa_samples,
                 hr,
                 info_queue,
@@ -425,7 +451,12 @@ impl DxContext {
             self.fog.resources.is_some(),
             super::fog::rebuild_fog_froxel_pso(
                 device,
-                &self.fog.resources.as_ref().unwrap().froxel_root_sig,
+                &self
+                    .fog
+                    .resources
+                    .as_ref()
+                    .expect("fog resources are live")
+                    .froxel_root_sig,
                 hr,
                 info_queue,
             )
@@ -436,7 +467,10 @@ impl DxContext {
             self.ssao.resources.is_some(),
             super::post::ssao::rebuild_ssao_pipelines(
                 device,
-                self.ssao.resources.as_ref().unwrap(),
+                self.ssao
+                    .resources
+                    .as_ref()
+                    .expect("SSAO resources are live"),
                 hr,
                 info_queue
             )
@@ -447,7 +481,7 @@ impl DxContext {
             self.ssr.is_some(),
             super::post::ssr::rebuild_ssr_pipelines(
                 device,
-                self.ssr.as_ref().unwrap(),
+                self.ssr.as_ref().expect("SSR resources are live"),
                 hr,
                 info_queue
             )
@@ -458,7 +492,7 @@ impl DxContext {
             self.gbuffer.is_some(),
             super::post::gbuffer::rebuild_gbuffer_pipelines(
                 device,
-                self.gbuffer.as_ref().unwrap(),
+                self.gbuffer.as_ref().expect("G-buffer resources are live"),
                 hr,
                 info_queue
             )
@@ -469,7 +503,7 @@ impl DxContext {
             self.ssgi.is_some(),
             super::post::ssgi::rebuild_ssgi_pipelines(
                 device,
-                self.ssgi.as_ref().unwrap(),
+                self.ssgi.as_ref().expect("SSGI resources are live"),
                 hr,
                 info_queue
             )
@@ -480,7 +514,7 @@ impl DxContext {
             self.taa.is_some(),
             super::post::taa::rebuild_taa_pipelines(
                 device,
-                self.taa.as_ref().unwrap(),
+                self.taa.as_ref().expect("TAA resources are live"),
                 hr,
                 info_queue
             )
@@ -492,7 +526,9 @@ impl DxContext {
             self.rt_reflections.is_some(),
             super::post::rt_reflections::rebuild_rt_reflections_pipelines(
                 device,
-                self.rt_reflections.as_ref().unwrap(),
+                self.rt_reflections
+                    .as_ref()
+                    .expect("RT reflection resources are live"),
                 hr,
                 info_queue
             )
@@ -503,7 +539,9 @@ impl DxContext {
             self.reflection_composite.is_some(),
             super::post::reflection_composite::rebuild_reflection_composite_pipelines(
                 device,
-                self.reflection_composite.as_ref().unwrap(),
+                self.reflection_composite
+                    .as_ref()
+                    .expect("reflection composite resources are live"),
                 hr,
                 info_queue
             )

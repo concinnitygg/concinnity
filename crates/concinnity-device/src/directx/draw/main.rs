@@ -316,11 +316,22 @@ impl DxContext {
             // is filled with this frame's ExecuteIndirect commands.
 
             let bindless_pso = self.wireframe_or(
-                self.cull.main_bindless_pso.as_ref().unwrap(),
+                self.cull
+                    .main_bindless_pso
+                    .as_ref()
+                    .expect("bindless PSO is live"),
                 self.wireframe.bindless.as_ref(),
             );
-            let bindless_root = self.cull.main_bindless_root_sig.as_ref().unwrap();
-            let cull_sig = self.cull.cull_command_signature.as_ref().unwrap();
+            let bindless_root = self
+                .cull
+                .main_bindless_root_sig
+                .as_ref()
+                .expect("bindless root signature is live alongside its PSO");
+            let cull_sig = self
+                .cull
+                .cull_command_signature
+                .as_ref()
+                .expect("cull command signature is live alongside the bindless PSO");
             let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
             let object_gva =
                 unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };

@@ -17,7 +17,15 @@
 // clock. Resolving the state tree and reading the compiled blob out of it is
 // `concinnity-store`, which sits above this crate.
 
+// The payload decoders parse bytes the process did not produce, so a panic
+// here is a crash on a corrupt blob rather than a bug. Invariants that
+// genuinely cannot fail use `expect` with the invariant named; tests unwrap
+// freely.
+#![warn(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 pub mod build;
+pub mod decode;
 pub mod ecs;
 pub mod geometry;
 pub mod gfx;
