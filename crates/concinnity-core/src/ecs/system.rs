@@ -7,7 +7,7 @@
 // under the historical `crate::ecs::*` paths, and its `define_systems!` table
 // generates the `SystemAsset` value enum that dispatches them.
 
-use crate::ecs::PipelineContext;
+use crate::ecs::{Access, PipelineContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepResult {
@@ -28,4 +28,14 @@ pub enum StepResult {
 pub trait System: Sized + core::fmt::Debug + 'static {
     fn init(&mut self, _ctx: &mut PipelineContext) {}
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult;
+
+    // The data `step` may touch, consulted once when the schedule is built
+    // (after `init`, so a data-dependent system can compute it from its
+    // compiled state). The default claims everything: an undeclared system is
+    // ordered against all others and never runs concurrently, which is always
+    // safe. Declaring narrower access is what admits a system to shared waves
+    // and to debug-build access validation.
+    fn access(&self) -> Access {
+        Access::new().exclusive()
+    }
 }

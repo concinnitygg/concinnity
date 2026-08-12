@@ -14,7 +14,7 @@ doctest = false
 concinnity-core = { path = "../concinnity-core" }
 concinnity-cpu = { path = "../concinnity-cpu" }
 
-rapier3d = "0.32"
+rapier3d = { version = "0.32", features = ["parallel"] }
 tracing = "0.1.44"
 
 [dev-dependencies]

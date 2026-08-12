@@ -39,7 +39,9 @@ pub mod feedback;
 pub mod fullscreen;
 pub mod hdr_output;
 pub mod input;
-pub mod jobs;
+// The job pool lives in concinnity-cpu so sim-side crates (physics) can share
+// it; re-exported here for the backends and the engine's historical path.
+pub use concinnity_cpu::jobs;
 pub mod keymap;
 pub mod lights;
 pub mod ltc;

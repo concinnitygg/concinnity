@@ -28,6 +28,11 @@ impl FpsCounterSystem {
 }
 
 impl System for FpsCounterSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .writes_components(crate::component_mask![crate::assets::TextLabel])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         self.frame_count += 1;
         let now = Instant::now();

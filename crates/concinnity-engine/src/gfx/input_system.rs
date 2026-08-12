@@ -116,12 +116,35 @@ fn compose_frame_input(
 }
 
 impl System for InputSystem {
-    fn init(&mut self, _ctx: &mut PipelineContext) {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .writes_components(crate::component_mask![crate::assets::FrameInput])
+            .reads_resources(crate::resource_mask![
+                crate::ecs::MenuActive,
+                crate::ecs::ScreenStack,
+                crate::ecs::FlyCam,
+                crate::assets::ControlsCommand,
+            ])
+            .writes_resources(crate::resource_mask![
+                crate::ecs::InputMailbox,
+                crate::ecs::CursorState,
+                crate::assets::FrameInput,
+            ])
+    }
+
+    fn init(&mut self, ctx: &mut PipelineContext) {
         // Persisted settings-menu choices override the engine defaults.
         let settings = crate::config::Settings::load();
         self.map = settings.controls.gamepad_map.unwrap_or_default();
         if let Some(dz) = settings.controls.gamepad_deadzone {
             self.deadzone = dz;
+        }
+        // Seed the one FrameInput row here so `step` only ever overwrites it
+        // in place: minting the row is a structural change, which the step's
+        // declared (non-exclusive) access cannot perform. Consumers treat the
+        // default snapshot exactly like the empty column: no keys, no clicks.
+        if ctx.query::<FrameInput>().next().is_none() {
+            ctx.push(FrameInput::default());
         }
     }
 
@@ -206,12 +229,11 @@ impl System for InputSystem {
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI
         // systems still query. Both readers query rather than drain, so the
-        // column carries one entity for the world's life and each frame
-        // overwrites it in place.
+        // column carries one entity for the world's life (seeded at init) and
+        // each frame overwrites it in place.
         ctx.insert_resource(frame_input.clone());
-        match ctx.query_mut::<FrameInput>().next() {
-            Some(slot) => *slot = frame_input,
-            None => ctx.push(frame_input),
+        if let Some(slot) = ctx.query_mut::<FrameInput>().next() {
+            *slot = frame_input;
         }
 
         StepResult::Continue

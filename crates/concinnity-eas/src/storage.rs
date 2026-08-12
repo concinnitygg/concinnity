@@ -38,7 +38,7 @@ macro_rules! define_component_storage {
         pub struct $storage {
             $( pub $field: $crate::Column<$ty>, )+
             entities: $crate::Entities,
-            change_tick: $crate::Tick,
+            change_tick: $crate::AtomicTick,
             join: $crate::JoinIndex,
         }
 
@@ -207,7 +207,7 @@ macro_rules! define_component_storage {
                 &self,
                 since: $crate::Tick,
             ) -> impl Iterator<Item = ($crate::Entity, &C)> {
-                C::slot(self).changed_rows(since.clamp_to(self.change_tick))
+                C::slot(self).changed_rows(since.clamp_to(self.change_tick.get()))
             }
 
             // Borrow one entity's component C, if it has one.
@@ -299,6 +299,18 @@ macro_rules! define_component_storage {
                 const DISCRIMINANT: u8 = $disc;
                 fn slot(s: &$storage) -> &$crate::Column<Self> { &s.$field }
                 fn slot_mut(s: &mut $storage) -> &mut $crate::Column<Self> { &mut s.$field }
+            }
+            impl $crate::ShardColumn<$storage> for $ty {
+                const ID: u8 = $disc;
+                unsafe fn column_ptr(storage: *mut $storage) -> *mut $crate::Column<$ty> {
+                    // SAFETY: raw field projection only; no reference to the
+                    // storage is created. Caller keeps `storage` live.
+                    unsafe { ::core::ptr::addr_of_mut!((*storage).$field) }
+                }
+                unsafe fn tick_ptr(storage: *mut $storage) -> *const $crate::AtomicTick {
+                    // SAFETY: as `column_ptr`.
+                    unsafe { ::core::ptr::addr_of!((*storage).change_tick) }
+                }
             }
             // The ComponentMask is a u128, so a discriminant past 127 would
             // silently alias another component's mask bit in a release build.

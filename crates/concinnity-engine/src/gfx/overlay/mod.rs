@@ -75,10 +75,34 @@ impl OverlaySystem {
 }
 
 impl System for OverlaySystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![
+                crate::assets::Sprite,
+                crate::assets::TextInput,
+                crate::assets::LayoutContainer,
+            ])
+            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .reads_resources(crate::resource_mask![
+                crate::assets::FrameInput,
+                crate::ecs::CursorState,
+                crate::ecs::ScreenStack,
+                crate::ecs::HudLayers,
+                crate::ecs::OpenDropdown,
+                crate::ecs::DesiredCursor,
+                crate::ecs::MenuOverride,
+            ])
+            .writes_resources(crate::resource_mask![
+                crate::gfx::overlay::OverlayAssets,
+                crate::gfx::overlay::OverlayFrame,
+                crate::ecs::MenuActive,
+            ])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // No parked assets: graphics init has not succeeded (or not run), so
         // there is nothing to build against and nothing will be drawn.
-        let Some(assets) = ctx.resources.remove::<OverlayAssets>() else {
+        let Some(assets) = ctx.remove_resource::<OverlayAssets>() else {
             return StepResult::Continue;
         };
         let elapsed = self
@@ -87,7 +111,7 @@ impl System for OverlaySystem {
             .elapsed()
             .as_secs_f32();
         let mut frame = build_overlay_frame(ctx, &assets, elapsed);
-        ctx.resources.insert(assets);
+        ctx.insert_resource(assets);
 
         // An external per-frame driver (the `cn editor` HUD) can force the
         // menu-active state through the `MenuOverride` resource, so it frees

@@ -46,6 +46,29 @@ impl Tick {
     }
 }
 
+// The change-tick counter shared across a storage's columns, atomic so writers
+// of disjoint columns can stamp edits concurrently without sharing `&mut`.
+// Relaxed ordering: the counter only supplies monotonic values; the column
+// data it stamps is synchronized by the scheduler (join/channel edges), never
+// by the counter itself. Values stay globally monotonic but their exact
+// assignment is interleaving-dependent under concurrency, so tick values must
+// never be hashed, persisted, or compared across columns.
+#[derive(Debug, Default)]
+pub struct AtomicTick(core::sync::atomic::AtomicU32);
+
+impl AtomicTick {
+    // Advance to the next tick (wrapping) and return the new value.
+    pub fn bump(&self) -> Tick {
+        use core::sync::atomic::Ordering;
+        Tick(self.0.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
+    }
+
+    // The most recently issued tick.
+    pub fn get(&self) -> Tick {
+        Tick(self.0.load(core::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

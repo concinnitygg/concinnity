@@ -167,6 +167,17 @@ impl DebugHudSystem {
 }
 
 impl System for DebugHudSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::Camera3D])
+            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .reads_resources(crate::resource_mask![
+                crate::assets::FrameInput,
+                crate::app::budget::ThreadBudget,
+                crate::app::budget::MemoryBudget,
+            ])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // F1 toggles the debug HUD. The per-frame input snapshot is read from
         // the FrameInput resource GraphicsSystem publishes earlier in the frame;

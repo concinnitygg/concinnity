@@ -313,6 +313,12 @@ fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
     crate::gfx::streaming_system::StreamingSystem::new().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
+        // InputSystem's init seeds the one FrameInput row; the fresh
+        // per-step instance here needs the same seed without the init's
+        // settings-file read.
+        if ctx.query::<crate::assets::FrameInput>().next().is_none() {
+            ctx.push(crate::assets::FrameInput::default());
+        }
         crate::gfx::input_system::InputSystem::new().step(&mut ctx);
     }
     result

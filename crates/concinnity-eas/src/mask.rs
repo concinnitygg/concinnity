@@ -60,6 +60,11 @@ impl ComponentMask {
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    // The union of two masks.
+    pub fn merged(self, other: ComponentMask) -> ComponentMask {
+        ComponentMask(self.0 | other.0)
+    }
 }
 
 #[cfg(test)]

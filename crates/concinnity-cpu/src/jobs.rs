@@ -112,6 +112,15 @@ pub fn pool() -> &'static JobPool {
     POOL.get_or_init(JobPool::build)
 }
 
+// A single-worker pool: the same execution shape as `pool()` with the jobs
+// run one at a time. The serial schedule installs solver work here so the
+// determinism oracle exercises the identical code path minus the
+// concurrency.
+pub fn serial_pool() -> &'static JobPool {
+    static POOL: OnceLock<JobPool> = OnceLock::new();
+    POOL.get_or_init(|| JobPool::with_threads(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

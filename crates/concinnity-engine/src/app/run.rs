@@ -68,6 +68,10 @@ pub enum PipelineMode {
 #[derive(Debug, Default)]
 pub struct RunOptions {
     pub mode: PipelineMode,
+    // Whether systems may fan their internal work across the job pool
+    // (default) or keep everything on the stepping thread
+    // (`cn run --serial-schedule`, the determinism oracle).
+    pub schedule: crate::ecs::ScheduleMode,
     // Capture the last presented frame to this path when the run stops, for
     // headless verification of the runtime path (`cn run --screenshot`).
     pub screenshot: Option<String>,
@@ -140,6 +144,7 @@ pub fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
         // Before `start()`, so graphics init arms the blit-readable path.
         crate::app::dev_flags::set_capture(true);
     }
+    app.world_mut().insert_resource(options.schedule);
 
     #[cfg(target_os = "macos")]
     if renders {

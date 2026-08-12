@@ -13,19 +13,23 @@
 // entry to the `define_systems!` table in `ecs::registry` -- the table is the
 // registry AND the schedule (table order is run order).
 
+pub mod access_ids;
 pub(crate) mod by_asset_id;
 pub(crate) mod decompose;
+#[cfg(test)]
+mod determinism_tests;
 mod registry;
 pub mod schedule;
+pub mod waves;
 
 // Renderer-free metadata, registry types, the asset-construction API, and the
 // `PipelineContext`, re-exported from concinnity-core so the rest of the client
 // keeps its historical `crate::ecs::*` import paths.
 pub use concinnity_core::ecs::{
-    Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset, ComponentSlot,
-    ComponentStorage, Entity, EventCursor, EventStore, Events, FontHandle, FrameContext,
-    MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord, MeshHandle, PayloadLocator, PipelineContext,
-    Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
+    Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
+    ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
+    Events, FontHandle, FrameContext, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord, MeshHandle,
+    PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;
@@ -39,9 +43,9 @@ pub use concinnity_cpu::ecs::asset_id;
 pub use concinnity_core::ecs::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
     GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
-    OverlayImage, OverlayImages, PickEntry, PickIndex, ScreenStack, SimTiming, TraceEvent,
-    TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides,
-    WorldLines,
+    OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack, SimTiming,
+    TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves,
+    ViewOverrides, WorldLines,
 };
 
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
@@ -248,7 +252,9 @@ pub struct DisplayModes(pub Vec<crate::gfx::display_mode::DisplayMode>);
 macro_rules! define_systems {
     ( $( $variant:ident => $behavior:path {
             gate: $gate:path,
-            present_when: $present_when:literal $(,)?
+            present_when: $present_when:literal,
+            after: [ $( $after:ident ),* $(,)? ],
+            before: [ $( $before:ident ),* $(,)? ] $(,)?
         } ),* $(,)? ) => {
         // Variant sizes follow the behavior types; boxing them would only move
         // the per-system state behind a pointer for no real gain here.
@@ -278,6 +284,14 @@ macro_rules! define_systems {
                     $( SystemAsset::$variant(s) => s.step(ctx), )*
                 }
             }
+
+            // The system's declared data access, consulted at schedule build
+            // (after init). Defaults to exclusive via the `System` trait.
+            pub fn access(&self) -> $crate::ecs::Access {
+                match self {
+                    $( SystemAsset::$variant(s) => $crate::ecs::System::access(s), )*
+                }
+            }
         }
 
         $( impl From<$behavior> for SystemAsset { fn from(s: $behavior) -> Self { SystemAsset::$variant(s) } } )*
@@ -289,6 +303,8 @@ macro_rules! define_systems {
                 name: stringify!($variant),
                 present_when: $present_when,
                 gate: $gate,
+                after: &[ $( stringify!($after) ),* ],
+                before: &[ $( stringify!($before) ),* ],
             }, )*
         ];
     };
@@ -332,6 +348,11 @@ pub struct World {
     // Set once `build_internal_systems` has run, so a second `start()` on the
     // same world does not append the internal systems twice.
     internal_systems_built: bool,
+    // The executable schedule over the built systems: declared ordering edges
+    // validated + conflict waves from each system's declared access. Built at
+    // the end of `start()` (after init, when data-dependent declarations are
+    // final) and rebuilt when a `Done` system leaves the set.
+    schedule: Option<waves::ExecSchedule>,
 }
 
 // The world must stay movable to the simulation thread; a !Send member in any
@@ -361,6 +382,7 @@ impl World {
             scratch: Arena::tagged(FRAME_SCRATCH_BYTES, MemTag::Scratch),
             scratch_overflows: 0,
             internal_systems_built: false,
+            schedule: None,
         }
     }
 
@@ -676,7 +698,32 @@ impl World {
                 freed / (1024 * 1024)
             );
         }
+        // Access declarations are final once every system has inited, so this
+        // is the earliest the edges can be validated and the waves derived.
+        let schedule = waves::build(&self.systems);
+        // Pre-create the event queues declared systems can touch, so their
+        // `events_mut` never grows the store's map mid-tick.
+        if !schedule.is_empty() {
+            if !self.resources.contains::<EventStore>() {
+                self.resources.insert(EventStore::new());
+            }
+            let store = self
+                .resources
+                .get_mut::<EventStore>()
+                .expect("EventStore was just inserted");
+            for i in 0..schedule.len() {
+                access_ids::ensure_event_queues(store, schedule.access(i));
+            }
+        }
+        self.schedule = Some(schedule);
+        #[cfg(debug_assertions)]
+        access_ids::install_hook();
         Ok(())
+    }
+
+    // The executable schedule over the built systems. `None` before `start()`.
+    pub fn schedule(&self) -> Option<&waves::ExecSchedule> {
+        self.schedule.as_ref()
     }
 
     // Construct the internal systems implied by the world's content, in their
@@ -749,22 +796,31 @@ impl World {
             frame: crate::ecs::FrameContext::new(&self.scratch),
         };
         let mut i = 0;
+        let mut removed_any = false;
         while i < self.systems.len() {
             let name = self.systems[i].name();
             let started = std::time::Instant::now();
+            #[cfg(debug_assertions)]
+            access_ids::set_active(Some((self.systems[i].access(), name)));
             let result = self.systems[i].step(&mut ctx);
+            #[cfg(debug_assertions)]
+            access_ids::set_active(None);
             let micros = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
             ctx.profile.record_system(name, micros);
             match result {
                 StepResult::Stop => return StepResult::Stop,
                 StepResult::Done => {
                     let removed = self.systems.remove(i);
+                    removed_any = true;
                     tracing::debug!("System '{}' finished", removed.name());
                 }
                 StepResult::Continue => {
                     i += 1;
                 }
             }
+        }
+        if removed_any && self.schedule.is_some() {
+            self.schedule = Some(waves::build(&self.systems));
         }
         self.report_scratch_overflow();
         if self.systems.is_empty() {

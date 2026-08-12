@@ -262,6 +262,29 @@ impl UiInputSystem {
 }
 
 impl System for UiInputSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![
+                crate::assets::TextLabel,
+                crate::assets::Sprite,
+                crate::assets::TextInput,
+            ])
+            .reads_resources(crate::resource_mask![
+                crate::ecs::DisabledSettingRows,
+                crate::ecs::DisplayModes,
+            ])
+            .writes_resources(crate::resource_mask![
+                crate::ecs::OpenDropdown,
+                crate::ecs::ScreenStack,
+                crate::assets::ScreenCommand,
+                crate::assets::ScreenShown,
+                crate::assets::SettingCommand,
+                crate::assets::SceneCommand,
+                crate::assets::StoryCommand,
+            ])
+    }
+
     fn init(&mut self, ctx: &mut PipelineContext) {
         // Drain Screen assets, record each one's policies, and pick the one
         // flagged `initial` to open at world start.

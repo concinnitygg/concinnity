@@ -162,6 +162,14 @@ pub struct BehaviorSystem {
     // Instances present before the first tick are the world's initial
     // population, so `spawned` does not fire for them.
     populated: bool,
+    // Per-worker evaluation state, grown to the job pool's width on the first
+    // parallel tick and reused thereafter so steady-state allocations stay
+    // flat.
+    eval_buckets: Vec<EvalBucket>,
+    // The tick's firing list and the serial path's binding scratch, kept for
+    // their capacity across ticks.
+    jobs: Vec<(usize, Option<Entity>)>,
+    bindings: Vec<Option<Val>>,
 }
 
 impl Default for BehaviorSystem {
@@ -182,6 +190,9 @@ impl Default for BehaviorSystem {
             trace_paths_published: false,
             sim_ticks: 0,
             populated: false,
+            eval_buckets: Vec::new(),
+            jobs: Vec::new(),
+            bindings: Vec::new(),
         }
     }
 }
@@ -314,29 +325,86 @@ struct Snapshot {
     scoped: Vec<Vec<Entity>>,
 }
 
-// What a body run reads that the tick, rather than the body, determines. The
-// per-tick half of `run::View`, which adds the per-instance half.
-struct TickView<'a, 'w> {
-    ctx: &'a PipelineContext<'w>,
-    // Copied out of the context so a body's working frame outlives the borrow
-    // the context itself is under.
-    frame: crate::ecs::FrameContext<'w>,
-    snapshot: &'a Snapshot,
+// What a body run reads that the tick, rather than the body, determines: the
+// per-tick half of `run::View`. Everything here is shared and immutable, so
+// evaluation can fan across workers; single-entity reads (a name, a position,
+// a liveness test) read the storage directly and cost one lookup each instead
+// of a whole-world copy per tick.
+struct EvalCtx<'a> {
+    components: &'a crate::ecs::ComponentStorage,
     // Resolved once per tick rather than per name lookup.
     names: Option<&'a crate::ecs::decompose::EntityByName>,
+    snapshot: &'a Snapshot,
+    programs: &'a [Program],
+    instances: &'a [Vec<Instance>],
+    vars: &'a [Val],
     dt: f32,
     elapsed: f32,
     tracing: bool,
 }
 
-impl TickView<'_, '_> {
-    // A name index entry can outlive its entity, so each is confirmed.
-    fn named(&self, id: AssetId) -> Option<Entity> {
-        self.names
-            .and_then(|n| n.get(id))
-            .filter(|e| self.ctx.is_alive(*e))
-    }
+// Run one instance's body against the tick's starting state, appending its
+// effects to `out`. Returns how many it appended, plus the nodes it executed
+// when tracing. Bodies never observe another body's same-tick writes (the
+// apply phase runs after every body), which is what makes evaluation order
+// unobservable and this function safe to run concurrently.
+//
+// `bindings` is the caller's reused buffer: resized to the body's compiled
+// binding high-water mark and cleared per run, so however many instances fire
+// a tick, binding scratch costs zero allocations in steady state. (The
+// previous per-run frame-arena grab exhausted the reserve on behavior-heavy
+// worlds and degraded to contended heap allocation across eval workers.)
+fn eval_one(
+    ec: &EvalCtx<'_>,
+    bindings: &mut Vec<Option<Val>>,
+    i: usize,
+    entity: Option<Entity>,
+    out: &mut Vec<Effect>,
+) -> Option<(usize, Vec<u32>)> {
+    let locals = ec.instances[i]
+        .iter()
+        .find(|inst| inst.entity == entity)
+        .map(|inst| inst.locals.as_slice())?;
+    bindings.clear();
+    bindings.resize(ec.programs[i].bindings, None);
+    let mut nodes: Option<Vec<u32>> = ec.tracing.then(Vec::new);
+    let before = out.len();
+    let mut view = View {
+        dt: ec.dt,
+        elapsed: ec.elapsed,
+        vars: ec.vars,
+        locals,
+        bindings: bindings.as_mut_slice(),
+        queries: &ec.snapshot.queries[i],
+        // A name index entry can outlive its entity, so each is confirmed.
+        by_name: &|id| {
+            ec.names
+                .and_then(|n| n.get(id))
+                .filter(|e| ec.components.is_alive(*e))
+        },
+        transforms: &|e| ec.components.get::<Transform>(e).copied(),
+        alive: &|e| ec.components.is_alive(e),
+        self_entity: entity,
+        trace: &mut nodes,
+    };
+    run::exec(&ec.programs[i].body, &mut view, out);
+    Some((out.len() - before, nodes.unwrap_or_default()))
 }
+
+// One worker's share of a parallel evaluation: a contiguous slice of the
+// tick's job list, its own effect/trace buffers, and its own binding scratch.
+// Everything keeps its capacity across ticks.
+#[derive(Debug, Default)]
+struct EvalBucket {
+    jobs: core::ops::Range<usize>,
+    effects: Vec<Effect>,
+    produced: Vec<(usize, Option<Entity>, usize)>,
+    fired: Vec<(usize, Vec<u32>)>,
+    bindings: Vec<Option<Val>>,
+}
+
+// Below this many firing instances the fan-out costs more than the work.
+const PARALLEL_EVAL_MIN_JOBS: usize = 64;
 
 impl BehaviorSystem {
     // Entities carrying every one of these component tags, in stable order.
@@ -468,65 +536,123 @@ impl BehaviorSystem {
         self.crossings.clear();
         self.presses.clear();
 
+        // Delayed runs from earlier ticks count down first: those now due run
+        // before this tick's firings, in discovery order, exactly as before.
+        // A fresh delay pushed below starts counting next tick.
+        let mut jobs = std::mem::take(&mut self.jobs);
+        jobs.clear();
+        let mut idx = 0;
+        while idx < self.pending.len() {
+            self.pending[idx].2 -= dt;
+            if self.pending[idx].2 <= 0.0 {
+                let (i, entity, _) = self.pending.swap_remove(idx);
+                jobs.push((i, entity));
+            } else {
+                idx += 1;
+            }
+        }
+        for (i, entity) in runs {
+            let delay = self.programs[i].def.delay;
+            if delay > 0.0 {
+                self.pending.push((i, entity, delay));
+            } else {
+                jobs.push((i, entity));
+            }
+        }
+
         // Read phase: every body runs against an unchanged world, so the
         // borrow here is shared and the effects it produces are applied only
-        // after it ends.
-        //
-        // Every run appends into one buffer and records how much it added, so a
-        // body costs no allocation of its own however many instances fire.
+        // after it ends. Serially each run appends into one buffer and
+        // records how much it added; with enough firing instances under the
+        // parallel schedule, contiguous job chunks evaluate on the pool into
+        // per-worker buffers instead. Either way a body observes only the
+        // tick's starting state, so the results are identical; only the apply
+        // order below is observable, and it walks jobs in list order in both
+        // modes.
+        let parallel = jobs.len() >= PARALLEL_EVAL_MIN_JOBS
+            && crate::ecs::ScheduleMode::current(ctx.resources)
+                == crate::ecs::ScheduleMode::Parallel;
         let mut effects: Vec<Effect> = Vec::new();
         let mut produced: Vec<(usize, Option<Entity>, usize)> = Vec::new();
+        let mut buckets = std::mem::take(&mut self.eval_buckets);
+        let mut serial_bindings = std::mem::take(&mut self.bindings);
         {
-            let reads = TickView {
-                frame: ctx.frame,
-                ctx,
-                snapshot: &snapshot,
+            let ec = EvalCtx {
+                components: ctx.components,
                 names: ctx.resource::<crate::ecs::decompose::EntityByName>(),
+                snapshot: &snapshot,
+                programs: &self.programs,
+                instances: &self.instances,
+                vars: &self.vars,
                 dt,
                 elapsed,
                 tracing,
             };
-
-            // Delayed runs from earlier ticks: count down and execute those now
-            // due. Before the append below, so a fresh delay starts counting
-            // next tick.
-            let mut idx = 0;
-            while idx < self.pending.len() {
-                self.pending[idx].2 -= dt;
-                if self.pending[idx].2 <= 0.0 {
-                    let (i, entity, _) = self.pending.swap_remove(idx);
-                    if let Some((count, nodes)) = self.run_body(&reads, i, entity, &mut effects) {
+            if parallel {
+                let workers = crate::jobs::pool().thread_count().max(1);
+                while buckets.len() < workers {
+                    buckets.push(EvalBucket::default());
+                }
+                let chunk = jobs.len().div_ceil(buckets.len()).max(1);
+                for (b, bucket) in buckets.iter_mut().enumerate() {
+                    bucket.jobs = (b * chunk).min(jobs.len())..((b + 1) * chunk).min(jobs.len());
+                }
+                let jobs = &jobs;
+                let ec = &ec;
+                crate::jobs::pool().parallel_for(&mut buckets, |bucket| {
+                    bucket.effects.clear();
+                    bucket.produced.clear();
+                    bucket.fired.clear();
+                    for &(i, entity) in &jobs[bucket.jobs.clone()] {
+                        if let Some((count, nodes)) =
+                            eval_one(ec, &mut bucket.bindings, i, entity, &mut bucket.effects)
+                        {
+                            bucket.produced.push((i, entity, count));
+                            if ec.tracing {
+                                bucket.fired.push((i, nodes));
+                            }
+                        }
+                    }
+                });
+            } else {
+                for &(i, entity) in &jobs {
+                    if let Some((count, nodes)) =
+                        eval_one(&ec, &mut serial_bindings, i, entity, &mut effects)
+                    {
                         produced.push((i, entity, count));
                         if tracing {
                             fired.push((i, nodes));
                         }
                     }
-                } else {
-                    idx += 1;
-                }
-            }
-
-            for (i, entity) in runs {
-                let delay = self.programs[i].def.delay;
-                if delay > 0.0 {
-                    self.pending.push((i, entity, delay));
-                } else if let Some((count, nodes)) = self.run_body(&reads, i, entity, &mut effects)
-                {
-                    produced.push((i, entity, count));
-                    if tracing {
-                        fired.push((i, nodes));
-                    }
                 }
             }
         }
 
-        // Walking the buffer once hands each run exactly the effects it
+        // Walking each buffer once hands each run exactly the effects it
         // appended, in record order, without copying or reshuffling them.
+        // Bucket order is job order, so the parallel apply is byte-identical
+        // to the serial one.
         let mut save_requested = false;
-        let mut recorded = effects.into_iter();
-        for (i, entity, count) in produced {
-            save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
+        if parallel {
+            for bucket in &mut buckets {
+                let mut recorded = bucket.effects.drain(..);
+                for k in 0..bucket.produced.len() {
+                    let (i, entity, count) = bucket.produced[k];
+                    save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
+                }
+                if tracing {
+                    fired.append(&mut bucket.fired);
+                }
+            }
+        } else {
+            let mut recorded = effects.into_iter();
+            for (i, entity, count) in produced {
+                save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
+            }
         }
+        self.eval_buckets = buckets;
+        self.jobs = jobs;
+        self.bindings = serial_bindings;
 
         // One write per tick, after every effect has landed, so the file holds
         // this tick's final values.
@@ -537,41 +663,6 @@ impl BehaviorSystem {
         if let Some(request) = request {
             self.publish_trace(ctx, &request, &fired);
         }
-    }
-
-    // Run one instance's body, appending its effects to `out`. Returns how many
-    // it appended, plus the nodes it executed when tracing.
-    fn run_body(
-        &self,
-        reads: &TickView<'_, '_>,
-        i: usize,
-        entity: Option<Entity>,
-        out: &mut Vec<Effect>,
-    ) -> Option<(usize, Vec<u32>)> {
-        let locals = self.instances[i]
-            .iter()
-            .find(|inst| inst.entity == entity)
-            .map(|inst| inst.locals.as_slice())?;
-        // The compiled binding count is a high-water mark, so this frame is
-        // exactly as wide as the body can address.
-        let mut bindings = reads.frame.filled(self.programs[i].bindings, None);
-        let mut nodes: Option<Vec<u32>> = reads.tracing.then(Vec::new);
-        let before = out.len();
-        let mut view = View {
-            dt: reads.dt,
-            elapsed: reads.elapsed,
-            vars: &self.vars,
-            locals,
-            bindings: &mut bindings,
-            queries: &reads.snapshot.queries[i],
-            by_name: &|id| reads.named(id),
-            transforms: &|e| reads.ctx.get::<Transform>(e).copied(),
-            alive: &|e| reads.ctx.is_alive(e),
-            self_entity: entity,
-            trace: &mut nodes,
-        };
-        run::exec(&self.programs[i].body, &mut view, out);
-        Some((out.len() - before, nodes.unwrap_or_default()))
     }
 
     // Land one body's effects. Returns whether a `save` was requested.

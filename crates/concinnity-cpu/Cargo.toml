@@ -24,6 +24,7 @@ concinnity-memory = { path = "../concinnity-memory" }
 
 bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
+tracing = "0.1.44"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

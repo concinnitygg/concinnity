@@ -129,6 +129,20 @@ impl LoadingOverlaySystem {
 }
 
 impl System for LoadingOverlaySystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .writes_components(crate::component_mask![
+                crate::assets::Sprite,
+                crate::assets::TextLabel,
+            ])
+            .reads_resources(crate::resource_mask![
+                crate::ecs::ActiveSceneFlow,
+                crate::ecs::SceneResidencyStatus,
+                crate::ecs::ScreenStack,
+            ])
+            .writes_resources(crate::resource_mask![crate::assets::ScreenCommand])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // The scene the player is headed to: the fade target mid-jump, else
         // the active scene.

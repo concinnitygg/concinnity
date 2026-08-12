@@ -155,6 +155,15 @@ impl StatHudSystem {
 }
 
 impl System for StatHudSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .writes_components(crate::component_mask![crate::assets::TextLabel])
+            .reads_resources(crate::resource_mask![
+                crate::ecs::HudPrefs,
+                crate::app::budget::MemoryBudget,
+            ])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // Per-chip visibility from the "Display performance stats" video
         // settings, published each frame by GraphicsSystem. Absent (a HUD-only

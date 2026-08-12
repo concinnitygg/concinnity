@@ -335,3 +335,27 @@ pub struct DropdownView {
     pub scale: f32,
     pub color: [f32; 3],
 }
+
+/// How a tick's independent work executes. `Parallel` lets systems fan their
+/// safe internal work across the job pool; `Serial` (or the resource being
+/// absent, the editor's case) keeps every system's work on the stepping
+/// thread -- the determinism oracle and the escape hatch
+/// (`cn run --serial-schedule`). Both modes must produce identical world
+/// state; the engine's schedule-determinism test is the gate on that claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScheduleMode {
+    Serial,
+    #[default]
+    Parallel,
+}
+
+impl ScheduleMode {
+    /// The mode a world runs under: the published resource, or `Serial` when
+    /// nothing published one.
+    pub fn current(resources: &concinnity_eas::Resources) -> ScheduleMode {
+        resources
+            .get::<ScheduleMode>()
+            .copied()
+            .unwrap_or(ScheduleMode::Serial)
+    }
+}

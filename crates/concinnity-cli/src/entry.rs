@@ -277,6 +277,11 @@ pub struct RunArgs {
     #[arg(long)]
     pub serial: bool,
 
+    /// Keep every system's internal work on the sim thread instead of the
+    /// job pool (determinism oracle, escape hatch)
+    #[arg(long)]
+    pub serial_schedule: bool,
+
     /// Capture the last presented frame to this PNG when the run stops
     #[arg(long)]
     pub screenshot: Option<String>,
@@ -472,6 +477,11 @@ pub fn run() -> std::io::Result<()> {
                     concinnity_engine::app::run::PipelineMode::Serial
                 } else {
                     concinnity_engine::app::run::PipelineMode::Pipelined
+                },
+                schedule: if args.serial_schedule {
+                    concinnity_engine::ecs::ScheduleMode::Serial
+                } else {
+                    concinnity_engine::ecs::ScheduleMode::Parallel
                 },
                 screenshot: args.screenshot.clone(),
                 max_frames: args.frames,

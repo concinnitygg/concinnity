@@ -70,6 +70,20 @@ impl Camera3DSystem {
 }
 
 impl System for Camera3DSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![
+                crate::assets::Camera3D,
+                crate::assets::Transform,
+            ])
+            .reads_resources(crate::resource_mask![
+                crate::ecs::decompose::EntityByName,
+                crate::assets::ControlsCommand,
+            ])
+            .writes_resources(crate::resource_mask![crate::assets::InteractSignal])
+    }
+
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.last_step = Some(Instant::now());
 

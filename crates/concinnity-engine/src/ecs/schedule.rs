@@ -22,6 +22,12 @@ pub struct SystemEntry {
     pub present_when: &'static str,
     // Constructs the system from world content when its gate holds.
     pub gate: fn(&World) -> Option<SystemAsset>,
+    // Systems (by variant name) that must run earlier in the tick than this
+    // one, and systems this one must precede. Validated against table order
+    // at schedule build: the table stays the one execution order, and an edge
+    // that contradicts it is a startup panic, not a silent reorder.
+    pub after: &'static [&'static str],
+    pub before: &'static [&'static str],
 }
 
 // OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the

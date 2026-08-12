@@ -107,6 +107,12 @@ impl TextInputSystem {
 }
 
 impl System for TextInputSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![crate::assets::TextInput])
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         let input = match ctx.query::<FrameInput>().last().cloned() {
             Some(i) => i,

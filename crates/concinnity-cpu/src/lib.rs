@@ -21,3 +21,4 @@ pub mod build;
 pub mod ecs;
 pub mod geometry;
 pub mod gfx;
+pub mod jobs;

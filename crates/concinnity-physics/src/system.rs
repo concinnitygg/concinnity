@@ -680,6 +680,14 @@ impl System for PhysicsSystem {
         let motions = super::rig::drain_motions(ctx, &mut self.root_cursor);
         super::rig::sync_rigs(ctx, &mut self.rigs);
 
+        // The solver's internal parallelism (rapier's rayon islands) runs
+        // inside the bounded job pool; the serial schedule pins it to the
+        // single-worker pool so the determinism oracle exercises the same
+        // code with one thread.
+        let solve_pool = match concinnity_core::ecs::ScheduleMode::current(ctx.resources) {
+            concinnity_core::ecs::ScheduleMode::Parallel => concinnity_cpu::jobs::pool(),
+            concinnity_core::ecs::ScheduleMode::Serial => concinnity_cpu::jobs::serial_pool(),
+        };
         for tick in 0..timing.ticks {
             let dt = timing.tick_dt;
 
@@ -735,7 +743,7 @@ impl System for PhysicsSystem {
             );
 
             // advance the simulation
-            world.step(dt);
+            solve_pool.install(|| world.step(dt));
 
             // batch the tick's contact hits (strongest per pair this frame)
             self.contact_gate.advance_tick();

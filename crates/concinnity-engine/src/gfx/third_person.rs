@@ -93,6 +93,18 @@ impl ThirdPersonSystem {
 }
 
 impl System for ThirdPersonSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![
+                crate::assets::Camera3D,
+                crate::assets::CharacterRig,
+                crate::assets::AnimParams,
+                crate::assets::CameraProbe,
+            ])
+            .reads_resources(crate::resource_mask![crate::assets::ControlsCommand])
+    }
+
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.last_step = Some(Instant::now());
 

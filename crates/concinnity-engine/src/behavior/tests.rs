@@ -1372,3 +1372,62 @@ fn a_retyped_variable_ignores_its_stale_save() {
     assert_eq!(var_val(&sys2, "v"), Val::Int(3));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// The pooled evaluation path (ScheduleMode::Parallel, enough firing
+// instances) must land exactly the state the serial path lands: same var
+// values, same transforms, same effect order.
+#[test]
+fn parallel_eval_matches_serial_state() {
+    fn run(parallel: bool) -> (Vec<i32>, Vec<[f32; 3]>) {
+        let mover = Behavior {
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            body: vec![
+                set_var("total", 1, true),
+                Node::SetTransform {
+                    entity: Expr::SelfEntity,
+                    position: Some(Expr::Add(
+                        Box::new(Expr::Position(Box::new(Expr::SelfEntity))),
+                        Box::new(Expr::Vec3([0.25, 0.0, 0.0])),
+                    )),
+                    rotation_deg: None,
+                    scale: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let counter = Behavior {
+            on: BehaviorSource::Tick,
+            body: vec![Node::Set {
+                var: "double".into(),
+                value: Expr::Mul(Box::new(Expr::Var("total".into())), Box::new(Expr::Int(2))),
+                add: false,
+            }],
+            ..Default::default()
+        };
+        let mut world = world_with(vec![mover, counter]);
+        if parallel {
+            world.resources.insert(crate::ecs::ScheduleMode::Parallel);
+        }
+        for i in 0..150 {
+            spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
+        }
+        let mut sys = system(&mut world);
+        for _ in 0..5 {
+            tick(&mut sys, &mut world, 0.016);
+        }
+        let vars = vec![var(&sys, "total"), var(&sys, "double")];
+        let positions = world
+            .ctx()
+            .query::<Transform>()
+            .map(|t| t.position)
+            .collect();
+        (vars, positions)
+    }
+
+    let serial = run(false);
+    let parallel = run(true);
+    assert_eq!(serial, parallel);
+    // 150 movers over 5 ticks; the mover really fired every tick.
+    assert_eq!(serial.0[0], 750);
+}

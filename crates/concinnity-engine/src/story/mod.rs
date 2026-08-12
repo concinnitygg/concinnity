@@ -313,6 +313,24 @@ impl StorySystem {
 }
 
 impl System for StorySystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::FrameInput])
+            .writes_components(crate::component_mask![
+                crate::assets::TextLabel,
+                crate::assets::Sprite,
+            ])
+            .reads_resources(crate::resource_mask![
+                crate::assets::StoryReload,
+                crate::assets::ScreenShown,
+                crate::assets::StoryCommand,
+            ])
+            .writes_resources(crate::resource_mask![
+                crate::assets::PlayCue,
+                crate::assets::ScreenCommand,
+            ])
+    }
+
     fn init(&mut self, ctx: &mut PipelineContext) {
         // A preview session's saves land in a sandbox wiped here, so the save
         // UI works without touching the user's real files and every session

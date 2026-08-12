@@ -195,6 +195,18 @@ fn resumed_origin(start: Instant, anchor: Instant, now: Instant) -> Instant {
 }
 
 impl System for AnimationSystem {
+    fn access(&self) -> crate::ecs::Access {
+        crate::ecs::Access::new()
+            .reads_components(crate::component_mask![crate::assets::CharacterRig])
+            .writes_components(crate::component_mask![
+                crate::assets::SkeletonPose,
+                crate::assets::AnimParams,
+                crate::assets::GroundProbes,
+            ])
+            .reads_resources(crate::resource_mask![crate::ecs::MenuActive])
+            .writes_resources(crate::resource_mask![crate::assets::RootMotion])
+    }
+
     fn init(&mut self, ctx: &mut PipelineContext) {
         // Clips accumulate per target mesh; how a bucket's clips combine is
         // decided below (graph if the world declares one, weighted blend

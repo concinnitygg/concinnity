@@ -10,7 +10,7 @@
 // a component id and a resource id never collide even though both are small
 // integers.
 
-use crate::mask::ComponentMask;
+use crate::mask::{ComponentId, ComponentMask};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Access {
@@ -56,6 +56,37 @@ impl Access {
 
     pub fn is_exclusive(self) -> bool {
         self.exclusive
+    }
+
+    // The combined access of two declarations: reads, writes, and exclusivity
+    // union. Used to fold a data-dependent system's per-program accesses into
+    // its schedule-visible declaration.
+    pub fn union(self, other: Access) -> Access {
+        Access {
+            component_reads: self.component_reads.merged(other.component_reads),
+            component_writes: self.component_writes.merged(other.component_writes),
+            resource_reads: self.resource_reads.merged(other.resource_reads),
+            resource_writes: self.resource_writes.merged(other.resource_writes),
+            exclusive: self.exclusive || other.exclusive,
+        }
+    }
+
+    // Whether a read of this component id is within the declaration (a
+    // declared write implies read permission; exclusive allows everything).
+    pub fn may_read_component(self, id: ComponentId) -> bool {
+        self.exclusive || self.component_reads.contains(id) || self.component_writes.contains(id)
+    }
+
+    pub fn may_write_component(self, id: ComponentId) -> bool {
+        self.exclusive || self.component_writes.contains(id)
+    }
+
+    pub fn may_read_resource(self, id: ComponentId) -> bool {
+        self.exclusive || self.resource_reads.contains(id) || self.resource_writes.contains(id)
+    }
+
+    pub fn may_write_resource(self, id: ComponentId) -> bool {
+        self.exclusive || self.resource_writes.contains(id)
     }
 
     // Whether this system can run concurrently with `other`.
