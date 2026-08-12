@@ -588,6 +588,76 @@ fn copy_next_to_exe_reports_failures() {
 }
 
 #[test]
+fn copy_next_to_exe_skips_when_up_to_date() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+    let src = tmp.path().join("up2date.dll");
+    touch_with(&src, b"junk dll bytes");
+
+    // First call copies the DLL into place.
+    let mut out = Vec::new();
+    assert!(copy_next_to_exe(&env, &src, "up2date.dll", &mut out));
+    let dst = profile(tmp.path()).join("up2date.dll");
+    assert!(dst.is_file());
+
+    // Overwrite the destination with same-length sentinel bytes; a skipped copy
+    // leaves them untouched, a redundant copy would clobber them.
+    touch_with(&dst, b"sentinel bytes");
+
+    let mut second = Vec::new();
+    assert!(copy_next_to_exe(&env, &src, "up2date.dll", &mut second));
+    assert_eq!(fs::read(&dst).unwrap(), b"sentinel bytes");
+    // The source stays watched even when the copy is skipped.
+    assert!(has(&second, "rerun-if-changed"));
+}
+
+#[test]
+fn copy_next_to_exe_recopies_when_size_differs() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+    let src = tmp.path().join("resized.dll");
+    touch_with(&src, b"a longer set of dll bytes");
+
+    // A stale destination of a different length is not up to date.
+    let dst = profile(tmp.path()).join("resized.dll");
+    touch_with(&dst, b"short");
+
+    let mut out = Vec::new();
+    assert!(copy_next_to_exe(&env, &src, "resized.dll", &mut out));
+    assert_eq!(fs::read(&dst).unwrap(), b"a longer set of dll bytes");
+}
+
+#[test]
+fn copy_next_to_exe_recopies_when_source_newer() {
+    use std::time::{Duration, SystemTime};
+
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+
+    // Same size, but the source is stamped newer than the destination.
+    let src = tmp.path().join("newer.dll");
+    touch_with(&src, b"fresh bytes!");
+    let dst = profile(tmp.path()).join("newer.dll");
+    touch_with(&dst, b"stale bytes!");
+
+    // Setting the modified time needs a write handle on Windows.
+    let stamp = |path: &Path, secs: u64| {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    };
+    stamp(&dst, 100);
+    stamp(&src, 200);
+
+    let mut out = Vec::new();
+    assert!(copy_next_to_exe(&env, &src, "newer.dll", &mut out));
+    assert_eq!(fs::read(&dst).unwrap(), b"fresh bytes!");
+}
+
+#[test]
 fn profile_dir_walks_up_from_out_dir() {
     // Backslash paths only parse into components on Windows; on other hosts
     // `Path` treats the whole string as one component, so this case is

@@ -387,13 +387,23 @@ fn dxc_directives(env: &SdkEnv, out: &mut Vec<String>) {
 }
 
 // Copy `src` to `<target>/<profile>/<file_name>` so `LoadLibrary` (which
-// searches the .exe directory first) finds it. Returns false on failure after
-// recording a `cargo::warning`.
+// searches the .exe directory first) finds it. Skips the copy when the
+// destination is already current, which avoids a redundant overwrite (and the
+// Windows sharing violation it can raise while the DLL is loaded). Returns
+// false on failure after recording a `cargo::warning`.
 fn copy_next_to_exe(env: &SdkEnv, src: &Path, file_name: &str, out: &mut Vec<String>) -> bool {
     let Some(profile_dir) = profile_dir(env) else {
         return false;
     };
     let dst = profile_dir.join(file_name);
+
+    // Watch the source regardless of the copy below, so a newer SDK DLL
+    // retriggers the build script even when this run is skipped as up to date.
+    out.push(rerun_path(src));
+
+    if up_to_date(src, &dst) {
+        return true;
+    }
     if let Err(e) = std::fs::copy(src, &dst) {
         out.push(warning(&format!(
             "could not copy {} -> {}: {e}",
@@ -402,8 +412,22 @@ fn copy_next_to_exe(env: &SdkEnv, src: &Path, file_name: &str, out: &mut Vec<Str
         )));
         return false;
     }
-    out.push(rerun_path(src));
     true
+}
+
+// A prior copy is current when the destination exists, matches the source
+// size, and is no older than the source. `fs::copy` stamps the destination
+// with a fresh mtime, so an unchanged source stays up to date until it is
+// replaced by a newer SDK DLL (make-style staleness). Any metadata error is
+// treated as stale so the copy is attempted.
+fn up_to_date(src: &Path, dst: &Path) -> bool {
+    let (Ok(s), Ok(d)) = (std::fs::metadata(src), std::fs::metadata(dst)) else {
+        return false;
+    };
+    if s.len() != d.len() {
+        return false;
+    }
+    matches!((s.modified(), d.modified()), (Ok(sm), Ok(dm)) if dm >= sm)
 }
 
 // `<target>/<profile>/`, where the final binaries and bundled DLLs land.
