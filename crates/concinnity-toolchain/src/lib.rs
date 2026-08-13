@@ -1,10 +1,10 @@
 // Shared build-script support for the workspace.
 //
-// Besides the Metal shader precompilation in `metal_shaders`, two
-// responsibilities, both previously copy-pasted between the runtime crate's
-// build script and the editor crate's build script (and missing entirely from
-// the example binaries, which is why they failed to link against the runtime's
-// DLSS code on Windows):
+// Besides the Metal shader precompilation in `metal_shaders` and the source
+// hashing in `source_hash`, two responsibilities, both previously copy-pasted
+// between the runtime crate's build script and the editor crate's build script
+// (and missing entirely from the example binaries, which is why they failed to
+// link against the runtime's DLSS code on Windows):
 //
 // 1. Resolve the rendering backend once and emit it as a single cfg
 //    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 mod metal_shaders;
 mod sdks;
+mod source_hash;
 
 pub use metal_shaders::precompile_metal_shaders;
 use sdks::SdkEnv;
@@ -105,6 +106,31 @@ pub fn setup_graphics_sdks(backend: Backend, opts: SdkOptions) {
     for line in sdks::graphics_sdk_directives(backend, opts, &env) {
         println!("{line}");
     }
+}
+
+// Hash the Rust sources under `roots`, and emit the rerun directives that
+// re-run the calling build script when any of them change. Each root is either
+// a directory tree (every `.rs` under it participates) or a single file.
+//
+// The hash is what a content-addressed cache folds in so that a change to the
+// code producing its stored bytes evicts entries whose other inputs did not
+// move. See `source_hash` for the shape of the guarantee.
+pub fn hash_sources(roots: &[PathBuf]) -> u32 {
+    let workspace = workspace_root().expect("build script runs inside the workspace");
+    let workspace = workspace.canonicalize().unwrap_or(workspace);
+    let mut named = Vec::new();
+    for root in roots {
+        // Directory-level rerun directives catch added and removed files.
+        println!("cargo:rerun-if-changed={}", root.display());
+        let mut files = Vec::new();
+        source_hash::collect(root, &mut files);
+        named.extend(
+            files
+                .into_iter()
+                .map(|file| (source_hash::relative_name(&workspace, &file), file)),
+        );
+    }
+    source_hash::hash_named(&mut named)
 }
 
 // Default SDK install roots, used when the matching env var is unset.

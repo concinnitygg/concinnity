@@ -308,6 +308,13 @@ impl VkContext {
 
                 let instance = unsafe { entry.create_instance(&instance_info, None) }
                     .map_err(|e| format!("create instance: {e}"))?;
+                // A run with no layer messages looks exactly like a run the layer
+                // found nothing wrong with, so say which one happened. Reaching
+                // here with the layer requested means it loaded: a missing
+                // `VK_LAYER_KHRONOS_validation` fails instance creation above.
+                if validation {
+                    tracing::info!("vulkan validation layer: enabled");
+                }
 
                 //  Debug messenger
                 // Budget the messenger callback consumes to drop benign DLSS first-frame

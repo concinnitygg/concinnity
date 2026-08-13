@@ -18,9 +18,17 @@
 //     aliasing input.
 //
 // Resources split into two origins. `import_texture` = engine-owned: the
-// resource outlives the frame (the cross-frame shadow map, the `scene_pre_taa`
-// / `scene_color` aliases read at v0, the froxel volume, the cross-frame Hi-Z
-// pyramid) and the backend always owns its GPU object. `create_texture` =
+// resource outlives the frame (the cross-frame shadow map, the TAA history
+// `scene_color`, the froxel volume, the cross-frame Hi-Z pyramid) and the
+// backend always owns its GPU object.
+//
+// A resource is declared only where a pass actually writes it. Several engine
+// bindings point two names at one texture depending on configuration --
+// `scene_pre_taa` is `hdr_resolve` without a reflection resolve, `scene_color`
+// is the pre-TAA scene without TAA, `hdr_color` is the resolve target without
+// MSAA -- and declaring the second name anyway would give one GPU object two
+// independent barrier timelines. The builder threads the upstream handle
+// through instead, so one texture is always one resource. `create_texture` =
 // transient: single-frame intermediates (hdr intermediates excepted for now)
 // the aliasing planner ([`super::alias`]) may pack into shared physical memory,
 // since their `[first, last]` lifetimes are disjoint. In practice only
@@ -94,11 +102,10 @@ pub struct FrameGraphInputs {
     pub taa_enabled: bool,
     // `true` when SSR is on. The graph adds an `SsrResolve` render pass
     // that reads the post-decoration `hdr_resolve` and writes the
-    // imported `scene_pre_taa` texture. When TAA is also on, TaaResolve
-    // reads the post-SsrResolve `scene_pre_taa` version. When TAA is
-    // off, scene_pre_taa is aliased to scene_color (same GPU object) by
-    // the engine binding, so Bloom + Composite see the SsrResolve
-    // output via declaration-order tie-breaking.
+    // imported `scene_pre_taa` texture, which only exists when this or
+    // `rt_reflections_enabled` is set. When TAA is also on, TaaResolve
+    // reads the post-SsrResolve version; with TAA off, Bloom +
+    // Composite read that version directly.
     pub ssr_enabled: bool,
     // `true` when the particle system is going to run this frame:
     // `particle_pipelines` built AND at least one live emitter. The
@@ -159,9 +166,9 @@ pub struct FrameGraphInputs {
     // AutoExposure samples the pre-raymarch scene) and writes the next
     // version that Decals then bumps further. The pass also RMWs the
     // main depth attachment so subsequent passes see raymarched
-    // surfaces' depth, but depth is not declared as a graph edge here
-    // (same rationale as Transparent / Decals / Fog: the executor
-    // binds the live depth attachment at encode time).
+    // surfaces' depth, and that read-modify-write is declared, which is
+    // what makes the post-Raymarch depth version the one every later
+    // decoration pass samples.
     pub raymarch_enabled: bool,
     // `true` when two-pass Hi-Z occlusion culling is requested
     // (`PostProcessConfig.occlusion_two_pass`) AND the bindless GPU-cull
@@ -229,6 +236,13 @@ pub struct FrameGraphInputs {
     // Per-slice edge of the spot shadow map array, so the imported resource
     // carries its real dimensions.
     pub spot_shadow_slice_size: u32,
+    // `true` when the GPU-cull path built a Hi-Z pyramid, so the frame ends by
+    // reducing its final depth into that pyramid for the next frame's phase-1
+    // cull. The graph adds a terminal `HizFinal` compute pass reading the last
+    // depth version and writing the pyramid, plus a `Cull` read of the pyramid
+    // the previous frame left there, which is what orders this frame's cull
+    // ahead of the rebuild that overwrites it.
+    pub hiz_build_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -267,6 +281,7 @@ impl FrameGraphInputs {
             composite_reads_ao: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
+            hiz_build_enabled: false,
         }
     }
 }
@@ -282,17 +297,24 @@ impl FrameGraphInputs {
 // ```text
 // Cull → SsrPrepass → SsaoBlur → Shadow → Main → AutoExposure
 //   → Raymarch → Velocity → Decals → Fog → ParticlesDraw → SsrResolve
-//   → Transparent → TaaResolve → Bloom → Composite
+//   → Transparent → TaaResolve → Bloom → HizFinal → Composite
 // ```
+//
+// Main depth has a shorter chain over the same spine: Main writes it,
+// Main2 and Raymarch bump it, and Decals / Fog / Lines / Transparent /
+// HizFinal all sample the last version. HizFinal is the frame's terminal
+// depth consumer, which is what keeps the depth live to the end of the
+// graph rather than only to the last decoration.
 //
 // The hdr_resolve version chain (Main writes v1, AutoExposure reads
 // v1 (WAR-pinned before subsequent writers), Decals → v2, Fog → v3,
 // ParticlesDraw → v4, SsrResolve reads v4) is the spine that
 // orders the bulk of the post stack. scene_pre_taa / scene_color /
 // bloom_top each have their own short version chains that branch off
-// the spine. Transparent extends the scene_pre_taa chain by one
-// version when enabled (RMW after SsrResolve), so TaaResolve / Upscale
-// pick up translucent geometry as part of temporal accumulation.
+// the spine where a pass writes them. Transparent extends whichever
+// chain carries the pre-TAA scene -- scene_pre_taa when a reflection
+// resolve produced it, hdr_resolve itself otherwise -- so TaaResolve /
+// Upscale pick up translucent geometry as part of temporal accumulation.
 //
 // When `two_pass_occlusion_enabled` is on the spine gains a phase-2
 // prefix: `Cull → Main → HizBuild → Cull2 → Main2 → AutoExposure →
@@ -340,10 +362,20 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 
     let mut b = GraphBuilder::new();
 
-    // Engine-owned imports the Main pass writes into. hdr_resolve is
-    // also written by Decals / Fog / ParticlesDraw and read by
+    // Engine-owned imports the Main pass writes into. hdr_resolve is the scene
+    // spine: also written by Decals / Fog / ParticlesDraw and read by
     // AutoExposure / SsrResolve, so its version chain is the longest.
-    let hdr_color = b.import_texture("hdr_color", hdr_color_desc(inputs));
+    //
+    // `hdr_color` is the multisample colour attachment, and it exists only when
+    // the world is multisampled. Without MSAA there is no separate resolve step
+    // and the single colour target *is* the spine, which every backend already
+    // reflects (Vulkan leaves `color_images` empty; DirectX and Metal leave
+    // their `resolve` field `None` and bind `color`). Declaring it
+    // unconditionally would put two graph resources on one GPU object, and the
+    // moment either became graph-driven they would transition it twice from
+    // states it was no longer in.
+    let hdr_color = (inputs.hdr_sample_count > 1)
+        .then(|| b.import_texture("hdr_color", hdr_color_desc(inputs)));
     let hdr_depth = b.import_texture("hdr_depth", hdr_depth_desc(inputs));
     let hdr_resolve = b.import_texture("hdr_resolve", hdr_resolve_desc(inputs));
 
@@ -352,6 +384,13 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // that requests two-pass without a bindless shader falls back to the
     // single-pass path with no orphaned phase-2 nodes.
     let two_pass = inputs.bindless_cull_enabled && inputs.two_pass_occlusion_enabled;
+
+    // The Hi-Z depth pyramid, imported up front because `Cull` reads the version
+    // the *previous* frame left there before `HizFinal` (and, under two-pass,
+    // the mid-frame `HizBuild`) overwrites it. Never a transient: its contents
+    // cross the frame boundary, so the aliasing planner must not place it.
+    let hiz_pyramid = (inputs.hiz_build_enabled || two_pass)
+        .then(|| b.import_texture("hiz_pyramid", hiz_pyramid_desc(inputs)));
 
     // Cull (compute) writes the indirect-draw args buffer Main consumes
     // through executeCommandsInBuffer. Under two-pass occlusion it also
@@ -368,6 +407,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             None
         };
         let mut cull = b.add_pass(PassId::Cull, PassKind::Compute);
+        // The previous frame's pyramid is this cull's occlusion test. Declaring
+        // the read is what gives the terminal rebuild a WAR edge to wait on.
+        if let Some(h) = hiz_pyramid {
+            cull.read_texture(h);
+        }
         let da = cull.write_buffer(draw_args);
         let cs = cull_status.map(|h| cull.write_buffer(h));
         (Some(da), cs)
@@ -493,7 +537,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(h) = ao_output_v1 {
             main.read_texture(h);
         }
-        let _ = main.write_texture(hdr_color);
+        if let Some(h) = hdr_color {
+            let _ = main.write_texture(h);
+        }
         let depth_v1 = main.write_texture(hdr_depth);
         let resolve_v1 = main.write_texture(hdr_resolve);
         (resolve_v1, depth_v1)
@@ -506,17 +552,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // the head of the post-decoration chain: AutoExposure and every later
     // RMW pass see the combined phase-1 + phase-2 scene. Without two-pass
     // the head stays at Main's hdr_resolve_v1.
-    let hdr_resolve_head = if two_pass {
+    let mut hiz_cur = hiz_pyramid;
+    let mut depth_cur = hdr_depth_v1;
+    let hdr_resolve_head = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
         // HizBuild (compute): read phase-1 depth, write the Hi-Z pyramid.
-        // The depth RAW edge pins it after Main. Imported, not transient: the
-        // pyramid is cross-frame persistent (written this frame, sampled by next
-        // frame's Cull before it is rewritten) and lives as a multi-mip image the
-        // executor owns, so its memory is never reusable by another transient and
-        // the aliasing planner must not place it.
-        let hiz = b.import_texture("hiz_pyramid", hiz_pyramid_desc(inputs));
+        // The depth RAW edge pins it after Main; the pyramid write is a WAR
+        // against Cull's read of the previous frame's contents.
         let mut hizb = b.add_pass(PassId::HizBuild, PassKind::Compute);
-        hizb.read_texture(hdr_depth_v1);
+        hizb.read_texture(depth_cur);
         let hiz_v1 = hizb.write_texture(hiz);
+        hiz_cur = Some(hiz_v1);
 
         // Cull2 (compute): read the rebuilt pyramid + the phase-1 status
         // buffer, write a second indirect-draw-args buffer Main2 consumes.
@@ -534,8 +579,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // HizBuild; the hdr_color / hdr_resolve WAW edges pin it after Main.
         let mut main2 = b.add_pass(PassId::Main2, PassKind::Render);
         main2.read_buffer(draw_args2_v1);
-        let _ = main2.write_texture(hdr_depth_v1);
-        let _ = main2.write_texture(hdr_color);
+        depth_cur = main2.write_texture(depth_cur);
+        if let Some(h) = hdr_color {
+            let _ = main2.write_texture(h);
+        }
         main2.write_texture(hdr_resolve_v1)
     } else {
         hdr_resolve_v1
@@ -578,11 +625,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // pass; AutoExposure's WAR-read on hdr_resolve_head pins it before
     // Raymarch (so SDF brightness doesn't skew exposure for the same
     // frame), matching the doc's chosen one-frame-lag trade-off.
+    //
+    // Main depth rides the same pattern: Raymarch sphere-traces against it and
+    // writes the hit depth back, so it bumps the depth version, and every later
+    // decoration samples that version rather than the one Main left.
     let mut h = hdr_resolve_head;
     if inputs.raymarch_enabled {
         let mut rm = b.add_pass(PassId::Raymarch, PassKind::Render);
         rm.read_texture(h);
         h = rm.write_texture(h);
+        depth_cur = rm.write_texture(depth_cur);
     }
     // SSGI reads the lit scene (its bounce-radiance source) and RMWs the
     // gathered + denoised indirect term back in. Slots right after Raymarch so
@@ -597,9 +649,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         h = ssgi.write_texture(h);
     }
     if inputs.decals_enabled {
-        h = b
-            .add_pass(PassId::Decals, PassKind::Render)
-            .write_texture(h);
+        // Projected decals reconstruct each pixel's world position from the
+        // scene depth, so the pass samples depth while blend-writing colour.
+        let mut decals = b.add_pass(PassId::Decals, PassKind::Render);
+        decals.read_texture(depth_cur);
+        h = decals.write_texture(h);
     }
     if inputs.fog_enabled {
         // FogFroxel (compute) populates the 3D scatter/transmittance
@@ -609,11 +663,18 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // All three backends implement the froxel path; the Fog render
         // pass trilinear-samples the volume by (screen_uv, view_z).
         let froxel_v0 = b.import_texture("fog_froxel_volume", froxel_volume_desc(inputs));
-        let froxel_v1 = b
-            .add_pass(PassId::FogFroxel, PassKind::Compute)
-            .write_texture(froxel_v0);
+        let mut froxel = b.add_pass(PassId::FogFroxel, PassKind::Compute);
+        // Each slab does a cascade tap, so the kernel is a second reader of the
+        // shadow map alongside Main. Declaring it puts the compute stage into the
+        // read run's union, which is what makes one transition serve both.
+        if let Some(h) = shadow_v1 {
+            froxel.read_texture(h);
+        }
+        let froxel_v1 = froxel.write_texture(froxel_v0);
         let mut fog_pass = b.add_pass(PassId::Fog, PassKind::Render);
         fog_pass.read_texture(froxel_v1);
+        // Scene depth bounds the ray march / froxel lookup per pixel.
+        fog_pass.read_texture(depth_cur);
         h = fog_pass.write_texture(h);
     }
     if inputs.particles_enabled {
@@ -624,27 +685,21 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     if inputs.lines_enabled {
         // Last of the hdr_resolve decorations: line geometry draws over the
         // lit + decorated scene, and SSR / TAA then treat it like any other
-        // scene content. Depth is not declared (same rationale as Decals /
-        // Fog / Transparent); the executor binds the live depth at encode.
-        h = b.add_pass(PassId::Lines, PassKind::Render).write_texture(h);
+        // scene content. Samples depth rather than testing against it, so a
+        // line behind geometry fades instead of disappearing.
+        let mut lines = b.add_pass(PassId::Lines, PassKind::Render);
+        lines.read_texture(depth_cur);
+        h = lines.write_texture(h);
     }
     let hdr_resolve_cur = h;
 
-    // scene_pre_taa is imported when SsrResolve writes to it,
-    // Transparent reads + writes it, or TaaResolve / Upscale reads
-    // from it. SsrResolve reads the post-Particles hdr_resolve when
-    // both are on. Transparent RMWs whatever the latest scene-pre-taa
-    // version is (SsrResolve's output when SSR is on, the imported v0,
-    // engine-aliased to hdr_resolve, when SSR is off). Without SSR
-    // and without transparency, scene_pre_taa stays at v0 and
-    // TaaResolve / Upscale read the imported handle (covered by the
-    // imported-v0 producer rule).
-    let need_scene_pre_taa = inputs.ssr_enabled
-        || inputs.rt_reflections_enabled
-        || inputs.transparent_enabled
-        || inputs.taa_enabled
-        || inputs.upscale_enabled;
-    let scene_pre_taa_cur = if need_scene_pre_taa {
+    // `scene_pre_taa` is a distinct texture only when a pass writes it:
+    // SsrResolve / RtReflections produce it, and Transparent read-modify-writes
+    // it. With neither resolve the engine binds the pre-TAA scene name straight
+    // to `hdr_resolve`, so declaring it here would put two graph resources on
+    // one GPU object -- each with its own barrier timeline over the same memory.
+    // Threading the upstream handle expresses that binding with one resource.
+    let scene_pre_taa_cur = if inputs.rt_reflections_enabled || inputs.ssr_enabled {
         let scene_pre_taa = b.import_texture("scene_pre_taa", scene_color_desc(inputs));
         // SsrResolve and RtReflections occupy the same slot: both read the
         // post-decoration hdr_resolve and write scene_pre_taa. Hardware RT
@@ -656,46 +711,56 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             let mut rt = b.add_pass(PassId::RtReflections, PassKind::Render);
             rt.read_texture(hdr_resolve_cur);
             rt.write_texture(scene_pre_taa)
-        } else if inputs.ssr_enabled {
+        } else {
             let mut ssr = b.add_pass(PassId::SsrResolve, PassKind::Render);
             ssr.read_texture(hdr_resolve_cur);
             ssr.write_texture(scene_pre_taa)
-        } else {
-            scene_pre_taa
         };
         if inputs.transparent_enabled {
             let mut trans = b.add_pass(PassId::Transparent, PassKind::Render);
-            // Read hdr_resolve_cur to pin Transparent after the entire
-            // post-decoration hdr_resolve chain (Main → Decals → Fog →
-            // ParticlesDraw). When SSR is on this is redundant with the
-            // scene_pre_taa edge below; when SSR is off it's the only
-            // edge ordering Transparent after Main. Depth is *not*
-            // declared here; decals / fog don't declare it either,
-            // and reading the imported (v0) handle would create a WAR
-            // edge pinning Transparent before Main (cycle). The
-            // executor binds the live depth attachment at encode time.
+            // Pin Transparent after the whole post-decoration hdr_resolve chain
+            // (Main → Decals → Fog → ParticlesDraw), which the scene_pre_taa
+            // edge below does not imply.
             trans.read_texture(hdr_resolve_cur);
-            // RMW the latest scene-pre-taa version. The read declares
-            // the sample dependency (translucents sample the resolved
-            // scene for refraction); the write produces the new
-            // blended version downstream passes consume.
+            // Depth is read at its latest version, not the imported v0:
+            // reading v0 would be a WAR against Main's write and pin
+            // Transparent *before* Main, closing a cycle.
+            trans.read_texture(depth_cur);
+            // RMW the resolve output. The read declares the sample dependency
+            // (translucents sample the resolved scene for refraction); the
+            // write produces the blended version downstream passes consume.
             trans.read_texture(current);
             current = trans.write_texture(current);
         }
         current
+    } else if inputs.transparent_enabled {
+        // With no reflection resolve the pre-TAA scene *is* `hdr_resolve` and
+        // glass blends straight into it, so Transparent extends the hdr_resolve
+        // chain by one version instead of branching a second resource onto the
+        // same object.
+        let mut trans = b.add_pass(PassId::Transparent, PassKind::Render);
+        trans.read_texture(depth_cur);
+        trans.read_texture(hdr_resolve_cur);
+        trans.write_texture(hdr_resolve_cur)
     } else {
-        TextureHandle::INVALID
+        hdr_resolve_cur
     };
 
-    // scene_color is the engine-owned output the post-TAA composite
-    // stack consumes. TaaResolve or Upscale writes it; otherwise it's
-    // aliased by engine binding to the latest pre-TAA scene texture.
-    // The two are mutually exclusive: the upscaler does its own
-    // temporal accumulation, so layering TaaResolve on top would
-    // double-temporal the scene.
-    let scene_color = b.import_texture("scene_color", scene_color_desc(inputs));
+    // `scene_color` is the engine-owned output the post-TAA composite stack
+    // consumes, and -- with TAA on -- the history slot next frame samples, which
+    // is why it stays imported rather than becoming a transient. Declared only
+    // when TaaResolve or Upscale writes it, for the same one-object-one-resource
+    // reason as above: with neither, the engine binds the name to the latest
+    // pre-TAA scene texture. The two writers are mutually exclusive -- the
+    // upscaler does its own temporal accumulation, so layering TaaResolve on top
+    // would double-temporal the scene.
     let scene_color_cur = if inputs.upscale_enabled {
-        let mut up = b.add_pass(PassId::Upscale, PassKind::Render);
+        let scene_color = b.import_texture("scene_color", scene_color_desc(inputs));
+        // Compute, not render: the temporal upscaler is a dispatch, so its reads
+        // want the non-pixel shader-resource state. Declaring it as a render
+        // pass put the fragment stage in the read-stage union and left the
+        // backend flipping the scene and the motion buffer by hand.
+        let mut up = b.add_pass(PassId::Upscale, PassKind::Compute);
         up.read_texture(scene_pre_taa_cur);
         // Explicit velocity read so the toposort pins Velocity →
         // Upscale. The scaler consumes motion vectors directly.
@@ -704,6 +769,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         up.write_texture(scene_color)
     } else if inputs.taa_enabled {
+        let scene_color = b.import_texture("scene_color", scene_color_desc(inputs));
         let mut taa = b.add_pass(PassId::TaaResolve, PassKind::Render);
         taa.read_texture(scene_pre_taa_cur);
         // Explicit velocity read so the toposort pins Velocity →
@@ -714,7 +780,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         taa.write_texture(scene_color)
     } else {
-        scene_color
+        scene_pre_taa_cur
     };
 
     let bloom_top_v1 = if inputs.bloom_enabled {
@@ -727,6 +793,18 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     } else {
         None
     };
+
+    // HizFinal (compute) reduces the frame's final depth into the Hi-Z pyramid
+    // the next frame's phase-1 Cull tests against. Declared last of the
+    // depth consumers so it reads the version every decoration pass has
+    // finished with, which is also what keeps the depth's graph lifetime
+    // honest: without this node the depth would look dead after the last
+    // decoration while a post-graph pass still read it.
+    if let (true, Some(hiz)) = (inputs.hiz_build_enabled, hiz_cur) {
+        let mut hizf = b.add_pass(PassId::HizFinal, PassKind::Compute);
+        hizf.read_texture(depth_cur);
+        let _ = hizf.write_texture(hiz);
+    }
 
     // Composite (the presenter) reads scene_color + optional bloom_top,
     // and writes the swapchain via `presents()`. The occlusion view mode adds
@@ -993,6 +1071,7 @@ mod tests {
             composite_reads_ao: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
+            hiz_build_enabled: false,
         }
     }
 
@@ -1069,6 +1148,167 @@ mod tests {
         assert_eq!(g.passes[2].kind, PassKind::Compute); // HizBuild
         assert_eq!(g.passes[3].kind, PassKind::Compute); // Cull2
         assert_eq!(g.passes[4].kind, PassKind::Render); // Main2
+    }
+
+    // Index of `label` in the compiled graph's resource arena.
+    fn resource_of(g: &CompiledGraph, label: &str) -> usize {
+        g.resources
+            .iter()
+            .position(|r| r.label == label)
+            .unwrap_or_else(|| panic!("{label} missing from the graph"))
+    }
+
+    #[test]
+    fn hiz_final_closes_the_frame_over_the_last_depth_version() {
+        // The terminal pyramid rebuild must read the depth version every
+        // decoration pass has already written and read, so main depth stays live
+        // to the end of the graph. Raymarch bumps depth to v2, so HizFinal reads
+        // v2 and lands after Lines / Transparent, which read the same version.
+        let mut i = all_off();
+        i.hiz_build_enabled = true;
+        i.raymarch_enabled = true;
+        i.lines_enabled = true;
+        i.transparent_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::Lines) < pos(PassId::HizFinal));
+        assert!(pos(PassId::Transparent) < pos(PassId::HizFinal));
+        assert!(pos(PassId::HizFinal) < pos(PassId::Composite));
+
+        let depth = resource_of(&g, "hdr_depth");
+        let hizf = &g.passes[pos(PassId::HizFinal)];
+        let read = hizf
+            .reads
+            .iter()
+            .find(|r| r.resource_index() == depth)
+            .expect("HizFinal reads depth");
+        assert_eq!(read.version(), 2, "Main writes v1, Raymarch bumps to v2");
+        // And it is the graph's last touch of depth: the resource's lifetime has
+        // to reach this pass or an aliaser could reuse the memory under it.
+        assert_eq!(g.resources[depth].lifetime.last, pos(PassId::HizFinal));
+    }
+
+    #[test]
+    fn cull_reads_the_pyramid_the_terminal_build_overwrites() {
+        // Phase-1 cull tests against the pyramid the previous frame left. That
+        // read is what gives the terminal rebuild a write-after-read edge; without
+        // it the rebuild is unordered against the cull that is still sampling.
+        let mut i = all_off();
+        i.hiz_build_enabled = true;
+        i.bindless_cull_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        let hiz = resource_of(&g, "hiz_pyramid");
+        assert!(
+            g.passes[pos(PassId::Cull)]
+                .reads
+                .iter()
+                .any(|r| r.resource_index() == hiz)
+        );
+        assert!(pos(PassId::Cull) < pos(PassId::HizFinal));
+    }
+
+    #[test]
+    fn hiz_final_off_means_no_pyramid_in_the_graph() {
+        // A world without the GPU-cull path builds no pyramid, so neither the node
+        // nor the resource may appear (an imported resource with no pass would
+        // still take a registry entry in every backend).
+        let g = build_frame_graph(&all_off()).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        assert!(!order.contains(&PassId::HizFinal));
+        assert!(!g.resources.iter().any(|r| r.label == "hiz_pyramid"));
+    }
+
+    #[test]
+    fn a_hidden_world_still_rebuilds_the_pyramid() {
+        // Masking drops every world pass, but the pyramid feeds the *next* frame's
+        // cull, so the terminal build survives: dropping it would leave a stale
+        // pyramid the frame after the menu closes.
+        let mut i = all_off();
+        i.hiz_build_enabled = true;
+        i.bindless_cull_enabled = true;
+        i.world_hidden = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        assert_eq!(
+            order,
+            vec![PassId::Main, PassId::HizFinal, PassId::Composite]
+        );
+    }
+
+    #[test]
+    fn depth_readers_all_sample_the_post_raymarch_version() {
+        // Raymarch writes hit depth back, so every later decoration must sample
+        // the version it produced. Reading Main's version instead would be a
+        // write-after-read against Raymarch and pin the readers ahead of it.
+        let mut i = all_off();
+        i.raymarch_enabled = true;
+        i.decals_enabled = true;
+        i.fog_enabled = true;
+        i.lines_enabled = true;
+        i.transparent_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        let depth = resource_of(&g, "hdr_depth");
+        for pass in [
+            PassId::Decals,
+            PassId::Fog,
+            PassId::Lines,
+            PassId::Transparent,
+        ] {
+            let read = g.passes[pos(pass)]
+                .reads
+                .iter()
+                .find(|r| r.resource_index() == depth)
+                .unwrap_or_else(|| panic!("{pass:?} reads depth"));
+            assert_eq!(read.version(), 2, "{pass:?}");
+        }
+        assert!(pos(PassId::Raymarch) < pos(PassId::Decals));
+    }
+
+    #[test]
+    fn the_msaa_colour_attachment_is_declared_only_when_multisampled() {
+        // Without MSAA there is no resolve step and the single colour target is
+        // the spine, so declaring `hdr_color` too would put two graph resources
+        // on one GPU object. Every backend already reflects this: Vulkan leaves
+        // `color_images` empty, DirectX and Metal leave `resolve` None.
+        let mut i = all_off();
+        i.hdr_sample_count = 1;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(!g.resources.iter().any(|r| r.label == "hdr_color"));
+        assert!(g.resources.iter().any(|r| r.label == "hdr_resolve"));
+
+        i.hdr_sample_count = 4;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.resources.iter().any(|r| r.label == "hdr_color"));
+        assert!(g.resources.iter().any(|r| r.label == "hdr_resolve"));
+    }
+
+    #[test]
+    fn dropping_the_msaa_attachment_keeps_the_phase_order() {
+        // The hdr_color write-after-write is one of three edges pinning Main2
+        // after Main; the depth and hdr_resolve writes carry the order on their
+        // own, so a single-sampled two-pass frame still runs in phase order.
+        let mut i = all_off();
+        i.hdr_sample_count = 1;
+        i.bindless_cull_enabled = true;
+        i.two_pass_occlusion_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        assert_eq!(
+            order,
+            vec![
+                PassId::Cull,
+                PassId::Main,
+                PassId::HizBuild,
+                PassId::Cull2,
+                PassId::Main2,
+                PassId::Composite,
+            ]
+        );
     }
 
     #[test]
@@ -1459,9 +1699,8 @@ mod tests {
 
     #[test]
     fn transparent_works_without_ssr() {
-        // Without SSR, scene_pre_taa stays at v0 (imported alias of
-        // hdr_resolve). Transparent still RMWs it; the imported-v0
-        // producer rule treats hdr_resolve_cur as scene_pre_taa's v0.
+        // Without a reflection resolve there is no scene_pre_taa texture, so
+        // Transparent RMWs hdr_resolve directly and TaaResolve reads that.
         let mut i = all_off();
         i.taa_enabled = true;
         i.velocity_enabled = true;
@@ -1473,6 +1712,109 @@ mod tests {
         let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
         assert!(pos(PassId::Main) < pos(PassId::Transparent));
         assert!(pos(PassId::Transparent) < pos(PassId::TaaResolve));
+    }
+
+    // A resource is declared only where a pass writes it. The engine points
+    // several names at one texture depending on configuration, and declaring the
+    // second name anyway would give one GPU object two barrier timelines -- the
+    // shape that shipped 129,909 debug-layer errors when two entries drove one
+    // buffer. These pin the three configurations where that could recur.
+
+    #[test]
+    fn no_reflection_resolve_means_no_scene_pre_taa_resource() {
+        // With neither SSR nor RT the engine binds the pre-TAA scene name to
+        // hdr_resolve itself, so a scene_pre_taa resource would be a second
+        // handle on that object.
+        let mut i = all_off();
+        i.taa_enabled = true;
+        i.velocity_enabled = true;
+        i.transparent_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(
+            !g.resources.iter().any(|r| r.label == "scene_pre_taa"),
+            "scene_pre_taa is hdr_resolve here; it must not be declared twice"
+        );
+        // And it reappears the moment a pass genuinely writes it.
+        i.ssr_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.resources.iter().any(|r| r.label == "scene_pre_taa"));
+    }
+
+    #[test]
+    fn no_temporal_pass_means_no_scene_color_resource() {
+        // Neither TaaResolve nor Upscale runs, so scene_color is bound to the
+        // latest pre-TAA scene texture and Composite reads that version.
+        let mut i = all_off();
+        i.ssr_enabled = true;
+        i.bloom_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(
+            !g.resources.iter().any(|r| r.label == "scene_color"),
+            "scene_color is the pre-TAA scene here; it must not be declared twice"
+        );
+        // Bloom and Composite consume the SsrResolve output instead.
+        let pre_taa = resource_of(&g, "scene_pre_taa");
+        let bloom = g
+            .passes
+            .iter()
+            .find(|p| p.id == PassId::Bloom)
+            .expect("bloom present");
+        assert!(
+            bloom.reads.iter().any(|r| r.resource_index() == pre_taa),
+            "Bloom reads the resolve output directly"
+        );
+        i.taa_enabled = true;
+        i.velocity_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.resources.iter().any(|r| r.label == "scene_color"));
+    }
+
+    #[test]
+    fn glass_without_a_reflection_resolve_extends_the_hdr_chain() {
+        // Transparent blends into whichever texture carries the pre-TAA scene.
+        // With no resolve that is hdr_resolve, so its write must bump the
+        // hdr_resolve version rather than branch a second resource -- otherwise
+        // the glass blend and the decoration chain order independently over one
+        // object.
+        let mut i = all_off();
+        i.transparent_enabled = true;
+        i.decals_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let hdr = resource_of(&g, "hdr_resolve");
+        let trans = g
+            .passes
+            .iter()
+            .find(|p| p.id == PassId::Transparent)
+            .expect("transparent present");
+        let write = trans
+            .writes
+            .iter()
+            .find(|w| w.resource_index() == hdr)
+            .expect("Transparent writes hdr_resolve");
+        // It RMWs: the version it produces is one past the decoration chain's.
+        let read = trans
+            .reads
+            .iter()
+            .find(|r| r.resource_index() == hdr)
+            .expect("Transparent reads hdr_resolve");
+        assert_eq!(
+            write.version(),
+            read.version() + 1,
+            "the glass blend extends the chain it read"
+        );
+        // Composite sees the blended version, not the pre-glass one.
+        let composite = g
+            .passes
+            .iter()
+            .find(|p| p.id == PassId::Composite)
+            .expect("composite present");
+        assert!(
+            composite
+                .reads
+                .iter()
+                .any(|r| r.resource_index() == hdr && r.version() == write.version()),
+            "Composite reads the post-glass version"
+        );
     }
 
     #[test]

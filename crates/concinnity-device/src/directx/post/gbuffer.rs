@@ -31,7 +31,7 @@ use crate::directx::pipeline::{
 };
 use crate::directx::texture::{
     create_buffer, create_main_depth_texture, create_rt_target, create_rt_target_with_clear,
-    transition_barrier, write_format_rtv, write_format_srv,
+    write_format_rtv, write_format_srv,
 };
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
@@ -920,24 +920,10 @@ impl DxContext {
         let w = self.render_width;
         let h = self.render_height;
 
-        // Targets → RENDER_TARGET, clear, draw.
-        let nd_to_rt = transition_barrier(
-            &gb.normal_depth,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        let r_to_rt = transition_barrier(
-            &gb.roughness,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        let v_to_rt = transition_barrier(
-            &gb.velocity,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        unsafe { cmd.ResourceBarrier(&[nd_to_rt, r_to_rt, v_to_rt]) };
-
+        // The three colour targets are one graph resource (`gbuffer`), so the
+        // executor has already put them in RENDER_TARGET for this pass's write
+        // and the consumers' barrier takes them back out. `gb.depth` is not part
+        // of it and stays in DEPTH_WRITE throughout.
         let rtvs = [gb.normal_depth_rtv, gb.roughness_rtv, gb.velocity_rtv];
         unsafe {
             cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&gb.depth_dsv));
@@ -998,24 +984,6 @@ impl DxContext {
                 velocity_active,
             );
         }
-
-        // Targets → PIXEL_SHADER_RESOURCE for the consumers.
-        let nd_to_psr = transition_barrier(
-            &gb.normal_depth,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        let r_to_psr = transition_barrier(
-            &gb.roughness,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        let v_to_psr = transition_barrier(
-            &gb.velocity,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        unsafe { cmd.ResourceBarrier(&[nd_to_psr, r_to_psr, v_to_psr]) };
     }
 
     // Legacy CPU-driven G-buffer pre-pass: per-object `DrawIndexedInstanced` for

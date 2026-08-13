@@ -1011,6 +1011,13 @@ impl DxContext {
             hdr_color_rtv,
             clear_color,
         )?;
+        // The sample count is a hardware query with no authored knob, and it
+        // decides which of two shapes the frame has: with MSAA the main pass
+        // resolves `hdr_color` into a separate single-sample spine (and the
+        // render graph carries both as resources), without it `hdr_color` is the
+        // spine and there is no resolve step at all. Log it so a verification
+        // run can say which shape it exercised.
+        tracing::info!("d3d12 HDR target: {msaa_samples}x MSAA");
         let hdr_resolve = if msaa_samples > 1 {
             Some(create_hdr_resolve_target(&device, render_w, render_h)?)
         } else {

@@ -141,8 +141,8 @@ pub struct DebugArgs {
     #[arg(long)]
     pub debug_port: Option<u16>,
 
-    /// Enable graphics API validation. Omitted defaults to on for debug builds
-    // and off for release. See `RunArgs::validation`.
+    /// Enable graphics API validation, overriding the build profile
+    // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub validation: Option<bool>,
 }
@@ -254,21 +254,22 @@ pub struct EditorArgs {
     #[arg(long)]
     pub debug_port: Option<u16>,
 
-    /// Enable graphics API validation. Omitted defaults to on for debug builds
-    // and off for release. See `RunArgs::validation`.
+    /// Enable graphics API validation, overriding the build profile
+    // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
     pub validation: Option<bool>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct RunArgs {
-    /// Enable graphics API validation. Omitted defaults to on for debug builds
+    /// Enable graphics API validation, overriding the build profile
     // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
     // layer (the process re-execs once with `MTL_DEBUG_LAYER` set, since Metal
-    // cannot toggle it from inside a running process). Omitted defaults to on for
-    // debug builds and off for release; pass `--validation false` to force it off
-    // in a debug build. The heavier Metal shader validation is not enabled by
-    // this flag; set `MTL_SHADER_VALIDATION=1` in the environment for that.
+    // cannot toggle it from inside a running process). Omitting the flag defers
+    // to the build profile: on for debug builds, off for release. Pass
+    // `--validation false` to force it off in a debug build. The heavier Metal
+    // shader validation is not enabled by this flag; set `MTL_SHADER_VALIDATION=1`
+    // in the environment for that.
     #[arg(long)]
     pub validation: Option<bool>,
 

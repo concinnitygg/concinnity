@@ -19,6 +19,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::texture::transition_barrier;
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
@@ -444,6 +445,18 @@ impl DxContext {
         }
         let params_gva = unsafe { ssgi.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
+        // The gather samples the scene spine while the composite blends into it,
+        // so this node reads and writes one resource. The graph models that as a
+        // single write and leaves the spine in RENDER_TARGET; sampling it needs
+        // the shader-resource state, so borrow it for the gather and hand it
+        // back. Finer than one-state-per-resource, hence inline.
+        let gather_read = transition_barrier(
+            self.hdr_scene_target(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        unsafe { cmd.ResourceBarrier(&[gather_read]) };
+
         // Gather: hemisphere ray-march over the G-buffer -> gi target. t0 = lit
         // scene (the bounce-radiance source); t1 = pre-pass G-buffer.
         encode_fullscreen(
@@ -452,6 +465,7 @@ impl DxContext {
                 ssgi,
                 output: &ssgi.gi,
                 output_rtv: ssgi.gi_rtv,
+                graph_driven: false,
                 pso: &ssgi.gather_pso,
                 source_srv: self.hdr.srv_gpu,
                 gbuffer_srv,
@@ -460,27 +474,23 @@ impl DxContext {
             cmd,
         );
 
-        // Composite: depth-aware blur of gi, additively blended into the scene.
-        // The scene target is `hdr_resolve` with MSAA on, `hdr_color` with MSAA
-        // off (the same selection the decal / fog RMW passes make). t0 = noisy
+        let gather_done = transition_barrier(
+            self.hdr_scene_target(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        );
+        unsafe { cmd.ResourceBarrier(&[gather_done]) };
+
+        // Composite: depth-aware blur of gi, additively blended into the scene
+        // spine, back in the RENDER_TARGET the graph left it in. t0 = noisy
         // gather output; t1 = G-buffer for depth weighting.
-        let (scene_res, scene_rtv): (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) =
-            if let Some(hdr_resolve) = &self.hdr.resolve {
-                (
-                    hdr_resolve,
-                    self.hdr
-                        .resolve_rtv
-                        .expect("hdr_resolve_rtv set when hdr_resolve is Some"),
-                )
-            } else {
-                (&self.hdr.color, self.hdr.color_rtv)
-            };
         encode_fullscreen(
             &SsgiPass {
                 ctx: self,
                 ssgi,
-                output: scene_res,
-                output_rtv: scene_rtv,
+                output: self.hdr_scene_target(),
+                output_rtv: self.hdr_scene_rtv(),
+                graph_driven: true,
                 pso: &ssgi.composite_pso,
                 source_srv: ssgi.gi_srv_gpu,
                 gbuffer_srv,
@@ -503,6 +513,10 @@ struct SsgiPass<'a> {
     // Target this sub-pass writes (gi for the gather, the scene for the composite).
     output: &'a ID3D12Resource,
     output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    // Whether the executor owns `output`'s transitions. True for the composite
+    // (the scene spine is a graph resource); false for the gather, whose `gi`
+    // target lives entirely inside this node and so keeps its own bracket.
+    graph_driven: bool,
     pso: &'a ID3D12PipelineState,
     // t0: lit scene for the gather, the noisy gi target for the composite.
     source_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -515,8 +529,13 @@ impl FullscreenPass for SsgiPass<'_> {
     type Rec = ID3D12GraphicsCommandList;
 
     fn begin(&self, cmd: &Self::Rec) {
-        self.ctx
-            .begin_fullscreen_rt(cmd, self.output, self.output_rtv);
+        if self.graph_driven {
+            self.ctx
+                .bind_fullscreen_rt(cmd, self.output, self.output_rtv);
+        } else {
+            self.ctx
+                .begin_fullscreen_rt(cmd, self.output, self.output_rtv);
+        }
     }
 
     fn draw(&self, cmd: &Self::Rec) {
@@ -536,6 +555,8 @@ impl FullscreenPass for SsgiPass<'_> {
     }
 
     fn end(&self, cmd: &Self::Rec) {
-        self.ctx.end_fullscreen_rt(cmd, self.output);
+        if !self.graph_driven {
+            self.ctx.end_fullscreen_rt(cmd, self.output);
+        }
     }
 }

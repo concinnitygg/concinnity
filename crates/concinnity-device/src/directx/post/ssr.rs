@@ -482,6 +482,42 @@ impl DxContext {
     // branch wins because FSR consumes the post-SSR scene and produces
     // the final temporally-accumulated image; the post stack reads from
     // that.
+    // The scene texture the post stack consumes *before* the upscaler: the
+    // reflection composite's output when a resolve ran, otherwise the HDR spine.
+    // These two are the graph's `scene_pre_taa` and `hdr_resolve`, and this
+    // predicate is the one the graph builder branches on.
+    //
+    // It exists because `scene_srv_for_post` below picks the same texture and
+    // the two drifted apart once: when the SSR / RT resolves stopped
+    // compositing inline and started writing radiance + weight into their own
+    // target, the upscaler kept reading that target as if it were the scene, so
+    // a world with both SSR and temporal upscaling upscaled the reflection
+    // buffer. Anything that needs the resource rather than its SRV goes through
+    // here.
+    pub(in crate::directx) fn post_scene_target(&self) -> &ID3D12Resource {
+        match self
+            .reflection_composite
+            .as_ref()
+            .filter(|_| self.reflection_resolve_active())
+        {
+            Some(rc) => &rc.output,
+            None => self.hdr_scene_target(),
+        }
+    }
+
+    // Render-target view of `post_scene_target`, for the passes that blend into
+    // it rather than sample it.
+    pub(in crate::directx) fn post_scene_rtv(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        match self
+            .reflection_composite
+            .as_ref()
+            .filter(|_| self.reflection_resolve_active())
+        {
+            Some(rc) => rc.output_rtv,
+            None => self.hdr_scene_rtv(),
+        }
+    }
+
     pub(in crate::directx) fn scene_srv_for_post(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
         if let Some(up) = &self.upscale.backend {
             return up.output_srv_gpu();

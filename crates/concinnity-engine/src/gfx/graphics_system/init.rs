@@ -2616,11 +2616,10 @@ impl GraphicsSystem {
         // (and log) on a real change.
         self.last_fog_settings = fog_settings;
 
-        // The CLI `--validation` flag (via `dev_flags`) drives the DirectX /
-        // Vulkan debug layers; unset falls back to the build profile. Metal is
-        // unaffected here: its validation layer is enabled by the CLI re-execing
-        // with `MTL_DEBUG_LAYER`, not through this flag.
-        let validation = crate::app::dev_flags::validation().unwrap_or(cfg!(debug_assertions));
+        // The DirectX / Vulkan debug layers: the CLI `--validation` flag if the
+        // launch passed one, otherwise the build profile. Metal is unaffected
+        // here: its layer is enabled by the CLI re-execing with `MTL_DEBUG_LAYER`.
+        let validation = crate::app::dev_flags::resolve_validation();
         // Shader hot-reload is opted in by `cn debug` (sets the static flag
         // in `crate::app::dev_flags` before world build). Production `cn run`
         // leaves it off; the backend then never spawns the filesystem watcher

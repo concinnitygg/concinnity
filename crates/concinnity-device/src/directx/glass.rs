@@ -952,37 +952,20 @@ impl DxContext {
             None
         };
 
-        // Pick the post-SSR scene target this pass blends into, mirroring
-        // `scene_srv_for_post`'s precedence (the upscaler runs later, so it is
-        // not consulted here). All rest in PIXEL_SHADER_RESOURCE after the
-        // preceding pass and carry ALLOW_RENDER_TARGET.
-        // The reflection composite (when a resolve ran) wrote the scene-with-
-        // reflections into its own output; glass blends into that, mirroring
-        // `scene_srv_for_post`. Otherwise the resolved (or raw) HDR scene.
-        let reflection_ran = self.reflection_resolve_active();
-        let (scene_res, scene_rtv): (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) =
-            if let Some(rc) = self
-                .reflection_composite
-                .as_ref()
-                .filter(|_| reflection_ran)
-            {
-                (&rc.output, rc.output_rtv)
-            } else if let Some(hdr_resolve) = &self.hdr.resolve {
-                (
-                    hdr_resolve,
-                    self.hdr
-                        .resolve_rtv
-                        .expect("hdr_resolve_rtv set when hdr_resolve is Some"),
-                )
-            } else {
-                (&self.hdr.color, self.hdr.color_rtv)
-            };
+        // The scene this pass blends into is the graph's `scene_pre_taa` or, with
+        // no reflection resolve, `hdr_resolve` -- the same branch the graph
+        // builder takes for the Transparent node's read-modify-write, so the
+        // executor has already put whichever one applies in RENDER_TARGET.
+        let scene_res = self.post_scene_target();
+        let scene_rtv = self.post_scene_rtv();
 
         // Snapshot the scene into `scene_copy` so refraction reads a stable copy
-        // of what it is also blending into.
+        // of what it is also blending into: a fragment cannot sample the
+        // attachment it blends into. The copy and its restore both live inside
+        // this node and leave no net state at the boundary.
         let scene_to_copy = transition_barrier(
-            scene_res,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            self.post_scene_target(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
         );
         let copy_to_dst = transition_barrier(
@@ -993,7 +976,7 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]) };
         unsafe { cmd.CopyResource(&glass.scene_copy, scene_res) };
         let scene_to_rt = transition_barrier(
-            scene_res,
+            self.post_scene_target(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
@@ -1004,14 +987,9 @@ impl DxContext {
         );
         unsafe { cmd.ResourceBarrier(&[scene_to_rt, copy_to_psr]) };
 
-        // Main depth -> PIXEL_SHADER_RESOURCE so the fragment shader can Load it
-        // for the manual occlusion test; restored to DEPTH_WRITE after the pass.
-        let depth_to_psr = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        unsafe { cmd.ResourceBarrier(&[depth_to_psr]) };
+        // Main depth is already in a shader-resource state for the fragment's
+        // manual occlusion Load: the graph declares this pass's depth read and the
+        // executor emits the transition ahead of this command list.
 
         let w = self.render_width;
         let h = self.render_height;
@@ -1137,20 +1115,8 @@ impl DxContext {
             }
         }
 
-        // Restore: scene target back to PIXEL_SHADER_RESOURCE for TAA / bloom /
-        // composite; main depth back to DEPTH_WRITE for next frame.
-        let scene_back = transition_barrier(
-            scene_res,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        unsafe { cmd.ResourceBarrier(&[scene_back]) };
-        let depth_back = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        );
-        unsafe { cmd.ResourceBarrier(&[depth_back]) };
+        // The scene target and main depth are both graph resources; the next
+        // consumer's barrier takes the scene back out of RENDER_TARGET.
         Ok(())
     }
 }

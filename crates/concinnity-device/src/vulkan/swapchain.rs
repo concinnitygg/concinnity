@@ -75,7 +75,7 @@ impl VkContext {
     // The extent a rebuild would create the swapchain at, read from the surface
     // instead of the window. See `rebuild_swapchain` for why the distinction
     // matters.
-    fn surface_extent(&self) -> Result<vk::Extent2D, String> {
+    pub(super) fn surface_extent(&self) -> Result<vk::Extent2D, String> {
         let caps = unsafe {
             self.surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, self.surface)
@@ -880,7 +880,7 @@ fn resolve_swapchain_extent(
 // Whether `extent` can carry a swapchain. Vulkan rejects a zero dimension on
 // the swapchain and on every attachment, framebuffer, render area, and viewport
 // sized from it.
-fn extent_is_presentable(extent: vk::Extent2D) -> bool {
+pub(super) fn extent_is_presentable(extent: vk::Extent2D) -> bool {
     extent.width > 0 && extent.height > 0
 }
 

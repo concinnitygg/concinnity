@@ -715,12 +715,13 @@ impl MtlContext {
         } else {
             None
         };
+        // Render resolution comes from the scaler, which owns the clamp to the
+        // device's supported range. The stored scale is the *requested* one, not
+        // `input / output`: that ratio is rounded to whole pixels, so feeding it
+        // back into the next rebuild shrinks the input a little further every
+        // resize.
         let (render_w, render_h, upscale_scale) = match &upscaler {
-            Some(u) => (
-                u.input_width,
-                u.input_height,
-                (u.input_width as f32) / (u.output_width.max(1) as f32),
-            ),
+            Some(u) => (u.input_width, u.input_height, upscale_scale_requested),
             None => (initial_w, initial_h, 1.0),
         };
         // With the MetalFX scaler doing temporal accumulation, the TAA pass

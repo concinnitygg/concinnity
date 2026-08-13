@@ -790,30 +790,10 @@ impl DxContext {
             unsafe { cmd.ResourceBarrier(&to_srv) };
         }
 
-        // Pass 5: render the visible emitters. `hdr_resolve` (or
-        // `hdr_color` MSAA-off) is in PIXEL_SHADER_RESOURCE after the fog
-        // pass; flip it to RENDER_TARGET, render, flip back.
+        // Pass 5: render the visible emitters into the scene spine, which the
+        // graph has already put in RENDER_TARGET for this pass's declared write.
         if any_visible {
-            let scene_rtv: D3D12_CPU_DESCRIPTOR_HANDLE =
-                if let Some(hdr_resolve) = &self.hdr.resolve {
-                    let to_rt = transition_barrier(
-                        hdr_resolve,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    );
-                    unsafe { cmd.ResourceBarrier(&[to_rt]) };
-                    self.hdr
-                        .resolve_rtv
-                        .expect("hdr_resolve_rtv set when hdr_resolve is Some")
-                } else {
-                    let to_rt = transition_barrier(
-                        &self.hdr.color,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    );
-                    unsafe { cmd.ResourceBarrier(&[to_rt]) };
-                    self.hdr.color_rtv
-                };
+            let scene_rtv = self.hdr_scene_rtv();
 
             let w = self.render_width;
             let h = self.render_height;
@@ -864,23 +844,8 @@ impl DxContext {
                 self.inc_draw_calls(1);
             }
 
-            // Restore the scene target to PIXEL_SHADER_RESOURCE for the SSR
-            // resolve / TAA / bloom / composite chain.
-            if let Some(hdr_resolve) = &self.hdr.resolve {
-                let to_psr = transition_barrier(
-                    hdr_resolve,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                );
-                unsafe { cmd.ResourceBarrier(&[to_psr]) };
-            } else {
-                let to_psr = transition_barrier(
-                    &self.hdr.color,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                );
-                unsafe { cmd.ResourceBarrier(&[to_psr]) };
-            }
+            // The scene spine is graph-driven; only the emitter pools need
+            // restoring here.
 
             // Restore visible pools back to UAV (their resting state for the
             // next frame's compute dispatch).

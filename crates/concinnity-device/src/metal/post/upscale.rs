@@ -31,8 +31,11 @@ use crate::metal::context::MtlContext;
 pub(crate) struct UpscaleState {
     // The MetalFX scaler. `Some` only when upscaling is active.
     pub scaler: Option<MetalFXUpscaler>,
-    // Per-axis input-to-output ratio. `1.0` when the scaler is absent. Kept on
-    // the context so a swapchain resize knows what fraction to render at.
+    // The per-axis input-to-output ratio the world asked for, `1.0` when the
+    // scaler is absent. Kept so a resize can rebuild the scaler from the same
+    // request. Deliberately not the realised `input / output`: that is rounded
+    // to whole pixels, and reusing it as the next request would shrink the input
+    // further on every resize. The realised size lives on the scaler itself.
     pub scale: f32,
     // Pixel-space jitter offset the projection applied this frame. Written on
     // the main thread before fan-out, read by `encode_upscale` on a worker;
@@ -81,6 +84,28 @@ pub(crate) fn temporal_scaler_supported(
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
 }
 
+// Input (render) dimensions for an output size and requested per-axis scale.
+// `ratio_range` is the device's supported OUTPUT-over-INPUT range, which is the
+// inverse of the user-facing scale, so the request is flipped into the device's
+// units, clamped, and flipped back.
+//
+// The one place this arithmetic happens. The realised size does not round-trip:
+// `input / output` is whole pixels over whole pixels, so re-deriving a render
+// size from it lands up to a pixel below what the scaler was built for, and
+// MetalFX asserts that the input content exceeds the input texture. Callers take
+// the render resolution from the built scaler instead of recomputing it.
+fn scaler_input_size(output: (u32, u32), scale: f32, ratio_range: (f32, f32)) -> (u32, u32) {
+    let (min_ratio, max_ratio) = ratio_range;
+    let requested_ratio = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+    let lo = min_ratio.max(1.0);
+    let clamped_ratio = requested_ratio.clamp(lo, max_ratio.max(lo));
+    let scale = 1.0 / clamped_ratio;
+    (
+        ((output.0 as f32) * scale).max(1.0) as u32,
+        ((output.1 as f32) * scale).max(1.0) as u32,
+    )
+}
+
 impl MetalFXUpscaler {
     // Build a fresh upscaler at the given output size and per-axis scale.
     // `scale` is clamped to the device's supported range; the resolved
@@ -103,11 +128,8 @@ impl MetalFXUpscaler {
         let max_ratio = unsafe {
             MTLFXTemporalScalerDescriptor::supportedInputContentMaxScaleForDevice(device)
         };
-        let requested_ratio = if scale > 0.0 { 1.0 / scale } else { 1.0 };
-        let clamped_ratio = requested_ratio.clamp(min_ratio.max(1.0), max_ratio.max(1.0));
-        let scale = 1.0 / clamped_ratio;
-        let input_width = ((output_width as f32) * scale).max(1.0) as u32;
-        let input_height = ((output_height as f32) * scale).max(1.0) as u32;
+        let (input_width, input_height) =
+            scaler_input_size((output_width, output_height), scale, (min_ratio, max_ratio));
 
         let descriptor = unsafe { MTLFXTemporalScalerDescriptor::new() };
         unsafe {
@@ -285,5 +307,58 @@ impl UpscaleJitter {
         let jx = f32::from_bits(packed as u32);
         let jy = f32::from_bits((packed >> 32) as u32);
         [jx, jy]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Typical range: no upscale at all up to 3x per axis.
+    const RANGE: (f32, f32) = (1.0, 3.0);
+
+    #[test]
+    fn the_realised_scale_does_not_round_trip() {
+        // The bug this guards. A 2048x1536 drawable at the default 2/3 quality
+        // scale gives a 1365x1024 input. Feeding the realised ratio
+        // (1365/2048) back in as a request yields 1023 rows -- one short of what
+        // the scaler was built for, which MetalFX rejects outright rather than
+        // tolerating. So the render resolution is read off the scaler, and the
+        // stored scale stays the original request.
+        let out = (2048, 1536);
+        let built = scaler_input_size(out, 2.0 / 3.0, RANGE);
+        assert_eq!(built, (1365, 1024));
+
+        let realised = built.0 as f32 / out.0 as f32;
+        let rederived = scaler_input_size(out, realised, RANGE);
+        assert_ne!(
+            rederived, built,
+            "if this ever round-trips the guard below is measuring nothing"
+        );
+        assert_eq!(rederived.1, 1023, "a row short of the built input");
+    }
+
+    #[test]
+    fn a_request_outside_the_device_range_is_clamped() {
+        // Asking for a 5x upscale on a 3x device resolves to 3x, and the
+        // resulting input size is the one the scaler is really built for --
+        // which is exactly why the caller must not assume its own request.
+        let out = (1920, 1080);
+        assert_eq!(scaler_input_size(out, 1.0 / 5.0, RANGE), (640, 360));
+        // And below the minimum: a request to render larger than the output
+        // clamps to no upscale at all.
+        assert_eq!(scaler_input_size(out, 2.0, RANGE), out);
+    }
+
+    #[test]
+    fn degenerate_inputs_stay_renderable() {
+        // A zero or negative scale means "no upscale" rather than a zero-sized
+        // target, and a tiny output never rounds to a zero dimension.
+        assert_eq!(scaler_input_size((800, 600), 0.0, RANGE), (800, 600));
+        assert_eq!(scaler_input_size((800, 600), -1.0, RANGE), (800, 600));
+        assert_eq!(scaler_input_size((1, 1), 1.0 / 3.0, RANGE), (1, 1));
+        // An inverted range still yields a usable size rather than a panic from
+        // `clamp` (min > max).
+        assert_eq!(scaler_input_size((1920, 1080), 0.5, (3.0, 1.0)), (640, 360));
     }
 }

@@ -1912,6 +1912,24 @@ impl DxContext {
         self.rt_reflections_active() || self.ssr.as_ref().and_then(|s| s.resolve.as_ref()).is_some()
     }
 
+    // The single-sample scene target the render graph drives as `hdr_resolve`:
+    // the resolve target with MSAA on, `hdr.color` itself with MSAA off. Every
+    // pass that writes the spine finds it already in RENDER_TARGET, so a pass
+    // that additionally needs it in some other state (the MSAA resolve, a
+    // refraction snapshot) transitions from there and back within its own body.
+    pub(in crate::directx) fn hdr_scene_target(&self) -> &ID3D12Resource {
+        self.hdr.resolve.as_ref().unwrap_or(&self.hdr.color)
+    }
+
+    // Render-target view of the spine `hdr_scene_target` returns. Every
+    // decoration pass on the hdr_resolve chain binds this as its sole RTV.
+    pub(in crate::directx) fn hdr_scene_rtv(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        match self.hdr.resolve_rtv {
+            Some(rtv) => rtv,
+            None => self.hdr.color_rtv,
+        }
+    }
+
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     pub(super) fn shade_mode(&self) -> f32 {
         if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {

@@ -30,7 +30,11 @@ enum Reason {
     GraphDriven,
     // Finer than the graph's one-state-per-resource granularity, so no derived
     // transition can express it: the Hi-Z reduction's per-mip chain, where one
-    // mip is written while the previous is sampled.
+    // mip is written while the previous is sampled; the MSAA resolve step, which
+    // needs its source and destination in the resolve states for the length of
+    // one call; and the refraction snapshots, where a pass copies the attachment
+    // it is blending into because a fragment cannot sample it. Each opens and
+    // closes within one node, so no net state crosses the node boundary.
     IntraPass,
     // Resource creation, staging upload, and resize transitions. Outside any
     // frame's command stream.
@@ -41,78 +45,221 @@ enum Reason {
     // The swapchain image's render-target/present pair, owned by the presentation
     // path rather than by a graph resource.
     Present,
-    // A frame-path transition the executor's barrier registry does not drive yet,
-    // so its encoder still owns it inline. Each entry disappears as its resource
-    // joins the registry; a table with no `Inline` rows means the frame path is
-    // fully graph-derived.
+    // A frame-path transition on a resource the graph does not model at all: the
+    // per-cascade and per-plane cull's own indirect buffers, the auto-exposure
+    // histogram + readback ring, the per-frame-variable planar reflection targets.
+    // Deriving one needs the resource declared first, which is a change to the
+    // graph rather than to the executor.
+    Ungraphed,
+    // A frame-path transition on a resource the graph *does* model, whose encoder
+    // still owns it because the executor's barrier registry does not resolve it
+    // yet. Each entry disappears as its resource joins the registry; a table with
+    // no `Inline` rows means every modelled resource is graph-derived.
     Inline,
+    // A Vulkan render pass's attachment layout declaration. These are frame-path
+    // transitions the driver performs at pass boundaries rather than calls the
+    // encoder makes, which is why they need counting at all: the scene targets'
+    // whole round trip (SHADER_READ_ONLY -> COLOR_ATTACHMENT and back) is
+    // expressed this way and would otherwise be invisible to this audit. Making
+    // them graph-derived means the graph choosing each pass's initial and final
+    // layouts, not replacing them with barriers -- a render pass folding its own
+    // transitions is the efficient form and the one a tiler wants.
+    AttachmentLayout,
 }
 
-// One backend's barrier surface: the call that emits a barrier, and the exact
-// per-file count with its justification. Paths are relative to the backend root.
+// One backend's barrier surface: every call that emits a barrier, and the exact
+// per-(file, call) count with its justification. Paths are relative to the
+// backend root.
+//
+// `calls` is a list because a backend emits frame-path transitions through more
+// than one API, and counting only the obvious one exempts the rest from the
+// audit: Vulkan has `cmd_pipeline_barrier` and the attachment layout
+// declarations a render pass performs at its own boundaries. The table is keyed
+// by (file, call) rather than by file, because one file legitimately holds
+// several kinds for different reasons -- `glass.rs` has two inline transfer
+// barriers and one attachment round trip.
 struct BackendAudit {
     backend: &'static str,
     root: &'static str,
-    call: &'static str,
-    sites: &'static [(&'static str, usize, Reason)],
+    calls: &'static [&'static str],
+    sites: &'static [(&'static str, &'static str, usize, Reason)],
 }
 
 const AUDITS: &[BackendAudit] = &[
     BackendAudit {
         backend: "vulkan",
         root: VULKAN_ROOT,
-        call: "cmd_pipeline_barrier",
+        calls: &["cmd_pipeline_barrier", ".final_layout("],
         sites: &[
-            ("graph_exec.rs", 3, Reason::GraphDriven),
-            ("hiz.rs", 3, Reason::IntraPass),
-            ("texture.rs", 1, Reason::Upload),
-            ("probe.rs", 3, Reason::OutOfFrame),
-            ("raytrace.rs", 6, Reason::OutOfFrame),
-            ("screenshot.rs", 2, Reason::OutOfFrame),
-            ("auto_exposure.rs", 4, Reason::Inline),
-            ("cull.rs", 1, Reason::Inline),
-            ("decal.rs", 2, Reason::Inline),
-            ("fog.rs", 4, Reason::Inline),
-            ("glass.rs", 3, Reason::Inline),
-            ("line.rs", 2, Reason::Inline),
-            ("main.rs", 1, Reason::Inline),
-            ("particle.rs", 2, Reason::Inline),
-            ("planar.rs", 1, Reason::Inline),
-            ("post/upscale/mod.rs", 2, Reason::Inline),
-            ("raymarch.rs", 2, Reason::Inline),
+            (
+                "graph_exec.rs",
+                "cmd_pipeline_barrier",
+                3,
+                Reason::GraphDriven,
+            ),
+            ("hiz.rs", "cmd_pipeline_barrier", 1, Reason::IntraPass),
+            ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
+            ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            ("raytrace.rs", "cmd_pipeline_barrier", 6, Reason::OutOfFrame),
+            (
+                "screenshot.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::OutOfFrame,
+            ),
+            (
+                "auto_exposure.rs",
+                "cmd_pipeline_barrier",
+                4,
+                Reason::Ungraphed,
+            ),
+            ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            ("planar.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            // The refraction snapshot: both passes copy the scene image into a
+            // private snapshot and sample that, because a fragment cannot read
+            // the attachment it is blending into. The pair opens the copy and
+            // closes it, restoring the scene image to the layout the render
+            // pass's colour LOAD declares -- so no net state crosses the node
+            // boundary and there is no graph edge to derive it from. The
+            // snapshot itself is not a graph resource.
+            ("glass.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            ("main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            (
+                "post/upscale/mod.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::Inline,
+            ),
+            (
+                "render_pass.rs",
+                ".final_layout(",
+                9,
+                Reason::AttachmentLayout,
+            ),
+            ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("glass.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("line.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("particle.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("raymarch.rs", ".final_layout(", 2, Reason::AttachmentLayout),
+            (
+                "post/gbuffer.rs",
+                ".final_layout(",
+                4,
+                Reason::AttachmentLayout,
+            ),
+            (
+                "post/reflection_composite.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
+            (
+                "post/rt_reflections.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
+            (
+                "post/ssao.rs",
+                ".final_layout(",
+                2,
+                Reason::AttachmentLayout,
+            ),
+            (
+                "post/ssgi.rs",
+                ".final_layout(",
+                2,
+                Reason::AttachmentLayout,
+            ),
+            ("post/ssr.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            ("post/taa.rs", ".final_layout(", 1, Reason::AttachmentLayout),
         ],
     },
     BackendAudit {
         backend: "directx",
         root: DIRECTX_ROOT,
-        call: ".ResourceBarrier(",
+        calls: &[".ResourceBarrier("],
         sites: &[
-            ("graph_exec.rs", 4, Reason::GraphDriven),
-            ("hiz.rs", 4, Reason::IntraPass),
-            ("allocator.rs", 1, Reason::Upload),
-            ("resources.rs", 5, Reason::Upload),
-            ("texture.rs", 8, Reason::Upload),
-            ("transient_pool.rs", 2, Reason::Upload),
-            ("geometry_rebuild.rs", 6, Reason::OutOfFrame),
-            ("probe.rs", 5, Reason::OutOfFrame),
-            ("raytrace.rs", 11, Reason::OutOfFrame),
-            ("screenshot.rs", 2, Reason::OutOfFrame),
-            ("draw/mod.rs", 1, Reason::Present),
-            ("draw/composite.rs", 2, Reason::Present),
-            ("auto_exposure.rs", 6, Reason::Inline),
-            ("cull.rs", 6, Reason::Inline),
-            ("draw/main.rs", 3, Reason::Inline),
-            ("fog.rs", 8, Reason::Inline),
-            ("glass.rs", 5, Reason::Inline),
-            ("particle.rs", 10, Reason::Inline),
-            ("planar.rs", 4, Reason::Inline),
-            ("post/bloom.rs", 2, Reason::Inline),
-            ("post/fullscreen.rs", 2, Reason::Inline),
-            ("post/gbuffer.rs", 2, Reason::Inline),
-            ("post/rt_reflections.rs", 2, Reason::Inline),
-            ("post/ssao.rs", 2, Reason::Inline),
-            ("post/upscale/fsr.rs", 2, Reason::Inline),
-            ("raymarch.rs", 6, Reason::Inline),
+            ("graph_exec.rs", ".ResourceBarrier(", 5, Reason::GraphDriven),
+            ("hiz.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            ("particle.rs", ".ResourceBarrier(", 6, Reason::IntraPass),
+            // The MSAA resolve step: the graph rests both HDR targets in
+            // RENDER_TARGET, and `ResolveSubresource` needs them in the resolve
+            // states for the length of one call.
+            ("draw/main.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            ("raymarch.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
+            // The refraction snapshot: a fragment cannot sample the attachment
+            // it is blending into, so the pass copies the scene into a private
+            // target and restores the scene to the state it was handed.
+            ("glass.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The SSGI gather samples the scene the composite then blends into,
+            // so this node reads and writes one resource; the graph models that
+            // as a single write and the gather borrows the read state.
+            ("post/ssgi.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The same shape in two more bundled nodes, on targets the graph does
+            // not model because they never cross a node boundary: SSAO's raw
+            // occlusion, which its own blur consumes, and the RT reflection
+            // radiance the roughness composite consumes.
+            ("post/ssao.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            (
+                "post/rt_reflections.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::IntraPass,
+            ),
+            // The bloom octave chain, which writes mip N while sampling mip N+1.
+            // The graph drives mip 0 (`bloom_top`) across the node boundary;
+            // these order the steps within it.
+            ("post/bloom.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The shared fullscreen bracket, now used only by targets that live
+            // inside one node: the SSR / RT resolve output, the reflection blur,
+            // and the SSGI gather. Callers whose target the graph drives take
+            // `bind_fullscreen_rt` instead.
+            (
+                "post/fullscreen.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::IntraPass,
+            ),
+            ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
+            ("resources.rs", ".ResourceBarrier(", 5, Reason::Upload),
+            ("texture.rs", ".ResourceBarrier(", 6, Reason::Upload),
+            ("transient_pool.rs", ".ResourceBarrier(", 2, Reason::Upload),
+            (
+                "geometry_rebuild.rs",
+                ".ResourceBarrier(",
+                6,
+                Reason::OutOfFrame,
+            ),
+            ("probe.rs", ".ResourceBarrier(", 5, Reason::OutOfFrame),
+            ("raytrace.rs", ".ResourceBarrier(", 11, Reason::OutOfFrame),
+            ("screenshot.rs", ".ResourceBarrier(", 2, Reason::OutOfFrame),
+            ("draw/composite.rs", ".ResourceBarrier(", 2, Reason::Present),
+            (
+                "auto_exposure.rs",
+                ".ResourceBarrier(",
+                6,
+                Reason::Ungraphed,
+            ),
+            ("cull.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
+            ("planar.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            // The last `Inline` row on this backend. One of its two barriers is
+            // really intra-pass (the G-buffer depth, which the graph does not
+            // model, borrowed for FSR's read); the other transitions the
+            // upscaler's output, which *is* the graph's `scene_color` under
+            // temporal upscaling. Driving it needs a resting state the graph
+            // cannot express: the output alternates UNORDERED_ACCESS and
+            // PIXEL_SHADER_RESOURCE depending on whether a previous frame
+            // dispatched.
+            (
+                "post/upscale/fsr.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::Inline,
+            ),
         ],
     },
 ];
@@ -150,19 +297,21 @@ fn call_sites(source: &str, call: &str) -> usize {
         .sum()
 }
 
-// The counted call sites per file for one backend, omitting files with none.
-fn scan(audit: &BackendAudit) -> BTreeMap<String, usize> {
+// The counted sites per (file, call) for one backend, omitting empty pairs.
+fn scan(audit: &BackendAudit) -> BTreeMap<(String, &'static str), usize> {
     let mut files = Vec::new();
     rust_sources(Path::new(audit.root), "", &mut files);
-    files
-        .into_iter()
-        .filter_map(|(rel, path)| {
-            let source =
-                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
-            let n = call_sites(&source, audit.call);
-            (n > 0).then_some((rel, n))
-        })
-        .collect()
+    let mut found = BTreeMap::new();
+    for (rel, path) in files {
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        for &call in audit.calls {
+            let n = call_sites(&source, call);
+            if n > 0 {
+                found.insert((rel.clone(), call), n);
+            }
+        }
+    }
+    found
 }
 
 #[cfg(test)]
@@ -174,33 +323,33 @@ mod tests {
         let mut failures = Vec::new();
         for audit in AUDITS {
             let found = scan(audit);
-            let expected: BTreeMap<&str, (usize, Reason)> = audit
+            let expected: BTreeMap<(String, &str), (usize, Reason)> = audit
                 .sites
                 .iter()
-                .map(|&(path, n, reason)| (path, (n, reason)))
+                .map(|&(path, call, n, reason)| ((path.to_string(), call), (n, reason)))
                 .collect();
 
-            for (path, &n) in &found {
-                match expected.get(path.as_str()) {
+            for ((path, call), &n) in &found {
+                match expected.get(&(path.clone(), *call)) {
                     None => failures.push(format!(
-                        "{}/{path}: {n} `{}` call(s) with no entry in the audit table; \
+                        "{}/{path}: {n} `{call}` site(s) with no entry in the audit table; \
                          classify them (or move them into the graph executor)",
-                        audit.backend, audit.call
+                        audit.backend
                     )),
                     Some(&(want, _)) if want != n => failures.push(format!(
-                        "{}/{path}: audit table says {want} `{}` call(s), found {n}; \
+                        "{}/{path}: audit table says {want} `{call}` site(s), found {n}; \
                          update the table",
-                        audit.backend, audit.call
+                        audit.backend
                     )),
                     Some(_) => {}
                 }
             }
-            for (path, (want, reason)) in &expected {
-                if !found.contains_key(*path) {
+            for ((path, call), (want, reason)) in &expected {
+                if !found.contains_key(&(path.clone(), *call)) {
                     failures.push(format!(
-                        "{}/{path}: audit table says {want} `{}` call(s) ({reason:?}), found none; \
-                         drop the entry",
-                        audit.backend, audit.call
+                        "{}/{path}: audit table says {want} `{call}` site(s) ({reason:?}), \
+                         found none; drop the entry",
+                        audit.backend
                     ));
                 }
             }
@@ -236,7 +385,7 @@ mod tests {
         // walk would silently exempt them.
         let vulkan = scan(&AUDITS[0]);
         assert!(
-            vulkan.keys().any(|p| p.contains('/')),
+            vulkan.keys().any(|(p, _)| p.contains('/')),
             "expected nested paths in the vulkan scan, got {:?}",
             vulkan.keys().collect::<Vec<_>>()
         );

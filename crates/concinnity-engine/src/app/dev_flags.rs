@@ -22,13 +22,14 @@
 //                        crate) because it bridges the runtime AnimationSystem,
 //                        which reads ENABLED, and the editor-driven hot-reload.
 //   VALIDATION           "did the launch request graphics validation?" Set by
-//                        the CLI `--validation` flag (`cn run` / `cn debug`);
-//                        read by `GraphicsSystem::init` to enable the DirectX /
-//                        Vulkan debug layers. Tri-state: unset falls back to
-//                        the build profile (on for debug, off for release).
-//                        Metal's validation layer cannot be toggled from a
-//                        running process, so the CLI re-execs with the env var
-//                        instead; this flag does not drive Metal.
+//                        the CLI `--validation` flag (`cn run` / `cn debug`).
+//                        Tri-state: unset defers to the build profile (on for
+//                        debug, off for release). `resolve_validation` settles
+//                        the two, and `GraphicsSystem::init` enables the
+//                        DirectX / Vulkan debug layers from the result. Metal's
+//                        validation layer cannot be toggled from a running
+//                        process, so the CLI re-execs with the env var instead;
+//                        this flag does not drive Metal.
 //   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
 //                        editor's `cn debug` / `cn editor` entry once the world
 //                        path is resolved; read by `GraphicsSystem::init` (only
@@ -126,14 +127,20 @@ pub fn set_validation(v: Option<bool>) {
     VALIDATION.store(encoded, Ordering::SeqCst);
 }
 
-// The CLI validation request, or `None` when the launch did not specify one
-// (the caller then falls back to `cfg!(debug_assertions)`).
+// The CLI validation request, or `None` when the launch did not specify one.
 pub(crate) fn validation() -> Option<bool> {
     match VALIDATION.load(Ordering::SeqCst) {
         1 => Some(false),
         2 => Some(true),
         _ => None,
     }
+}
+
+// Settle the graphics-validation request: the CLI `--validation` flag if the
+// launch passed one, otherwise the build profile. Running a debug layer is a
+// launch concern, so no world can ask for it.
+pub(crate) fn resolve_validation() -> bool {
+    validation().unwrap_or(cfg!(debug_assertions))
 }
 
 // Record the world.jsonl path the dev host resolved, so the hot-reload watcher
@@ -213,5 +220,20 @@ mod tests {
         assert_eq!(validation(), Some(true));
         set_validation(Some(false));
         assert_eq!(validation(), Some(false));
+    }
+
+    #[test]
+    fn the_launch_flag_outranks_the_build_profile() {
+        let _flags = write_access();
+
+        // No flag: the build profile decides.
+        set_validation(None);
+        assert_eq!(resolve_validation(), cfg!(debug_assertions));
+
+        // An explicit flag decides instead, either way.
+        set_validation(Some(false));
+        assert!(!resolve_validation());
+        set_validation(Some(true));
+        assert!(resolve_validation());
     }
 }

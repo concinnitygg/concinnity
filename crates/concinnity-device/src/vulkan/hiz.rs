@@ -17,23 +17,23 @@
 //                           MAX over every sample so the result is conservative.
 //   * `hiz_downsample.comp`: MAX-reduce 2x2 source texels into the next mip.
 //
-// The pyramid is *not* a graph node: it runs inline on the frame's command
-// buffer at the end of `record_frame`, after `execute_graph` returns (which
-// already recorded the Main pass that writes depth, plus any decal / fog passes
-// that restore depth to `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`). Treating it as an
-// end-of-frame action keeps it off the render-graph dispatch and off the main
-// depth attachment's in-graph layout chain.
+// The build is a graph node: `HizFinal` (terminal, reducing the frame's last
+// depth version for the next frame's cull) and, under two-pass occlusion,
+// `HizBuild` (mid-frame, reducing phase-1 depth for `Cull2`). Both dispatch this
+// encoder, so the graph owns the pyramid's lifetime and the main depth's layout
+// chain reaches the end of the frame.
 //
 // Each mip is written through its own single-level R32F storage-image view; the
 // whole Hi-Z image stays in GENERAL during the build, with a compute
-// write -> read memory barrier between each step. Between frames the image
-// rests in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel samples it via a
-// `sampler2D` (set 1). A single shared image read one frame / written the next
-// is hazard-free on a single queue: the build's closing GENERAL ->
-// SHADER_READ_ONLY barrier (dstStage COMPUTE, dstAccess SHADER_READ) orders the
-// write before the next frame's cull read, and the build's opening
-// SHADER_READ_ONLY -> GENERAL barrier orders that read before this frame's
-// write.
+// write -> read memory barrier between each step. That per-mip chain is finer
+// than the graph's one-state-per-resource granularity, so it stays inline here;
+// the open and close around it are graph-derived. Between frames the image rests
+// in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel samples it via a `sampler2D`
+// (set 1). A single shared image read one frame and written the next is
+// hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
+// SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
+// producer barrier derived from `Cull`'s declared pyramid read orders that read
+// before this frame's write.
 
 use ash::{Device, vk};
 
@@ -94,8 +94,9 @@ pub(super) struct HiZResources {
     // R32F mip-chain image. Written mip-by-mip during the build (GENERAL),
     // sampled by the cull kernel between frames (SHADER_READ_ONLY). Its views
     // below are attached to the lease, so replacing it on a resize retires the
-    // whole set together.
-    pyramid: PooledImage,
+    // whole set together. The graph executor resolves it as the `hiz_pyramid`
+    // barrier target.
+    pub(super) pyramid: PooledImage,
     // All-mips sampled view bound in the cull-read set.
     sampled_view: vk::ImageView,
     // One single-level storage view per mip, bound as the init dst (mip 0) and
@@ -564,9 +565,10 @@ impl crate::vulkan::context::VkContext {
     // Encode the Hi-Z build into `cmd`. Reads this frame's main depth
     // (`depth_images[frame_idx]`) and writes the mip chain that *next* frame's
     // cull dispatch consults. A no-op when no Hi-Z resource was built (GPU-cull
-    // pipeline not active). Called from `record_frame` after `execute_graph`,
-    // so the Main pass has already written depth and decal / fog have restored
-    // it to `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`.
+    // pipeline not active). Runs as the graph's `HizBuild` (mid-frame, phase-1
+    // depth) or `HizFinal` (terminal, the frame's last depth version) node, so
+    // the executor has already put main depth in SHADER_READ_ONLY and the
+    // pyramid in GENERAL; only the per-mip chain below is this encoder's.
     pub(in crate::vulkan) fn encode_hiz_build(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
@@ -575,39 +577,8 @@ impl crate::vulkan::context::VkContext {
             return;
         }
         let device = &self.device;
-        let depth_image = self.depth_images[frame_idx].image;
 
-        // 1. Transition main depth -> SHADER_READ_ONLY for the compute read,
-        //    and the Hi-Z image SHADER_READ_ONLY -> GENERAL for the writes.
-        let depth_to_read = depth_barrier(
-            depth_image,
-            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            vk::AccessFlags::SHADER_READ,
-        );
-        let hiz_to_general = hiz_image_barrier(
-            hiz.pyramid.image(),
-            hiz.mip_count,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::GENERAL,
-            vk::AccessFlags::SHADER_READ,
-            vk::AccessFlags::SHADER_WRITE,
-        );
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
-                    | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[depth_to_read, hiz_to_general],
-            );
-        }
-
-        // 2. Init: mip 0 from main depth (MAX over MSAA samples when on).
+        // 1. Init: mip 0 from main depth (MAX over MSAA samples when on).
         let init_params = HizParams {
             dst_width: hiz.width,
             dst_height: hiz.height,
@@ -639,8 +610,10 @@ impl crate::vulkan::context::VkContext {
             );
         }
 
-        // 3. Downsample chain. Each step reads the prior mip and writes the
+        // 2. Downsample chain. Each step reads the prior mip and writes the
         //    next, with a compute write -> read barrier between dispatches.
+        //    Finer than the graph's one-state-per-resource granularity, so this
+        //    one stays inline.
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -696,67 +669,11 @@ impl crate::vulkan::context::VkContext {
             cur_w = next_w;
             cur_h = next_h;
         }
-
-        // 4. Restore: main depth -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the
-        //    next frame's main pass, and Hi-Z -> SHADER_READ_ONLY so the next
-        //    frame's cull dispatch samples it (this barrier's second scope
-        //    orders the writes before that cross-frame read).
-        let depth_back = depth_barrier(
-            depth_image,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            vk::AccessFlags::SHADER_READ,
-            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
-        let hiz_back = hiz_image_barrier(
-            hiz.pyramid.image(),
-            hiz.mip_count,
-            vk::ImageLayout::GENERAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::AccessFlags::SHADER_WRITE,
-            vk::AccessFlags::SHADER_READ,
-        );
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[depth_back, hiz_back],
-            );
-        }
     }
 }
 
 fn as_bytes<T: bytemuck::NoUninit>(v: &T) -> &[u8] {
     bytemuck::bytes_of(v)
-}
-
-fn depth_barrier(
-    image: vk::Image,
-    old: vk::ImageLayout,
-    new: vk::ImageLayout,
-    src: vk::AccessFlags,
-    dst: vk::AccessFlags,
-) -> vk::ImageMemoryBarrier<'static> {
-    vk::ImageMemoryBarrier::default()
-        .src_access_mask(src)
-        .dst_access_mask(dst)
-        .old_layout(old)
-        .new_layout(new)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        })
 }
 
 fn hiz_image_barrier(

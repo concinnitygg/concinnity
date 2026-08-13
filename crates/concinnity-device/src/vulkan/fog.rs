@@ -980,33 +980,12 @@ impl VkContext {
             );
         }
 
-        // The froxel volume's SHADER_READ_ONLY -> GENERAL open transition is
-        // graph-driven: fog_froxel_volume is the graph's resource and the
-        // executor emits its FogFroxel producer (Undefined -> Write) barrier
-        // before this pass, whose (FRAGMENT_SHADER, SHADER_READ) source scope
-        // also orders the previous frame's fog fragment read before this write.
-        // Only the shadow-map sync stays inline: shadow_map isn't a graph read of
-        // this pass (the kernel's CSM tap is hand-rolled), so we order the Shadow
-        // pass's depth write before this compute tap here. Same-layout barrier:
-        // the map stays SHADER_READ_ONLY (the main pass already sampled it).
-        let shadow_to_compute = shadow_sync_barrier(
-            self.shadow.map.image,
-            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            vk::AccessFlags::SHADER_READ,
-        );
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&shadow_to_compute),
-            );
-        }
-
+        // Both of this pass's transitions are graph-driven. The froxel volume's
+        // SHADER_READ_ONLY -> GENERAL open comes from the FogFroxel producer
+        // barrier, whose source scope also orders the previous frame's fog
+        // fragment read before this write; the shadow map's cascade tap is a
+        // declared read of this pass, so the Shadow consumer barrier's stage union
+        // carries the compute stage.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, fog.froxel_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -1025,29 +1004,10 @@ impl VkContext {
             );
         }
 
-        // The froxel volume's GENERAL -> SHADER_READ_ONLY close transition is
-        // graph-driven: the executor emits the Fog consumer (Write -> Read)
-        // barrier before the Fog pass. Only the shadow-map sync stays inline:
-        // order this compute shadow read before next frame's shadow depth write
-        // (the end-of-frame SHADER_READ -> DEPTH_STENCIL reset covers only the
-        // fragment reads).
-        let shadow_to_depth = shadow_sync_barrier(
-            self.shadow.map.image,
-            vk::AccessFlags::empty(),
-            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&shadow_to_depth),
-            );
-        }
+        // The froxel volume's GENERAL -> SHADER_READ_ONLY close comes from the
+        // Fog consumer barrier, and next frame's Shadow producer opens from a
+        // resting scope that names both shader stages, so this frame's compute tap
+        // is ordered against it.
     }
 
     // Encode the volumetric-fog pass. Samples the 3D froxel volume the
@@ -1076,36 +1036,9 @@ impl VkContext {
         let device = &self.device;
         let extent = self.render_extent;
 
-        // Transition main depth -> SHADER_READ_ONLY so the fragment can sample
-        // it; restore to DEPTH_STENCIL_ATTACHMENT after the pass so the next
-        // frame's main pass can clear/write it again. Mirrors the decal
-        // encoder.
-        let depth_image = self.depth_images[frame_idx].image;
-        unsafe {
-            let to_read = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image(depth_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::DEPTH,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&to_read),
-            );
-        }
-
+        // Main depth is already in SHADER_READ_ONLY for the fragment's scene-depth
+        // sample: the graph declares this pass's depth read and the executor emits
+        // the transition ahead of this command buffer.
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(fog.render_pass)
             .framebuffer(fog.framebuffers[frame_idx])
@@ -1140,59 +1073,8 @@ impl VkContext {
             );
             device.cmd_draw(cmd, 3, 1, 0, 0);
             device.cmd_end_render_pass(cmd);
-
-            // Restore main depth -> DEPTH_STENCIL_ATTACHMENT for the next
-            // frame's main pass.
-            let to_depth = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .image(depth_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::DEPTH,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&to_depth),
-            );
         }
     }
-}
-
-// A same-layout (SHADER_READ_ONLY) image memory barrier on the shadow map
-// array, used to thread the per-slab compute tap into the CSM write/reset
-// chain that otherwise only orders fragment reads. Stage masks are supplied to
-// `cmd_pipeline_barrier`; the layout never changes.
-fn shadow_sync_barrier(
-    image: vk::Image,
-    src_access: vk::AccessFlags,
-    dst_access: vk::AccessFlags,
-) -> vk::ImageMemoryBarrier<'static> {
-    vk::ImageMemoryBarrier::default()
-        .src_access_mask(src_access)
-        .dst_access_mask(dst_access)
-        .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: vk::REMAINING_ARRAY_LAYERS,
-        })
 }
 
 #[cfg(test)]

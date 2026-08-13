@@ -413,12 +413,11 @@ impl MtlContext {
                 self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
                 0
             }
-            PassId::HizBuild => {
-                // Two-pass occlusion: rebuild the Hi-Z pyramid mid-frame
-                // from this frame's phase-1 depth so Cull2 re-tests against
-                // up-to-date occluders. Same `encode_hiz_build` the
-                // end-of-frame (next-frame) build uses, just dispatched
-                // here as a graph node ordered after Main.
+            PassId::HizBuild | PassId::HizFinal => {
+                // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the
+                // pyramid mid-frame from phase-1 depth so Cull2 re-tests
+                // against up-to-date occluders; `HizFinal` reduces the frame's
+                // final depth for the next frame's phase-1 cull.
                 self.encode_hiz_build(cmd_buf);
                 0
             }

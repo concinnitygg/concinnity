@@ -21,7 +21,6 @@ use crate::gfx::render_types::{
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use super::math::{mat4_inverse, mat4_mul, perspective};
-use super::texture::transition_barrier;
 
 mod composite;
 mod main;
@@ -256,6 +255,10 @@ impl DxContext {
             // is the single gate the executor's phase-2 arms + the Main resolve
             // skip share, so the graph shape matches what the executor dispatches.
             two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
+            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
+            // pyramid: the frame ends by reducing its final depth into it for the
+            // next frame's phase-1 occlusion test.
+            hiz_build_enabled: self.cull.hiz.is_some(),
             // Screen-space global illumination: inserts the `Ssgi` RMW node
             // after `Raymarch` and before `Decals`. On when the world selected
             // `indirect_lighting: ssgi` (which also forces the SSR pre-pass on
@@ -502,17 +505,10 @@ impl DxContext {
         // matching inputs skips the rebuild.
         *self.frame_graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
-        // Hi-Z pyramid: read this frame's main depth buffer, write the
-        // mip chain that *next* frame's cull dispatch consults. Runs inline
-        // on the outer "end" cmd list, after Composite (encoded by
-        // `execute_graph`) but before the per-frame restore barriers below.
-        // That placement keeps the build off the worker fan-out (so it
-        // does not need its own per-pass cmd-list slot) while still
-        // executing after the main pass has written depth. A no-op when no
-        // Hi-Z resource was built (bindless cull pipeline not active).
-        // The encoder owns its own DEPTH_WRITE ↔ NPSR transitions.
+        // The Hi-Z reduction that feeds next frame's cull is the graph's
+        // terminal `HizFinal` pass, so it has already been recorded; `hiz_valid`
+        // only tracks whether a pyramid at the current resolution now exists.
         if self.cull.hiz.is_some() {
-            self.encode_hiz_build(end_cmd);
             self.cull.hiz_valid.set(true);
         }
         // Capture the un-jittered view-projection for the next frame's cull
@@ -521,19 +517,10 @@ impl DxContext {
         // or a re-init.
         self.cull.prev_view_proj.set(cur_vp);
 
-        // Restore the HDR target → RENDER_TARGET for the next frame. The MSAA
-        // path already did this after the resolve; only the MSAA-off path,
-        // which left it in PIXEL_SHADER_RESOURCE, still needs it. Lands on
-        // the "end" cmd list (after Composite) so it executes after every
-        // per-pass cmd list above.
-        if self.hdr.resolve.is_none() {
-            let hdr_to_rt = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            unsafe { end_cmd.ResourceBarrier(&[hdr_to_rt]) };
-        }
+        // The HDR targets are graph resources: `emit_graph_restores` already
+        // returned each to its resting state on the "end" cmd list, which is
+        // where the MSAA-off spine's PIXEL_SHADER_RESOURCE -> RENDER_TARGET
+        // reset now comes from.
 
         // The shadow map rests sampled between frames; next frame's Shadow
         // producer barrier (graph-driven) performs the PIXEL_SHADER_RESOURCE ->

@@ -69,15 +69,26 @@ pub(super) fn setup(
         height,
         title_bar,
     } = config;
-    // Validation / debug layer
-    if validation
-        && let Ok(debug) = unsafe {
+    // Validation / debug layer. `D3D12GetDebugInterface` fails when the Windows
+    // "Graphics Tools" optional feature is absent, and a run without the layer
+    // looks exactly like a run the layer found nothing wrong with, so say which
+    // one happened: a verification pass that reports "0 errors" needs to know
+    // the layer was there to report them.
+    if validation {
+        let debug = unsafe {
             let mut d: Option<ID3D12Debug> = None;
-            D3D12GetDebugInterface(&mut d).map(|_| d)
+            D3D12GetDebugInterface(&mut d).ok().and(d)
+        };
+        match debug {
+            Some(d) => {
+                unsafe { d.EnableDebugLayer() };
+                tracing::info!("d3d12 debug layer: enabled");
+            }
+            None => tracing::warn!(
+                "d3d12 debug layer: requested but unavailable (install the Windows \
+                 \"Graphics Tools\" optional feature); running unvalidated"
+            ),
         }
-        && let Some(d) = debug
-    {
-        unsafe { d.EnableDebugLayer() };
     }
 
     // Win32 window (create_window also registers raw mouse input and installs
@@ -111,11 +122,15 @@ pub(super) fn setup(
     // Disable break-on-error so the debug layer doesn't terminate the process
     // before we can log the message via tracing.
     let info_queue: Option<ID3D12InfoQueue> = if validation {
-        device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
+        let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false);
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false);
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false);
-        })
+        });
+        if iq.is_none() {
+            tracing::warn!("d3d12 info queue: unavailable; layer messages will not be logged");
+        }
+        iq
     } else {
         None
     };

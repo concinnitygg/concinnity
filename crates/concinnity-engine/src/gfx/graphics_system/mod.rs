@@ -403,8 +403,7 @@ impl std::fmt::Debug for GraphicsSystem {
 impl GraphicsSystem {
     // Fresh renderer driver with no backend yet. Config (frames-in-flight,
     // clear color, `max_frames`, shadow-map size) is read from the world's
-    // `GraphicsConfig` in [`System::init`]; the validation request comes from
-    // the CLI via `dev_flags`.
+    // `GraphicsConfig` in [`System::init`].
     pub fn new() -> Self {
         Self {
             window_args: Default::default(),

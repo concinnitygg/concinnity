@@ -387,8 +387,11 @@ impl DxContext {
         self.end_fullscreen_rt(cmd, &rc.blur);
 
         // Pass 2: lerp the sharp full-res reflection against the upsampled blur by
-        // roughness, then composite over the scene into `output`.
-        self.begin_fullscreen_rt(cmd, &rc.output, rc.output_rtv);
+        // roughness, then composite over the scene into `output` -- the graph's
+        // `scene_pre_taa`, which the executor has already put in RENDER_TARGET
+        // for this pass's declared write, and which the next consumer's barrier
+        // takes back out.
+        self.bind_fullscreen_rt(cmd, &rc.output, rc.output_rtv);
         unsafe {
             cmd.SetPipelineState(&rc.composite_pso);
             cmd.SetGraphicsRootSignature(&rc.composite_root_sig);
@@ -404,7 +407,6 @@ impl DxContext {
             cmd.IASetIndexBuffer(None);
             cmd.DrawInstanced(3, 1, 0, 0);
         }
-        self.end_fullscreen_rt(cmd, &rc.output);
     }
 }
 

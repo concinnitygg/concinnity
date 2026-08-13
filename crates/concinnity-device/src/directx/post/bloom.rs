@@ -337,26 +337,71 @@ impl crate::gfx::fullscreen::BloomEncoder for DxContext {
     }
 
     fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) {
-        self.bloom_run_pass(cmd, 0, *scene_srv, &self.bloom.pso_prefilter);
+        // Mip 0 is the graph's `bloom_top`, so it arrives in RENDER_TARGET and
+        // must leave in it. In between the downsample chain samples it, which is
+        // the one state change this node owns.
+        let after = if self.bloom.mips.len() > 1 {
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        } else {
+            D3D12_RESOURCE_STATE_RENDER_TARGET
+        };
+        self.bloom_run_pass(
+            cmd,
+            BloomSubPass {
+                dst: 0,
+                src_srv: *scene_srv,
+                pso: &self.bloom.pso_prefilter,
+                before: D3D12_RESOURCE_STATE_RENDER_TARGET,
+                after,
+            },
+        );
     }
 
     fn bloom_downsample(&self, cmd: &Self::Rec, _scene_srv: &Self::Args, dst: usize) {
         self.bloom_run_pass(
             cmd,
-            dst,
-            self.bloom.mip_srv_gpus[dst - 1],
-            &self.bloom.pso_downsample,
+            BloomSubPass {
+                dst,
+                src_srv: self.bloom.mip_srv_gpus[dst - 1],
+                pso: &self.bloom.pso_downsample,
+                before: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                after: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            },
         );
     }
 
     fn bloom_upsample(&self, cmd: &Self::Rec, _scene_srv: &Self::Args, dst: usize) {
+        // The chain walks back down to mip 0, whose last write hands
+        // `bloom_top` back to the graph in RENDER_TARGET.
+        let after = if dst == 0 {
+            D3D12_RESOURCE_STATE_RENDER_TARGET
+        } else {
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        };
         self.bloom_run_pass(
             cmd,
-            dst,
-            self.bloom.mip_srv_gpus[dst + 1],
-            &self.bloom.pso_upsample,
+            BloomSubPass {
+                dst,
+                src_srv: self.bloom.mip_srv_gpus[dst + 1],
+                pso: &self.bloom.pso_upsample,
+                before: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                after,
+            },
         );
     }
+}
+
+// One bloom sub-pass: which mip it renders into, what it samples, and the states
+// that mip is in on either side of it. Every mip but 0 rests sampled inside the
+// chain; mip 0 is the graph's `bloom_top` and rests in RENDER_TARGET at the node
+// boundary, so it is the only one whose `before` and `after` differ from the
+// rest.
+struct BloomSubPass<'a> {
+    dst: usize,
+    src_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pso: &'a ID3D12PipelineState,
+    before: D3D12_RESOURCE_STATES,
+    after: D3D12_RESOURCE_STATES,
 }
 
 impl DxContext {
@@ -374,22 +419,27 @@ impl DxContext {
     }
 
     // One fullscreen-triangle bloom sub-pass: sample `src_srv`, render into
-    // bloom mip `dst` with `pso` bound, wrapped in the RT<->SRV barrier pair.
-    fn bloom_run_pass(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        dst: usize,
-        src_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
-        pso: &ID3D12PipelineState,
-    ) {
+    // bloom mip `dst` with `pso` bound, opening from the mip's `before` state
+    // and closing into its `after`. A sub-pass whose mip is already a render
+    // target on both sides (mip 0, handed over by the graph) emits neither.
+    fn bloom_run_pass(&self, cmd: &ID3D12GraphicsCommandList, pass: BloomSubPass<'_>) {
+        let BloomSubPass {
+            dst,
+            src_srv,
+            pso,
+            before,
+            after,
+        } = pass;
         let (mw, mh) = self.bloom.mip_extents[dst];
         let post = self.post_process;
-        let to_rt = transition_barrier(
-            &self.bloom.mips[dst],
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        if before != D3D12_RESOURCE_STATE_RENDER_TARGET {
+            let to_rt = transition_barrier(
+                &self.bloom.mips[dst],
+                before,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        }
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.bloom.mip_rtvs[dst]), false, None);
             let vp = D3D12_VIEWPORT {
@@ -418,12 +468,14 @@ impl DxContext {
             );
             cmd.DrawInstanced(3, 1, 0, 0);
         }
-        let to_psr = transition_barrier(
-            &self.bloom.mips[dst],
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        unsafe { cmd.ResourceBarrier(&[to_psr]) };
+        if after != D3D12_RESOURCE_STATE_RENDER_TARGET {
+            let from_rt = transition_barrier(
+                &self.bloom.mips[dst],
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                after,
+            );
+            unsafe { cmd.ResourceBarrier(&[from_rt]) };
+        }
     }
 }
 

@@ -613,11 +613,18 @@ impl MtlContext {
             None
         };
 
-        // `scene_input` is the engine-owned texture the post-decoration
-        // stack treats as the pre-TAA scene: the SSR (or RT-reflection)
-        // resolve output when on, else the raw `hdr_resolve`. Both SSR resolve
-        // and the RT-reflection pass write `ssr_targets.output`. `scene_color`
-        // is what Bloom + Composite read:
+        // `scene_input` is the engine-owned texture the post-decoration stack
+        // treats as the pre-TAA scene: `ssr_targets.output` when a reflection
+        // path is live, else the raw `hdr_resolve`.
+        //
+        // `output` is the *composited* scene, not the reflection. Both the SSR
+        // and the RT resolve write radiance into `ssr_targets.reflection`, then
+        // call the shared `encode_reflection_composite`, which blends that over
+        // `hdr_resolve` into `output`. Worth stating precisely: the DirectX
+        // equivalent split the two apart and left its upscaler reading the
+        // radiance buffer as if it were the scene.
+        //
+        // `scene_color` is what Bloom + Composite read:
         //   - the upscaler's output (drawable-res) when MetalFX is on,
         //   - the TAA resolve target when TAA is on,
         //   - otherwise just the pre-TAA scene (no temporal stage).
@@ -715,6 +722,10 @@ impl MtlContext {
             // static geometry simply runs single-pass. When on, the builder
             // inserts HizBuild → Cull2 → Main2 between Main and the post chain.
             two_pass_occlusion_enabled: self.cull.two_pass_occlusion,
+            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
+            // pyramid: the frame ends by reducing its final depth into it for the
+            // next frame's phase-1 occlusion test.
+            hiz_build_enabled: self.cull.hiz.is_some(),
             // SSGI runs when `indirect_lighting: "ssgi"` resolved settings.
             // The builder inserts the Ssgi RMW pass after Raymarch on the
             // hdr_resolve chain; the gather reads the SSR pre-pass G-buffer
@@ -839,22 +850,13 @@ impl MtlContext {
         // with matching inputs skips the rebuild.
         self.frame_graph_cache = Some((graph_inputs, graph));
 
-        // Hi-Z pyramid: reduce this frame's main depth buffer into the mip
-        // chain the *next* frame's phase-1 cull dispatch consults. Encoded on
-        // the outer command buffer here, after `execute_graph` (which already
-        // committed every pass's cmd buf, so the depth attachment is written)
-        // and before present, so it stays off the per-pass worker fan-out
-        // while still executing after the last main pass. A no-op when no Hi-Z
-        // resource was built (bindless cull pipeline not active). Under
-        // two-pass occlusion this reduces the *final* (post-Main2) depth, and
-        // the graph's mid-frame `HizBuild` already rebuilt the pyramid that fed
-        // this frame's Cull2: this end-of-frame build supersedes it for the
-        // next frame. The un-jittered VP captured at the top of the frame
-        // becomes `cull_prev_view_proj` so next frame's projection lines up
-        // (distinct from the velocity pre-pass's `prev_view_proj`, which only
-        // advances when velocity runs).
+        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
+        // `HizFinal` pass, so it has already been encoded. Advance the temporal
+        // state it depends on: the pyramid is now valid for next frame's cull, and
+        // the un-jittered VP captured at the top of the frame becomes the
+        // projection that cull tests through (distinct from the velocity
+        // pre-pass's `prev_view_proj`, which only advances when velocity runs).
         if self.cull.hiz.is_some() {
-            self.encode_hiz_build(&cmd_buf);
             self.cull.hiz_valid = true;
             self.cull.prev_view_proj = self.cull.cur_view_proj;
         }
@@ -1324,17 +1326,35 @@ impl MtlContext {
     // and the MetalFX output texture stay at the drawable (output)
     // resolution so the final composite reads cleanly into the swapchain.
     fn resize_targets_if_needed(&mut self, want_w: u32, want_h: u32) -> Result<(), String> {
-        // Output (drawable) dimensions are the `want_w/h` arg; render
-        // dimensions match output when no upscaler is active, otherwise
-        // they're the upscaler's input size (clamped to device-supported
-        // scale range at scaler-build time).
-        let (render_w, render_h) = if self.upscale.scaler.is_some() {
-            (
-                ((want_w as f32) * self.upscale.scale).max(1.0) as u32,
-                ((want_h as f32) * self.upscale.scale).max(1.0) as u32,
-            )
-        } else {
-            (want_w, want_h)
+        // A MetalFX scaler is bound to one (input, output) size pair at
+        // construction, so a changed output needs a fresh instance. Rebuild
+        // before deriving the render resolution below, which reads the sizes
+        // this decides. Reset the temporal history on the first frame after, so
+        // the new scaler does not pull from a stale buffer.
+        if let Some(u) = self.upscale.scaler.as_ref()
+            && (want_w != u.output_width || want_h != u.output_height)
+        {
+            self.upscale.scaler = Some(super::post::MetalFXUpscaler::new(
+                &self.device,
+                want_w,
+                want_h,
+                self.upscale.scale,
+            )?);
+            self.upscale
+                .reset_pending
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+
+        // Output (drawable) dimensions are the `want_w/h` arg; the render
+        // dimensions are the scaler's own input size, taken from it rather than
+        // recomputed. `upscale.scale` is a rounded ratio (`input / output`), so
+        // multiplying it back out can land a pixel low -- at 2048x1536 the
+        // scaler declares a 1024-row input and the arithmetic yields 1023, and
+        // MetalFX asserts that the content exceeds the texture. The scaler is
+        // the authority on the size it was built for.
+        let (render_w, render_h) = match self.upscale.scaler.as_ref() {
+            Some(u) => (u.input_width.max(1), u.input_height.max(1)),
+            None => (want_w, want_h),
         };
 
         let render_changed =
@@ -1453,28 +1473,6 @@ impl MtlContext {
         if render_changed && let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.device, render_w, render_h)?;
             self.cull.hiz_valid = false;
-        }
-        // MetalFX scaler is bound to specific (input, output) sizes at
-        // construction; a resize requires a fresh scaler instance. Reset
-        // the temporal history on the first frame after the rebuild so
-        // the new scaler doesn't pull from a stale buffer.
-        if self.upscale.scaler.is_some() {
-            let output_changed = match &self.upscale.scaler {
-                Some(u) => want_w != u.output_width || want_h != u.output_height,
-                None => false,
-            };
-            if output_changed {
-                let new_scaler = super::post::MetalFXUpscaler::new(
-                    &self.device,
-                    want_w,
-                    want_h,
-                    self.upscale.scale,
-                )?;
-                self.upscale.scaler = Some(new_scaler);
-                self.upscale
-                    .reset_pending
-                    .store(true, std::sync::atomic::Ordering::Release);
-            }
         }
         Ok(())
     }

@@ -19,9 +19,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::texture::{
-    HDR_FORMAT, ScopedBarrier, create_buffer, upload_buffer, write_texture_srv,
-};
+use crate::directx::texture::{HDR_FORMAT, create_buffer, upload_buffer, write_texture_srv};
 use crate::gfx::decal::DecalRecord;
 
 // Compile the decal vertex + fragment shaders; the MSAA define keeps the
@@ -497,40 +495,14 @@ impl DxContext {
         let params_base_gva =
             unsafe { decals.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
-        // Main depth -> PIXEL_SHADER_RESOURCE so the fragment can sample it; the
-        // guard restores DEPTH_WRITE on drop (function end) so next frame's main
-        // pass can clear/write it again. Declared before the scene guard so it
-        // drops *after* it (LIFO): scene restored to PSR, then depth, matching
-        // the original teardown order.
-        let _depth_rmw = ScopedBarrier::new(
-            cmd,
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        // Main depth is already in a shader-resource state for the fragment's
+        // sample: the graph declares this pass's depth read and the executor emits
+        // the transition ahead of this command list.
 
-        // hdr_resolve / hdr_color was transitioned to PIXEL_SHADER_RESOURCE by
-        // encode_main_pass. The decal pass writes it directly as an RTV, so the
-        // guard flips it to RENDER_TARGET now and back to PSR on drop for the
-        // SSR resolve / TAA / bloom / composite passes.
-        let (scene_res, scene_rtv): (&ID3D12Resource, D3D12_CPU_DESCRIPTOR_HANDLE) =
-            if let Some(hdr_resolve) = &self.hdr.resolve {
-                (
-                    hdr_resolve,
-                    self.hdr
-                        .resolve_rtv
-                        .expect("hdr_resolve_rtv set when hdr_resolve is Some"),
-                )
-            } else {
-                // MSAA off: `hdr_color` is the resolved scene.
-                (&self.hdr.color, self.hdr.color_rtv)
-            };
-        let _scene_rmw = ScopedBarrier::new(
-            cmd,
-            scene_res,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
+        // The scene spine is a graph resource: this pass declares its
+        // read-modify-write, so the executor has already put it in RENDER_TARGET
+        // and the next consumer's barrier takes it back out.
+        let scene_rtv = self.hdr_scene_rtv();
 
         let w = self.render_width;
         let h = self.render_height;
@@ -616,9 +588,8 @@ impl DxContext {
             self.inc_draw_calls(1);
         }
 
-        // `_scene_rmw` then `_depth_rmw` drop here (LIFO): scene RT -> PSR for
-        // the SSR resolve / TAA / bloom / composite passes, then main depth
-        // PSR -> DEPTH_WRITE for next frame.
+        // `_scene_rmw` drops here: scene RT -> PSR for the SSR resolve / TAA /
+        // bloom / composite passes.
     }
 
     // GPU descriptor handle for decal `i`'s albedo SRV (written into the

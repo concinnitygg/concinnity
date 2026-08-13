@@ -21,18 +21,18 @@
 //
 // Every operation is best-effort: a miss, an unreadable entry, or a failed write
 // all fall back to compiling normally, so the cache can never break a run.
-// Deleting the directory is the way to force a full recompile; a toolchain whose
-// output changes for identical source wants a `CACHE_FORMAT_VERSION` bump.
+// Deleting the directory is the way to force a full recompile, and is what a
+// host toolchain upgrade whose output differs for identical source wants.
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// Bump when a stored artifact's meaning changes without a corresponding change
-// to the hashed inputs -- a new compiler toolchain whose output differs for
-// identical source, or a change to what `cached` stores. A bump orphans every
-// existing entry, which `prune` then reclaims.
-const CACHE_FORMAT_VERSION: u32 = 1;
+// SHADER_COMPILE_SOURCE_HASH: derived by build.rs from the modules that decide
+// how an artifact is produced, so a change to a compiler invocation or to what
+// `cached` stores orphans every entry it would otherwise serve stale. `prune`
+// reclaims the orphans.
+include!(concat!(env!("OUT_DIR"), "/shader_compile_source_hash.rs"));
 
 // Keep the cache from growing without bound: every shader edit orphans the
 // previous artifact, and a long-lived checkout would otherwise accumulate them
@@ -55,7 +55,7 @@ impl Key<'_> {
     // key tuples can concatenate to the same byte stream.
     fn digest(&self) -> String {
         let mut h = Sha256::new();
-        h.update(CACHE_FORMAT_VERSION.to_le_bytes());
+        h.update(SHADER_COMPILE_SOURCE_HASH.to_le_bytes());
         for part in [self.compiler, self.source, self.entry, self.target] {
             h.update((part.len() as u64).to_le_bytes());
             h.update(part.as_bytes());

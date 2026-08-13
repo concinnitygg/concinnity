@@ -738,57 +738,49 @@ impl DxContext {
         // two-pass occlusion the resolve is deferred to `Main2` (which re-runs
         // the disoccluded geometry on top of this pass's colour + depth), so the
         // post stack sees the combined phase-1 + phase-2 scene. Skipping it here
-        // leaves `hdr_color` in RENDER_TARGET (and `hdr_resolve`, when present,
-        // in PIXEL_SHADER_RESOURCE) exactly as `Main2` expects to load them.
+        // leaves both targets in RENDER_TARGET, exactly as `Main2` expects to
+        // load them.
         if !self.two_pass_occlusion_active() {
             self.finish_hdr_target(cmd);
         }
     }
 
-    // Resolve (MSAA) or transition (no MSAA) the HDR scene target to
-    // `PIXEL_SHADER_RESOURCE` so the velocity / TAA / bloom / composite passes
-    // can sample it. With MSAA on, resolve the multisampled `hdr_color` into the
-    // single-sample `hdr_resolve` and restore `hdr_color` to RENDER_TARGET for
-    // next frame; with MSAA off, the composite samples `hdr_color` directly. The
-    // HDR SRV the composite binds was created at init on whichever of the two is
-    // sampled here. Shared by the phase-1 main pass and the phase-2 `Main2`
-    // pass; entry state must be `hdr_color` = RENDER_TARGET (+ `hdr_resolve` =
-    // PIXEL_SHADER_RESOURCE), which is the resting state after either pass's
-    // draws and the state `Main2` inherits when phase 1 deferred the resolve.
+    // Resolve the multisampled `hdr_color` into the single-sample `hdr_resolve`
+    // that every later pass reads. A no-op with MSAA off, where there is no
+    // separate resolve target and `hdr_color` *is* the spine. Shared by the
+    // phase-1 main pass and the phase-2 `Main2` pass.
+    //
+    // Both targets are graph resources sitting in RENDER_TARGET here -- their
+    // writes are what this pass declares -- so the transitions below are the
+    // resolve step's own, finer than the one-state-per-resource the graph
+    // models, and each returns its target to RENDER_TARGET before the pass ends.
     pub(in crate::directx) fn finish_hdr_target(&self, cmd: &ID3D12GraphicsCommandList) {
-        if let Some(hdr_resolve) = &self.hdr.resolve {
-            let color_to_src = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-            );
-            let resolve_to_dst = transition_barrier(
-                hdr_resolve,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_RESOLVE_DEST,
-            );
-            unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
-            unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.hdr.color, 0, HDR_FORMAT) };
-            let resolve_to_psr = transition_barrier(
-                hdr_resolve,
-                D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            // Restore the multisampled target to RENDER_TARGET for next frame.
-            let color_to_rt = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            unsafe { cmd.ResourceBarrier(&[resolve_to_psr, color_to_rt]) };
-        } else {
-            let color_to_psr = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            unsafe { cmd.ResourceBarrier(&[color_to_psr]) };
-        }
+        let Some(hdr_resolve) = &self.hdr.resolve else {
+            return;
+        };
+        let color_to_src = transition_barrier(
+            &self.hdr.color,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+        );
+        let resolve_to_dst = transition_barrier(
+            self.hdr_scene_target(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_RESOLVE_DEST,
+        );
+        unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
+        unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.hdr.color, 0, HDR_FORMAT) };
+        let resolve_to_rt = transition_barrier(
+            self.hdr_scene_target(),
+            D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        );
+        let color_to_rt = transition_barrier(
+            &self.hdr.color,
+            D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        );
+        unsafe { cmd.ResourceBarrier(&[resolve_to_rt, color_to_rt]) };
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not clear)

@@ -28,7 +28,6 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::texture::transition_barrier;
 
 // DWORD count of the `HizParams` cbuffer (dst_w, dst_h, src_mip, sample_count).
 const HIZ_PARAMS_DWORDS: u32 = 4;
@@ -421,30 +420,17 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 }
 
 impl crate::directx::context::DxContext {
-    // Encode the Hi-Z build pass on `cmd`. Runs after the render graph
-    // returns, before the per-frame restore barriers. Assumes the main
-    // depth resource is in `DEPTH_WRITE` state (every depth-reading pass
-    // in the graph restores it back to DEPTH_WRITE after sampling). A
-    // no-op when bindless cull isn't active (no Hi-Z resource was built).
+    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizBuild`
+    // (mid-frame, phase-1 depth) or `HizFinal` (terminal, the frame's last depth
+    // version) node, so the executor has already put main depth in a
+    // shader-resource state and the pyramid in `UNORDERED_ACCESS`; only the
+    // per-mip chain below is this encoder's. A no-op when bindless cull isn't
+    // active (no Hi-Z resource was built).
     pub(in crate::directx) fn encode_hiz_build(&self, cmd: &ID3D12GraphicsCommandList) {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
         };
-        // 1. Transition main depth so a compute SRV can sample it, and
-        //    transition the Hi-Z texture so the compute UAV can write it.
-        let depth_to_srv = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        );
-        let hiz_to_uav = transition_barrier(
-            &hiz.texture,
-            hiz.rest_state,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        );
-        unsafe { cmd.ResourceBarrier(&[depth_to_srv, hiz_to_uav]) };
-
-        // 2. Init kernel: mip 0 from main depth (MAX over MSAA samples when
+        // 1. Init kernel: mip 0 from main depth (MAX over MSAA samples when
         //    MSAA is on).
         let msaa = self.hdr.msaa_samples > 1;
         let init_params = HizParams {
@@ -473,8 +459,9 @@ impl crate::directx::context::DxContext {
         }
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };
 
-        // 3. Downsample chain. Each dispatch reads the prior mip via the
-        //    all-mips SRV and writes the next mip via its UAV.
+        // 2. Downsample chain. Each dispatch reads the prior mip via the
+        //    all-mips SRV and writes the next mip via its UAV. Finer than the
+        //    graph's one-state-per-resource granularity, so it stays inline.
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -502,20 +489,5 @@ impl crate::directx::context::DxContext {
             cur_w = next_w;
             cur_h = next_h;
         }
-
-        // 4. Restore: main depth back to DEPTH_WRITE for next frame's main
-        //    pass; Hi-Z back to NON_PIXEL_SHADER_RESOURCE so the next frame's
-        //    cull dispatch finds it where the cull kernel expects.
-        let depth_back = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        );
-        let hiz_back = transition_barrier(
-            &hiz.texture,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            hiz.rest_state,
-        );
-        unsafe { cmd.ResourceBarrier(&[depth_back, hiz_back]) };
     }
 }

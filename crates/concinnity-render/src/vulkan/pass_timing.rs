@@ -113,6 +113,7 @@ mod tests {
             PassId::LightCull,
             PassId::SpotShadow,
             PassId::Lines,
+            PassId::HizFinal,
         ] {
             let (s, e) = pass_pair(0, variant);
             assert!(seen.insert(s), "duplicate start slot for {variant:?}");

@@ -183,6 +183,7 @@ mod tests {
         }),
         ("composite_reads_ao", |i| i.composite_reads_ao = true),
         ("shadowed_spots", |i| i.shadowed_spot_count = 2),
+        ("hiz_build", |i| i.hiz_build_enabled = true),
     ];
 
     // Compile the graph for `combo` and assert it has no barrier gaps.
@@ -270,6 +271,10 @@ mod tests {
                 set(&mut inputs);
             }
         }
+        // Multisampled, so the separate `hdr_color` attachment is in the graph;
+        // without MSAA the single colour target is the spine and only
+        // `hdr_resolve` is declared.
+        inputs.hdr_sample_count = 4;
         let graph = build_frame_graph(&inputs).expect("compiles");
 
         let expected = [

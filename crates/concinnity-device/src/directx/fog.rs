@@ -27,7 +27,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::texture::{HDR_FORMAT, create_buffer, transition_barrier};
+use crate::directx::texture::{HDR_FORMAT, create_buffer};
 use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use crate::gfx::render_types::{FogFroxelParams, FogParams};
 
@@ -465,16 +465,16 @@ pub(in crate::directx) struct FogResources {
     pub(in crate::directx) volume_uav_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) volume_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
-    // Heap GPU handle of the main-depth SRV. Bound at fog pass t0; the
-    // resource is transitioned to PIXEL_SHADER_RESOURCE around the pass and
-    // restored to DEPTH_WRITE afterward.
+    // Heap GPU handle of the main-depth SRV. Bound at fog pass t0; the graph
+    // declares the Fog pass's depth read, so the executor puts the resource in a
+    // shader-resource state before this pass and restores DEPTH_WRITE at the end
+    // of the frame.
     pub(in crate::directx) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
     // Heap GPU handle of the shadow map array SRV. Bound at the froxel
     // kernel's t0 so each slab can do a CSM tap. Shared with the rest of
     // the engine; the resource is transitioned to PIXEL_SHADER_RESOURCE
-    // by `encode_shadow_pass` ahead of every later pass, including this
-    // one, and restored to DEPTH_WRITE at the end of `record_frame`.
+    // by `encode_shadow_pass` ahead of every later pass, including this one.
     pub(in crate::directx) shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
 
@@ -704,22 +704,11 @@ impl DxContext {
         let froxel_params_gva =
             unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
-        // Shadow map needs to flip from PIXEL_SHADER_RESOURCE (where every
-        // earlier pass left it (either `encode_shadow_pass` for the real
-        // path or the init upload for the 1×1 fallback) to
-        // NON_PIXEL_SHADER_RESOURCE so the compute kernel can sample it.
-        // The volume stays in `UNORDERED_ACCESS`; `encode_fog` is what
-        // transitions it to PIXEL_SHADER_RESOURCE for the render pass.
-        let shadow_to_compute = self.shadow.resource.as_ref().map(|s| {
-            transition_barrier(
-                &s.resource,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            )
-        });
-        if let Some(b) = shadow_to_compute {
-            unsafe { cmd.ResourceBarrier(&[b]) };
-        }
+        // The shadow map's cascade tap is a declared read of this pass, so the
+        // Shadow consumer barrier's stage union already carries the non-pixel
+        // shader-resource state the compute kernel needs. The volume stays in
+        // `UNORDERED_ACCESS`; the graph's Fog consumer barrier is what returns it
+        // to a shader-resource state for the render pass.
 
         unsafe {
             cmd.SetComputeRootSignature(&fog.froxel_root_sig);
@@ -737,19 +726,8 @@ impl DxContext {
             cmd.Dispatch(groups_x, groups_y, 1);
         }
 
-        // Restore the shadow map to PIXEL_SHADER_RESOURCE so the end-of-
-        // frame transition back to DEPTH_WRITE (or the fallback's permanent
-        // PIXEL state) finds it where it expects.
-        let shadow_back = self.shadow.resource.as_ref().map(|s| {
-            transition_barrier(
-                &s.resource,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            )
-        });
-        if let Some(b) = shadow_back {
-            unsafe { cmd.ResourceBarrier(&[b]) };
-        }
+        // The shadow map stays in the state the graph's read run put it in; the
+        // executor's end-of-frame restore returns it to resting.
     }
 
     // Encode the volumetric-fog pass. Samples the 3D froxel volume the
@@ -781,42 +759,14 @@ impl DxContext {
         let froxel_params_gva =
             unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
-        // Transition main depth → PIXEL_SHADER_RESOURCE so the fragment can
-        // sample it; restored to DEPTH_WRITE after the pass.
-        let depth_to_psr = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        // The froxel volume's transitions are fully graph-driven:
-        // fog_froxel_volume is the graph's resource, so the FogFroxel producer
-        // barrier (PIXEL_SHADER_RESOURCE → UNORDERED_ACCESS) runs before that
-        // pass and this Fog pass's consumer barrier (UNORDERED_ACCESS →
-        // PIXEL_SHADER_RESOURCE) before this pass. There is no inline reset.
-        unsafe { cmd.ResourceBarrier(&[depth_to_psr]) };
+        // Main depth and the froxel volume are both graph resources, so both
+        // transitions are already in place: the executor emits this pass's depth
+        // consumer barrier and the froxel volume's UNORDERED_ACCESS →
+        // PIXEL_SHADER_RESOURCE close before this command list.
 
-        // hdr_resolve / hdr_color is in PIXEL_SHADER_RESOURCE after the main
-        // pass (decals, if they ran, restored it to PIXEL_SHADER_RESOURCE).
-        // Flip it back to RENDER_TARGET so we can blend into it.
-        let scene_rtv: D3D12_CPU_DESCRIPTOR_HANDLE = if let Some(hdr_resolve) = &self.hdr.resolve {
-            let resolve_to_rt = transition_barrier(
-                hdr_resolve,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            unsafe { cmd.ResourceBarrier(&[resolve_to_rt]) };
-            self.hdr
-                .resolve_rtv
-                .expect("hdr_resolve_rtv set when hdr_resolve is Some")
-        } else {
-            let to_rt = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            unsafe { cmd.ResourceBarrier(&[to_rt]) };
-            self.hdr.color_rtv
-        };
+        // The scene spine is a graph resource: this pass declares its
+        // read-modify-write, so the executor has already put it in RENDER_TARGET.
+        let scene_rtv = self.hdr_scene_rtv();
 
         let w = self.render_width;
         let h = self.render_height;
@@ -852,36 +802,7 @@ impl DxContext {
             cmd.DrawInstanced(3, 1, 0, 0);
         }
 
-        // Restore: scene target back to PIXEL_SHADER_RESOURCE so the SSR
-        // resolve / TAA / bloom / composite can sample it; main depth back to
-        // DEPTH_WRITE for next frame's main pass; volume back to UNORDERED_ACCESS
-        // for next frame's compute pass. This volume reset is the graph seam's
-        // kept inline restore: it returns fog_froxel_volume to its resting state
-        // so the executor's FogFroxel producer barrier stays a no-op.
-        if let Some(hdr_resolve) = &self.hdr.resolve {
-            let rt_to_psr = transition_barrier(
-                hdr_resolve,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            unsafe { cmd.ResourceBarrier(&[rt_to_psr]) };
-        } else {
-            let to_psr = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            unsafe { cmd.ResourceBarrier(&[to_psr]) };
-        }
-        // The main depth is restored to DEPTH_WRITE for the next frame. The
-        // froxel volume rests sampled and is reset to UNORDERED_ACCESS by next
-        // frame's graph-driven FogFroxel producer barrier, so it needs no inline
-        // reset here.
-        let depth_back = transition_barrier(
-            &self.depth_resource,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        );
-        unsafe { cmd.ResourceBarrier(&[depth_back]) };
+        // The scene spine, main depth and the froxel volume are all graph
+        // resources; nothing here is left to restore.
     }
 }

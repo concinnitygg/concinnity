@@ -37,7 +37,19 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
         unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        self.bind_fullscreen_rt(cmd, output, output_rtv);
+    }
 
+    // The bind half of `begin_fullscreen_rt`, without the transition: for a
+    // target the render graph drives, which the executor has already put in
+    // RENDER_TARGET before this pass's command list. Such a pass has no `end`
+    // half either -- the next consumer's graph barrier takes the target back out.
+    pub(in crate::directx) fn bind_fullscreen_rt(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        output: &ID3D12Resource,
+        output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) {
         let desc = unsafe { output.GetDesc() };
         let w = desc.Width as u32;
         let h = desc.Height;

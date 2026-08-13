@@ -521,6 +521,10 @@ impl VkContext {
             // executor dispatches. The graph builder further ANDs this with
             // `bindless_cull_enabled`, which is already implied here.
             two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
+            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
+            // pyramid: the frame ends by reducing its final depth into it for the
+            // next frame's phase-1 occlusion test.
+            hiz_build_enabled: self.cull.hiz.is_some(),
             // Screen-space global illumination. `Some` only when the world
             // selected `indirect_lighting: ssgi`; the graph then inserts the
             // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
@@ -765,12 +769,9 @@ impl VkContext {
         // matching inputs skips the rebuild.
         self.frame_graph_cache = Some((seed_inputs, graph));
 
-        // Hi-Z occlusion: reduce this frame's main depth into the depth-mip
-        // pyramid that next frame's `Cull` dispatch consults. Runs inline on
-        // the frame's command buffer after the graph (so the Main pass has
-        // written depth and any decal / fog pass has restored it to
-        // DEPTH_STENCIL_ATTACHMENT_OPTIMAL). A no-op when GPU-cull is off.
-        self.encode_hiz_build(cmd, frame_idx);
+        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
+        // `HizFinal` pass, so it has already been recorded above; `hiz_valid` only
+        // tracks whether a pyramid at the current resolution now exists.
 
         // The cascade slices rest sampled (SHADER_READ_ONLY_OPTIMAL) between
         // frames; next frame's Shadow producer barrier (graph-driven) performs
@@ -801,9 +802,9 @@ impl VkContext {
         }
 
         // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next
-        // frame's occlusion-test projection, and the pyramid `encode_hiz_build`
-        // just wrote is now valid for next frame's cull (kept independent of
-        // TAA, which may be off while Hi-Z is on).
+        // frame's occlusion-test projection, and the pyramid the graph's
+        // `HizFinal` pass just wrote is now valid for next frame's cull (kept
+        // independent of TAA, which may be off while Hi-Z is on).
         if self.cull.hiz.is_some() {
             self.cull.hiz_prev_view_proj = cur_vp;
             self.cull.hiz_valid = true;

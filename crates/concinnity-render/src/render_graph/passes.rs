@@ -51,13 +51,14 @@ pub const PASS_NAMES: [&str; PASS_COUNT] = [
     "light_cull",
     "spot_shadow",
     "lines",
+    "hiz_final",
 ];
 
 // Number of distinct passes the engine times. Sized to match
 // [`PASS_NAMES`]; the per-pass timing array in
 // [`crate::profile::RenderStats`] is sized to at least this many
 // slots.
-pub const PASS_COUNT: usize = 31;
+pub const PASS_COUNT: usize = 32;
 
 // One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
 // `[T; PASS_COUNT]` companion array.
@@ -201,6 +202,14 @@ pub enum PassId {
     // a frame that submits no lines omits the node entirely, so a frame that
     // draws none never pays for it.
     Lines = 30,
+    // Terminal Hi-Z (depth-mip pyramid) build. Reduces the frame's final main
+    // depth into the pyramid the *next* frame's phase-1 `Cull` tests against,
+    // so it is declared last and reads the depth every decoration pass has
+    // finished with. Distinct from `HizBuild`, which rebuilds the same pyramid
+    // mid-frame from phase-1 depth for `Cull2`; when two-pass occlusion is on
+    // both run and this one supersedes it for the next frame. Present whenever
+    // the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
+    HizFinal = 31,
 }
 
 impl PassId {
@@ -254,6 +263,7 @@ mod tests {
         PassId::LightCull,
         PassId::SpotShadow,
         PassId::Lines,
+        PassId::HizFinal,
     ];
 
     // Expected timing name per variant. The match has no wildcard arm, so
@@ -292,6 +302,7 @@ mod tests {
             PassId::LightCull => "light_cull",
             PassId::SpotShadow => "spot_shadow",
             PassId::Lines => "lines",
+            PassId::HizFinal => "hiz_final",
         }
     }
 

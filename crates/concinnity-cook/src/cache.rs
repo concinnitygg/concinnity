@@ -2,12 +2,12 @@
 //
 // Some assets are expensive to compile -- the EnvironmentMap IBL convolution
 // alone is hundreds of millions of float ops per build. The compiled payload
-// is, however, a deterministic function of a small set of inputs: the cache
-// format version, the component discriminant, the asset's args JSON, and the
-// contents of any source files the args reference. This module hashes those
-// inputs into a key and stores the compiled bytes under `.concinnity/cache/`.
-// A later build that produces the same key reuses the cached payload instead
-// of recompiling.
+// is, however, a deterministic function of a small set of inputs: the code that
+// compiles it, the postcard-visible asset schema, the component discriminant,
+// the asset's args JSON, and the contents of any source files the args
+// reference. This module hashes those inputs into a key and stores the compiled
+// bytes under `.concinnity/cache/`. A later build that produces the same key
+// reuses the cached payload instead of recompiling.
 //
 // Every operation here is best-effort: a cache miss, a read error, or a write
 // error all fall back to a normal compile, so the cache can never break or
@@ -54,47 +54,16 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     Some(hash)
 }
 
-// Bump this whenever a compile path's output changes without a corresponding
-// change to asset args -- e.g. a convolution algorithm tweak, a payload format
-// revision, or a change to a default sample count. A bump changes every key
-// and so invalidates every existing cache entry.
-//
-// The counter was reset to 1 with the postcard/blob migration. Two entries
-// predate that reset and are kept for context:
-//   (pre-reset 4): font payload gained a supersample factor (build::font).
-//   (pre-reset 5): EnvironmentMap default irradiance_face_size 32 -> 8
-//   (build::environment_map), so worlds that omit it bake a different cube.
-//
-// 2: EnvironmentMap glossy reflection mips gained a firefly clamp
-//    (prefilter_clamp, default 12); worlds that omit the arg still bake dimmer
-//    hot texels, so every cached envmap must rebake (build::environment_map).
-// 3: Font payload header gained the rasterisation size (size_px) after
-//    supersample, shifting the atlas offset 12 -> 16 (build::font).
-// 4: baked resource data (`Material` data_bytes, the SkinnedMesh data tuple)
-//    switched JSON -> postcard alongside BLOB_VERSION 3; cached JSON bytes
-//    must not be replayed into a postcard blob.
-// 6: the SKMV skinned payload gained the optional MRPH morph-target block, so
-//    a mesh whose source carries morph targets compiles different bytes from
-//    unchanged args.
-// 7: every 2D texture payload switched to the tagged format (magic + format_id
-//    + per-mip records) so KTX2 / DDS can ship block-compressed mip chains; the
-//    old headerless RGBA8 bytes no longer parse (build::texture).
-// 8: the Material data resource gained `alpha_cutoff`, so its postcard bytes
-//    grew a field and cached records from before it no longer decode.
-// 9: BC5 sources decode to RGBA8 instead of shipping blocks (the shaders need a
-//    reconstructed Z in blue), and a block-compressed chain now honours
-//    `max_size` by dropping leading mips (build::texture).
-// 10: BC5 sources ship their blocks again now that the shaders reconstruct a
-//     normal map's Z from X and Y, so cached RGBA8 payloads must recompile
-//     (build::texture).
-// 11: Material gained the `shader` reference field, changing its baked
-//     postcard layout; cached Material records must recompile.
-const CACHE_FORMAT_VERSION: u32 = 11;
+// COMPILE_SOURCE_HASH: derived by build.rs from this crate's compile pipeline
+// and the payload format helpers it shares with the runtime, so a compile-path
+// change evicts the entries it would otherwise replay stale.
+include!(concat!(env!("OUT_DIR"), "/compile_source_hash.rs"));
 
-// Compute the cache key for one compiled asset. The key folds in the cache
-// format version, the component discriminant, the args JSON, a hash of every
-// input the compile reads, and -- for assets that compile rather than
-// transport their source -- the active backend's shader platform.
+// Compute the cache key for one compiled asset. The key folds in the two hashes
+// that stand for the compiler (the compile sources, and the asset schema the
+// baked records encode against), the component discriminant, the args JSON, a
+// hash of every input the compile reads, and -- for assets that compile rather
+// than transport their source -- the active backend's shader platform.
 //
 // The key is content-addressed with no namespacing prefix: an asset that
 // compiles identically on every backend (a mesh, a texture, a font) produces
@@ -192,7 +161,10 @@ fn key_from_parts(
     target: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(CACHE_FORMAT_VERSION.to_le_bytes());
+    hasher.update(COMPILE_SOURCE_HASH.to_le_bytes());
+    // The baked records inside a payload encode against the asset schema, and a
+    // schema field can change those bytes for args that hash identically.
+    hasher.update(concinnity_blob::SCHEMA_HASH.to_le_bytes());
     hasher.update([discriminant]);
 
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();

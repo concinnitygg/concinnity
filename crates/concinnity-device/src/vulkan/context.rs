@@ -1534,7 +1534,7 @@ impl VkContext {
         // the window is restored. `window_closed` keeps pumping the message loop
         // each tick, so the restore is picked up. Mirrors the DirectX backend,
         // which skips its resize + present while minimised.
-        if self.is_minimized() {
+        if self.frame_is_parked() {
             return Ok(());
         }
 
@@ -1900,6 +1900,28 @@ impl VkContext {
     pub(super) fn is_minimized(&self) -> bool {
         let (w, h) = self.window().framebuffer_size();
         extent_minimized(w, h)
+    }
+
+    // True while this frame cannot be presented, which is what `draw_frame`
+    // parks on. The window's own size is not enough: it is tracked from WM_SIZE,
+    // so a window that was already minimised when it was created never saw a
+    // zero and reports its requested size for the whole run, while the surface
+    // reports 0x0 from the start. Without the surface check that run builds a
+    // zero-extent swapchain and then renders into it every frame -- a render
+    // area, viewport and image copy all at zero, which validation rejects
+    // individually and endlessly. `rebuild_swapchain` already gates on the
+    // surface for the same reason.
+    //
+    // A failed capability query answers "presentable": a transient WSI error
+    // must not wedge the renderer into a permanent park.
+    pub(super) fn frame_is_parked(&self) -> bool {
+        if self.is_minimized() {
+            return true;
+        }
+        match self.surface_extent() {
+            Ok(extent) => !super::swapchain::extent_is_presentable(extent),
+            Err(_) => false,
+        }
     }
 
     // Re-point the combined-image-sampler at `binding` of `set` to `view`.

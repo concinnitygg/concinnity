@@ -1524,7 +1524,6 @@ impl VkContext {
             .get(frame_idx)
             .ok_or("glass: scene image index OOB")?;
         let snapshot = glass.snapshot.image;
-        let depth_image = self.depth_images[frame_idx].image;
 
         // Upload this frame's view UBO.
         let view_ptr = glass
@@ -1591,13 +1590,6 @@ impl VkContext {
 
         let color_range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let depth_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
             base_mip_level: 0,
             level_count: 1,
             base_array_layer: 0,
@@ -1676,10 +1668,10 @@ impl VkContext {
             );
         }
 
-        // 2) Close the snapshot for the fragment read, restore the scene image
-        // to SHADER_READ_ONLY (so the render pass's colour LOAD matches its
-        // declared initial layout), and flip the main depth to SHADER_READ_ONLY
-        // for the manual occlusion test.
+        // 2) Close the snapshot for the fragment read and restore the scene
+        // image to SHADER_READ_ONLY, so the render pass's colour LOAD matches
+        // its declared initial layout. Main depth is already sampled here: the
+        // graph transitions it once for the whole decoration run.
         let snapshot_to_read = color_barrier(
             snapshot,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -1694,25 +1686,16 @@ impl VkContext {
             vk::AccessFlags::TRANSFER_READ,
             vk::AccessFlags::COLOR_ATTACHMENT_READ,
         );
-        let depth_to_read = vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(depth_image)
-            .subresource_range(depth_range);
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
-                vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::FRAGMENT_SHADER
                     | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
-                &[snapshot_to_read, scene_to_read, depth_to_read],
+                &[snapshot_to_read, scene_to_read],
             );
         }
 
@@ -1820,29 +1803,6 @@ impl VkContext {
             device.cmd_end_render_pass(cmd);
         }
 
-        // 4) Restore the main depth to DEPTH_STENCIL_ATTACHMENT for the next
-        // frame's main pass. The scene image already rests in SHADER_READ_ONLY
-        // (render-pass final layout) for TAA / bloom / composite.
-        let depth_to_attach = vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::SHADER_READ)
-            .dst_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(depth_image)
-            .subresource_range(depth_range);
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&depth_to_attach),
-            );
-        }
         Ok(())
     }
 }

@@ -83,6 +83,13 @@ mod object_data_layout;
 #[cfg(test)]
 mod barrier_audit;
 
+// The companion guard: `barrier_audit` proves every barrier is classified, this
+// one proves a classified barrier is not redundant with one the graph executor
+// already emits. Same text-scanning rationale, so it also covers DirectX from a
+// macOS build.
+#[cfg(test)]
+mod double_drive_audit;
+
 // Device-memory placement policy shared by the backends' allocators.
 pub(crate) mod suballoc;
 

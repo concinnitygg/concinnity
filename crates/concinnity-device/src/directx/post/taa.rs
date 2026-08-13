@@ -314,7 +314,10 @@ impl FullscreenPass for TaaResolvePass<'_> {
     type Rec = ID3D12GraphicsCommandList;
 
     fn begin(&self, cmd: &Self::Rec) {
-        self.ctx.begin_fullscreen_rt(
+        // This frame's history slot is the graph's `scene_color`, already in
+        // RENDER_TARGET for this pass's declared write; the bloom / composite
+        // consumers' barrier takes it back out.
+        self.ctx.bind_fullscreen_rt(
             cmd,
             &self.taa.history[self.cur],
             self.taa.history_rtv[self.cur],
@@ -351,7 +354,5 @@ impl FullscreenPass for TaaResolvePass<'_> {
         }
     }
 
-    fn end(&self, cmd: &Self::Rec) {
-        self.ctx.end_fullscreen_rt(cmd, &self.taa.history[self.cur]);
-    }
+    fn end(&self, _cmd: &Self::Rec) {}
 }

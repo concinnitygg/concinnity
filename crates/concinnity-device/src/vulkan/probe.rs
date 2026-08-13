@@ -26,6 +26,7 @@ use ash::vk;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
+use super::cull::CullParams;
 use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
 use super::draw::ViewUniforms;
 use super::hiz::CullHizParams;
@@ -57,6 +58,29 @@ const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // so the exact far plane only affects depth precision during the bake.
 const PROBE_NEAR: f32 = 0.05;
 const PROBE_FAR: f32 = 2000.0;
+
+// The cull push constant for an off-camera capture (a probe face or a planar
+// mirror plane), which differs from the main camera's in one way: `bucket_count`
+// is 1, so every record is routed into region 0 whatever shader bucket it belongs
+// to. The capture callers allocate a single-region indirect buffer and draw it
+// with the one default bindless pipeline, so a bucketed record must land in
+// region 0 to appear at all -- with default shading, which is the documented
+// trade the DirectX and Metal capture paths make too.
+fn capture_cull_params(frustum: &Frustum, cam_pos: [f32; 3], n_cull: u32) -> CullParams {
+    let mut params = CullParams {
+        planes: [[0.0; 4]; 6],
+        cam_pos,
+        object_count: n_cull,
+        bucket_count: 1,
+        // Never indexed with `bucket_count == 1` (region 0 starts at 0), but it
+        // names the region capacity the caller sized its buffer with.
+        bucket_stride: n_cull,
+    };
+    for (i, p) in frustum.planes.iter().enumerate().take(6) {
+        params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
+    }
+    params
+}
 
 impl VkContext {
     // Set the reflection-probe placements (declared `ReflectionProbe` assets,
@@ -723,6 +747,11 @@ impl VkContext {
     // bound), pushes the face/plane frustum + eye, dispatches one invocation per
     // record, and orders the writes before the indirect draw's read. Shared by the
     // probe bake + the planar reflection's reflected-frustum cull.
+    //
+    // `bucket_count = 1` routes every record into region 0 whatever shader bucket
+    // it belongs to, matching the single indirect region these callers allocate and
+    // the one bindless pipeline `encode_main_into_face` draws it with: a bucketed
+    // draw appears in the capture with default shading rather than not at all.
     pub(in crate::vulkan) fn encode_probe_cull(
         &self,
         cmd: vk::CommandBuffer,
@@ -737,15 +766,15 @@ impl VkContext {
             return;
         };
         let device = &self.device;
-        // The cull push-constant block (six planes + cam_pos + object_count, 112 B
-        // std430). Built inline to avoid exposing cull.rs's private CullParams.
-        let mut push = [0u8; 112];
-        for (i, p) in frustum.planes.iter().enumerate().take(6) {
-            let plane = [p.normal[0], p.normal[1], p.normal[2], p.d];
-            push[i * 16..i * 16 + 16].copy_from_slice(bytemuck::bytes_of(&plane));
-        }
-        push[96..108].copy_from_slice(bytemuck::bytes_of(&cam_pos));
-        push[108..112].copy_from_slice(&(self.cull_count() as u32).to_le_bytes());
+        let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
+        // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
+        // cull.comp declares (pinned by the layout test in concinnity-render).
+        let push = unsafe {
+            std::slice::from_raw_parts(
+                &params as *const CullParams as *const u8,
+                std::mem::size_of::<CullParams>(),
+            )
+        };
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
@@ -766,7 +795,7 @@ impl VkContext {
                     &[],
                 );
             }
-            device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, &push);
+            device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push);
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1541,4 +1570,52 @@ mod tests {
         assert_eq!(&out[8..12], &[0.0, 0.0, 0.0, 0.0]);
         assert_eq!(&out[12..16], &[0.5, 0.5, 0.5, 1.0]);
     }
+
+    // A capture routes every record into region 0. Getting this wrong is
+    // invisible in a screenshot of most worlds -- it only drops the records whose
+    // material carries a world shader -- so it is pinned rather than eyeballed.
+    #[test]
+    fn a_capture_cull_routes_every_record_into_one_region() {
+        let p = capture_cull_params(&Frustum::from_view_projection(IDENTITY), [0.0; 3], 12);
+        assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
+        assert_eq!(p.object_count, 12);
+        assert_eq!(p.bucket_stride, 12, "stride names the region capacity");
+    }
+
+    // Every byte the shader reads must be written. `cmd_push_constants` takes a
+    // slice, so a short one leaves the tail undefined -- and push constants do not
+    // carry across command buffers, so the capture cull (which runs on a later
+    // pass's buffer than the main cull) reads whatever the driver left there.
+    // That is how the mirror render lost its draws.
+    #[test]
+    fn the_capture_push_covers_the_whole_shader_block() {
+        let p = capture_cull_params(&Frustum::from_view_projection(IDENTITY), [1.0, 2.0, 3.0], 4);
+        // SAFETY: `repr(C)`, read as its own bytes.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &p as *const CullParams as *const u8,
+                std::mem::size_of::<CullParams>(),
+            )
+        };
+        assert_eq!(bytes.len(), 120, "cull.comp's push_constant block is 120 B");
+        // The two routing fields live in the last 8 bytes: the exact span a
+        // 112-byte push left undefined.
+        assert_eq!(
+            &bytes[112..116],
+            &1u32.to_le_bytes(),
+            "bucket_count written"
+        );
+        assert_eq!(
+            &bytes[116..120],
+            &4u32.to_le_bytes(),
+            "bucket_stride written"
+        );
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
 }

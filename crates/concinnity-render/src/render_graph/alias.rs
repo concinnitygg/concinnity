@@ -199,6 +199,7 @@ mod tests {
         composite_reads_ao: false,
         shadowed_spot_count: 0,
         spot_shadow_slice_size: 512,
+        hiz_build_enabled: false,
     };
 
     // A transient texture desc of the given format at full drawable size.

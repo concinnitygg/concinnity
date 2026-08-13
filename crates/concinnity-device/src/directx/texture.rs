@@ -1158,51 +1158,6 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
     }
 }
 
-// RAII guard for the common read-modify-write barrier pattern: transition a
-// resource into a working state now, and restore it to its resting state when
-// the guard drops. Pairing the two halves means an early `return`/`?` between
-// them, or a pass inserted mid-scope, can't leave the resource in the wrong
-// state for the next pass; the reverse barrier is issued by construction.
-//
-// Scoped to the single-resource "transition in, draw, transition back" pattern.
-// Passes that batch several resources into one `ResourceBarrier`, or that hand a
-// resource to the next pass in a new state on purpose, stay explicit.
-pub(super) struct ScopedBarrier<'a> {
-    list: &'a ID3D12GraphicsCommandList,
-    resource: &'a ID3D12Resource,
-    // The resting state the guard entered from and restores on drop.
-    resting: D3D12_RESOURCE_STATES,
-    // The working state the guard transitioned into (restored *from* on drop).
-    working: D3D12_RESOURCE_STATES,
-}
-
-impl<'a> ScopedBarrier<'a> {
-    // Transition `resource` from `resting` to `working` immediately; the reverse
-    // transition is recorded onto `list` when the returned guard drops.
-    pub(super) fn new(
-        list: &'a ID3D12GraphicsCommandList,
-        resource: &'a ID3D12Resource,
-        resting: D3D12_RESOURCE_STATES,
-        working: D3D12_RESOURCE_STATES,
-    ) -> Self {
-        let forward = transition_barrier(resource, resting, working);
-        unsafe { list.ResourceBarrier(&[forward]) };
-        Self {
-            list,
-            resource,
-            resting,
-            working,
-        }
-    }
-}
-
-impl Drop for ScopedBarrier<'_> {
-    fn drop(&mut self) {
-        let reverse = transition_barrier(self.resource, self.working, self.resting);
-        unsafe { self.list.ResourceBarrier(&[reverse]) };
-    }
-}
-
 // IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
 // `EnvironmentMapTextures` shape so the fragment-shader code stays portable.
 // `prefilter_mip_count == 0` is the runtime signal for "IBL disabled"; the

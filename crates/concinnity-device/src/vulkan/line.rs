@@ -662,36 +662,9 @@ impl VkContext {
             );
         }
 
-        // Transition main depth -> SHADER_READ_ONLY so the fragment can sample
-        // it; restore to DEPTH_STENCIL_ATTACHMENT after the pass so the next
-        // frame's main pass can clear/write it again.
-        let depth_image = self.depth_images[frame_idx].image;
-        let depth_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::DEPTH,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        unsafe {
-            let to_read = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image(depth_image)
-                .subresource_range(depth_range);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&to_read),
-            );
-        }
-
+        // Main depth is already in SHADER_READ_ONLY for the fragment's occlusion
+        // sample: the graph declares this pass's depth read and the executor emits
+        // the transition ahead of this command buffer.
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(lines.render_pass)
             .framebuffer(lines.framebuffers[frame_idx])
@@ -725,23 +698,6 @@ impl VkContext {
             device.cmd_bind_vertex_buffers(cmd, 0, &[slot.buffer.buffer()], &[0]);
             device.cmd_draw(cmd, vertices.len() as u32, 1, 0, 0);
             device.cmd_end_render_pass(cmd);
-
-            let to_depth = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .image(depth_image)
-                .subresource_range(depth_range);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&to_depth),
-            );
         }
         self.inc_draw_calls(1);
     }

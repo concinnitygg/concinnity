@@ -858,51 +858,29 @@ impl crate::directx::context::DxContext {
         };
 
         // Inputs:
-        //   scene  : the post-SSR scene the bloom/composite stack would
-        //            normally sample. SSR resolve writes into
-        //            `ssr.resolve.output` when SSR is on; otherwise the head
-        //            of the hdr_resolve RMW chain is the raw resolved HDR
-        //            target (which SSGI, if on, has already composited into).
-        //            In both cases the resource is in PIXEL_SHADER_RESOURCE
-        //            state after its writer.
+        //   scene  : the scene the post stack consumes, which is the graph's
+        //            `scene_pre_taa` (or `hdr_resolve` with no reflection
+        //            resolve). `post_scene_target` is the one place that
+        //            selection lives -- reading the SSR resolve's own target
+        //            here instead upscaled reflected radiance rather than the
+        //            scene. Graph-driven, and `Upscale` is a compute node, so
+        //            the executor has already put it in a non-pixel shader
+        //            resource state.
         //   depth  : `gbuffer.depth` (single-sample D32F at render-res;
-        //            the unified G-buffer pre-pass writes it).
-        //   mv     : `gbuffer.velocity` (RG16F screen-space motion).
-        let (scene_res, scene_was_in_psr) = match self.ssr.as_ref().and_then(|s| s.resolve.as_ref())
-        {
-            Some(r) => (r.output.clone(), true),
-            None => match &self.hdr.resolve {
-                Some(r) => (r.clone(), true),
-                None => (self.hdr.color.clone(), true),
-            },
-        };
-        let _ = scene_was_in_psr;
+        //            the unified G-buffer pre-pass writes it). Not a graph
+        //            resource -- the `gbuffer` handle covers the three colour
+        //            targets -- so its flip stays here.
+        //   mv     : `gbuffer.velocity` (RG16F screen-space motion), part of
+        //            the graph-driven `gbuffer`.
+        let scene_res = self.post_scene_target().clone();
 
-        // Transition inputs PSR → NON_PSR for FSR's compute reads, and
-        // remember to restore them PSR-side after (so any later passes,
-        // and the end-of-frame restores in `record_frame`, find them
-        // where they expect). The upscaler's output texture stays in
-        // UNORDERED_ACCESS the entire frame except for the bloom /
-        // composite sample window, which we flip to NON_PSR after the
-        // dispatch.
-        let to_npsr_scene = transition_barrier(
-            &scene_res,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        );
-        let to_npsr_velo = transition_barrier(
-            &gb.velocity,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        );
-        // gbuffer.depth is in DEPTH_WRITE after the G-buffer pre-pass (no
-        // intermediate transition). Flip it to NON_PSR for FSR's read.
-        let to_npsr_depth = transition_barrier(
+        // gbuffer.depth is in DEPTH_WRITE after the G-buffer pre-pass. Flip it
+        // to NON_PSR for FSR's read and back below.
+        let mut barriers = vec![transition_barrier(
             &gb.depth,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        );
-        let mut barriers = vec![to_npsr_scene, to_npsr_velo, to_npsr_depth];
+        )];
         // After the *previous* frame's dispatch we left `output` in
         // PIXEL_SHADER_RESOURCE so Bloom + Composite could sample it.
         // FSR's dispatch needs it back in UNORDERED_ACCESS; flip it
@@ -947,19 +925,8 @@ impl crate::directx::context::DxContext {
             },
         )?;
 
-        // Restore the inputs to the states downstream consumers (and
-        // the end-of-frame restores) expect: scene + G-buffer velocity
-        // PSR, G-buffer depth back to DEPTH_WRITE.
-        let from_npsr_scene = transition_barrier(
-            &scene_res,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        let from_npsr_velo = transition_barrier(
-            &gb.velocity,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        // Give the G-buffer depth back. The scene and the velocity target are
+        // graph resources; the next consumer's barrier moves them on.
         let from_npsr_depth = transition_barrier(
             &gb.depth,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -968,21 +935,17 @@ impl crate::directx::context::DxContext {
         // Flip the upscaler output UAV → PIXEL_SHADER_RESOURCE so
         // Bloom + Composite can sample it. Track the new state on the
         // upscaler so the next frame's top-of-encode barrier knows to
-        // flip back.
+        // flip back. This is `scene_color` under upscaling, and the one
+        // driven-resource candidate the graph's resting model cannot express:
+        // its between-frames state depends on whether a previous frame
+        // dispatched.
         let output_to_psr = transition_barrier(
             upscaler.output_resource(),
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
         upscaler.set_output_is_psr(true);
-        unsafe {
-            cmd.ResourceBarrier(&[
-                from_npsr_scene,
-                from_npsr_velo,
-                from_npsr_depth,
-                output_to_psr,
-            ])
-        };
+        unsafe { cmd.ResourceBarrier(&[from_npsr_depth, output_to_psr]) };
 
         Ok(())
     }

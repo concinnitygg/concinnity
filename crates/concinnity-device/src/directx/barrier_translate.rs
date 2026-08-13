@@ -111,6 +111,23 @@ pub(super) fn d3d12_transition(
     (before != after).then_some((before, after))
 }
 
+// The end-of-frame transition returning a resource the frame left in `state` to
+// its `resting` state, so the next frame's first transition (whose `Undefined`
+// source resolves to `resting`) names the state the resource is really in.
+// `None` when the frame already ended there, or never touched the resource.
+pub(super) fn d3d12_restore(
+    class: GraphResourceClass,
+    resting: D3D12_RESOURCE_STATES,
+    state: ResourceState,
+    read_stages: ReadStages,
+) -> Option<(D3D12_RESOURCE_STATES, D3D12_RESOURCE_STATES)> {
+    if state == ResourceState::Undefined {
+        return None;
+    }
+    let before = d3d12_state(class, state, read_stages);
+    (before != resting).then_some((before, resting))
+}
+
 // What the executor must emit for one graph barrier.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum DxBarrier {
@@ -439,6 +456,60 @@ mod tests {
                 ResourceState::Read,
                 ResourceState::Read,
                 FRAG,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_frame_that_ends_off_resting_takes_one_restore() {
+        // The Hi-Z pyramid rests in NON_PIXEL_SHADER_RESOURCE (where the next
+        // frame's cull kernel samples it) and the frame leaves it written, so the
+        // executor owes it one transition back after the last pass.
+        assert_eq!(
+            d3d12_restore(
+                GraphResourceClass::StorageImage,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                ResourceState::Write,
+                ReadStages::empty(),
+            ),
+            Some((
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+            ))
+        );
+        // Main depth rests in DEPTH_WRITE and a frame with decoration passes ends
+        // it sampled, so it takes one too.
+        assert_eq!(
+            d3d12_restore(
+                GraphResourceClass::DepthTarget,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                ResourceState::Read,
+                FRAG,
+            ),
+            Some((
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE
+            ))
+        );
+        // A frame that ends a resource at rest owes nothing: main depth in the
+        // collapsed graph, where only Main touches it.
+        assert_eq!(
+            d3d12_restore(
+                GraphResourceClass::DepthTarget,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                ResourceState::Write,
+                ReadStages::empty(),
+            ),
+            None
+        );
+        // Nor does a resource the frame never touched.
+        assert_eq!(
+            d3d12_restore(
+                GraphResourceClass::DepthTarget,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                ResourceState::Undefined,
+                ReadStages::empty(),
             ),
             None
         );

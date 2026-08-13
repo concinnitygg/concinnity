@@ -1256,21 +1256,14 @@ impl DxContext {
         // skips the resolve and renders into hdr_color directly.
         let msaa = self.hdr.resolve.is_some();
 
-        // Pre-pass: snapshot the resolved scene into `hdr_resolve_copy`
-        // for refractive user shaders. Source is hdr_resolve on the
-        // MSAA path, hdr_color on the MSAA-off path; both rest in
-        // PIXEL_SHADER_RESOURCE at this point.
-        let snapshot_src = if msaa {
-            self.hdr
-                .resolve
-                .as_ref()
-                .expect("hdr_resolve checked above")
-        } else {
-            &self.hdr.color
-        };
+        // Pre-pass: snapshot the scene spine into `hdr_resolve_copy` for
+        // refractive user shaders. A fragment cannot read the attachment it is
+        // writing, so the copy and its restore both live inside this node and
+        // leave no net state at the boundary. The spine is graph-driven and
+        // enters in RENDER_TARGET (this pass declares its read-modify-write).
         let snapshot_src_to_copy = transition_barrier(
-            snapshot_src,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            self.hdr_scene_target(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
         );
         let snapshot_dst_to_copy = transition_barrier(
@@ -1279,11 +1272,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_COPY_DEST,
         );
         unsafe { cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]) };
-        unsafe { cmd.CopyResource(&rm.hdr_resolve_copy, snapshot_src) };
+        unsafe { cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target()) };
         let snapshot_src_back = transition_barrier(
-            snapshot_src,
+            self.hdr_scene_target(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
         let snapshot_dst_to_psr = transition_barrier(
             &rm.hdr_resolve_copy,
@@ -1292,19 +1285,10 @@ impl DxContext {
         );
         unsafe { cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]) };
 
-        // On the MSAA path hdr_color is already in RENDER_TARGET; no
-        // transition needed. On the MSAA-off path we flip
-        // PIXEL_SHADER_RESOURCE → RENDER_TARGET for the draw. Depth
-        // stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
+        // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
+        // there, and with MSAA off it is the spine this pass declares a write
+        // on. Depth stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
         // test composites against existing rasterised depth.
-        if !msaa {
-            let hdr_color_to_rt = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            unsafe { cmd.ResourceBarrier(&[hdr_color_to_rt]) };
-        }
 
         let w = self.render_width;
         let h = self.render_height;
@@ -1358,37 +1342,31 @@ impl DxContext {
         //
         // MSAA path: re-resolve hdr_color → hdr_resolve so downstream
         // single-sample readers see the composited scene + raymarched
-        // pixels. Restore hdr_color to RENDER_TARGET (matching Main's
-        // post-resolve baseline) and hdr_resolve to
-        // PIXEL_SHADER_RESOURCE for Decals / Fog / SsrResolve / etc.
+        // pixels. Both targets return to RENDER_TARGET, the state the
+        // graph rests them in for the rest of the decoration chain; the
+        // resolve step's own transitions are finer than the graph models.
         //
-        // MSAA-off path: just flip hdr_color back to
-        // PIXEL_SHADER_RESOURCE so the downstream chain reads it as a
-        // texture. No resolve needed.
+        // MSAA-off path: hdr_color *is* the single-sample spine and the
+        // draws above already wrote it, so there is nothing to resolve.
         if msaa {
-            let hdr_resolve = self
-                .hdr
-                .resolve
-                .as_ref()
-                .expect("hdr_resolve checked above");
             let hdr_color_to_resolve_src = transition_barrier(
                 &self.hdr.color,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
             );
             let resolve_to_dst = transition_barrier(
-                hdr_resolve,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                self.hdr_scene_target(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_RESOLVE_DEST,
             );
             unsafe {
                 cmd.ResourceBarrier(&[hdr_color_to_resolve_src, resolve_to_dst]);
-                cmd.ResolveSubresource(hdr_resolve, 0, &self.hdr.color, 0, HDR_FORMAT);
+                cmd.ResolveSubresource(self.hdr_scene_target(), 0, &self.hdr.color, 0, HDR_FORMAT);
             }
             let resolve_back = transition_barrier(
-                hdr_resolve,
+                self.hdr_scene_target(),
                 D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
             );
             let hdr_color_back_to_rt = transition_barrier(
                 &self.hdr.color,
@@ -1396,13 +1374,6 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
             );
             unsafe { cmd.ResourceBarrier(&[resolve_back, hdr_color_back_to_rt]) };
-        } else {
-            let hdr_color_to_psr = transition_barrier(
-                &self.hdr.color,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            unsafe { cmd.ResourceBarrier(&[hdr_color_to_psr]) };
         }
         Ok(())
     }
