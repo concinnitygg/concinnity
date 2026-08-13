@@ -72,15 +72,40 @@ impl VkContext {
         self.swapchain_image_views.clear();
     }
 
+    // The extent a rebuild would create the swapchain at, read from the surface
+    // instead of the window. See `rebuild_swapchain` for why the distinction
+    // matters.
+    fn surface_extent(&self) -> Result<vk::Extent2D, String> {
+        let caps = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_capabilities(self.physical_device, self.surface)
+        }
+        .map_err(|e| format!("surface caps: {e}"))?;
+        let (width, height) = self.window().framebuffer_size();
+        Ok(resolve_swapchain_extent(
+            &caps,
+            width.max(0) as u32,
+            height.max(0) as u32,
+        ))
+    }
+
     pub(super) fn rebuild_swapchain(&mut self) -> Result<(), String> {
         // A minimised window has a 0x0 client area, and a zero-extent swapchain
         // (with every attachment / framebuffer sized from it) is invalid. Skip
         // the rebuild and leave the existing resources at their last non-zero
-        // size. `draw_frame` already parks the whole frame while minimised, so
-        // the frame-loop callers never reach here at 0x0; this guards the
-        // out-of-band callers (set_vsync, quality changes) as defence in depth.
-        // Mirrors DirectX `maybe_handle_resize`'s minimise skip.
+        // size; a later frame rebuilds once the window is restored. Mirrors
+        // DirectX `maybe_handle_resize`'s minimise skip.
         if self.is_minimized() {
+            return Ok(());
+        }
+        // The window's cached client size is not enough on its own: it holds
+        // whatever the last WM_SIZE delivered, and a present returning
+        // SUBOPTIMAL / OUT_OF_DATE rebuilds inside the same frame, before the
+        // pump that would report the minimise. The surface reports 0x0 straight
+        // away and is where the extent actually comes from, so gate on it too.
+        // Vsync turns that race into the common case, since the frame blocks in
+        // FIFO present for as long as the minimise takes to arrive.
+        if !extent_is_presentable(self.surface_extent()?) {
             return Ok(());
         }
         self.wait_idle();
@@ -832,6 +857,33 @@ pub(super) struct SwapchainConfig {
     pub vsync: bool,
 }
 
+// The extent a swapchain will be created at. The surface's own current extent
+// wins when it reports one; `u32::MAX` is the spec's "no preference" sentinel,
+// and only then does the requested window size decide, clamped to the range the
+// surface supports. Windows always reports a real extent, which is what makes
+// this (not the window's cached client size) the authority on whether a
+// swapchain can be built at all: a minimised window reports 0x0 here.
+fn resolve_swapchain_extent(
+    caps: &vk::SurfaceCapabilitiesKHR,
+    width: u32,
+    height: u32,
+) -> vk::Extent2D {
+    if caps.current_extent.width != u32::MAX {
+        return caps.current_extent;
+    }
+    vk::Extent2D {
+        width: width.clamp(caps.min_image_extent.width, caps.max_image_extent.width),
+        height: height.clamp(caps.min_image_extent.height, caps.max_image_extent.height),
+    }
+}
+
+// Whether `extent` can carry a swapchain. Vulkan rejects a zero dimension on
+// the swapchain and on every attachment, framebuffer, render area, and viewport
+// sized from it.
+fn extent_is_presentable(extent: vk::Extent2D) -> bool {
+    extent.width > 0 && extent.height > 0
+}
+
 pub(super) fn create_swapchain_inner(
     surface: &SwapchainSurface,
     families: SwapchainQueueFamilies,
@@ -928,14 +980,7 @@ pub(super) fn create_swapchain_inner(
         }
     };
 
-    let extent = if caps.current_extent.width != u32::MAX {
-        caps.current_extent
-    } else {
-        vk::Extent2D {
-            width: width.clamp(caps.min_image_extent.width, caps.max_image_extent.width),
-            height: height.clamp(caps.min_image_extent.height, caps.max_image_extent.height),
-        }
-    };
+    let extent = resolve_swapchain_extent(&caps, width, height);
 
     let image_count = (caps.min_image_count + 1).min(if caps.max_image_count == 0 {
         u32::MAX
@@ -1200,4 +1245,73 @@ pub(super) fn create_shadow_framebuffers(
         fbs.push(fb);
     }
     Ok(fbs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extent_is_presentable, resolve_swapchain_extent};
+    use ash::vk;
+
+    fn caps(current: vk::Extent2D) -> vk::SurfaceCapabilitiesKHR {
+        vk::SurfaceCapabilitiesKHR {
+            current_extent: current,
+            min_image_extent: vk::Extent2D {
+                width: 1,
+                height: 1,
+            },
+            max_image_extent: vk::Extent2D {
+                width: 4096,
+                height: 4096,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn extent(width: u32, height: u32) -> vk::Extent2D {
+        vk::Extent2D { width, height }
+    }
+
+    #[test]
+    fn a_surface_that_reports_an_extent_decides_the_size() {
+        // The requested window size gets no vote, which is the whole point of
+        // the minimise gate: the surface knows first.
+        let resolved = resolve_swapchain_extent(&caps(extent(800, 600)), 1920, 1080);
+        assert_eq!(resolved, extent(800, 600));
+    }
+
+    #[test]
+    fn the_window_size_decides_under_the_no_preference_sentinel() {
+        let no_preference = caps(extent(u32::MAX, u32::MAX));
+        assert_eq!(
+            resolve_swapchain_extent(&no_preference, 1280, 720),
+            extent(1280, 720)
+        );
+    }
+
+    #[test]
+    fn a_window_size_outside_the_surface_range_clamps_to_it() {
+        let no_preference = caps(extent(u32::MAX, u32::MAX));
+        assert_eq!(
+            resolve_swapchain_extent(&no_preference, 99_999, 0),
+            extent(4096, 1)
+        );
+    }
+
+    // A minimised window collapses the surface to 0x0 while the window itself
+    // can still report its pre-minimise size for another frame. Resolving from
+    // the window there is what built a whole 0x0 attachment chain.
+    #[test]
+    fn a_minimised_surface_resolves_to_an_unpresentable_extent() {
+        let resolved = resolve_swapchain_extent(&caps(extent(0, 0)), 1024, 768);
+        assert_eq!(resolved, extent(0, 0));
+        assert!(!extent_is_presentable(resolved));
+    }
+
+    #[test]
+    fn presentable_requires_both_dimensions() {
+        assert!(extent_is_presentable(extent(1, 1)));
+        assert!(!extent_is_presentable(extent(0, 720)));
+        assert!(!extent_is_presentable(extent(1280, 0)));
+        assert!(!extent_is_presentable(extent(0, 0)));
+    }
 }
