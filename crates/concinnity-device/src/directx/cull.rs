@@ -393,10 +393,10 @@ impl DxContext {
     // runs one thread per build-time object to test it against the frustum,
     // distance, and (when valid) the Hi-Z pyramid, and writes the surviving
     // `ExecuteIndirect` commands into this frame's indirect buffer. The
-    // indirect buffer rests in `INDIRECT_ARGUMENT` between frames; the
-    // dispatch flips it to `UAV` and back. Caller must already have built
-    // the per-frame `GpuObjectData` buffer (the bindless main pass owns
-    // that step).
+    // indirect buffer rests in `INDIRECT_ARGUMENT` between frames; the graph
+    // drives the `UAV` transition here and back at the consuming pass, off the
+    // `draw_args` write edge. Caller must already have built the per-frame
+    // `GpuObjectData` buffer (the bindless main pass owns that step).
     pub(in crate::directx) fn encode_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -465,11 +465,6 @@ impl DxContext {
         }
 
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso);
             // The Hi-Z SRV lives in the global SRV heap; the descriptor table
@@ -493,11 +488,6 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             // One thread per build-time object, 64-wide threadgroups.
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-            )]);
         }
     }
 
@@ -842,8 +832,11 @@ impl DxContext {
     // and writes the surviving `ExecuteIndirect` commands into this frame's
     // second indirect buffer; `Main2` then issues it. A no-op when the phase-2
     // pipeline / buffers are not built (two-pass off). The phase-2 indirect
-    // buffer rests in `INDIRECT_ARGUMENT`; the dispatch flips it to `UAV` and
-    // back. Mirrors `metal/cull.rs::encode_cull_phase2`.
+    // buffer rests in `INDIRECT_ARGUMENT`; the graph drives the `UAV`
+    // transition here and back at `Main2`, and the UAV barrier ordering
+    // phase-1's `cull_status` writes before this dispatch's reads, off the
+    // `draw_args2` and `cull_status` edges. Mirrors
+    // `metal/cull.rs::encode_cull_phase2`.
     pub(in crate::directx) fn encode_cull_phase2(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -893,17 +886,6 @@ impl DxContext {
         }
 
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            // Order phase-1's `cull_status` writes (an earlier per-pass cmd
-            // list, so earlier in GPU execution order on the serial queue)
-            // before this dispatch's reads. cull_status has no state transition
-            // between phases (UAV in both), so the UAV barrier is the only thing
-            // that flushes the phase-1 writes.
-            cmd.ResourceBarrier(&[uav_barrier(&self.cull.cull_status_buffers[frame_idx])]);
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso2);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
@@ -921,11 +903,6 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(4, indirect.GetGPUVirtualAddress());
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-            )]);
         }
     }
 
@@ -942,24 +919,5 @@ impl DxContext {
             && self.cull.hiz.is_some()
             && self.cull.main_bindless_pso.is_some()
             && self.cull_count() > 0
-    }
-}
-
-// UAV barrier on a single resource. Used to order phase-1 cull_status writes
-// before the phase-2 read (no state transition sits between them). `pResource`
-// is borrowed (no AddRef) via `transmute_copy`: it is a `ManuallyDrop`, so a
-// `clone()` here would never be released and would leak one reference to the
-// resource on every barrier. The caller's `&resource` outlives the
-// `ResourceBarrier` call, so the raw pointer stays valid. Mirrors
-// `transition_barrier`.
-fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
-                pResource: unsafe { std::mem::transmute_copy(resource) },
-            }),
-        },
     }
 }

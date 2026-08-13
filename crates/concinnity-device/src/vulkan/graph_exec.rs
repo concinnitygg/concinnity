@@ -12,12 +12,12 @@
 // the compiled graph.
 //
 // Per-pass `barriers_before` is consumed for the resources the executor's
-// barrier registry resolves (`ao_output`, `shadow_map`, `fog_froxel_volume`):
-// `emit_graph_barriers` translates their graph state transitions into explicit
-// `vkCmdPipelineBarrier` image transitions at the start of each pass's command
-// buffer. Every other resource still owns its transitions inline or
-// render-pass-baked (attachment layout pinning). Migrating the rest off those
-// paths is the open follow-up shared with DirectX. All three migrated resources
+// barrier registry resolves (`ao_output`, `shadow_map`, `spot_shadow_map`,
+// `fog_froxel_volume`): `emit_graph_barriers` translates their graph state
+// transitions into explicit `vkCmdPipelineBarrier` image transitions at the start
+// of each pass's command buffer. Every other resource still owns its transitions
+// inline or render-pass-baked (attachment layout pinning); `barrier_audit.rs`
+// classifies each remaining site. The migrated resources
 // now rest sampled between frames, so BOTH their transitions are graph-driven:
 // `shadow_map`'s producer is the SHADER_READ_ONLY → DEPTH_STENCIL_ATTACHMENT
 // cross-frame reset (folded off the old inline `record_frame` restore) and its
@@ -44,15 +44,21 @@ use super::context::VkContext;
 use super::parallel_encoder::ParallelCtxRef;
 use super::post::gbuffer::GbufferPrepassView;
 
-// One resolved barrier target: the image a graph resource backs, its class, and
-// its array-layer count (1 for a plain target, the cascade count for the CSM
-// `shadow_map`). Built once per frame by `build_barrier_registry`. `vk::Image`
-// is a plain `Send + Sync` handle, so the registry shares into the parallel pass
+// The GPU object a graph resource backs: an image with its array-layer count (1
+// for a plain target, the cascade count for the CSM `shadow_map`), or a buffer.
+#[derive(Copy, Clone)]
+enum VkTargetObject {
+    Image { image: vk::Image, layer_count: u32 },
+    Buffer { buffer: vk::Buffer },
+}
+
+// One resolved barrier target: the object a graph resource backs plus its class.
+// Built once per frame by `build_barrier_registry`. `vk::Image` / `vk::Buffer`
+// are plain `Send + Sync` handles, so the registry shares into the parallel pass
 // workers with no wrapper (unlike the DirectX side's COM handles).
 struct VkBarrierTarget {
-    image: vk::Image,
+    object: VkTargetObject,
     class: GraphResourceClass,
-    layer_count: u32,
 }
 
 // `ResourceId`-indexed table of barrier targets for the migrated graph resources
@@ -92,37 +98,62 @@ fn emit_graph_barriers(
         else {
             continue;
         };
-        let aspect = match target.class {
-            GraphResourceClass::DepthTarget => vk::ImageAspectFlags::DEPTH,
-            GraphResourceClass::ColorTarget | GraphResourceClass::StorageImage => {
-                vk::ImageAspectFlags::COLOR
+        match target.object {
+            VkTargetObject::Buffer { buffer } => {
+                // A buffer has no layout; the whole barrier is the access + stage
+                // dependency, over the whole range.
+                let barrier = vk::BufferMemoryBarrier::default()
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .buffer(buffer)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE)
+                    .src_access_mask(src_access)
+                    .dst_access_mask(dst_access);
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        cmd,
+                        src_stage,
+                        dst_stage,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        std::slice::from_ref(&barrier),
+                        &[],
+                    );
+                }
             }
-        };
-        let barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(old_layout)
-            .new_layout(new_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(target.image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: aspect,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: target.layer_count,
-            })
-            .src_access_mask(src_access)
-            .dst_access_mask(dst_access);
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                src_stage,
-                dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&barrier),
-            );
+            VkTargetObject::Image { image, layer_count } => {
+                let aspect = match target.class {
+                    GraphResourceClass::DepthTarget => vk::ImageAspectFlags::DEPTH,
+                    _ => vk::ImageAspectFlags::COLOR,
+                };
+                let barrier = vk::ImageMemoryBarrier::default()
+                    .old_layout(old_layout)
+                    .new_layout(new_layout)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: aspect,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count,
+                    })
+                    .src_access_mask(src_access)
+                    .dst_access_mask(dst_access);
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        cmd,
+                        src_stage,
+                        dst_stage,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        std::slice::from_ref(&barrier),
+                    );
+                }
+            }
         }
     }
 }
@@ -166,6 +197,60 @@ fn emit_alias_barriers(device: &ash::Device, cmd: vk::CommandBuffer, images: &[v
                 std::slice::from_ref(&barrier),
             );
         }
+    }
+}
+
+// Check the graph's barrier coverage and cross-frame layout contract for every
+// resource this executor drives, on the frame's real compiled graph. Two
+// invariants, both cheap enough to run per frame under `debug_assertions`:
+//
+//   * every declared read / write of a driven resource is preceded by a
+//     transition putting it in the matching state, in the consuming stage;
+//   * a driven resource whose first-use transition opens from a resting layout
+//     actually ends the frame in that layout, so the next frame's producer
+//     barrier names a source layout the image is really in. A resource whose
+//     first use discards (`UNDEFINED`) is exempt: that source is legal from any
+//     layout.
+//
+// This is where a registry entry that claims a resource the graph does not fully
+// cover shows up; the headless sweep in `render_graph::validate` covers the
+// deriver itself.
+#[cfg(debug_assertions)]
+fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
+    use super::barrier_translate::vk_state;
+    use crate::gfx::render_graph::{
+        ReadStages, ResourceState, barrier_coverage_gaps_for_driven, final_states,
+    };
+
+    let driven: Vec<bool> = registry.0.iter().map(|t| t.is_some()).collect();
+    let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
+    assert!(
+        gaps.is_empty(),
+        "render graph (vulkan): uncovered accesses on graph-driven resources: {}",
+        gaps.iter()
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+        let Some(Some(target)) = registry.0.get(idx) else {
+            continue;
+        };
+        // Buffers have no layout, so there is no cross-frame layout to restore.
+        if target.class.is_buffer() {
+            continue;
+        }
+        let opens_from = vk_state(target.class, ResourceState::Undefined, ReadStages::empty()).0;
+        if opens_from == vk::ImageLayout::UNDEFINED {
+            continue;
+        }
+        let ends_at = vk_state(target.class, state, stages).0;
+        assert_eq!(
+            opens_from, ends_at,
+            "render graph (vulkan): {} opens from {:?} but the frame leaves it in {:?}",
+            graph.resources[idx].label, opens_from, ends_at,
+        );
     }
 }
 
@@ -279,6 +364,8 @@ impl VkContext {
         // Resolve every migrated resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
         let registry = self.build_barrier_registry(graph, frame_idx);
+        #[cfg(debug_assertions)]
+        debug_assert_graph_drives(graph, &registry);
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.
@@ -439,7 +526,11 @@ impl VkContext {
             graph
                 .resources
                 .iter()
-                .map(|res| self.barrier_target_for_label(res.label, frame_idx))
+                .map(|res| {
+                    let class = res.class()?;
+                    let object = self.barrier_object_for_label(res.label, frame_idx)?;
+                    Some(VkBarrierTarget { object, class })
+                })
                 .collect(),
         )
     }
@@ -467,53 +558,54 @@ impl VkContext {
         table
     }
 
-    // Map one graph resource label to its backing `vk::Image`, class, and
-    // array-layer count (1 for a plain target, the cascade count for the CSM
-    // `shadow_map`). `frame_idx` selects the frame-in-flight copy for the
-    // per-frame pooled transients (`ao_output`).
-    fn barrier_target_for_label(&self, label: &str, frame_idx: usize) -> Option<VkBarrierTarget> {
+    // Map one graph resource label to its backing GPU object. `frame_idx` selects
+    // the frame-in-flight copy for the per-frame pooled transients (`ao_output`)
+    // and the per-frame cull buffers. The resource's barrier class is NOT decided
+    // here: it follows the usage the graph declares (`CompiledResource::class`),
+    // so this backend and DirectX cannot disagree about what a resource is.
+    // `None` means the owning feature is inactive, and the graph carries no node
+    // for it either.
+    fn barrier_object_for_label(&self, label: &str, frame_idx: usize) -> Option<VkTargetObject> {
+        // A per-frame buffer resolves through its frame slot.
+        let buffer = |slots: &[super::allocator::PooledBuffer]| {
+            slots
+                .get(frame_idx)
+                .map(|b| VkTargetObject::Buffer { buffer: b.buffer() })
+        };
+        let image = |image, layer_count| VkTargetObject::Image { image, layer_count };
         match label {
+            // The indirect-draw commands the cull kernel writes and the main pass
+            // consumes through `cmd_draw_indexed_indirect`.
+            "draw_args" => buffer(&self.cull.indirect_buffers),
+            // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
+            "draw_args2" => buffer(&self.cull.indirect_buffers2),
+            // Per-object cull status: phase 1 writes it, phase 2 reads it.
+            "cull_status" => buffer(&self.cull.cull_status_buffers),
+            // Per-cluster light index lists: `LightCull` writes them, the main
+            // pass's fragment shader reads them. One buffer, not per-frame.
+            "cluster_light_list" => Some(VkTargetObject::Buffer {
+                buffer: self.light_cull.cluster_buffer.buffer(),
+            }),
             "ao_output" => self
                 .transient_pool
                 .image_for("ao_output", frame_idx)
-                .map(|image| VkBarrierTarget {
-                    image,
-                    class: GraphResourceClass::ColorTarget,
-                    layer_count: 1,
-                }),
-            // shadow_map rests sampled (SHADER_READ_ONLY) between frames, so the
-            // Shadow producer barrier is the real SHADER_READ_ONLY ->
-            // DEPTH_STENCIL_ATTACHMENT cross-frame reset and the Main consumer
-            // (Write -> Read) returns it to sampled, both over all cascade layers.
-            // The map is created sampled, so frame 0's producer starts from the
-            // image's real layout; there is no inline reset.
-            "shadow_map" if !self.shadow.framebuffers.is_empty() => Some(VkBarrierTarget {
-                image: self.shadow.map.image,
-                class: GraphResourceClass::DepthTarget,
-                layer_count: self.shadow.framebuffers.len() as u32,
-            }),
-            // spot_shadow_map rests sampled exactly like shadow_map above: the
-            // SpotShadow producer barrier opens it for the depth loop and the
-            // Main consumer returns it to sampled, over all spot layers. Only
-            // imported when the world has shadowed spots, so the framebuffer
-            // guard matches the graph gate.
-            "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => {
-                Some(VkBarrierTarget {
-                    image: self.spot_shadow.map.image,
-                    class: GraphResourceClass::DepthTarget,
-                    layer_count: self.spot_shadow.framebuffers.len() as u32,
-                })
-            }
-            // fog_froxel_volume: the froxel kernel writes it (GENERAL) and the
-            // fog fragment samples it (SHADER_READ_ONLY). Both transitions are
-            // graph-driven: the producer (Undefined -> Write) is the real
-            // SHADER_READ_ONLY -> GENERAL open, the consumer (Write -> Read) the
-            // GENERAL -> SHADER_READ_ONLY close. One array layer (the 3D volume).
-            "fog_froxel_volume" => self.fog_resources.as_ref().map(|f| VkBarrierTarget {
-                image: f.volume.image(),
-                class: GraphResourceClass::StorageImage,
-                layer_count: 1,
-            }),
+                .map(|i| image(i, 1)),
+            // The cascade array; one layer per cascade.
+            "shadow_map" if !self.shadow.framebuffers.is_empty() => Some(image(
+                self.shadow.map.image,
+                self.shadow.framebuffers.len() as u32,
+            )),
+            // The spot array; one layer per shadowed spot. Only imported when the
+            // world has shadowed spots, so the framebuffer guard matches the gate.
+            "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => Some(image(
+                self.spot_shadow.map.image,
+                self.spot_shadow.framebuffers.len() as u32,
+            )),
+            // The volumetric-fog scatter volume: one array layer (the 3D volume).
+            "fog_froxel_volume" => self
+                .fog_resources
+                .as_ref()
+                .map(|f| image(f.volume.image(), 1)),
             _ => None,
         }
     }

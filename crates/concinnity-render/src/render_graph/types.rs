@@ -149,6 +149,65 @@ pub enum GraphResourceClass {
     // target classes its `Write` happens in the compute stage, so the translated
     // state pairs a storage-write layout with the compute pipeline stage.
     StorageImage,
+    // Compute-written buffer consumed as draw arguments (e.g. the GPU cull pass's
+    // `draw_args`): a compute pass writes it and the drawing pass reads it through
+    // the indirect-draw stage, which is neither of the shader stages `ReadStages`
+    // models. Buffers carry no layout, so a transition on this class is a pure
+    // execution + memory dependency.
+    IndirectBuffer,
+    // Compute-written, shader-read buffer (e.g. the clustered-lighting
+    // `cluster_light_list`). Like `IndirectBuffer` it has no layout; its read side
+    // follows the consuming stage union, so it reads as a shader resource.
+    StorageBuffer,
+    // Buffer both written and read through an unordered-access view (e.g. the
+    // two-pass cull's `cull_status`, which phase 1 writes and phase 2 reads with
+    // the same binding). Distinct from `StorageBuffer` because its read is not a
+    // shader-resource read: on DirectX it never leaves `UNORDERED_ACCESS`, so its
+    // ordering comes from a UAV barrier rather than a state transition.
+    UnorderedBuffer,
+}
+
+impl GraphResourceClass {
+    // The class a texture of `usage` belongs to. Declared usage is the single
+    // source of truth for it: a backend resolves a resource label to its GPU
+    // object, but never restates what kind of resource it is, so the two
+    // executors cannot disagree about (say) whether the shadow map is a depth
+    // target. Depth-stencil wins over storage wins over render target, since a
+    // target declaring several is used in the most constrained of them.
+    pub const fn for_texture_usage(usage: TextureUsage) -> Self {
+        if usage.contains(TextureUsage::DEPTH_STENCIL) {
+            GraphResourceClass::DepthTarget
+        } else if usage.contains(TextureUsage::STORAGE) {
+            GraphResourceClass::StorageImage
+        } else {
+            GraphResourceClass::ColorTarget
+        }
+    }
+
+    // The class a buffer of `usage` belongs to, on the same declared-usage rule
+    // as [`Self::for_texture_usage`]. Indirect arguments win over the read-write
+    // binding, since a buffer declaring both is consumed as draw arguments.
+    pub const fn for_buffer_usage(usage: BufferUsage) -> Self {
+        if usage.contains(BufferUsage::INDIRECT) {
+            GraphResourceClass::IndirectBuffer
+        } else if usage.contains(BufferUsage::UNORDERED) {
+            GraphResourceClass::UnorderedBuffer
+        } else {
+            GraphResourceClass::StorageBuffer
+        }
+    }
+
+    // Whether this class names a buffer rather than an image. Buffers have no
+    // layout, so a backend emits a buffer / global memory barrier for them and an
+    // image barrier for everything else.
+    pub const fn is_buffer(self) -> bool {
+        matches!(
+            self,
+            GraphResourceClass::IndirectBuffer
+                | GraphResourceClass::StorageBuffer
+                | GraphResourceClass::UnorderedBuffer
+        )
+    }
 }
 
 // Which shader stage(s) read a graph resource across a contiguous read-run
@@ -419,6 +478,13 @@ impl BufferUsage {
     pub const INDIRECT: Self = Self(1 << 4);
     pub const TRANSFER_SRC: Self = Self(1 << 5);
     pub const TRANSFER_DST: Self = Self(1 << 6);
+    // Consumers access this buffer through the same read-write binding the
+    // producer wrote through, rather than a read-only view of it. It therefore
+    // never transitions to a read state, and ordering between the producer and
+    // the consumer comes from an execution barrier instead of a state change.
+    // The two-pass cull's `cull_status` is the case: both phases bind it the
+    // same way.
+    pub const UNORDERED: Self = Self(1 << 7);
 
     pub const fn empty() -> Self {
         Self(0)
@@ -540,6 +606,68 @@ mod tests {
             ReadStages::for_pass_kind(PassKind::Compute),
             ReadStages::COMPUTE
         );
+    }
+
+    #[test]
+    fn class_follows_declared_usage() {
+        // Declared usage is the single source of truth for a resource's barrier
+        // class, so the precedence between overlapping bits is pinned here rather
+        // than restated by each backend.
+        let tex = |usage| GraphResourceClass::for_texture_usage(usage);
+        assert_eq!(
+            tex(TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ),
+            GraphResourceClass::ColorTarget
+        );
+        assert_eq!(
+            tex(TextureUsage::DEPTH_STENCIL | TextureUsage::SHADER_READ),
+            GraphResourceClass::DepthTarget
+        );
+        assert_eq!(
+            tex(TextureUsage::STORAGE | TextureUsage::SHADER_READ),
+            GraphResourceClass::StorageImage
+        );
+        // Depth wins over storage, storage over render target: a target declaring
+        // several is used in the most constrained of them.
+        assert_eq!(
+            tex(TextureUsage::DEPTH_STENCIL | TextureUsage::STORAGE | TextureUsage::RENDER_TARGET),
+            GraphResourceClass::DepthTarget
+        );
+        assert_eq!(
+            tex(TextureUsage::STORAGE | TextureUsage::RENDER_TARGET),
+            GraphResourceClass::StorageImage
+        );
+
+        let buf = |usage| GraphResourceClass::for_buffer_usage(usage);
+        assert_eq!(buf(BufferUsage::STORAGE), GraphResourceClass::StorageBuffer);
+        assert_eq!(
+            buf(BufferUsage::STORAGE | BufferUsage::UNORDERED),
+            GraphResourceClass::UnorderedBuffer
+        );
+        assert_eq!(
+            buf(BufferUsage::STORAGE | BufferUsage::INDIRECT),
+            GraphResourceClass::IndirectBuffer
+        );
+        // Indirect wins over the read-write binding: a buffer declaring both is
+        // consumed as draw arguments.
+        assert_eq!(
+            buf(BufferUsage::INDIRECT | BufferUsage::UNORDERED),
+            GraphResourceClass::IndirectBuffer
+        );
+        // Every buffer class reports as a buffer; no image class does.
+        for c in [
+            GraphResourceClass::IndirectBuffer,
+            GraphResourceClass::StorageBuffer,
+            GraphResourceClass::UnorderedBuffer,
+        ] {
+            assert!(c.is_buffer(), "{c:?}");
+        }
+        for c in [
+            GraphResourceClass::ColorTarget,
+            GraphResourceClass::DepthTarget,
+            GraphResourceClass::StorageImage,
+        ] {
+            assert!(!c.is_buffer(), "{c:?}");
+        }
     }
 
     #[test]

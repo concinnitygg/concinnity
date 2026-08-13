@@ -12,7 +12,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier};
+use crate::directx::texture::{create_buffer, create_uav_buffer};
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
@@ -215,7 +215,9 @@ impl DxContext {
     // Dispatch the clustered light-binning pass. One thread per cluster; the
     // kernel builds the cluster's world-space AABB and tests each local light's
     // sphere against it, writing the surviving indices into `cluster_buffer`.
-    // The executor orders this before Main, which reads the same buffer.
+    // The executor orders this before Main, which reads the same buffer, and
+    // drives the buffer's `UAV` transition here and back at Main off that edge;
+    // it rests in `PIXEL_SHADER_RESOURCE`.
     pub(in crate::directx) fn encode_light_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -230,11 +232,6 @@ impl DxContext {
         let lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
 
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                cluster_buffer,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
             cmd.SetComputeRootSignature(root_sig);
             cmd.SetPipelineState(pso);
             cmd.SetComputeRootConstantBufferView(0, params_gva);
@@ -242,11 +239,6 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(2, cluster_buffer.GetGPUVirtualAddress());
             // One thread per cluster, 64-wide threadgroups.
             cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
-            cmd.ResourceBarrier(&[transition_barrier(
-                cluster_buffer,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            )]);
         }
         Ok(())
     }

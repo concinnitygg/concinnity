@@ -52,12 +52,6 @@ pub mod parallel_ctx;
 pub mod particles;
 pub mod planar_reflection;
 pub mod reflection_probe;
-// Each backend's barrier + resource-aliasing path consumes only a subset of the
-// graph today (buffer resources and version tracking are not wired into a
-// backend executor yet), so a portion of the builder internals stays unused.
-// Drop this allow once every backend's barrier + aliasing path consumes the
-// full builder surface.
-#[allow(dead_code)]
 pub mod render_graph;
 pub mod rt_geom;
 pub mod rt_topology;

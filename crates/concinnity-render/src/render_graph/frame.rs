@@ -828,11 +828,13 @@ fn draw_args_desc() -> BufferDesc {
 
 fn cull_status_desc() -> BufferDesc {
     // One u32 per draw object: phase-1 cull writes drawn / hi-z-candidate /
-    // culled, Cull2 reads it. Plain storage; the executor owns the
-    // allocation (sized to the live draw-object count).
+    // culled, Cull2 reads it. Both phases bind it the same read-write way, so it
+    // never transitions to a read state and its ordering comes from an execution
+    // barrier; `UNORDERED` is what says so. The executor owns the allocation
+    // (sized to the live draw-object count).
     BufferDesc {
         size_bytes: None,
-        usage: BufferUsage::STORAGE,
+        usage: BufferUsage::STORAGE.union(BufferUsage::UNORDERED),
     }
 }
 

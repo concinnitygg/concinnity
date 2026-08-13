@@ -23,8 +23,8 @@ use std::collections::{BinaryHeap, HashMap};
 use super::builder::{GraphBuilder, ResourceVersion};
 use super::passes::PassId;
 use super::types::{
-    BarrierOp, PassKind, PassRange, ReadStages, ResourceId, ResourceOrigin, ResourceState,
-    TextureDesc,
+    BarrierOp, BufferDesc, GraphResourceClass, PassKind, PassRange, ReadStages, ResourceId,
+    ResourceOrigin, ResourceState, TextureDesc,
 };
 
 // Compiler error. Returned by [`GraphBuilder::compile`]; the call site
@@ -108,6 +108,23 @@ pub struct CompiledResource {
     // buffer. The aliasing planner uses it to size each transient resource;
     // the backend will use it to allocate the realised resource.
     pub tex_desc: Option<TextureDesc>,
+    // Buffer shape (size / usage), `None` for a texture. Carried so a backend can
+    // derive the resource's barrier class from its declared usage.
+    pub buf_desc: Option<BufferDesc>,
+}
+
+impl CompiledResource {
+    // The barrier class this resource's declared usage puts it in. The graph is
+    // the single source of truth for it: a backend executor resolves a label to
+    // its GPU object but never restates what kind of resource it is, so the
+    // executors cannot disagree. `None` for a resource carrying neither desc.
+    pub fn class(&self) -> Option<GraphResourceClass> {
+        if let Some(desc) = self.tex_desc {
+            return Some(GraphResourceClass::for_texture_usage(desc.usage));
+        }
+        self.buf_desc
+            .map(|desc| GraphResourceClass::for_buffer_usage(desc.usage))
+    }
 }
 
 // Frozen graph the per-backend executor consumes. Passes are in
@@ -334,6 +351,7 @@ impl GraphBuilder {
                     lifetime,
                     is_texture: decl.is_texture(),
                     tex_desc: decl.texture_desc(),
+                    buf_desc: decl.buffer_desc(),
                 }
             })
             .collect();
@@ -406,24 +424,33 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
         for (k, &(pass_idx, eff)) in entries.iter().enumerate() {
             match eff {
                 Eff::Write => {
-                    if state != ResourceState::Write {
-                        // A `Read -> Write` carries the prior run's union (the
-                        // write must wait on every reader); `Undefined -> Write`
-                        // has no Read side.
-                        let read_stages = if state == ResourceState::Read {
-                            run_stages
-                        } else {
-                            ReadStages::empty()
-                        };
-                        passes[pass_idx].barriers_before.push(BarrierOp {
-                            resource,
-                            from: state,
-                            to: ResourceState::Write,
-                            read_stages,
-                        });
-                        state = ResourceState::Write;
-                        run_stages = ReadStages::empty();
-                    }
+                    // Emitted for every write, including a write that follows a
+                    // write. Each pass contributes at most one timeline entry per
+                    // resource, so back-to-back `Write` entries are always
+                    // different passes, and their ordering is not implied by
+                    // anything else: on the read-modify-write chains (hdr_resolve
+                    // through the decoration passes) each pass records into its own
+                    // command buffer, and command buffers in one submission may
+                    // overlap in execution. The resulting `Write -> Write` op is a
+                    // pure execution + memory dependency with no state change,
+                    // which each backend translates by its own rules.
+                    let read_stages = if state == ResourceState::Read {
+                        // A `Read -> Write` carries the prior run's union: the
+                        // write must wait on every reader.
+                        run_stages
+                    } else {
+                        // `Undefined -> Write` and `Write -> Write` have no Read
+                        // side.
+                        ReadStages::empty()
+                    };
+                    passes[pass_idx].barriers_before.push(BarrierOp {
+                        resource,
+                        from: state,
+                        to: ResourceState::Write,
+                        read_stages,
+                    });
+                    state = ResourceState::Write;
+                    run_stages = ReadStages::empty();
                 }
                 Eff::Read(_) => {
                     if state != ResourceState::Read {

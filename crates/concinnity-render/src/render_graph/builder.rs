@@ -48,14 +48,6 @@ impl ResourceDecl {
         }
     }
 
-    pub(super) fn current_version(&self) -> u32 {
-        match self {
-            ResourceDecl::Texture { version, .. } | ResourceDecl::Buffer { version, .. } => {
-                *version
-            }
-        }
-    }
-
     pub(super) fn bump_version(&mut self) -> u32 {
         match self {
             ResourceDecl::Texture { version, .. } | ResourceDecl::Buffer { version, .. } => {
@@ -79,6 +71,16 @@ impl ResourceDecl {
         match self {
             ResourceDecl::Texture { desc, .. } => Some(*desc),
             ResourceDecl::Buffer { .. } => None,
+        }
+    }
+
+    // The buffer description (size / usage), or `None` for a texture. The compile
+    // pass carries it onto `CompiledResource` so a backend can derive the
+    // resource's barrier class from its declared usage.
+    pub(super) fn buffer_desc(&self) -> Option<BufferDesc> {
+        match self {
+            ResourceDecl::Buffer { desc, .. } => Some(*desc),
+            ResourceDecl::Texture { .. } => None,
         }
     }
 }

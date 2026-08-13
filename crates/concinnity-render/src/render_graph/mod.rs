@@ -21,6 +21,7 @@ mod compile;
 mod frame;
 mod passes;
 mod types;
+mod validate;
 mod view_mask;
 
 pub use alias::{AliasPlan, AliasSlot, plan_aliasing};
@@ -32,5 +33,8 @@ pub use types::{
     BarrierOp, BufferDesc, BufferHandle, BufferUsage, GraphResourceClass, PassKind, PassRange,
     PixelFormat, ReadStages, ResourceId, ResourceOrigin, ResourceState, TextureDesc, TextureHandle,
     TextureSize, TextureUsage,
+};
+pub use validate::{
+    BarrierGap, GapKind, barrier_coverage_gaps, barrier_coverage_gaps_for_driven, final_states,
 };
 pub use view_mask::apply_view;

@@ -108,8 +108,48 @@ pub(super) fn vk_state(
             vk::AccessFlags::SHADER_WRITE,
             vk::PipelineStageFlags::COMPUTE_SHADER,
         ),
-        // Every class reads as a sampled image; the stage follows the consuming
-        // run's union so a compute consumer synchronises in COMPUTE_SHADER.
+        // Buffers carry no layout, so their triple keeps `UNDEFINED` throughout and
+        // only the access + stage matter; `vk_transition` recognises the class and
+        // emits a buffer barrier rather than skipping on the equal layouts.
+        // Indirect draw arguments are consumed by the draw-indirect stage, which is
+        // neither shader stage `read_stage_mask` models.
+        (GraphResourceClass::IndirectBuffer, ResourceState::Read) => (
+            vk::ImageLayout::UNDEFINED,
+            vk::AccessFlags::INDIRECT_COMMAND_READ,
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+        ),
+        (
+            GraphResourceClass::StorageBuffer | GraphResourceClass::UnorderedBuffer,
+            ResourceState::Read,
+        ) => (
+            vk::ImageLayout::UNDEFINED,
+            vk::AccessFlags::SHADER_READ,
+            read_stage_mask(read_stages),
+        ),
+        (
+            GraphResourceClass::IndirectBuffer
+            | GraphResourceClass::StorageBuffer
+            | GraphResourceClass::UnorderedBuffer,
+            ResourceState::Write,
+        ) => (
+            vk::ImageLayout::UNDEFINED,
+            vk::AccessFlags::SHADER_WRITE,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+        ),
+        // A buffer's first use in a frame has no prior access to wait on.
+        (
+            GraphResourceClass::IndirectBuffer
+            | GraphResourceClass::StorageBuffer
+            | GraphResourceClass::UnorderedBuffer,
+            ResourceState::Undefined,
+        ) => (
+            vk::ImageLayout::UNDEFINED,
+            vk::AccessFlags::empty(),
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+        ),
+        // Every image class reads as a sampled image; the stage follows the
+        // consuming run's union so a compute consumer synchronises in
+        // COMPUTE_SHADER.
         (_, ResourceState::Read) => (
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::AccessFlags::SHADER_READ,
@@ -147,7 +187,18 @@ pub(super) fn vk_transition(
 ) -> Option<VkTransition> {
     let (old, src_access, src_stage) = vk_state(class, from, read_stages);
     let (new, dst_access, dst_stage) = vk_state(class, to, read_stages);
-    (old != new).then_some((old, new, src_access, dst_access, src_stage, dst_stage))
+    // A write following a write keeps one layout but still needs the dependency:
+    // consecutive writers of one resource record into separate command buffers,
+    // and command buffers in a submission may overlap in execution, so nothing
+    // orders the second write after the first without this. Emitting it with
+    // old == new makes it a pure execution + memory barrier.
+    //
+    // A buffer never changes layout at all, so the layout comparison would skip
+    // every one of its transitions; its access + stage change is the whole point
+    // of the barrier.
+    let write_after_write = from == ResourceState::Write && to == ResourceState::Write;
+    (old != new || write_after_write || class.is_buffer())
+        .then_some((old, new, src_access, dst_access, src_stage, dst_stage))
 }
 
 #[cfg(test)]

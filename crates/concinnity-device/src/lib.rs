@@ -77,6 +77,12 @@ pub mod precompile;
 #[cfg(test)]
 mod object_data_layout;
 
+// Ownership guard for the explicit backends' resource barriers. Test-only and
+// backend-agnostic for the same reason as the fragment guard above: the call
+// sites are counted as text, so one build audits both explicit backends.
+#[cfg(test)]
+mod barrier_audit;
+
 // Device-memory placement policy shared by the backends' allocators.
 pub(crate) mod suballoc;
 

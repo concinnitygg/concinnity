@@ -55,14 +55,31 @@ pub(super) fn d3d12_state(
 ) -> D3D12_RESOURCE_STATES {
     match (class, state) {
         (_, ResourceState::Undefined) => D3D12_RESOURCE_STATE_COMMON,
+        // Indirect draw arguments are consumed by `ExecuteIndirect`, not by a
+        // shader stage, so this class reads into its own state rather than
+        // through the stage union.
+        (GraphResourceClass::IndirectBuffer, ResourceState::Read) => {
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT
+        }
+        // Read through the same unordered-access binding it was written with, so
+        // it never changes state and its ordering falls to the UAV barrier below.
+        (GraphResourceClass::UnorderedBuffer, ResourceState::Read) => {
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+        }
         (_, ResourceState::Read) => read_state(read_stages),
         (GraphResourceClass::ColorTarget, ResourceState::Write) => {
             D3D12_RESOURCE_STATE_RENDER_TARGET
         }
         (GraphResourceClass::DepthTarget, ResourceState::Write) => D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        (GraphResourceClass::StorageImage, ResourceState::Write) => {
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-        }
+        // Compute writes a storage image or either buffer class through an
+        // unordered-access view.
+        (
+            GraphResourceClass::StorageImage
+            | GraphResourceClass::IndirectBuffer
+            | GraphResourceClass::StorageBuffer
+            | GraphResourceClass::UnorderedBuffer,
+            ResourceState::Write,
+        ) => D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
     }
 }
 
@@ -92,6 +109,59 @@ pub(super) fn d3d12_transition(
     };
     let after = d3d12_state(class, to, read_stages);
     (before != after).then_some((before, after))
+}
+
+// What the executor must emit for one graph barrier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DxBarrier {
+    // A state change, as `(before, after)`.
+    Transition(D3D12_RESOURCE_STATES, D3D12_RESOURCE_STATES),
+    // No state change, but one unordered write must precede the next.
+    Uav,
+}
+
+// Resolve a graph barrier into the barrier the executor emits, or `None` when
+// D3D12 needs none.
+//
+// A state change is the barrier whenever there is one. Where there is not, an
+// unordered class still needs a UAV barrier for any edge involving a write,
+// because accesses through an unordered-access view have no implied ordering:
+//
+//   * write-after-write -- consecutive writes to a render or depth target are
+//     ordered by the output-merger stage within a queue, so D3D12 needs nothing
+//     for those, which is where it diverges from Vulkan (separate render pass
+//     instances carry no such implied dependency and do take a barrier);
+//   * read-after-write and write-after-read -- these carry a state change for
+//     every class whose read and write states differ, so only `UnorderedBuffer`
+//     reaches here: it is read through the same UAV binding it was written with
+//     (`cull_status`, bound as a root UAV in both cull phases).
+//
+// A first use (`Undefined` source) needs no UAV barrier: the frame's fence wait
+// already retired the previous submission that touched this slot.
+pub(super) fn d3d12_barrier(
+    class: GraphResourceClass,
+    resting: D3D12_RESOURCE_STATES,
+    from: ResourceState,
+    to: ResourceState,
+    read_stages: ReadStages,
+) -> Option<DxBarrier> {
+    if let Some((before, after)) = d3d12_transition(class, resting, from, to, read_stages) {
+        return Some(DxBarrier::Transition(before, after));
+    }
+    let orders_a_write = matches!(
+        (from, to),
+        (ResourceState::Write, ResourceState::Write)
+            | (ResourceState::Write, ResourceState::Read)
+            | (ResourceState::Read, ResourceState::Write)
+    );
+    let unordered = matches!(
+        class,
+        GraphResourceClass::StorageImage
+            | GraphResourceClass::IndirectBuffer
+            | GraphResourceClass::StorageBuffer
+            | GraphResourceClass::UnorderedBuffer
+    );
+    (orders_a_write && unordered).then_some(DxBarrier::Uav)
 }
 
 #[cfg(test)]
@@ -329,6 +399,94 @@ mod tests {
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_RENDER_TARGET
             ))
+        );
+    }
+
+    #[test]
+    fn unordered_buffer_edges_fall_back_to_a_uav_barrier() {
+        // cull_status: written by phase 1 and read by phase 2 through the same
+        // root UAV, so no edge carries a state change and the UAV barrier is the
+        // only thing ordering the phases. Every write-involving edge takes one.
+        const UAV: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        for (from, to) in [
+            (ResourceState::Write, ResourceState::Read),
+            (ResourceState::Write, ResourceState::Write),
+            (ResourceState::Read, ResourceState::Write),
+        ] {
+            assert_eq!(
+                d3d12_barrier(GraphResourceClass::UnorderedBuffer, UAV, from, to, FRAG),
+                Some(DxBarrier::Uav),
+                "{from:?} -> {to:?}"
+            );
+        }
+        // A first use needs none: the frame's fence wait already retired the
+        // previous submission that touched this slot.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::UnorderedBuffer,
+                UAV,
+                ResourceState::Undefined,
+                ResourceState::Write,
+                FRAG,
+            ),
+            None
+        );
+        // A read-only run needs none either.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::UnorderedBuffer,
+                UAV,
+                ResourceState::Read,
+                ResourceState::Read,
+                FRAG,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn ordered_classes_take_a_transition_not_a_uav_barrier() {
+        // Every other class's read and write states differ, so its consumer edge
+        // is a real transition and never reaches the UAV fallback. draw_args:
+        // UAV write -> INDIRECT_ARGUMENT read; cluster_light_list: UAV write ->
+        // PIXEL_SHADER_RESOURCE read.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::IndirectBuffer,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+                ResourceState::Write,
+                ResourceState::Read,
+                FRAG,
+            ),
+            Some(DxBarrier::Transition(
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT
+            ))
+        );
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::StorageBuffer,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                ResourceState::Write,
+                ResourceState::Read,
+                FRAG,
+            ),
+            Some(DxBarrier::Transition(
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+            ))
+        );
+        // A render target's write-after-write stays a no-op: the output-merger
+        // orders it within a queue.
+        assert_eq!(
+            d3d12_barrier(
+                GraphResourceClass::ColorTarget,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                ResourceState::Write,
+                ResourceState::Write,
+                FRAG,
+            ),
+            None
         );
     }
 }

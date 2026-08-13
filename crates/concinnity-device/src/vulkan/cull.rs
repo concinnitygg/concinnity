@@ -215,20 +215,6 @@ impl VkContext {
             device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
             // One invocation per build-time object, 64-wide local groups.
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
-            // Order the kernel's indirect-buffer writes before the main pass'
-            // `cmd_draw_indexed_indirect` reads them.
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
         }
     }
 
@@ -391,23 +377,6 @@ impl VkContext {
                 std::mem::size_of::<CullHizParams>(),
             );
 
-            // Order phase-1's `cull_status` writes (an earlier compute dispatch
-            // on this queue) before this kernel's reads. `cull_status` has no
-            // layout/state to transition, so this memory barrier is the only
-            // thing flushing the phase-1 writes to the phase-2 reads.
-            let status_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&status_barrier),
-                &[],
-                &[],
-            );
-
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -427,21 +396,6 @@ impl VkContext {
             );
             device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
-
-            // Order the kernel's phase-2 indirect-buffer writes before `Main2`'s
-            // `cmd_draw_indexed_indirect` reads them.
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
         }
     }
 }

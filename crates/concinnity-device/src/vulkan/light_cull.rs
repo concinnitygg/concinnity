@@ -289,24 +289,6 @@ impl VkContext {
             );
             // One invocation per cluster, 64-wide workgroups.
             device.cmd_dispatch(cmd, CLUSTER_COUNT.div_ceil(64), 1, 1);
-            // Order the compute write before the forward pass samples the lists.
-            let barrier = vk::BufferMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .buffer(self.light_cull.cluster_buffer.buffer())
-                .offset(0)
-                .size(cluster_list_size());
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                std::slice::from_ref(&barrier),
-                &[],
-            );
         }
     }
 }

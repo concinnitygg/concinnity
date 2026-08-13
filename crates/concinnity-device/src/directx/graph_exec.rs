@@ -18,8 +18,11 @@
 // `ResolveQueryData` ride the same submission). Mirrors
 // `metal/graph_exec.rs`.
 //
-// Per-pass `barriers_before` is dropped on DirectX; each
-// migrated encoder owns its inline `D3D12_RESOURCE_BARRIER` calls.
+// Per-pass `barriers_before` is consumed for the resources the barrier registry
+// resolves: `emit_graph_barriers` translates their graph state transitions into
+// `D3D12_RESOURCE_BARRIER` transitions at the start of each pass's own command
+// list. Every other resource still owns its transitions inline in its encoder;
+// `barrier_audit.rs` classifies each remaining site.
 //
 // Bundled passes:
 //   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
@@ -37,10 +40,10 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::gfx::render_graph::{CompiledGraph, CompiledPass, GraphResourceClass, PassId};
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 
-use super::barrier_translate::d3d12_transition;
+use super::barrier_translate::{DxBarrier, d3d12_barrier};
 use super::context::DxContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdList, pool_index};
-use super::texture::{aliasing_barrier, transition_barrier};
+use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 
 // One resolved barrier target: the D3D12 resource a graph resource backs, its
 // class, and its resting state (created / cross-frame-restored). Built once per
@@ -123,17 +126,67 @@ fn emit_graph_barriers(
         let Some(Some(target)) = registry.0.get(op.resource_index()) else {
             continue;
         };
-        if let Some((before, after)) = d3d12_transition(
+        let Some(barrier) = d3d12_barrier(
             target.class,
             target.resting,
             op.source_state(),
             op.to_state(),
             op.read_stages(),
-        ) {
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(&target.resource, before, after)]);
+        ) else {
+            continue;
+        };
+        let native = match barrier {
+            DxBarrier::Transition(before, after) => {
+                transition_barrier(&target.resource, before, after)
             }
+            DxBarrier::Uav => uav_barrier(&target.resource),
+        };
+        unsafe {
+            cmd.ResourceBarrier(&[native]);
         }
+    }
+}
+
+// Check the graph's barrier coverage and cross-frame state contract for every
+// resource this executor drives, on the frame's real compiled graph. Two
+// invariants, both cheap enough to run per frame under `debug_assertions`:
+//
+//   * every declared read / write of a driven resource is preceded by a
+//     transition putting it in the matching state, in the consuming stage;
+//   * a driven resource actually ends the frame in the resting state its registry
+//     entry declares, so the next frame's first transition (whose `Undefined`
+//     source resolves to that resting state) names the state the resource is
+//     really in. The debug layer rejects a mismatch.
+//
+// This is where a registry entry that claims a resource the graph does not fully
+// cover shows up; the headless sweep in `render_graph::validate` covers the
+// deriver itself. Mirrors the Vulkan executor's `debug_assert_graph_drives`.
+#[cfg(debug_assertions)]
+fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
+    use super::barrier_translate::d3d12_state;
+    use crate::gfx::render_graph::{barrier_coverage_gaps_for_driven, final_states};
+
+    let driven: Vec<bool> = registry.0.iter().map(|t| t.is_some()).collect();
+    let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
+    assert!(
+        gaps.is_empty(),
+        "render graph (directx): uncovered accesses on graph-driven resources: {}",
+        gaps.iter()
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+        let Some(Some(target)) = registry.0.get(idx) else {
+            continue;
+        };
+        let ends_at = d3d12_state(target.class, state, stages);
+        assert_eq!(
+            target.resting.0, ends_at.0,
+            "render graph (directx): {} rests in {:?} but the frame leaves it in {:?}",
+            graph.resources[idx].label, target.resting, ends_at,
+        );
     }
 }
 
@@ -303,7 +356,9 @@ impl DxContext {
         let ctx_ref = ParallelCtxRef::new(self);
         // Resolve every migrated resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
-        let registry = self.build_barrier_registry(graph);
+        let registry = self.build_barrier_registry(graph, params.frame_idx);
+        #[cfg(debug_assertions)]
+        debug_assert_graph_drives(graph, &registry);
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.
@@ -484,12 +539,21 @@ impl DxContext {
     // field-grouping re-cuts here, not in the executor. A resource the owning
     // feature disabled (or one never migrated) gets `None`, and the graph carries
     // no barrier for it either.
-    fn build_barrier_registry(&self, graph: &CompiledGraph) -> DxBarrierRegistry {
+    fn build_barrier_registry(&self, graph: &CompiledGraph, frame_idx: usize) -> DxBarrierRegistry {
         DxBarrierRegistry(
             graph
                 .resources
                 .iter()
-                .map(|res| self.barrier_target_for_label(res.label))
+                .map(|res| {
+                    let class = res.class()?;
+                    let (resource, resting) =
+                        self.barrier_object_for_label(res.label, frame_idx)?;
+                    Some(DxBarrierTarget {
+                        resource,
+                        class,
+                        resting,
+                    })
+                })
                 .collect(),
         )
     }
@@ -517,64 +581,76 @@ impl DxContext {
         DxAliasBarriers(table)
     }
 
-    // Map one graph resource label to its backing D3D12 resource, class, and
-    // resting state (the state it was created in and returns to at the end of
-    // every frame, via the encoder's kept restore barrier). The resting state
-    // lets the executor translate a first-use `Undefined` transition into one
-    // whose `from` matches the resource's real state.
-    fn barrier_target_for_label(&self, label: &str) -> Option<DxBarrierTarget> {
+    // Map one graph resource label to its backing D3D12 resource and its resting
+    // state (the state it was created in and returns to at the end of every
+    // frame), so a first-use `Undefined` transition names the state the resource
+    // is really in. The resource's barrier class is NOT decided here: it follows
+    // the usage the graph declares (`CompiledResource::class`), so this backend
+    // and Vulkan cannot disagree about what a resource is. Resting state stays
+    // per-resource because it is not derivable from usage -- everything migrated
+    // so far rests sampled, but the main depth target will rest as a depth
+    // attachment. `None` means the owning feature is inactive, and the graph
+    // carries no node for it either.
+    fn barrier_object_for_label(
+        &self,
+        label: &str,
+        frame_idx: usize,
+    ) -> Option<(ID3D12Resource, D3D12_RESOURCE_STATES)> {
+        // A per-frame buffer resolves through the frame slot being recorded.
+        let buffer =
+            |slots: &[ID3D12Resource], resting| slots.get(frame_idx).map(|r| (r.clone(), resting));
+        const SAMPLED: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         match label {
+            // Indirect commands the cull kernel writes (UAV) and the main pass
+            // consumes through `ExecuteIndirect`.
+            "draw_args" => buffer(
+                &self.cull.indirect_cmd_buffers,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            ),
+            // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
+            "draw_args2" => buffer(
+                &self.cull.indirect_cmd_buffers_2,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            ),
+            // Phase 1 writes it and phase 2 reads it through the same root UAV,
+            // so it never leaves `UNORDERED_ACCESS`.
+            "cull_status" => buffer(
+                &self.cull.cull_status_buffers,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            ),
+            // Per-cluster light index lists: the dispatch flips them to UAV and
+            // back, so they rest sampled. One buffer, not per-frame.
+            "cluster_light_list" => Some((self.light_cull.cluster_buffer.clone(), SAMPLED)),
             "ao_output" => self
                 .transient_pool
                 .resource_for("ao_output")
-                .map(|r| DxBarrierTarget {
-                    resource: r.clone(),
-                    class: GraphResourceClass::ColorTarget,
-                    resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                }),
-            // shadow_map rests sampled (PIXEL_SHADER_RESOURCE): the Shadow
-            // producer barrier (Undefined -> Write) is the real
-            // PIXEL_SHADER_RESOURCE -> DEPTH_WRITE reset for this frame's shadow
-            // loop, and the Main consumer (Write -> Read) returns it to sampled.
-            // Both transitions are graph-driven; there is no inline cross-frame
-            // reset (the map is created sampled, so frame 0's producer barrier
-            // starts from the resource's real state).
+                .map(|r| (r.clone(), SAMPLED)),
+            // The cascade array rests sampled: the Shadow producer barrier is the
+            // real cross-frame reset for this frame's shadow loop and the Main
+            // consumer returns it to sampled. Created sampled, so frame 0's
+            // producer starts from the resource's real state.
             "shadow_map" => self
                 .shadow
                 .resource
                 .as_ref()
                 .filter(|_| !self.shadow.dsvs.is_empty())
-                .map(|s| DxBarrierTarget {
-                    resource: s.resource.clone(),
-                    class: GraphResourceClass::DepthTarget,
-                    resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                }),
-            // spot_shadow_map rests sampled, exactly like shadow_map above: the
-            // SpotShadow producer barrier opens it for the depth loop and the
-            // Main consumer returns it to sampled. Only imported when the world
-            // has shadowed spots, so the `dsvs` filter matches the graph gate.
+                .map(|s| (s.resource.clone(), SAMPLED)),
+            // The spot array rests sampled exactly like the cascades. Only
+            // imported when the world has shadowed spots, so the `dsvs` filter
+            // matches the graph gate.
             "spot_shadow_map" => self
                 .spot_shadow
                 .resource
                 .as_ref()
                 .filter(|_| !self.spot_shadow.dsvs.is_empty())
-                .map(|s| DxBarrierTarget {
-                    resource: s.resource.clone(),
-                    class: GraphResourceClass::DepthTarget,
-                    resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                }),
-            // fog_froxel_volume rests sampled (PIXEL_SHADER_RESOURCE): the
-            // FogFroxel producer (Undefined -> Write) is the real
-            // PIXEL_SHADER_RESOURCE -> UNORDERED_ACCESS open for the compute
-            // write, and the Fog consumer (Write -> Read) the matching UAV ->
-            // PIXEL_SHADER_RESOURCE close for the trilinear sample. Both are
-            // graph-driven; there is no inline reset (the volume is created
-            // sampled, matching Vulkan, which already graph-drives both).
-            "fog_froxel_volume" => self.fog.resources.as_ref().map(|f| DxBarrierTarget {
-                resource: f.volume_resource.clone(),
-                class: GraphResourceClass::StorageImage,
-                resting: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            }),
+                .map(|s| (s.resource.clone(), SAMPLED)),
+            // The froxel volume rests sampled: the FogFroxel producer opens it for
+            // the compute write and the Fog consumer closes it for the sample.
+            "fog_froxel_volume" => self
+                .fog
+                .resources
+                .as_ref()
+                .map(|f| (f.volume_resource.clone(), SAMPLED)),
             _ => None,
         }
     }
