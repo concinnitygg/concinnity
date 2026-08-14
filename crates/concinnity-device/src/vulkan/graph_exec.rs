@@ -287,6 +287,32 @@ fn emit_pass_prologue(
 // This is where a registry entry that claims a resource the graph does not fully
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself.
+// Assert no alias slot has two members live at once in the graph this frame is
+// about to run. Members of a slot share bytes, so two live at once means one
+// reads memory the other overwrote -- and unlike a barrier gap that has no
+// validation layer behind it, on any backend.
+//
+// This is the layer the sweep in `render_graph::transient` cannot be: the pool
+// is planned once per build configuration while graphs compile per frame, and
+// passes that *substitute* for one another mean there is no single maximal
+// graph to plan against. What the sweep covers is the input space it models;
+// this covers the graph actually in hand.
+#[cfg(debug_assertions)]
+fn debug_assert_pool_aliasing_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>]) {
+    use crate::gfx::render_graph::slot_conflicts;
+
+    let conflicts = slot_conflicts(graph, slot_labels);
+    assert!(
+        conflicts.is_empty(),
+        "transient pool (vulkan): alias slot members are simultaneously live: {}",
+        conflicts
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
     use super::barrier_translate::vk_state;
@@ -442,6 +468,8 @@ impl VkContext {
         let registry = self.build_barrier_registry(graph, frame_idx);
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &registry);
+        #[cfg(debug_assertions)]
+        debug_assert_pool_aliasing_sound(graph, self.transient_pool.slot_labels());
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.

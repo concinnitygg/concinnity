@@ -45,7 +45,7 @@ use crate::render_types::NUM_SHADOW_CASCADES;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
-    PixelFormat, TextureDesc, TextureHandle, TextureSize, TextureUsage,
+    PixelFormat, TextureDesc, TextureHandle, TextureSize, TextureUsage, full_mip_levels,
 };
 
 // Per-frame inputs that gate conditional passes. Built by `draw_frame`
@@ -323,6 +323,18 @@ impl FrameGraphInputs {
 // the phase-1 status buffer and writes `draw_args2`; `Main2` RMWs
 // hdr_color / hdr_depth / hdr_resolve → v2, and that v2 (not v1)
 // becomes the head AutoExposure reads and the RMW chain extends.
+// The four attachments the unified G-buffer pre-pass writes in one draw. They
+// are separate resources rather than one handle because their shapes differ
+// (three colour formats and a depth target) and so do their consumers, so one
+// handle would give each of them the union of four lifetimes.
+#[derive(Copy, Clone)]
+struct GBufferHandles {
+    normal_depth: TextureHandle,
+    roughness: TextureHandle,
+    velocity: TextureHandle,
+    depth: TextureHandle,
+}
+
 pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
     // When an opaque menu backdrop hides the scene, every world pass is wasted:
     // nothing it produces is visible. Force every gated world pass off so the
@@ -419,15 +431,20 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         (None, None)
     };
 
-    // Unified G-buffer pre-pass (Metal): one node writes the view-space
-    // normal+depth / roughness / velocity that SSR, SSAO, SSGI, RT, TAA, and the
-    // upscaler all read, replacing the separate SsrPrepass + Velocity nodes. Runs
-    // when any of those consumers is on. The other backends keep
-    // `unified_gbuffer_prepass` false and emit the two separate nodes below.
+    // Unified G-buffer pre-pass: one node writes the view-space normal+depth /
+    // roughness / velocity / depth that SSR, SSAO, SSGI, RT, TAA, and the
+    // upscaler read, replacing the separate SsrPrepass + Velocity nodes. Runs
+    // when any of those consumers is on. Every backend takes this path when its
+    // G-buffer targets are built; the separate nodes below are the fallback for
+    // a build without them.
     let gbuffer_v1 = if inputs.unified_gbuffer_prepass
         && (inputs.ssr_prepass_enabled || inputs.ssao_enabled || inputs.velocity_enabled)
     {
-        let gbuffer = b.create_texture("gbuffer", gbuffer_desc(inputs));
+        let normal_depth =
+            b.create_texture("gbuffer_normal_depth", gbuffer_normal_depth_desc(inputs));
+        let roughness = b.create_texture("gbuffer_roughness", gbuffer_roughness_desc(inputs));
+        let velocity = b.create_texture("gbuffer_velocity", velocity_desc(inputs));
+        let depth = b.create_texture("gbuffer_depth", gbuffer_depth_desc(inputs));
         let mut gb = b.add_pass(PassId::GBufferPrepass, PassKind::Render);
         // When the GPU-driven cull path is active the pre-pass reuses the main
         // pass's per-frame indirect command buffer (camera frustum, same cull
@@ -437,7 +454,14 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(h) = draw_args_v1 {
             gb.read_buffer(h);
         }
-        Some(gb.write_texture(gbuffer))
+        // One draw writes all four attachments; they are separate resources
+        // because their shapes and their consumers differ.
+        Some(GBufferHandles {
+            normal_depth: gb.write_texture(normal_depth),
+            roughness: gb.write_texture(roughness),
+            velocity: gb.write_texture(velocity),
+            depth: gb.write_texture(depth),
+        })
     } else {
         None
     };
@@ -446,7 +470,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // shared-G-buffer fast path). Under the unified path the merged node above
     // supplies the same normal+depth handle, so this separate node is skipped.
     let ssr_gbuffer_v1 = if let Some(g) = gbuffer_v1 {
-        Some(g)
+        Some(g.normal_depth)
     } else if inputs.ssr_prepass_enabled {
         let ssr_gbuffer = b.create_texture("ssr_gbuffer", ssr_gbuffer_desc(inputs));
         Some(
@@ -605,7 +629,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // carries velocity, so TAA / Upscale read that handle and this separate node
     // is skipped.
     let velocity_v1 = if let Some(g) = gbuffer_v1 {
-        Some(g)
+        Some(g.velocity)
     } else if inputs.velocity_enabled {
         let velocity = b.create_texture("velocity", velocity_desc(inputs));
         Some(
@@ -646,6 +670,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     if inputs.ssgi_enabled {
         let mut ssgi = b.add_pass(PassId::Ssgi, PassKind::Render);
         ssgi.read_texture(h);
+        // The gather is against the pre-pass view normal + linear depth; with
+        // no G-buffer there is nothing to gather against and the encoder skips.
+        if let Some(g) = ssr_gbuffer_v1 {
+            ssgi.read_texture(g);
+        }
         h = ssgi.write_texture(h);
     }
     if inputs.decals_enabled {
@@ -707,13 +736,30 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // backend / GPU that supports it, SSR as the cross-backend fallback),
         // and where RT is live the builder picks it and omits SsrResolve. Only
         // one of the two is ever inserted.
+        // Both resolves trace against the pre-pass view normal + linear depth
+        // and pick their blur radius from its roughness. Declaring those reads
+        // is what keeps the G-buffer's modelled lifetime as long as its real
+        // one: roughness has no other consumer, so without this it would look
+        // dead the moment the pre-pass finished.
         let mut current = if inputs.rt_reflections_enabled {
             let mut rt = b.add_pass(PassId::RtReflections, PassKind::Render);
             rt.read_texture(hdr_resolve_cur);
+            if let Some(g) = ssr_gbuffer_v1 {
+                rt.read_texture(g);
+            }
+            if let Some(g) = gbuffer_v1 {
+                rt.read_texture(g.roughness);
+            }
             rt.write_texture(scene_pre_taa)
         } else {
             let mut ssr = b.add_pass(PassId::SsrResolve, PassKind::Render);
             ssr.read_texture(hdr_resolve_cur);
+            if let Some(g) = ssr_gbuffer_v1 {
+                ssr.read_texture(g);
+            }
+            if let Some(g) = gbuffer_v1 {
+                ssr.read_texture(g.roughness);
+            }
             ssr.write_texture(scene_pre_taa)
         };
         if inputs.transparent_enabled {
@@ -766,6 +812,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // Upscale. The scaler consumes motion vectors directly.
         if let Some(v) = velocity_v1 {
             up.read_texture(v);
+        }
+        // The scaler also samples the pre-pass depth (single-sample at render
+        // resolution), which is the only consumer that target has.
+        if let Some(g) = gbuffer_v1 {
+            up.read_texture(g.depth);
         }
         up.write_texture(scene_color)
     } else if inputs.taa_enabled {
@@ -827,20 +878,17 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 }
 
 fn froxel_volume_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // Identity stub only: the graph does not allocate resources, so the
-    // backend owns the actual 3D-texture creation. The desc carries the X/Y
-    // extent for documentation; the Z extent is communicated separately via
-    // the FogFroxelParams uniform. `array_layers` is left at 1 since
-    // TextureDesc does not model 3D textures explicitly.
+    // The volumetric-fog froxel volume: a 3D texture the fog kernel writes and
+    // the fog pass samples. Its Z extent also rides in `FogFroxelParams.
+    // froxel_dims` so shaders can map indices to volume UVs.
     let _ = inputs;
-    TextureDesc {
-        width: TextureSize::Absolute(FOG_FROXEL_X),
-        height: TextureSize::Absolute(FOG_FROXEL_Y),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
-    }
+    TextureDesc::volume_3d(
+        TextureSize::Absolute(FOG_FROXEL_X),
+        TextureSize::Absolute(FOG_FROXEL_Y),
+        FOG_FROXEL_Z,
+        PixelFormat::Rgba16Float,
+        TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+    )
 }
 
 // X/Y/Z dimensions of the volumetric-fog froxel volume. Sized to keep the
@@ -854,47 +902,58 @@ pub const FOG_FROXEL_Y: u32 = 45;
 pub const FOG_FROXEL_Z: u32 = 64;
 
 fn shadow_map_desc(size: u32) -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::Absolute(size.max(1)),
-        height: TextureSize::Absolute(size.max(1)),
-        format: PixelFormat::Depth32Float,
-        sample_count: 1,
-        array_layers: NUM_SHADOW_CASCADES as u32,
-        usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-    }
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(size.max(1)),
+        TextureSize::Absolute(size.max(1)),
+        PixelFormat::Depth32Float,
+        TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
+    .with_array_layers(NUM_SHADOW_CASCADES as u32)
 }
 
 fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::Absolute(slice_size.max(1)),
-        height: TextureSize::Absolute(slice_size.max(1)),
-        format: PixelFormat::Depth32Float,
-        sample_count: 1,
-        array_layers: slices.max(1),
-        usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-    }
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(slice_size.max(1)),
+        TextureSize::Absolute(slice_size.max(1)),
+        PixelFormat::Depth32Float,
+        TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
+    .with_array_layers(slices.max(1))
 }
 
 fn hdr_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: inputs.hdr_sample_count.max(1),
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET,
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET,
+    )
+    .with_sample_count(inputs.hdr_sample_count.max(1))
 }
 
 fn hdr_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Depth32Float,
-        sample_count: inputs.hdr_sample_count.max(1),
-        array_layers: 1,
-        usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::Depth32Float,
+        TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
+    .with_sample_count(inputs.hdr_sample_count.max(1))
+}
+
+// A single-sample 2D target at the HDR render resolution, which is what most of
+// the frame's off-screen targets are. Render resolution is not the drawable
+// extent under temporal upscaling, so these are `Absolute` off the inputs
+// rather than `Drawable`.
+fn render_res_2d(
+    inputs: &FrameGraphInputs,
+    format: PixelFormat,
+    usage: TextureUsage,
+) -> TextureDesc {
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(inputs.hdr_width.max(1)),
+        TextureSize::Absolute(inputs.hdr_height.max(1)),
+        format,
+        usage,
+    )
 }
 
 fn draw_args_desc() -> BufferDesc {
@@ -927,111 +986,117 @@ fn cluster_light_list_desc() -> BufferDesc {
 }
 
 fn hiz_pyramid_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // R32Float depth-mip pyramid rebuilt mid-frame from phase-1 depth.
-    // Identity stub: the executor owns the real mip-chain texture (the desc
-    // carries render dims + format for graph edges; the mip count is derived
-    // backend-side). Imported, so the desc is not an aliasing input. Standard
-    // depth, MAX reduction.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::R32Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
-    }
+    // R32Float depth-mip pyramid rebuilt mid-frame from phase-1 depth, MAX
+    // reduction. The cull kernel samples the coarse levels, so the chain is
+    // most of the footprint and the desc carries its real length -- the same
+    // `floor(log2(max)) + 1` each backend's Hi-Z build derives.
+    render_res_2d(
+        inputs,
+        PixelFormat::R32Float,
+        TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+    )
+    .with_mip_levels(full_mip_levels(
+        inputs.hdr_width.max(1),
+        inputs.hdr_height.max(1),
+    ))
 }
 
-fn gbuffer_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // Documentation-only handle for the unified G-buffer pre-pass (the executor
-    // owns the real normal+depth / roughness / velocity / depth textures). The
-    // RGBA16F normal+depth is the representative format used for graph edges.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+// The unified G-buffer pre-pass writes four separate targets in one draw. They
+// are four graph resources rather than one handle because their shapes differ
+// (three colour formats and a depth target) and so do their consumers, and a
+// resource the aliaser may place has to name the memory it actually needs.
+fn gbuffer_normal_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // RGBA16F view-space normal + linear depth, read by SSR / SSAO / SSGI / RT.
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn gbuffer_roughness_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // R8 perceptual roughness, read by the reflection resolve to pick its
+    // blur radius. Clears to 1.0 (fully rough), so a pixel the pre-pass never
+    // rasterises reflects nothing -- the one graph target whose cleared
+    // background carries meaning, and the reason `TextureDesc` models a clear
+    // value at all.
+    render_res_2d(
+        inputs,
+        PixelFormat::R8Unorm,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
+    .with_clear_color([1.0, 0.0, 0.0, 0.0])
+}
+
+fn gbuffer_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // The pre-pass's own depth attachment. Single-sample regardless of the
+    // main pass's MSAA: the pre-pass rasterises once.
+    render_res_2d(
+        inputs,
+        PixelFormat::Depth32Float,
+        TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn ssr_gbuffer_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // RGBA16F view-space normal + linear depth at HDR dims; shared with
     // SSAO when both passes are on.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn ao_output_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // R8 occlusion at HDR dims; sampled by Main's ambient term.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::R8Unorm,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::R8Unorm,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn velocity_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // RG16F motion-vector buffer at HDR dims, sampled by TaaResolve.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rg16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::Rg16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn bloom_top_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // bloom_top is `bloom_targets.mips[0]`, the bloom chain's half-resolution
-    // top octave (every backend sizes it `hdr_dims >> 1`); the prefilter pass
-    // writes into it and the upsample chain accumulates back into it for
-    // Composite to sample. Modelling it half-res keeps the aliasing planner's
-    // footprint honest -- a full-res desc over-reports `bloom_top` 4x.
-    TextureDesc {
-        width: TextureSize::Absolute((inputs.hdr_width.max(1) >> 1).max(1)),
-        height: TextureSize::Absolute((inputs.hdr_height.max(1) >> 1).max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+    // top octave; the prefilter pass writes into it and the upsample chain
+    // accumulates back into it for Composite to sample.
+    //
+    // Half the *drawable* extent, not half the render resolution: every backend
+    // builds its bloom chain from the output extent, so under temporal
+    // upscaling (where render resolution is smaller) an `hdr_width >> 1` desc
+    // names a texture no backend creates.
+    let _ = inputs;
+    TextureDesc::texture_2d(
+        TextureSize::DrawableScaled(0.5),
+        TextureSize::DrawableScaled(0.5),
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn hdr_resolve_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-    }
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn scene_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // The engine-owned scene_color texture the post stack consumes is
     // single-sample at HDR dims regardless of whether the per-frame
     // resolution lands on taa_targets / ssr_targets.output / hdr_resolve.
-    TextureDesc {
-        width: TextureSize::Absolute(inputs.hdr_width.max(1)),
-        height: TextureSize::Absolute(inputs.hdr_height.max(1)),
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        usage: TextureUsage::SHADER_READ,
-    }
+    render_res_2d(inputs, PixelFormat::Rgba16Float, TextureUsage::SHADER_READ)
 }
 
 #[cfg(test)]

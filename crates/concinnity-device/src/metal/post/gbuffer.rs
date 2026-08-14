@@ -49,22 +49,20 @@ pub(crate) struct GBufferState {
 
 // Targets
 
-// Off-screen targets for the unified G-buffer pre-pass, shared by every
-// consumer of view-space normal/depth, roughness, or motion. All single-sample
-// and render resolution; created when any consumer (SSR, SSGI, RT, SSAO, TAA,
-// or the upscaler) is active and rebuilt with the HDR targets on resize (sizing
-// is keyed off `HdrTargets`, so no dimensions are stored here).
+// The pre-pass's feature-owned target: its depth attachment, and only that.
+//
+// The three colour channels (`gbuffer_normal_depth` / `_roughness` /
+// `_velocity`) are pool-owned and read back by label through
+// `MtlContext::gbuffer_*`, so nothing here holds them -- a pool rebuild repacks
+// every slot, and a cached handle would point into memory that now belongs to
+// another resource. The depth stays feature-owned to match DirectX and Vulkan
+// (there it cannot be pooled: a shader-readable depth target needs a typeless
+// resource format `PixelFormat` cannot express).
+//
+// `Some` when any consumer (SSR, SSGI, RT, SSAO, TAA, or the upscaler) is
+// active -- the same gate the pool is built under -- and rebuilt with the HDR
+// targets on resize, so no dimensions are stored here.
 pub(crate) struct GBufferTargets {
-    // `RGBA16Float`: view-space normal in rgb, positive linear view depth in a.
-    // Read by SSR resolve, the SSAO kernel/blur, SSGI, and RT reflections.
-    // Cleared alpha 0 marks "no geometry" (background).
-    pub normal_depth: Retained<ProtocolObject<dyn MTLTexture>>,
-    // `R8Unorm`: per-pixel perceptual roughness. Read by SSR resolve and RT
-    // reflections; cleared 1.0 so the background is treated as non-reflective.
-    pub roughness: Retained<ProtocolObject<dyn MTLTexture>>,
-    // `RG16Float`: screen-space motion `(prev_uv - cur_uv)`. Read by TAA resolve
-    // and the MetalFX upscaler's motion input; cleared 0 (no motion).
-    pub velocity: Retained<ProtocolObject<dyn MTLTexture>>,
     // `Depth32Float`, single-sample: the pre-pass z-buffer. Unlike the old
     // per-pass prepass depths this is `ShaderRead | RenderTarget` and stored,
     // because the MetalFX upscaler samples it (`setDepthTexture`). The main pass
@@ -72,45 +70,30 @@ pub(crate) struct GBufferTargets {
     pub depth: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-// Create or recreate the G-buffer targets at `width`x`height`.
+// Create or recreate the pre-pass depth attachment at `width`x`height`. The
+// colour channels come from the transient pool, which the caller must have
+// built (or rebuilt) at the same extent first.
 pub(crate) fn create_gbuffer_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
 ) -> Result<GBufferTargets, String> {
-    let w = width.max(1) as usize;
-    let h = height.max(1) as usize;
-
-    let sampled = MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
-    let make = |fmt: MTLPixelFormat,
-                label: &str|
-     -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-        let desc = MTLTextureDescriptor::new();
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(fmt);
-            desc.setWidth(w);
-            desc.setHeight(h);
-            desc.setUsage(sampled);
-            desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
-        }
-        device
-            .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| format!("failed to create G-buffer {} texture", label))
-    };
-
-    // The depth is sampleable (MetalFX reads it), unlike the old prepass depths.
-    let normal_depth = make(MTLPixelFormat::RGBA16Float, "normal+depth")?;
-    let roughness = make(MTLPixelFormat::R8Unorm, "roughness")?;
-    let velocity = make(MTLPixelFormat::RG16Float, "velocity")?;
-    let depth = make(MTLPixelFormat::Depth32Float, "depth")?;
-
-    Ok(GBufferTargets {
-        normal_depth,
-        roughness,
-        velocity,
-        depth,
-    })
+    let desc = MTLTextureDescriptor::new();
+    unsafe {
+        desc.setTextureType(MTLTextureType::Type2D);
+        desc.setPixelFormat(MTLPixelFormat::Depth32Float);
+        desc.setWidth(width.max(1) as usize);
+        desc.setHeight(height.max(1) as usize);
+        // Sampleable (MetalFX reads it), unlike the old prepass depths.
+        desc.setUsage(MTLTextureUsage(
+            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
+        ));
+        desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    }
+    let depth = device
+        .newTextureWithDescriptor(&desc)
+        .ok_or("failed to create G-buffer depth texture")?;
+    Ok(GBufferTargets { depth })
 }
 
 // Pipeline
@@ -297,11 +280,29 @@ impl MtlContext {
             (Some(t), Some(p)) => (t, p),
             _ => return Ok(0),
         };
+        // The colour channels are pool-owned; the pool is built under the same
+        // gate as `targets`, so all three are present whenever it is. A missing
+        // one means the pool and the feature disagree about that gate, which
+        // would otherwise show up as a pre-pass rendering into nothing.
+        let (normal_depth, roughness, velocity) = match (
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
+            self.gbuffer_velocity(),
+        ) {
+            (Some(n), Some(r), Some(v)) => (n, r, v),
+            _ => {
+                return Err(
+                    "G-buffer pre-pass: the transient pool is missing a colour channel; \
+                     its build gate disagrees with the pre-pass's"
+                        .to_string(),
+                );
+            }
+        };
 
         let desc = MTLRenderPassDescriptor::new();
         unsafe {
             let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca0.setTexture(Some(targets.normal_depth.as_ref()));
+            ca0.setTexture(Some(normal_depth));
             ca0.setLoadAction(MTLLoadAction::Clear);
             ca0.setStoreAction(MTLStoreAction::Store);
             // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
@@ -312,7 +313,7 @@ impl MtlContext {
                 alpha: 0.0,
             });
             let ca1 = desc.colorAttachments().objectAtIndexedSubscript(1);
-            ca1.setTexture(Some(targets.roughness.as_ref()));
+            ca1.setTexture(Some(roughness));
             ca1.setLoadAction(MTLLoadAction::Clear);
             ca1.setStoreAction(MTLStoreAction::Store);
             // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
@@ -323,7 +324,7 @@ impl MtlContext {
                 alpha: 0.0,
             });
             let ca2 = desc.colorAttachments().objectAtIndexedSubscript(2);
-            ca2.setTexture(Some(targets.velocity.as_ref()));
+            ca2.setTexture(Some(velocity));
             ca2.setLoadAction(MTLLoadAction::Clear);
             ca2.setStoreAction(MTLStoreAction::Store);
             // Zero motion for the cleared background.

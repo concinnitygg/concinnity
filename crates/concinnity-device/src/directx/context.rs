@@ -1519,6 +1519,7 @@ impl DxContext {
             skinned_pool_free,
             gpu_frame_us,
             vram_bytes,
+            transient_pool_bytes: self.transient_pool.allocated_bytes(),
             pass_times_us,
             // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
             // chip. `None` when the world stayed on the authored static

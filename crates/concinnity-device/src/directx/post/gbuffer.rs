@@ -30,8 +30,7 @@ use crate::directx::pipeline::{
     main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
 };
 use crate::directx::texture::{
-    create_buffer, create_main_depth_texture, create_rt_target, create_rt_target_with_clear,
-    write_format_rtv, write_format_srv,
+    create_buffer, create_main_depth_texture, write_format_rtv, write_format_srv,
 };
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
@@ -47,9 +46,10 @@ pub const GBUFFER_ROUGHNESS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
 pub const GBUFFER_VELOCITY_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT;
 
 // Background roughness the prepass clears the roughness target to: fully rough,
-// so untouched pixels emit no reflection. Used for both the optimized clear
-// value and the per-frame clear so they match.
-const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+// so untouched pixels emit no reflection. The per-frame clear uses it here; the
+// matching optimized clear now comes from the graph's desc, and a test pins the
+// two together.
+pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 
 // Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat
 // (four float4x4 = 256 B). Matches the `GbView` cbuffer in every pre-pass VS.
@@ -524,6 +524,17 @@ pub(in crate::directx) struct GbufferDeviceCtx<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
+// The three colour targets the transient pool owns, handed to the G-buffer at
+// build / resize. The feature no longer creates them: they are graph resources
+// the pool places, so it only writes their views. `depth` is absent because it
+// stays feature-owned (see `transient_pool::pooled`).
+#[derive(Clone)]
+pub(in crate::directx) struct GbufferPooled {
+    pub normal_depth: ID3D12Resource,
+    pub roughness: ID3D12Resource,
+    pub velocity: ID3D12Resource,
+}
+
 // Render-target extent plus which pipeline variants the G-buffer pre-pass builds.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferExtent {
@@ -537,11 +548,49 @@ pub(in crate::directx) struct GbufferExtent {
     pub hot_reload: bool,
 }
 
+// The RTV + SRV descriptor slots the three pooled colour targets are viewed
+// through. Built from `GbufferSlots` at construction and from the stored
+// handles at resize, so one routine writes the views in both paths.
+struct GbufferViewSlots {
+    normal_depth: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE),
+    roughness: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE),
+    velocity: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE),
+}
+
+// Point the pre-reserved RTV / SRV slots at the pool's placed resources and
+// hand back a reference to each. Every pool rebuild (init, resize, and a
+// quality toggle that changes the pooled set) relocates these resources, so
+// every one of those paths must call this or the descriptors name freed memory.
+fn write_pooled_views(
+    device: &ID3D12Device,
+    slots: GbufferViewSlots,
+    pooled: &GbufferPooled,
+) -> (ID3D12Resource, ID3D12Resource, ID3D12Resource) {
+    for (res, (rtv, srv), format) in [
+        (
+            &pooled.normal_depth,
+            slots.normal_depth,
+            GBUFFER_NORMAL_DEPTH_FORMAT,
+        ),
+        (&pooled.roughness, slots.roughness, GBUFFER_ROUGHNESS_FORMAT),
+        (&pooled.velocity, slots.velocity, GBUFFER_VELOCITY_FORMAT),
+    ] {
+        write_format_rtv(device, res, rtv, format);
+        write_format_srv(device, res, srv, format);
+    }
+    (
+        pooled.normal_depth.clone(),
+        pooled.roughness.clone(),
+        pooled.velocity.clone(),
+    )
+}
+
 impl GbufferResources {
     pub(in crate::directx) fn new(
         ctx: GbufferDeviceCtx,
         extent: GbufferExtent,
         slots: GbufferSlots,
+        pooled: &GbufferPooled,
     ) -> Result<Self, String> {
         let GbufferDeviceCtx { alloc, info_queue } = ctx;
         let device = alloc.device();
@@ -552,52 +601,16 @@ impl GbufferResources {
             need_skinned,
             hot_reload,
         } = extent;
-        let normal_depth = create_rt_target(device, width, height, GBUFFER_NORMAL_DEPTH_FORMAT)?;
-        write_format_rtv(
+        // The three colour targets come from the transient pool; this only
+        // writes their views into the pre-reserved descriptor slots.
+        let (normal_depth, roughness, velocity) = write_pooled_views(
             device,
-            &normal_depth,
-            slots.normal_depth_rtv,
-            GBUFFER_NORMAL_DEPTH_FORMAT,
-        );
-        write_format_srv(
-            device,
-            &normal_depth,
-            slots.normal_depth_srv.0,
-            GBUFFER_NORMAL_DEPTH_FORMAT,
-        );
-
-        let roughness = create_rt_target_with_clear(
-            device,
-            width,
-            height,
-            GBUFFER_ROUGHNESS_FORMAT,
-            GBUFFER_ROUGHNESS_CLEAR,
-        )?;
-        write_format_rtv(
-            device,
-            &roughness,
-            slots.roughness_rtv,
-            GBUFFER_ROUGHNESS_FORMAT,
-        );
-        write_format_srv(
-            device,
-            &roughness,
-            slots.roughness_srv.0,
-            GBUFFER_ROUGHNESS_FORMAT,
-        );
-
-        let velocity = create_rt_target(device, width, height, GBUFFER_VELOCITY_FORMAT)?;
-        write_format_rtv(
-            device,
-            &velocity,
-            slots.velocity_rtv,
-            GBUFFER_VELOCITY_FORMAT,
-        );
-        write_format_srv(
-            device,
-            &velocity,
-            slots.velocity_srv.0,
-            GBUFFER_VELOCITY_FORMAT,
+            GbufferViewSlots {
+                normal_depth: (slots.normal_depth_rtv, slots.normal_depth_srv.0),
+                roughness: (slots.roughness_rtv, slots.roughness_srv.0),
+                velocity: (slots.velocity_rtv, slots.velocity_srv.0),
+            },
+            pooled,
         );
 
         let depth = create_main_depth_texture(device, width, height, slots.depth_dsv, 1, true)?;
@@ -715,8 +728,12 @@ impl GbufferResources {
         Ok(())
     }
 
-    // Rebuild the MRT targets + private depth at a new resolution. The
-    // descriptor *slots* stay put; only the resources backing them change.
+    // Re-point the MRT views at the rebuilt pool and recreate the private depth
+    // at a new resolution. The descriptor *slots* stay put; only the resources
+    // behind them change, so no consumer needs a re-bind.
+    //
+    // The caller must have rebuilt the transient pool first: `pooled` names the
+    // new placed resources, and the old ones are freed with the pool.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -724,61 +741,38 @@ impl GbufferResources {
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
         srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        pooled: &GbufferPooled,
     ) -> Result<(), String> {
+        self.repoint_pooled(device, srv_cpu_base, srv_gpu_base, pooled);
+        self.depth = create_main_depth_texture(device, width, height, self.depth_dsv, 1, true)?;
+        Ok(())
+    }
+
+    // Re-point the three pooled colour views after a pool rebuild that did not
+    // change the resolution -- a quality toggle that adds or removes another
+    // pooled resource relocates these too, because the pool repacks every slot.
+    pub(in crate::directx) fn repoint_pooled(
+        &mut self,
+        device: &ID3D12Device,
+        srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        pooled: &GbufferPooled,
+    ) {
         let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
         };
-
-        self.normal_depth = create_rt_target(device, width, height, GBUFFER_NORMAL_DEPTH_FORMAT)?;
-        write_format_rtv(
+        let (normal_depth, roughness, velocity) = write_pooled_views(
             device,
-            &self.normal_depth,
-            self.normal_depth_rtv,
-            GBUFFER_NORMAL_DEPTH_FORMAT,
+            GbufferViewSlots {
+                normal_depth: (self.normal_depth_rtv, srv_cpu(self.normal_depth_srv_gpu)),
+                roughness: (self.roughness_rtv, srv_cpu(self.roughness_srv_gpu)),
+                velocity: (self.velocity_rtv, srv_cpu(self.velocity_srv_gpu)),
+            },
+            pooled,
         );
-        write_format_srv(
-            device,
-            &self.normal_depth,
-            srv_cpu(self.normal_depth_srv_gpu),
-            GBUFFER_NORMAL_DEPTH_FORMAT,
-        );
-
-        self.roughness = create_rt_target_with_clear(
-            device,
-            width,
-            height,
-            GBUFFER_ROUGHNESS_FORMAT,
-            GBUFFER_ROUGHNESS_CLEAR,
-        )?;
-        write_format_rtv(
-            device,
-            &self.roughness,
-            self.roughness_rtv,
-            GBUFFER_ROUGHNESS_FORMAT,
-        );
-        write_format_srv(
-            device,
-            &self.roughness,
-            srv_cpu(self.roughness_srv_gpu),
-            GBUFFER_ROUGHNESS_FORMAT,
-        );
-
-        self.velocity = create_rt_target(device, width, height, GBUFFER_VELOCITY_FORMAT)?;
-        write_format_rtv(
-            device,
-            &self.velocity,
-            self.velocity_rtv,
-            GBUFFER_VELOCITY_FORMAT,
-        );
-        write_format_srv(
-            device,
-            &self.velocity,
-            srv_cpu(self.velocity_srv_gpu),
-            GBUFFER_VELOCITY_FORMAT,
-        );
-
-        self.depth = create_main_depth_texture(device, width, height, self.depth_dsv, 1, true)?;
-        Ok(())
+        self.normal_depth = normal_depth;
+        self.roughness = roughness;
+        self.velocity = velocity;
     }
 }
 

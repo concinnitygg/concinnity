@@ -65,13 +65,17 @@ impl MtlContext {
         rt_params: &crate::gfx::render_types::RtParams,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> Result<u32, String> {
-        let (targets, accel, gbuf) =
-            match (&self.ssr.targets, &self.rt.accel, &self.gbuffer.targets) {
-                (Some(t), Some(a), Some(g)) => (t, a, g),
-                // No G-buffer or acceleration structure (unsupported GPU / empty
-                // scene): skip, leaving the base scene.
-                _ => return Ok(0),
-            };
+        let (targets, accel, gb_normal_depth, gb_roughness) = match (
+            &self.ssr.targets,
+            &self.rt.accel,
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
+        ) {
+            (Some(t), Some(a), Some(n), Some(r)) => (t, a, n, r),
+            // No G-buffer or acceleration structure (unsupported GPU / empty
+            // scene): skip, leaving the base scene.
+            _ => return Ok(0),
+        };
 
         // The BVH this pass reads (TLAS, skinned BLAS, deformed-vertex buffer)
         // was built earlier this frame in `raytrace::rebuild_skinned`, on command
@@ -110,8 +114,8 @@ impl MtlContext {
         unsafe {
             // Textures + samplers mirror the SSR resolve.
             enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
-            enc.setFragmentTexture_atIndex(Some(gbuf.normal_depth.as_ref()), 1);
-            enc.setFragmentTexture_atIndex(Some(gbuf.roughness.as_ref()), 2);
+            enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 1);
+            enc.setFragmentTexture_atIndex(Some(gb_roughness), 2);
             enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 3);
             // Local reflection-probe cubes at texture(4..4+MAX_PROBES): a missed
             // reflection ray reflects the box-projected scene capture instead of

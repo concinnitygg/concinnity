@@ -61,10 +61,11 @@ use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 // to record transitions into a worker's command list.
 //
 // `resources` is a list because a graph resource may stand for several GPU
-// objects that are always in the same state: the unified G-buffer pre-pass
-// writes normal+depth, roughness and motion in one draw and every consumer reads
-// all three, so the graph models them as one node output rather than three
-// resources with identical timelines. They transition in one `ResourceBarrier`.
+// objects that are always in the same state, transitioned in one
+// `ResourceBarrier`. Nothing uses that today -- the G-buffer pre-pass's
+// attachments are separate graph resources, since their consumers differ -- but
+// the shape is what keeps one timeline per object available when a future
+// resource genuinely needs it.
 struct DxBarrierTarget {
     resources: Vec<ID3D12Resource>,
     class: GraphResourceClass,
@@ -230,6 +231,32 @@ fn emit_graph_restores(
 // This is where a registry entry that claims a resource the graph does not fully
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself. Mirrors the Vulkan executor's `debug_assert_graph_drives`.
+// Assert no alias slot has two members live at once in the graph this frame is
+// about to run. Members of a slot share bytes, so two live at once means one
+// reads memory the other overwrote -- and unlike a barrier gap that has no
+// validation layer behind it, on any backend.
+//
+// This is the layer the sweep in `render_graph::transient` cannot be: the pool
+// is planned once per build configuration while graphs compile per frame, and
+// passes that *substitute* for one another mean there is no single maximal
+// graph to plan against. What the sweep covers is the input space it models;
+// this covers the graph actually in hand.
+#[cfg(debug_assertions)]
+fn debug_assert_pool_aliasing_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>]) {
+    use crate::gfx::render_graph::slot_conflicts;
+
+    let conflicts = slot_conflicts(graph, slot_labels);
+    assert!(
+        conflicts.is_empty(),
+        "transient pool (directx): alias slot members are simultaneously live: {}",
+        conflicts
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
@@ -434,6 +461,8 @@ impl DxContext {
         let registry = self.build_barrier_registry(graph, params.frame_idx);
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &registry);
+        #[cfg(debug_assertions)]
+        debug_assert_pool_aliasing_sound(graph, self.transient_pool.slot_labels());
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.
@@ -788,21 +817,20 @@ impl DxContext {
                 .as_ref()
                 .filter(|_| self.upscale.backend.is_none())
                 .map(|taa| one(&taa.history[taa.output_index()], SAMPLED)),
-            // The unified G-buffer pre-pass's three colour targets. One graph
-            // resource because one draw writes all three and every consumer
-            // reads all three, so their timelines are identical. `gbuffer.depth`
-            // is deliberately absent: it is a depth target, not a colour one, so
-            // it would need its own class, and only the upscaler ever moves it.
-            "gbuffer" => self.gbuffer.as_ref().map(|gb| {
-                (
-                    vec![
-                        gb.normal_depth.clone(),
-                        gb.roughness.clone(),
-                        gb.velocity.clone(),
-                    ],
-                    SAMPLED,
-                )
-            }),
+            // The unified G-buffer pre-pass's colour targets, one entry each.
+            // One draw writes all three, but their consumers differ -- the
+            // reflection resolve reads normal+depth and roughness, the temporal
+            // passes read velocity -- so they are separate graph resources with
+            // separate lifetimes. All three rest sampled.
+            "gbuffer_normal_depth" => self
+                .gbuffer
+                .as_ref()
+                .map(|gb| one(&gb.normal_depth, SAMPLED)),
+            "gbuffer_roughness" => self.gbuffer.as_ref().map(|gb| one(&gb.roughness, SAMPLED)),
+            "gbuffer_velocity" => self.gbuffer.as_ref().map(|gb| one(&gb.velocity, SAMPLED)),
+            // `gbuffer_depth` is deliberately unregistered: it is a depth
+            // target rather than a colour one, and the only pass that moves it
+            // is the upscaler, which borrows it inside its own dispatch.
             // The Hi-Z pyramid rests where the cull kernel samples it, which is a
             // compute stage, so it is the non-pixel shader-resource state rather
             // than the sampled default.

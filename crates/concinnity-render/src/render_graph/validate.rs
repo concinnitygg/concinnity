@@ -289,6 +289,13 @@ mod tests {
             ("hdr_depth", C::DepthTarget),
             ("hdr_color", C::ColorTarget),
             ("hiz_pyramid", C::StorageImage),
+            // The unified pre-pass's four attachments are four resources, and
+            // the depth one is why: it is a different class from its three
+            // colour siblings, so one handle could not have carried it.
+            ("gbuffer_normal_depth", C::ColorTarget),
+            ("gbuffer_roughness", C::ColorTarget),
+            ("gbuffer_velocity", C::ColorTarget),
+            ("gbuffer_depth", C::DepthTarget),
         ];
         for (label, want) in expected {
             let res = graph
@@ -317,14 +324,12 @@ mod tests {
     }
 
     fn tex() -> TextureDesc {
-        TextureDesc {
-            width: TextureSize::Drawable,
-            height: TextureSize::Drawable,
-            format: PixelFormat::Rgba16Float,
-            sample_count: 1,
-            array_layers: 1,
-            usage: TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        }
+        TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::Rgba16Float,
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        )
     }
 
     #[test]

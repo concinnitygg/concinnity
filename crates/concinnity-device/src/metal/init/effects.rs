@@ -29,7 +29,7 @@ use crate::metal::particle::{
     ParticleEmitterGpuState, ParticlePipelines, build_emitter_gpu_state, build_particle_pipelines,
 };
 use crate::metal::post::{
-    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState, bloom_top_extent,
+    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_gbuffer_prepass_pipeline,
     build_reflection_blur_pipeline, build_reflection_composite_pipeline,
     build_rt_reflection_pipeline, build_ssao_pipeline, build_ssgi_composite_pipeline,
@@ -262,25 +262,35 @@ pub(crate) fn build_quality_effects(
         white: create_fallback_texture(alloc)?,
     };
 
+    // Whether the unified G-buffer pre-pass runs at all. Derived once, here,
+    // because it gates two things that must agree: the pool (which owns the
+    // pre-pass's three colour channels) and the pre-pass's own targets +
+    // pipelines below. If they disagreed, a consumer would read a label the
+    // pool never created.
+    let needs_ssr_prepass =
+        ssr_settings.is_some() || ssgi_settings.is_some() || rt_reflection_settings.is_some();
+    let needs_gbuffer = needs_ssr_prepass || ssao_settings.is_some() || needs_velocity;
+
     // Render-graph transient texture pool: `ao_output` (SSAO's blurred
-    // occlusion, render-resolution) and `bloom_top` (bloom mip 0, half output
-    // resolution), which the planner packs onto one aliased heap slot. Built
-    // before the bloom chain, which reads its top mip back out of the pool.
+    // occlusion), `bloom_top` (bloom mip 0, half output resolution), and the
+    // G-buffer pre-pass's normal+depth / roughness / velocity channels. The
+    // planner packs whichever of them have disjoint lifetimes onto shared heap
+    // slots. Built before the bloom chain and the pre-pass, both of which read
+    // their targets back out of it by label.
     let transient_pool = TransientTexturePool::build(
         device,
         &transient_slots(
             ssao_settings.is_some(),
+            needs_gbuffer,
             (render_w, render_h),
-            bloom_top_extent(output_w, output_h),
-        ),
+            (output_w, output_h),
+        )?,
     )?;
 
     // SSR resolve: the ray-march resolve pipeline + its output target, built when
     // SSR *or* SSGI *or* RT reflections is on (all three need the G-buffer the
     // unified pre-pass below produces; RT reuses `ssr_targets.output`). The
     // fullscreen resolve pipeline is built only when SSR itself is on.
-    let needs_ssr_prepass =
-        ssr_settings.is_some() || ssgi_settings.is_some() || rt_reflection_settings.is_some();
     let (ssr_targets, ssr_resolve_pipeline, ssr_composite_pipeline, ssr_blur_pipeline) =
         if needs_ssr_prepass {
             let ssr_resolve = if ssr_settings.is_some() {
@@ -318,7 +328,6 @@ pub(crate) fn build_quality_effects(
     // Unified G-buffer pre-pass (Metal): one pipeline per geometry kind + the
     // shared targets, built when any consumer (SSR / SSGI / RT / SSAO / velocity)
     // is on. The skinned variant is built by the caller.
-    let needs_gbuffer = needs_ssr_prepass || ssao_settings.is_some() || needs_velocity;
     let (gbuffer_targets, gbuffer_prepass_pipeline, gbuffer_instanced_pipeline) = if needs_gbuffer {
         let inst = if has_instanced {
             Some(build_gbuffer_prepass_pipeline(

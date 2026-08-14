@@ -219,9 +219,10 @@ impl VkContext {
             &super::transient_pool::transient_slots(
                 self.ssao.is_some(),
                 self.post_process.bloom_intensity > 0.0,
+                self.gbuffer.is_some(),
                 render_ext,
                 ext,
-            ),
+            )?,
         )?;
         let bloom_top_pairs = self
             .transient_pool
@@ -311,6 +312,10 @@ impl VkContext {
         // roughness / velocity views below, so the merged buffer must already be
         // current. The render pass, pipelines, UBOs, and descriptor sets survive.
         if let Some(mut gb) = self.gbuffer.take() {
+            // The three colour channels are pool-owned and were reallocated by
+            // the pool rebuild above, so the framebuffers built here reference
+            // the new images.
+            let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
             gb.rebuild(
                 GbufferDeviceCtx {
                     alloc: &self.alloc,
@@ -325,6 +330,7 @@ impl VkContext {
                     height: render_ext.height,
                     frames: self.frames_in_flight,
                 },
+                &pooled,
             )?;
             self.gbuffer = Some(gb);
         }

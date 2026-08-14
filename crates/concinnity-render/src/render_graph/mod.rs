@@ -20,19 +20,24 @@ mod builder;
 mod compile;
 mod frame;
 mod passes;
+mod transient;
 mod types;
 mod validate;
 mod view_mask;
 
-pub use alias::{AliasPlan, AliasSlot, plan_aliasing};
+pub use alias::{AliasPlan, AliasSlot, plan_aliasing, plan_aliasing_for};
 pub use builder::{GraphBuilder, PassBuilder, ResourceVersion};
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource, GraphError};
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
+pub use transient::{
+    SlotConflict, TransientSlot, TransientTexture, plan_transient_slots, planning_inputs,
+    slot_conflicts,
+};
 pub use types::{
-    BarrierOp, BufferDesc, BufferHandle, BufferUsage, GraphResourceClass, PassKind, PassRange,
-    PixelFormat, ReadStages, ResourceId, ResourceOrigin, ResourceState, TextureDesc, TextureHandle,
-    TextureSize, TextureUsage,
+    BarrierOp, BufferDesc, BufferHandle, BufferUsage, ClearValue, GraphResourceClass, PassKind,
+    PassRange, PixelFormat, ReadStages, ResourceId, ResourceOrigin, ResourceState, TextureDesc,
+    TextureHandle, TextureSize, TextureUsage, full_mip_levels,
 };
 pub use validate::{
     BarrierGap, GapKind, barrier_coverage_gaps, barrier_coverage_gaps_for_driven, final_states,

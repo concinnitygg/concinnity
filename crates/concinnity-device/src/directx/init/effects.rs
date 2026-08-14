@@ -10,8 +10,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::directx::allocator::{DeviceAllocator, PooledTexture};
 use crate::directx::context::dump_on_err;
 use crate::directx::post::bloom::{
-    bloom_top_extent, compile_bloom_shaders, create_bloom_mips, create_bloom_pso,
-    create_bloom_root_signature, write_color_rtv,
+    compile_bloom_shaders, create_bloom_mips, create_bloom_pso, create_bloom_root_signature,
+    write_color_rtv,
 };
 use crate::directx::post::rt_reflections::{
     RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
@@ -109,10 +109,13 @@ pub(super) struct EffectSettings {
     pub rt_supported: bool,
 }
 
-// Non-settings build flags: TAA on/off and the shader hot-reload toggle.
+// Non-settings build flags: TAA on/off, whether the unified G-buffer pre-pass
+// is built (which decides whether the pool places its colour targets), and the
+// shader hot-reload toggle.
 #[derive(Clone, Copy)]
 pub(super) struct EffectFlags {
     pub taa_enabled: bool,
+    pub gbuffer_enabled: bool,
     pub hot_reload: bool,
 }
 
@@ -150,6 +153,7 @@ pub(super) fn build_effects(
     } = settings;
     let EffectFlags {
         taa_enabled,
+        gbuffer_enabled,
         hot_reload,
     } = flags;
     let EffectDescriptorSlots {
@@ -170,9 +174,10 @@ pub(super) fn build_effects(
         alloc.queue(),
         &transient_slots(
             ssao_settings.is_some(),
+            gbuffer_enabled,
             (render_width, render_height),
-            bloom_top_extent(width, height),
-        ),
+            (width, height),
+        )?,
     )?;
 
     // Bloom mip chain + per-mip RTV/SRV writes. `mips[0]` (`bloom_top`) is the

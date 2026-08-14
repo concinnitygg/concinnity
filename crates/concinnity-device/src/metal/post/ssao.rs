@@ -119,11 +119,14 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssao_params: &crate::gfx::render_types::SsaoParams,
     ) -> Result<u32, String> {
-        let (targets, kernel_ps, blur_ps, gbuf) = match (
+        let (targets, kernel_ps, blur_ps, gbuffer) = match (
             &self.ssao.targets,
             &self.ssao.kernel_pipeline,
             &self.ssao.blur_pipeline,
-            &self.gbuffer.targets,
+            // The unified pre-pass produced the depth + normal the kernel
+            // reads; SSAO shares it and runs no geometry redraw of its own.
+            // Pool-owned, so it is fetched here rather than cached.
+            self.gbuffer_normal_depth(),
         ) {
             (Some(t), Some(b), Some(c), Some(g)) => (t, b, c, g),
             _ => return Ok(0),
@@ -137,10 +140,6 @@ impl MtlContext {
             .transient_pool
             .texture_for("ao_output")
             .ok_or("ao_output missing from transient pool")?;
-
-        // The unified G-buffer pre-pass produced the depth + normal the kernel
-        // reads; SSAO shares it and runs no geometry redraw of its own.
-        let gbuffer: &ProtocolObject<dyn objc2_metal::MTLTexture> = gbuf.normal_depth.as_ref();
 
         // Kernel: GTAO horizon search over the G-buffer -> raw occlusion.
         self.fullscreen_pass(

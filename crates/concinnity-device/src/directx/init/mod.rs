@@ -1616,6 +1616,7 @@ impl DxContext {
             },
             effects::EffectFlags {
                 taa_enabled,
+                gbuffer_enabled,
                 hot_reload,
             },
             effects::EffectDescriptorSlots {
@@ -1657,6 +1658,11 @@ impl DxContext {
         // `gbuffer_srv_base_slot` block. The skinned PSO builds lazily in
         // `upload_skinned` once the joint-bound vertex layout exists.
         let gbuffer = if gbuffer_enabled {
+            // The three colour targets are pooled, so the pool (built in
+            // `build_effects`, before this) is what owns them.
+            let pooled = transient_pool
+                .gbuffer_pooled()
+                .ok_or("transient pool missing the gbuffer colour targets")?;
             Some(crate::directx::post::gbuffer::GbufferResources::new(
                 crate::directx::post::gbuffer::GbufferDeviceCtx {
                     alloc: &alloc,
@@ -1670,6 +1676,7 @@ impl DxContext {
                     hot_reload,
                 },
                 gbuffer_slots,
+                &pooled,
             )?)
         } else {
             None

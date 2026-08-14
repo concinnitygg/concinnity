@@ -84,6 +84,28 @@ impl VkContext {
         // the last consumer leaves it resident until the next launch / resize),
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
+            // Its three colour channels are pool-owned, so the pool has to place
+            // them before the pre-pass framebuffers can reference them. Rebuild
+            // with the G-buffer gate on first; the `rebuild_swapchain` later in
+            // this call rebuilds the pool once more and re-points every reader.
+            self.transient_pool.rebuild(
+                &super::transient_pool::TransientPoolGpu {
+                    instance: &self.instance,
+                    device: &self.device,
+                    physical_device: self.physical_device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.graphics_queue,
+                },
+                self.frames_in_flight,
+                &super::transient_pool::transient_slots(
+                    self.ssao.is_some(),
+                    self.post_process.bloom_intensity > 0.0,
+                    true,
+                    self.render_extent,
+                    self.swapchain_extent,
+                )?,
+            )?;
+            let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
             let gb = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.alloc,
@@ -105,6 +127,7 @@ impl VkContext {
                 },
                 self.draw_objects.len(),
                 self.hot_reload,
+                &pooled,
             )?;
             self.gbuffer = Some(gb);
         }
@@ -243,9 +266,10 @@ impl VkContext {
                 &super::transient_pool::transient_slots(
                     true,
                     self.post_process.bloom_intensity > 0.0,
+                    self.gbuffer.is_some(),
                     self.render_extent,
                     self.swapchain_extent,
-                ),
+                )?,
             )?;
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ao_views = self

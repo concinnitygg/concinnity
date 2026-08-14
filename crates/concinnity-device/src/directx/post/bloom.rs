@@ -201,13 +201,6 @@ pub(in crate::directx) fn bloom_mip_count(width: u32, height: u32) -> u32 {
 // Bloom mip chain: the mip render targets paired with their (width, height).
 type BloomMips = (Vec<ID3D12Resource>, Vec<(u32, u32)>);
 
-// Extent of bloom mip 0 (`bloom_top`): half the output resolution, floored at
-// one texel. The transient pool sizes the placed `bloom_top` to this so it
-// matches what the chain expects for `mips[0]`.
-pub(in crate::directx) fn bloom_top_extent(width: u32, height: u32) -> (u32, u32) {
-    ((width.max(1) >> 1).max(1), (height.max(1) >> 1).max(1))
-}
-
 // Create the bloom mip chain for an HDR target of `width`x`height`. `mips[i]`
 // has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel, so
 // `mips[0]` is half-res. `mips[0]` (`bloom_top`) is the transient pool's placed
@@ -253,8 +246,9 @@ pub(in crate::directx) fn create_bloom_mips_at(
     let mut mips = Vec::with_capacity(count);
     let mut extents = Vec::with_capacity(count);
     // mip 0 (`bloom_top`) is the pool-owned placed resource; the finer octaves
-    // below stay committed.
-    let (tw, th) = bloom_top_extent(full_w, full_h);
+    // below stay committed. The pool sizes it from the graph's own
+    // `DrawableScaled(0.5)` desc, which resolves to the same half-extent.
+    let (tw, th) = ((full_w.max(1) >> 1).max(1), (full_h.max(1) >> 1).max(1));
     mips.push(top);
     extents.push((tw, th));
     for i in 1..count {

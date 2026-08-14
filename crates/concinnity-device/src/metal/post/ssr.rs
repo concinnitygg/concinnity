@@ -177,12 +177,15 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssr_params: &crate::gfx::render_types::SsrParams,
     ) -> Result<u32, String> {
-        let (targets, resolve_ps, gbuf) = match (
+        // The pre-pass channels are pool-owned, so they are fetched here rather
+        // than cached: a pool rebuild repacks every slot.
+        let (targets, resolve_ps, gb_normal_depth, gb_roughness) = match (
             &self.ssr.targets,
             &self.ssr.resolve_pipeline,
-            &self.gbuffer.targets,
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
         ) {
-            (Some(t), Some(b), Some(g)) => (t, b, g),
+            (Some(t), Some(b), Some(n), Some(r)) => (t, b, n, r),
             _ => return Ok(0),
         };
 
@@ -199,8 +202,8 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuf.normal_depth.as_ref()), 1);
-                enc.setFragmentTexture_atIndex(Some(gbuf.roughness.as_ref()), 2);
+                enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 1);
+                enc.setFragmentTexture_atIndex(Some(gb_roughness), 2);
                 // The IBL prefilter cubemap is the miss / screen-edge fallback.
                 // It is always valid (a grey fallback when no EnvironmentMap is
                 // bound); `SsrParams.prefilter_mip_count == 0` tells the shader to
@@ -245,13 +248,14 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     ) -> Result<(), String> {
-        let (targets, composite_ps, blur_ps, gbuf) = match (
+        let (targets, composite_ps, blur_ps, gb_normal_depth, gb_roughness) = match (
             &self.ssr.targets,
             &self.ssr.composite_pipeline,
             &self.ssr.blur_pipeline,
-            &self.gbuffer.targets,
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
         ) {
-            (Some(t), Some(cp), Some(bp), Some(g)) => (t, cp, bp, g),
+            (Some(t), Some(cp), Some(bp), Some(n), Some(r)) => (t, cp, bp, n, r),
             _ => return Ok(()),
         };
         // Pass 1: the roughness blur, at reduced resolution into `blur`. Times the
@@ -267,7 +271,7 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuf.roughness.as_ref()), 1);
+                enc.setFragmentTexture_atIndex(Some(gb_roughness), 1);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
             },
         )?;
@@ -285,8 +289,8 @@ impl MtlContext {
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 1);
-                enc.setFragmentTexture_atIndex(Some(gbuf.normal_depth.as_ref()), 2);
-                enc.setFragmentTexture_atIndex(Some(gbuf.roughness.as_ref()), 3);
+                enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 2);
+                enc.setFragmentTexture_atIndex(Some(gb_roughness), 3);
                 enc.setFragmentTexture_atIndex(Some(targets.blur.as_ref()), 4);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
             },

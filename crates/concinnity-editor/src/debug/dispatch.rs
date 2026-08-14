@@ -165,6 +165,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     "skinned_pool_free": r.skinned_pool_free,
                     "gpu_frame_us": r.gpu_frame_us,
                     "vram_bytes": r.vram_bytes,
+                    "transient_pool_bytes": r.transient_pool_bytes,
                     "auto_exposure_ev": r.auto_exposure_ev,
                     "max_edr": r.max_edr,
                     "passes": passes,

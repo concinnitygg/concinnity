@@ -222,20 +222,23 @@ impl MtlContext {
             .scaler
             .as_ref()
             .ok_or("Upscale enabled but upscaler missing")?;
+        // The pre-pass depth stays feature-owned; its motion channel is
+        // pool-owned and fetched at encode time.
         let gbuf = self
             .gbuffer
             .targets
             .as_ref()
             .ok_or("Upscale enabled but G-buffer targets missing")?;
+        let velocity = self
+            .gbuffer_velocity()
+            .ok_or("Upscale enabled but the pooled G-buffer velocity is missing")?;
 
         unsafe {
             upscaler
                 .scaler
                 .setColorTexture(Some(scene_pre_taa.as_ref()));
             upscaler.scaler.setDepthTexture(Some(gbuf.depth.as_ref()));
-            upscaler
-                .scaler
-                .setMotionTexture(Some(gbuf.velocity.as_ref()));
+            upscaler.scaler.setMotionTexture(Some(velocity));
             upscaler
                 .scaler
                 .setOutputTexture(Some(upscaler.output.as_ref()));

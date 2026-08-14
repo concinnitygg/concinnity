@@ -23,12 +23,43 @@
 // interval-graph greedy, optimal for the slot *count* on an interval graph):
 // each resource takes the first compatible slot whose last occupant's lifetime
 // ended strictly before this resource's begins, else opens a new slot. A slot
-// is sized to its largest member. Compatibility is coarse for now (depth vs
-// colour, which separates the two backend memory classes); the backend refines
-// it against concrete usage flags when it allocates.
+// is sized to its largest member. Compatibility is [`SlotClass`]: resources
+// that differ on it never share, whatever their lifetimes.
+//
+// The interval test is on `[first, last]` **pass indices**, which is only a
+// disjointness test while the pass list is totally ordered. Async compute makes
+// the schedule partially ordered, and two resources with disjoint index ranges
+// can then be concurrently live on two queues -- so the planner would need the
+// toposort's reachability relation (is every writer of B ordered after every
+// reader of A?) rather than an index comparison. Aliasing and async compute
+// have to be designed together; do not read this packing as finished.
 
 use super::compile::CompiledGraph;
-use super::types::ResourceOrigin;
+use super::types::{ResourceOrigin, TextureDesc};
+
+// The memory class two resources must agree on before they can share a slot.
+// Not the whole desc: differing extents and formats are fine (a slot is sized
+// to its largest member and each member is created with its own descriptor),
+// but these two change what kind of allocation the backend must make.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct SlotClass {
+    // Depth targets and colour targets take different heap flags / memory
+    // types on every backend.
+    depth: bool,
+    // A multisample target's layout is not the single-sample one, so a 4x
+    // attachment and a resolved target cannot share bytes even across
+    // disjoint lifetimes.
+    sample_count: u32,
+}
+
+impl SlotClass {
+    fn of(desc: &TextureDesc) -> Self {
+        Self {
+            depth: desc.format.is_depth(),
+            sample_count: desc.sample_count.max(1),
+        }
+    }
+}
 
 // One physical memory slot shared by one or more transient resources with
 // pairwise-disjoint lifetimes. `byte_size` is the max footprint of its members
@@ -64,21 +95,37 @@ impl AliasPlan {
     }
 }
 
-// Compute the aliasing plan for `graph` at the given drawable extent. Pure: the
-// same graph + extent always produces the same plan. See the module header for
-// the packing strategy.
+// Compute the aliasing plan over every transient texture in `graph` at the
+// given drawable extent. Pure: the same graph + extent always produces the same
+// plan. See the module header for the packing strategy.
 pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) -> AliasPlan {
+    plan_aliasing_for(graph, drawable_w, drawable_h, &|_| true)
+}
+
+// The same plan restricted to the transients `poolable` accepts by label, i.e.
+// the ones a backend's pool actually owns. Restricting the *candidate set*
+// rather than filtering the finished plan is what lets a pool plan against the
+// real frame graph: the greedy then packs the pooled resources against each
+// other, instead of pairing one of them with an unpooled resource and leaving
+// the other alone. Everything `poolable` rejects is left unplaced, exactly like
+// an imported resource.
+pub fn plan_aliasing_for(
+    graph: &CompiledGraph,
+    drawable_w: u32,
+    drawable_h: u32,
+    poolable: &dyn Fn(&str) -> bool,
+) -> AliasPlan {
     // Gather the transient texture candidates with their lifetime + size.
     struct Cand {
         idx: usize,
         first: usize,
         last: usize,
         size: u64,
-        depth: bool,
+        class: SlotClass,
     }
     let mut cands: Vec<Cand> = Vec::new();
     for (idx, res) in graph.resources.iter().enumerate() {
-        if res.origin != ResourceOrigin::Transient {
+        if res.origin != ResourceOrigin::Transient || !poolable(res.label) {
             continue;
         }
         let Some(desc) = res.tex_desc else {
@@ -89,7 +136,7 @@ pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) ->
             first: res.lifetime.first,
             last: res.lifetime.last,
             size: desc.byte_size(drawable_w, drawable_h),
-            depth: desc.format.is_depth(),
+            class: SlotClass::of(&desc),
         });
     }
 
@@ -103,7 +150,7 @@ pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) ->
     // Slot bookkeeping kept alongside the public `AliasSlot` so we can track the
     // running free-time without recomputing it.
     struct SlotMeta {
-        depth: bool,
+        class: SlotClass,
         free_at: usize,
         byte_size: u64,
         members: Vec<usize>,
@@ -118,7 +165,7 @@ pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) ->
         // are both live on that pass and must not share memory.
         let chosen = slots
             .iter()
-            .position(|s| s.depth == c.depth && s.free_at < c.first);
+            .position(|s| s.class == c.class && s.free_at < c.first);
         let si = match chosen {
             Some(si) => {
                 let s = &mut slots[si];
@@ -129,7 +176,7 @@ pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) ->
             }
             None => {
                 slots.push(SlotMeta {
-                    depth: c.depth,
+                    class: c.class,
                     free_at: c.last,
                     byte_size: c.size,
                     members: vec![c.idx],
@@ -204,14 +251,12 @@ mod tests {
 
     // A transient texture desc of the given format at full drawable size.
     fn tex(format: PixelFormat) -> TextureDesc {
-        TextureDesc {
-            width: TextureSize::Drawable,
-            height: TextureSize::Drawable,
+        TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
             format,
-            sample_count: 1,
-            array_layers: 1,
-            usage: TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        }
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        )
     }
 
     // Bytes a full-drawable texture of `format` occupies at 100x100.
@@ -224,21 +269,17 @@ mod tests {
         let d = tex(PixelFormat::Rgba16Float);
         assert_eq!(d.byte_size(64, 32), 64 * 32 * 8);
         // Half-res quarter-byte format.
-        let half_r8 = TextureDesc {
-            width: TextureSize::DrawableScaled(0.5),
-            height: TextureSize::DrawableScaled(0.5),
-            format: PixelFormat::R8Unorm,
-            sample_count: 1,
-            array_layers: 1,
-            usage: TextureUsage::SHADER_READ,
-        };
+        let half_r8 = TextureDesc::texture_2d(
+            TextureSize::DrawableScaled(0.5),
+            TextureSize::DrawableScaled(0.5),
+            PixelFormat::R8Unorm,
+            TextureUsage::SHADER_READ,
+        );
         assert_eq!(half_r8.byte_size(64, 64), 32 * 32);
         // Sample count + array layers multiply.
-        let msaa = TextureDesc {
-            sample_count: 4,
-            array_layers: 2,
-            ..tex(PixelFormat::Rgba8Unorm)
-        };
+        let msaa = tex(PixelFormat::Rgba8Unorm)
+            .with_sample_count(4)
+            .with_array_layers(2);
         assert_eq!(msaa.byte_size(10, 10), 10 * 10 * 4 * 4 * 2);
     }
 
@@ -345,6 +386,50 @@ mod tests {
         let plan = plan_aliasing(&g, 100, 100);
         assert_eq!(plan.slots.len(), 2, "depth + colour never share a slot");
         assert_eq!(plan.saved_bytes(), 0);
+    }
+
+    #[test]
+    fn differing_sample_counts_do_not_share() {
+        // The MSAA attachment and the resolved target are both colour, and here
+        // their lifetimes are disjoint -- but a 4x attachment's layout is not
+        // the single-sample one, so they must not land on the same bytes.
+        let mut g = GraphBuilder::new();
+        let multi = g.create_texture("multi", tex(PixelFormat::Rgba16Float).with_sample_count(4));
+        let single = g.create_texture("single", tex(PixelFormat::Rgba16Float));
+        let m1 = g
+            .add_pass(PassId::Main, PassKind::Render)
+            .write_texture(multi);
+        g.add_pass(PassId::SsaoBlur, PassKind::Render)
+            .read_texture(m1);
+        let s1 = g
+            .add_pass(PassId::Fog, PassKind::Render)
+            .write_texture(single);
+        g.add_pass(PassId::Composite, PassKind::Render)
+            .read_texture(s1)
+            .presents();
+        let g = g.compile().expect("compiles");
+
+        let plan = plan_aliasing(&g, 100, 100);
+        assert_eq!(
+            plan.slots.len(),
+            2,
+            "a multisample target never shares with a single-sample one"
+        );
+        assert_eq!(plan.saved_bytes(), 0);
+        // Same lifetimes at a matching sample count *do* share, so the test
+        // above is measuring the sample-count axis and not the lifetimes.
+        let mut g = GraphBuilder::new();
+        let a = g.create_texture("a", tex(PixelFormat::Rgba16Float).with_sample_count(4));
+        let b = g.create_texture("b", tex(PixelFormat::Rgba16Float).with_sample_count(4));
+        let a1 = g.add_pass(PassId::Main, PassKind::Render).write_texture(a);
+        g.add_pass(PassId::SsaoBlur, PassKind::Render)
+            .read_texture(a1);
+        let b1 = g.add_pass(PassId::Fog, PassKind::Render).write_texture(b);
+        g.add_pass(PassId::Composite, PassKind::Render)
+            .read_texture(b1)
+            .presents();
+        let g = g.compile().expect("compiles");
+        assert_eq!(plan_aliasing(&g, 100, 100).slots.len(), 1);
     }
 
     #[test]

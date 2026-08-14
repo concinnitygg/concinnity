@@ -277,7 +277,10 @@ impl System for StreamingSystem {
         crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         // Republish each pool's device footprint under the shared tags, so a
         // readout can name what VRAM is holding.
-        accounting::publish(concinnity_memory::ledger(), state.pool_reports());
+        accounting::publish(
+            concinnity_memory::ledger(),
+            state.pool_reports(ctx.profile.render.transient_pool_bytes),
+        );
         ctx.insert_resource(CameraRelativeView { view, cam_pos });
         // Republish the per-scene load status when it changed, so menus and
         // loading screens can read scene progress without touching the pools.
@@ -793,15 +796,25 @@ impl StreamingState {
 
     // What each streaming pool holds in device memory, for the shared ledger.
     // Only pools that are actually streaming report.
-    fn pool_reports(&self) -> impl Iterator<Item = accounting::PoolReport> {
+    //
+    // `transient_pool_bytes` is the render graph's transient pool, which is not a
+    // streaming pool at all: it sits off the device allocator (its slots alias on
+    // purpose, which the general allocator must never do) and so is invisible to
+    // every other accounting path. It rides in under `Textures` because that is
+    // what it holds. Its bytes are added to the budget as well as the usage, so
+    // the streamer's own headroom against its own cap is unchanged -- the pool is
+    // not competing for the streamer's budget, it is reporting alongside it.
+    fn pool_reports(
+        &self,
+        transient_pool_bytes: u64,
+    ) -> impl Iterator<Item = accounting::PoolReport> {
+        let textures = accounting::textures_report(
+            self.texture_streamer
+                .as_ref()
+                .map(|s| (s.resident_bytes(), s.byte_budget())),
+            transient_pool_bytes,
+        );
         [
-            self.texture_streamer.as_ref().map(|s| {
-                (
-                    concinnity_memory::MemTag::Textures,
-                    s.resident_bytes(),
-                    s.byte_budget(),
-                )
-            }),
             self.mesh_streamer.as_ref().map(|s| {
                 (
                     concinnity_memory::MemTag::Meshes,
@@ -826,6 +839,7 @@ impl StreamingState {
                 byte_budget,
             },
         )
+        .chain(textures)
     }
 
     // `(resident, pending, unloaded)` counts for each active streaming pool.

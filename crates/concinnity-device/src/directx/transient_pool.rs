@@ -25,26 +25,11 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::texture::{HDR_FORMAT, one_shot_submit, transition_barrier};
-
-// One managed transient: the graph label plus the concrete D3D12 parameters the
-// pool needs to place it. The label is the same string `build_frame_graph`
-// declares, so the barrier registry and every feature consumer agree on one id.
-pub(super) struct ResourceSpec {
-    pub label: &'static str,
-    pub width: u32,
-    pub height: u32,
-    pub format: DXGI_FORMAT,
-    pub clear_color: [f32; 4],
-    pub initial_state: D3D12_RESOURCE_STATES,
-}
-
-// One alias slot: the members that share a heap region (each placed at offset 0).
-// A single-member slot is a plain placed target; a multi-member slot realises an
-// alias (the members have disjoint lifetimes, so they reuse one region).
-pub(super) struct SlotSpec {
-    pub members: Vec<ResourceSpec>,
-}
+use super::texture::{one_shot_submit, transition_barrier};
+use crate::gfx::render_graph::{
+    ClearValue, FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
+    plan_transient_slots,
+};
 
 struct PlacedResource {
     label: &'static str,
@@ -68,6 +53,13 @@ pub(super) struct TransientResourcePool {
     // the frame boundary (the wrap), giving every shared member a predecessor.
     // Empty when no slot is shared. Drives the executor's aliasing barriers.
     alias_pred: Vec<(&'static str, &'static str)>,
+    // The member labels of each slot, in the order they reuse its heap region.
+    // Read back by the executor's per-frame soundness assertion.
+    slot_labels: Vec<Vec<&'static str>>,
+    // The pool's aliased footprint: the sum of its slot heap sizes. Reported to
+    // the memory ledger, which would otherwise not see this pool at all -- it
+    // deliberately sits off the device allocator.
+    allocated_bytes: u64,
 }
 
 impl TransientResourcePool {
@@ -78,11 +70,19 @@ impl TransientResourcePool {
     pub(super) fn build(
         device: &ID3D12Device,
         queue: &ID3D12CommandQueue,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<Self, String> {
         let mut heaps = Vec::new();
         let mut resources = Vec::new();
         let mut alias_pred: Vec<(&'static str, &'static str)> = Vec::new();
+        let slot_labels: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
+        // `allocated_bytes` is what the pool really reserves (one heap per slot,
+        // sized to its largest member); `unaliased_bytes` is what the same
+        // members would cost one heap each. Their difference is the aliasing
+        // saving, which is otherwise invisible: the ledger sees only the total,
+        // so a plan that quietly stopped sharing would look like a bigger scene.
+        let mut allocated_bytes: u64 = 0;
+        let mut unaliased_bytes: u64 = 0;
         // (resource, resting state) for the one-shot init below. A placed
         // render-target resource is NOT auto-zeroed like a committed one, so
         // D3D12 rejects its first draw/sample until a Clear/Discard/Copy
@@ -103,7 +103,7 @@ impl TransientResourcePool {
             // member's alignment, so aliased members all place there.
             let mut slot_size: u64 = 0;
             let mut slot_align: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;
-            let descs: Vec<(&ResourceSpec, D3D12_RESOURCE_DESC)> = slot
+            let descs: Vec<(&TransientTexture, D3D12_RESOURCE_DESC)> = slot
                 .members
                 .iter()
                 .map(|m| {
@@ -111,6 +111,7 @@ impl TransientResourcePool {
                     let info = unsafe { device.GetResourceAllocationInfo(0, &[desc]) };
                     slot_size = slot_size.max(info.SizeInBytes);
                     slot_align = slot_align.max(info.Alignment);
+                    unaliased_bytes += info.SizeInBytes;
                     (m, desc)
                 })
                 .collect();
@@ -126,25 +127,21 @@ impl TransientResourcePool {
                 // RT/DS textures is valid on every resource-heap tier.
                 Flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
             };
+            allocated_bytes += slot_size;
             let mut heap: Option<ID3D12Heap> = None;
             unsafe { device.CreateHeap(&heap_desc, &mut heap) }
                 .map_err(|e| format!("transient pool heap: {e}"))?;
             let heap = heap.ok_or("transient pool heap returned None")?;
 
             for (m, desc) in &descs {
-                let clear = D3D12_CLEAR_VALUE {
-                    Format: m.format,
-                    Anonymous: D3D12_CLEAR_VALUE_0 {
-                        Color: m.clear_color,
-                    },
-                };
+                let clear = clear_value(m);
                 let mut res: Option<ID3D12Resource> = None;
                 unsafe {
                     device.CreatePlacedResource(
                         &heap,
                         0,
                         desc,
-                        m.initial_state,
+                        resting_state(m),
                         Some(&clear),
                         &mut res,
                     )
@@ -152,7 +149,7 @@ impl TransientResourcePool {
                 .map_err(|e| format!("transient pool place {}: {e}", m.label))?;
                 let resource = res.ok_or("transient pool placed resource None")?;
                 if !shared {
-                    to_init.push((resource.clone(), m.initial_state));
+                    to_init.push((resource.clone(), resting_state(m)));
                 }
                 resources.push(PlacedResource {
                     label: m.label,
@@ -193,10 +190,18 @@ impl TransientResourcePool {
             })?;
         }
 
+        tracing::info!(
+            "transient heap pool: {} heap allocation(s), {} KiB ({} KiB saved by aliasing)",
+            heaps.len(),
+            allocated_bytes / 1024,
+            unaliased_bytes.saturating_sub(allocated_bytes) / 1024,
+        );
         Ok(Self {
             heaps,
             resources,
             alias_pred,
+            slot_labels,
+            allocated_bytes,
         })
     }
 
@@ -221,6 +226,30 @@ impl TransientResourcePool {
             .map(|(_, p)| *p)
     }
 
+    // The pool's aliased footprint in bytes, for the memory ledger.
+    pub(super) fn allocated_bytes(&self) -> u64 {
+        self.allocated_bytes
+    }
+
+    // The three pooled G-buffer colour targets, or `None` when the pool was
+    // built without the G-buffer gate (no screen-space consumer, so the
+    // pre-pass node is absent and nothing was placed). All three are placed
+    // together or not at all, so a partial result is a planner bug rather than
+    // a state a caller should handle.
+    pub(super) fn gbuffer_pooled(&self) -> Option<super::post::gbuffer::GbufferPooled> {
+        Some(super::post::gbuffer::GbufferPooled {
+            normal_depth: self.resource_for("gbuffer_normal_depth")?.clone(),
+            roughness: self.resource_for("gbuffer_roughness")?.clone(),
+            velocity: self.resource_for("gbuffer_velocity")?.clone(),
+        })
+    }
+
+    // The member labels of each slot, for the executor's per-frame check that
+    // no slot has two resources live at once in the graph it is about to run.
+    pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
+        &self.slot_labels
+    }
+
     // Rebuild every managed resource at a new extent. The caller has already
     // idled the device; reassigning drops the old heaps + placed resources
     // (COM release), so any feature descriptor that referenced them must be
@@ -229,183 +258,367 @@ impl TransientResourcePool {
         &mut self,
         device: &ID3D12Device,
         queue: &ID3D12CommandQueue,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<(), String> {
         *self = Self::build(device, queue, slots)?;
         Ok(())
     }
 }
 
-// The resource desc for a managed render target: single-sample Texture2D, one
-// mip, render-target-capable (matches `texture::create_rt_target`). `Alignment`
-// 0 lets the runtime pick the default (64 KiB) placement alignment.
-fn rt_desc(m: &ResourceSpec) -> D3D12_RESOURCE_DESC {
+// The optimized clear value a pooled target is created with, from the graph's
+// desc. D3D12 matches this against the value a real `Clear*View` passes: a
+// mismatch is a debug-layer warning and costs the fast-clear path, so it is the
+// graph's business rather than a constant here. A depth target carries a depth
+// value; every colour target carries four floats.
+fn clear_value(m: &TransientTexture) -> D3D12_CLEAR_VALUE {
+    let format = dxgi_format(m.format);
+    match m.clear {
+        ClearValue::Color(color) => D3D12_CLEAR_VALUE {
+            Format: format,
+            Anonymous: D3D12_CLEAR_VALUE_0 { Color: color },
+        },
+        ClearValue::Depth(depth) => D3D12_CLEAR_VALUE {
+            Format: format,
+            Anonymous: D3D12_CLEAR_VALUE_0 {
+                DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
+                    Depth: depth,
+                    Stencil: 0,
+                },
+            },
+        },
+    }
+}
+
+// Translate one graph-declared transient into its D3D12 resource desc. This is
+// the backend's whole share of describing a pooled resource: the extent,
+// format, mip count and flags all come from the graph, so there is no second
+// table here that could disagree with it. `Alignment` 0 lets the runtime pick
+// the default (64 KiB) placement alignment.
+fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
+    let (dimension, depth_or_array) = if m.depth.max(1) > 1 {
+        (D3D12_RESOURCE_DIMENSION_TEXTURE3D, m.depth.max(1))
+    } else {
+        (D3D12_RESOURCE_DIMENSION_TEXTURE2D, m.array_layers.max(1))
+    };
     D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Dimension: dimension,
         Alignment: 0,
         Width: m.width.max(1) as u64,
         Height: m.height.max(1),
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        Format: m.format,
+        DepthOrArraySize: depth_or_array as u16,
+        MipLevels: m.mip_levels.max(1) as u16,
+        Format: dxgi_format(m.format),
         SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
+            Count: m.sample_count.max(1),
             Quality: 0,
         },
         Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+        Flags: resource_flags(m.usage),
     }
 }
 
-// Build the alias-slot list for the transients the pool manages this build.
-// Centralises the label to D3D12 format / state mapping so init and resize stay
-// in lockstep. The managed transients are `bloom_top` (the bloom chain's
-// half-res top mip, always present) and `ao_output` (SSAO's blurred occlusion,
-// only when SSAO is on). The shared `gfx::render_graph::alias` planner decides
-// which of them may share a heap region; `group_by_plan` packs them into one
-// `SlotSpec` per planner slot, so disjoint-lifetime transients alias.
+fn dxgi_format(format: PixelFormat) -> DXGI_FORMAT {
+    match format {
+        PixelFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        PixelFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        PixelFormat::Rg16Float => DXGI_FORMAT_R16G16_FLOAT,
+        PixelFormat::R8Unorm => DXGI_FORMAT_R8_UNORM,
+        PixelFormat::R32Float => DXGI_FORMAT_R32_FLOAT,
+        PixelFormat::Depth32Float => DXGI_FORMAT_D32_FLOAT,
+        PixelFormat::BgraSwapchain => DXGI_FORMAT_B8G8R8A8_UNORM,
+    }
+}
+
+fn resource_flags(usage: TextureUsage) -> D3D12_RESOURCE_FLAGS {
+    let mut flags = D3D12_RESOURCE_FLAG_NONE;
+    if usage.contains(TextureUsage::RENDER_TARGET) {
+        flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    }
+    if usage.contains(TextureUsage::DEPTH_STENCIL) {
+        flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    }
+    if usage.contains(TextureUsage::STORAGE) {
+        flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    }
+    flags
+}
+
+// Where a pooled target sits between frames, which is also the state it is
+// created in so its first derived transition names a state it is really in.
+// Colour targets rest sampled, matching the barrier registry; a depth target
+// would rest as its attachment, which is why this follows the declared usage
+// rather than being one constant.
+fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
+    if m.usage.contains(TextureUsage::DEPTH_STENCIL) {
+        D3D12_RESOURCE_STATE_DEPTH_WRITE
+    } else {
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+    }
+}
+
+// The transients this pool owns. Everything else the graph declares transient
+// stays backend-owned; adding a label here is what hands it to the pool.
+//
+// `gbuffer_depth` is deliberately absent while its three colour siblings are
+// here. D3D12 creates a shader-readable depth target with a **typeless**
+// resource format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`,
+// and `PixelFormat::Depth32Float` names one format for all three roles -- so
+// the pool would create a resource the feature's SRV cannot view. Pooling it
+// needs `PixelFormat` to separate a resource format from its view formats;
+// until then it stays feature-owned, which is also why the barrier registry
+// leaves it out (see `graph_exec`).
+fn pooled(label: &str) -> bool {
+    matches!(
+        label,
+        "ao_output"
+            | "bloom_top"
+            | "gbuffer_normal_depth"
+            | "gbuffer_roughness"
+            | "gbuffer_velocity"
+    )
+}
+
+// The alias-slot list for the transients the pool manages this build, taken
+// straight from the graph: `plan_transient_slots` decides the grouping and
+// hands back each member's extent, format and usage, so init and resize cannot
+// drift apart and neither can the graph and the resource it describes.
+//
+// `render_extent` sizes the render-resolution transients and `output_extent` is
+// the drawable the half-resolution ones scale off; under temporal upscaling
+// they differ, which is exactly why both are passed rather than derived.
+//
+// A planning graph that does not compile is a hard error rather than an empty
+// pool: every consumer reads its resource back out by label, so silently
+// pooling nothing would fail later and further from the cause.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
-    ao_extent: (u32, u32),
-    bloom_top_extent: (u32, u32),
-) -> Vec<SlotSpec> {
-    // bloom_top is always managed: the bloom chain always exists and the
-    // composite samples mip 0 even when bloom is disabled.
-    let mut specs = vec![bloom_top_spec(bloom_top_extent)];
-    if ssao_enabled {
-        specs.push(ao_output_spec(ao_extent));
-    }
-    group_by_plan(specs, ssao_enabled)
-}
-
-// Group the managed specs into shared slots per the aliasing planner. The
-// planner runs on a worst-case graph (bloom forced on, since it toggles per
-// frame yet the physical allocation must cover the frames where it is live) at
-// the actual SSAO setting; the grouping is lifetime-based, so the extent used
-// for the planner's sizing is irrelevant and a fixed one is passed. Members of a
-// planner slot are kept in its order (lifetime-start), which the pool's cyclic
-// predecessor wiring relies on. Falls back to one slot per spec if the
-// worst-case graph fails to compile, leaving the build render-neutral.
-fn group_by_plan(specs: Vec<ResourceSpec>, ssao_enabled: bool) -> Vec<SlotSpec> {
-    use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph, plan_aliasing};
-
-    let mut inputs = FrameGraphInputs::all_off();
-    inputs.bloom_enabled = true;
-    inputs.ssao_enabled = ssao_enabled;
-
-    let groups: Vec<Vec<usize>> = match build_frame_graph(&inputs) {
-        Ok(graph) => {
-            let plan = plan_aliasing(&graph, 1920, 1080);
-            let mut by_label: std::collections::HashMap<&str, usize> =
-                std::collections::HashMap::new();
-            for (i, s) in specs.iter().enumerate() {
-                by_label.insert(s.label, i);
-            }
-            let mut groups: Vec<Vec<usize>> = Vec::new();
-            let mut grouped = vec![false; specs.len()];
-            for slot in &plan.slots {
-                let group: Vec<usize> = slot
-                    .members
-                    .iter()
-                    .filter_map(|&res_idx| by_label.get(graph.resources[res_idx].label).copied())
-                    .collect();
-                for &si in &group {
-                    grouped[si] = true;
-                }
-                if !group.is_empty() {
-                    groups.push(group);
-                }
-            }
-            // Any managed spec the planner did not place (no graph resource for
-            // it) gets its own un-aliased slot.
-            for (si, placed) in grouped.iter().enumerate() {
-                if !placed {
-                    groups.push(vec![si]);
-                }
-            }
-            groups
-        }
-        Err(_) => (0..specs.len()).map(|i| vec![i]).collect(),
-    };
-
-    // Materialize: move each spec into its group's slot.
-    let mut specs_opt: Vec<Option<ResourceSpec>> = specs.into_iter().map(Some).collect();
-    groups
-        .into_iter()
-        .map(|g| SlotSpec {
-            members: g
-                .into_iter()
-                .map(|si| {
-                    specs_opt[si]
-                        .take()
-                        .expect("each spec index appears in exactly one alias group")
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-// `bloom_top`: bloom mip 0 (the chain's half-resolution top), HDR_FORMAT,
-// sampled by the composite. The composite binds it even when bloom is disabled
-// and the bloom passes never run, so its clear-colour init must hold. Rests in
-// PIXEL_SHADER_RESOURCE like the committed mip it replaces; the bloom prefilter
-// transitions it to RENDER_TARGET per frame.
-fn bloom_top_spec((width, height): (u32, u32)) -> ResourceSpec {
-    ResourceSpec {
-        label: "bloom_top",
-        width,
-        height,
-        format: HDR_FORMAT,
-        clear_color: [0.0; 4],
-        initial_state: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-    }
-}
-
-// `ao_output`: SSAO's blurred occlusion at full render resolution, single-channel
-// R8, sampled by the main pass's ambient term. Rests in PIXEL_SHADER_RESOURCE
-// (matching `create_rt_target` + the executor's barrier registry resting state).
-fn ao_output_spec((width, height): (u32, u32)) -> ResourceSpec {
-    ResourceSpec {
-        label: "ao_output",
-        width,
-        height,
-        format: super::post::ssao::SSAO_OCCLUSION_FORMAT,
-        clear_color: [0.0; 4],
-        initial_state: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-    }
+    gbuffer_enabled: bool,
+    render_extent: (u32, u32),
+    output_extent: (u32, u32),
+) -> Result<Vec<TransientSlot>, String> {
+    let mut build = FrameGraphInputs::all_off();
+    build.hdr_width = render_extent.0;
+    build.hdr_height = render_extent.1;
+    build.ssao_enabled = ssao_enabled;
+    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
+    // nodes rather than adding to them, so it cannot be forced on in
+    // `planning_inputs` the way the purely additive passes are: it has to
+    // follow the build. `velocity_enabled` is what makes the node appear at
+    // all once the flag is set.
+    build.unified_gbuffer_prepass = gbuffer_enabled;
+    build.velocity_enabled = gbuffer_enabled;
+    // `bloom_top` is always managed: the bloom chain always exists and the
+    // composite samples mip 0 even when bloom is disabled, so a pool built at
+    // init / resize cannot gate on it.
+    build.bloom_enabled = true;
+    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
+        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
 
     // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
     // the planner-routed grouping is testable headlessly.
 
     #[test]
-    fn ssao_and_bloom_alias_into_one_slot() {
-        // With SSAO on, the planner sees `ao_output` (early: SsaoBlur -> Main) and
-        // `bloom_top` (late: Bloom -> Composite) with disjoint lifetimes, so the
-        // pool packs them into one shared slot. This is the memory saving: one
-        // heap region instead of two.
-        let slots = transient_slots(true, (1024, 768), (512, 384));
-        assert_eq!(
-            slots.len(),
-            1,
-            "ao_output + bloom_top should share one slot"
+    fn the_late_bloom_target_aliases_an_early_one() {
+        // The pool's whole saving, in the configuration a real session runs:
+        // SSAO on implies the G-buffer pre-pass is on, so both gates are true
+        // here. `bloom_top` is the only genuinely late member (Bloom ->
+        // Composite), so it is the one that can reuse an earlier member's
+        // memory; everything else is live across most of the frame and needs its
+        // own slot. A plan where `bloom_top` sits alone means the aliasing
+        // stopped working.
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let shared: Vec<Vec<&str>> = slots
+            .iter()
+            .map(|s| s.labels())
+            .filter(|l| l.len() > 1)
+            .collect();
+        assert!(
+            shared.iter().any(|l| l.contains(&"bloom_top")),
+            "bloom_top should reuse an earlier member's heap region: {:?}",
+            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
         );
-        let labels: Vec<&str> = slots[0].members.iter().map(|m| m.label).collect();
-        assert!(labels.contains(&"bloom_top"), "{labels:?}");
-        assert!(labels.contains(&"ao_output"), "{labels:?}");
+        // Whatever it pairs with must start first: the pool's cyclic predecessor
+        // wiring depends on lifetime-start order.
+        let pair = shared
+            .iter()
+            .find(|l| l.contains(&"bloom_top"))
+            .expect("checked above");
+        assert_ne!(pair[0], "bloom_top", "{pair:?}");
     }
 
     #[test]
     fn bloom_top_alone_is_unshared() {
         // SSAO off: `bloom_top` is the only managed transient, so it sits in its
         // own single-member slot (no aliasing, no aliasing barriers).
-        let slots = transient_slots(false, (1024, 768), (512, 384));
+        let slots = transient_slots(false, false, (1024, 768), (1024, 768)).expect("plans");
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].members.len(), 1);
         assert_eq!(slots[0].members[0].label, "bloom_top");
+    }
+
+    #[test]
+    fn the_gbuffer_colour_targets_are_pooled_and_depth_is_not() {
+        // The G-buffer group migration: the three colour targets join the pool,
+        // and `gbuffer_depth` stays feature-owned because D3D12 needs a typeless
+        // resource format for a shader-readable depth target (see `pooled`).
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        for want in [
+            "gbuffer_normal_depth",
+            "gbuffer_roughness",
+            "gbuffer_velocity",
+        ] {
+            assert!(labels.contains(&want), "{want} pooled: {labels:?}");
+        }
+        assert!(
+            !labels.contains(&"gbuffer_depth"),
+            "gbuffer_depth must stay feature-owned: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn the_gbuffer_gate_is_what_places_them() {
+        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
+        // so `planning_inputs` cannot force it on and the pool must follow the
+        // build. Without the gate the pre-pass node is absent and none of its
+        // targets are placed -- which would leave every consumer reading a
+        // resource the pool never created.
+        let slots = transient_slots(true, false, (1024, 768), (1024, 768)).expect("plans");
+        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        assert!(!labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
+    }
+
+    #[test]
+    fn the_roughness_clear_matches_the_feature_constant() {
+        // The reason `TextureDesc` models a clear value at all. D3D12 bakes an
+        // optimized clear into a placed resource, and roughness clears to 1.0
+        // (fully rough) rather than 0: a mismatch here costs the fast-clear path
+        // and, if the pool won, would make untouched pixels mirror-smooth.
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let roughness = slots
+            .iter()
+            .flat_map(|s| &s.members)
+            .find(|m| m.label == "gbuffer_roughness")
+            .expect("roughness pooled");
+        assert_eq!(
+            roughness.clear,
+            crate::gfx::render_graph::ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR)
+        );
+    }
+
+    #[test]
+    fn translated_descs_match_the_feature_formats() {
+        // The graph is the single source of the shape now, so what this pins is
+        // the *translation*: a divergence from each feature's own constant
+        // would silently mis-back the resource that feature binds.
+        let slots = transient_slots(true, true, (1024, 768), (1920, 1080)).expect("plans");
+        let member = |label: &str| {
+            slots
+                .iter()
+                .flat_map(|s| &s.members)
+                .find(|m| m.label == label)
+                .unwrap_or_else(|| panic!("{label} pooled"))
+                .clone()
+        };
+
+        // `ao_output` follows the render extent; `bloom_top` is half the output
+        // extent, which is what `create_bloom_mips` sizes mip 0 to.
+        let ao = member("ao_output");
+        let ao_desc = rt_desc(&ao);
+        assert_eq!((ao_desc.Width, ao_desc.Height), (1024, 768));
+        assert_eq!(
+            ao_desc.Format,
+            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
+        );
+        assert_eq!(ao_desc.MipLevels, 1);
+        assert_eq!(ao_desc.SampleDesc.Count, 1);
+        assert_eq!(ao_desc.Dimension, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
+        assert_eq!(ao_desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        // Rests sampled, matching the barrier registry's resting state.
+        assert_eq!(
+            resting_state(&ao),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        );
+
+        let bloom = member("bloom_top");
+        let bloom_desc = rt_desc(&bloom);
+        assert_eq!((bloom_desc.Width, bloom_desc.Height), (960, 540));
+        assert_eq!(bloom_desc.Format, super::super::texture::HDR_FORMAT);
+
+        // The G-buffer colour targets. A format divergence here would silently
+        // mis-back the resource the pre-pass MRT binds, and the render-target
+        // flag is what makes it bindable at all.
+        use super::super::post::gbuffer::{
+            GBUFFER_NORMAL_DEPTH_FORMAT, GBUFFER_ROUGHNESS_FORMAT, GBUFFER_VELOCITY_FORMAT,
+        };
+        for (label, format) in [
+            ("gbuffer_normal_depth", GBUFFER_NORMAL_DEPTH_FORMAT),
+            ("gbuffer_roughness", GBUFFER_ROUGHNESS_FORMAT),
+            ("gbuffer_velocity", GBUFFER_VELOCITY_FORMAT),
+        ] {
+            let desc = rt_desc(&member(label));
+            assert_eq!(desc.Format, format, "{label}");
+            // Render resolution, not the drawable: the pre-pass rasterises at
+            // the scene resolution, which differs under temporal upscaling.
+            assert_eq!((desc.Width, desc.Height), (1024, 768), "{label}");
+            assert_eq!(desc.SampleDesc.Count, 1, "{label} rasterises once");
+            assert_eq!(
+                desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn depth_and_volume_shapes_translate() {
+        // Nothing pooled needs these yet, but the descs the graph now carries
+        // do, so the translator has to be right before they can be pooled. A
+        // depth transient in particular rests in its attachment state, not
+        // sampled, which is why resting is derived rather than constant.
+        let depth = TransientTexture {
+            label: "probe_depth",
+            width: 8,
+            height: 8,
+            depth: 1,
+            format: PixelFormat::Depth32Float,
+            sample_count: 4,
+            array_layers: 1,
+            mip_levels: 1,
+            usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+            clear: ClearValue::Depth(1.0),
+        };
+        let desc = rt_desc(&depth);
+        assert_eq!(desc.Format, DXGI_FORMAT_D32_FLOAT);
+        assert_eq!(desc.SampleDesc.Count, 4);
+        assert_eq!(desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        assert_eq!(resting_state(&depth), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        // A depth target's optimized clear must be the depth arm: handing
+        // D3D12 a colour for a D32 resource is a creation failure.
+        // SAFETY: the union arm is the one `clear_value` just wrote for a
+        // `ClearValue::Depth`, which the assertion above pins.
+        assert_eq!(
+            unsafe { clear_value(&depth).Anonymous.DepthStencil.Depth },
+            1.0
+        );
+
+        let volume = TransientTexture {
+            label: "probe_volume",
+            depth: 64,
+            format: PixelFormat::Rgba16Float,
+            sample_count: 1,
+            usage: TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+            clear: ClearValue::Color([0.0; 4]),
+            ..depth
+        };
+        let desc = rt_desc(&volume);
+        assert_eq!(desc.Dimension, D3D12_RESOURCE_DIMENSION_TEXTURE3D);
+        assert_eq!(desc.DepthOrArraySize, 64);
+        assert_eq!(desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     }
 }

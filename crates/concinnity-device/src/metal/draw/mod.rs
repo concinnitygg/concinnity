@@ -124,6 +124,7 @@ impl MtlContext {
         // Current GPU memory footprint. On Apple Silicon's unified memory this
         // is the Metal device's allocation within system RAM.
         self.frame_stats.vram_bytes = self.device.currentAllocatedSize() as u64;
+        self.frame_stats.transient_pool_bytes = self.transient_pool.heap_bytes();
 
         // Rotate the per-frame sample-buffer slot if per-pass GPU timing is
         // available. Every `pass_timing.attach_*` call this frame writes
@@ -1385,19 +1386,31 @@ impl MtlContext {
         // off `want_w/h` either way.
         let bloom_changed =
             want_w != self.bloom_targets.width || want_h != self.bloom_targets.height;
-        // The transient pool backs `ao_output` (render-resolution) and
-        // `bloom_top` (half output-resolution), so either extent moving
-        // invalidates it. The bloom chain then rebuilds around the pool's fresh
-        // top mip; the per-frame bindless argument buffer re-encodes `ao_output`
-        // itself, so nothing else caches these handles.
+        // Whether the unified G-buffer pre-pass runs, derived once so the pool
+        // and the pre-pass's own depth target below cannot disagree about it.
+        // Same expression as `build_effects`'s `needs_gbuffer`.
+        let needs_gbuffer = self.ssr.settings.is_some()
+            || self.ssgi.settings.is_some()
+            || self.rt.settings.is_some()
+            || self.ssao.settings.is_some()
+            || self.taa.enabled
+            || self.upscale.scaler.is_some();
+        // The transient pool backs `ao_output` and the G-buffer channels (all
+        // render-resolution) plus `bloom_top` (half output-resolution), so
+        // either extent moving invalidates it. The bloom chain then rebuilds
+        // around the pool's fresh top mip. Nothing else caches a pooled handle:
+        // the per-frame bindless argument buffer re-encodes `ao_output` itself
+        // and every G-buffer consumer fetches its channel by label at encode
+        // time, which is what makes a rebuild's slot repack harmless here.
         if render_changed || bloom_changed {
             self.transient_pool.rebuild(
                 &self.device,
                 &super::transient_pool::transient_slots(
                     self.ssao.settings.is_some(),
+                    needs_gbuffer,
                     (render_w, render_h),
-                    super::post::bloom_top_extent(want_w, want_h),
-                ),
+                    (want_w, want_h),
+                )?,
             )?;
             self.bloom_targets = super::post::create_bloom_targets(
                 &self.device,
@@ -1442,18 +1455,11 @@ impl MtlContext {
                 self.ssr.blur_scale,
             )?);
         }
-        // The unified G-buffer targets (normal+depth / roughness / velocity /
-        // sampleable depth) are render-resolution. Rebuilt when any consumer
-        // (SSR / SSGI / RT / SSAO / TAA / upscaler) is on: the same gate as the
-        // GBufferPrepass node.
-        if render_changed
-            && (self.ssr.settings.is_some()
-                || self.ssgi.settings.is_some()
-                || self.rt.settings.is_some()
-                || self.ssao.settings.is_some()
-                || self.taa.enabled
-                || self.upscale.scaler.is_some())
-        {
+        // The pre-pass's depth attachment is render-resolution and stays
+        // feature-owned; its three colour channels were rebuilt with the pool
+        // above. Same gate, so the two halves of the pre-pass's targets are
+        // always present or absent together.
+        if render_changed && needs_gbuffer {
             self.gbuffer.targets = Some(super::post::create_gbuffer_targets(
                 &self.device,
                 render_w,

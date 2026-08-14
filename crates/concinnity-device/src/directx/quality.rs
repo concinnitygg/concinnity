@@ -31,7 +31,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::gfx::backend::QualitySettings;
 
 use super::context::DxContext;
-use super::post::bloom::{bloom_top_extent, create_bloom_mips_at, write_color_rtv};
+use super::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use super::post::gbuffer::GbufferSlots;
 use super::post::reflection_composite::ReflectionCompositeSlots;
 use super::texture::write_hdr_srv;
@@ -115,6 +115,15 @@ impl DxContext {
         // the last consumer leaves it resident until the next launch / resize),
         // which is harmless: with no consumer the graph omits its readers.
         if gbuffer_needed && self.gbuffer.is_none() {
+            // Its three colour targets are pooled, so the pool has to place them
+            // before the feature can view them. Rebuilding with the G-buffer gate
+            // on also relocates `ao_output` / `bloom_top`, which the rebuild
+            // re-points.
+            self.rebuild_transient_pool_and_consumers(self.ssao.resources.is_some(), true)?;
+            let pooled = self
+                .transient_pool
+                .gbuffer_pooled()
+                .ok_or("transient pool missing the gbuffer colour targets after enable")?;
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.alloc,
@@ -129,6 +138,7 @@ impl DxContext {
                     hot_reload,
                 },
                 slots.gbuffer,
+                &pooled,
             )?;
             self.gbuffer = Some(gbuffer);
         }
@@ -258,8 +268,9 @@ impl DxContext {
         // (`ssao_ao_srv_gpu`) falls back to the 1x1 white slot when off, so a
         // turn-off needs no rewire beyond dropping the resources.
         let ssao_was = self.ssao.resources.is_some();
+        let gbuffer_on = self.gbuffer.is_some();
         if desired_ssao && !ssao_was {
-            self.rebuild_transient_pool_and_bloom(true)?;
+            self.rebuild_transient_pool_and_consumers(true, gbuffer_on)?;
             let ao_resource = self
                 .transient_pool
                 .resource_for("ao_output")
@@ -287,7 +298,7 @@ impl DxContext {
         } else if !desired_ssao && ssao_was {
             // Drop before the pool rebuild removes the `ao_output` it points at.
             self.ssao.resources = None;
-            self.rebuild_transient_pool_and_bloom(false)?;
+            self.rebuild_transient_pool_and_consumers(false, gbuffer_on)?;
         }
 
         Ok(())
@@ -361,22 +372,46 @@ impl DxContext {
         Ok(())
     }
 
-    // Rebuild the transient pool with the given SSAO gate (adds / removes
-    // `ao_output`), then rebuild the bloom mip chain whose `mips[0]`
-    // (`bloom_top`) is a pooled resource the pool rebuild relocates. The finer
-    // mips are committed and unaffected, but the count is held fixed so the heap
-    // layout past the bloom block stays anchored. Mirrors `handle_resize`'s
-    // transient-pool + bloom steps (the device is idle when this is reached).
-    fn rebuild_transient_pool_and_bloom(&mut self, ssao_on: bool) -> Result<(), String> {
+    // Rebuild the transient pool with the given gates (which of `ao_output` and
+    // the G-buffer colour targets it places), then re-point every consumer of a
+    // pooled resource. Mirrors `handle_resize`'s transient-pool + bloom +
+    // G-buffer steps (the device is idle when this is reached).
+    //
+    // **Every** pooled consumer has to be re-pointed here, not just the one the
+    // caller is toggling: a rebuild repacks the whole pool, so changing the SSAO
+    // gate relocates the G-buffer's targets and vice versa. Re-pointing only the
+    // toggled feature leaves the other one's descriptors naming freed memory.
+    fn rebuild_transient_pool_and_consumers(
+        &mut self,
+        ssao_on: bool,
+        gbuffer_on: bool,
+    ) -> Result<(), String> {
         self.transient_pool.rebuild(
             &self.device,
             &self.command_queue,
             &super::transient_pool::transient_slots(
                 ssao_on,
+                gbuffer_on,
                 (self.render_width, self.render_height),
-                bloom_top_extent(self.output_width, self.output_height),
-            ),
+                (self.output_width, self.output_height),
+            )?,
         )?;
+        if let Some(pooled) = self.transient_pool.gbuffer_pooled() {
+            let srv_cpu_base = unsafe {
+                self.descriptors
+                    .srv_heap
+                    .GetCPUDescriptorHandleForHeapStart()
+            };
+            let srv_gpu_base = unsafe {
+                self.descriptors
+                    .srv_heap
+                    .GetGPUDescriptorHandleForHeapStart()
+            };
+            let device = self.device.clone();
+            if let Some(gbuffer) = self.gbuffer.as_mut() {
+                gbuffer.repoint_pooled(&device, srv_cpu_base, srv_gpu_base, &pooled);
+            }
+        }
         let bloom_count = self.bloom.mips.len();
         if bloom_count > 0 {
             let bloom_top = self

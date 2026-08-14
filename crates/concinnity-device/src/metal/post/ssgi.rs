@@ -141,7 +141,7 @@ impl MtlContext {
             &self.ssgi.targets,
             &self.ssgi.gather_pipeline,
             &self.ssgi.composite_pipeline,
-            self.gbuffer.targets.as_ref().map(|t| &t.normal_depth),
+            self.gbuffer_normal_depth(),
         ) {
             (Some(t), Some(g), Some(c), Some(gb)) => (t, g, c, gb),
             // SSGI requires the SSR pre-pass G-buffer for normals + depth; if
@@ -162,7 +162,7 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuffer.as_ref()), 1);
+                enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssgi_params).cast(),
@@ -186,7 +186,7 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.gi.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuffer.as_ref()), 1);
+                enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssgi_params).cast(),

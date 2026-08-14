@@ -489,14 +489,12 @@ mod tests {
     use crate::render_graph::types::{BufferDesc, PassKind};
 
     fn tex() -> TextureDesc {
-        TextureDesc {
-            width: TextureSize::Drawable,
-            height: TextureSize::Drawable,
-            format: PixelFormat::Rgba16Float,
-            sample_count: 1,
-            array_layers: 1,
-            usage: TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        }
+        TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::Rgba16Float,
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        )
     }
 
     fn buf() -> BufferDesc {

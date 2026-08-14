@@ -869,10 +869,22 @@ impl VkContext {
         )?;
 
         //  Transient image pool: the graph-owned transients (`ao_output`,
-        //  `bloom_top`). Built before the bloom chain so bloom mip 0 binds the
-        //  pooled `bloom_top` image, and before SSAO (below) so its blur
-        //  framebuffers + the main pass binding 6 bind the pooled `ao_output`.
+        //  `bloom_top`, and the three G-buffer colour channels). Built before the
+        //  bloom chain so bloom mip 0 binds the pooled `bloom_top` image, before
+        //  SSAO (below) so its blur framebuffers + the main pass binding 6 bind
+        //  the pooled `ao_output`, and before the G-buffer pre-pass so its
+        //  framebuffers bind the pooled MRT channels.
         let bloom_on = post_process.bloom_intensity > 0.0;
+        let rt_wanted = rt_settings.is_some() && rt_capable;
+        //  The unified pre-pass exists when any screen-space consumer needs it.
+        //  Derived once here rather than restated at the build site below: the
+        //  pool gate and the feature gate disagreeing would mean the pool places
+        //  no images while the feature expects them, or the reverse.
+        let gbuffer_on = taa_enabled
+            || ssao_settings.is_some()
+            || ssr_settings.is_some()
+            || ssgi_settings.is_some()
+            || rt_wanted;
         let transient_pool = super::transient_pool::TransientImagePool::build(
             &super::transient_pool::TransientPoolGpu {
                 instance: &instance,
@@ -885,11 +897,13 @@ impl VkContext {
             &super::transient_pool::transient_slots(
                 ssao_settings.is_some(),
                 bloom_on,
+                gbuffer_on,
                 render_extent,
                 swapchain_extent,
-            ),
+            )?,
         )?;
         let bloom_top_pairs = transient_pool.pairs_for_frames("bloom_top", frames);
+        let gbuffer_pooled = transient_pool.gbuffer_pooled(frames);
 
         //  Bloom chain (per frame-in-flight slot)
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
@@ -1598,8 +1612,8 @@ impl VkContext {
             ssr_settings.unwrap_or_else(|| crate::gfx::ssr::SsrSettings::resolve(0.0, 0.0));
         // RT reflections reuse the SSR depth + normal + roughness pre-pass
         // G-buffer (like SSGI), so the pre-pass half is built whenever SSR, SSGI,
-        // *or* RT (and the device supports it) is on.
-        let rt_wanted = rt_settings.is_some() && rt_capable;
+        // *or* RT (and the device supports it) is on. `rt_wanted` is derived up
+        // with the transient pool's gates.
         let ssr_opt = if ssr_settings.is_some() || ssgi_settings.is_some() || rt_wanted {
             let settings = ssr_build_settings;
             let hdr_views: Vec<vk::ImageView> =
@@ -1638,7 +1652,11 @@ impl VkContext {
         //  replacing the separate SSR / SSAO / velocity pre-passes. The skinned
         //  variant is built lazily by `upload_skinned` once the joint-set layout
         //  exists (it doesn't at init). Mirrors the DirectX `self.gbuffer` build.
-        let gbuffer_opt = if ssr_opt.is_some() || ssao_opt.is_some() || taa_enabled {
+        //  The gate is `gbuffer_on`, the same value the transient pool was built
+        //  from, so the pool cannot place the MRT channels for a pre-pass that is
+        //  not built (harmless) or -- the dangerous direction -- leave them
+        //  unplaced for one that is.
+        let gbuffer_opt = if gbuffer_on {
             Some(super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &alloc,
@@ -1662,6 +1680,7 @@ impl VkContext {
                 },
                 draw_objects.len(),
                 hot_reload,
+                &gbuffer_pooled,
             )?)
         } else {
             None

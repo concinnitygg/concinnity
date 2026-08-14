@@ -42,24 +42,15 @@ use objc2_metal::{
     MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
 };
 
+// `ClearValue` is deliberately absent: Metal takes a clear value on the render
+// pass descriptor rather than baking it into the texture, so the graph's clear
+// is consumed where the pass is encoded, not here. DirectX translates it at
+// creation, which is why its pool reads the field and this one does not.
+use crate::gfx::render_graph::{
+    FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
+    plan_transient_slots,
+};
 use crate::metal::context::MtlContext;
-
-// One managed transient texture: the graph label plus the parameters the pool
-// needs to place it. The label is the same string the shared `build_frame_graph`
-// declares, so every feature consumer agrees on one identifier.
-pub(super) struct TextureSpec {
-    pub label: &'static str,
-    pub width: u32,
-    pub height: u32,
-    pub format: MTLPixelFormat,
-}
-
-// One alias slot: the members that share a heap. A single-member slot is a plain
-// placed target; a multi-member slot realises an alias (the members have
-// disjoint lifetimes, so they reuse one heap).
-pub(super) struct SlotSpec {
-    pub members: Vec<TextureSpec>,
-}
 
 struct PooledTexture {
     label: &'static str,
@@ -74,6 +65,10 @@ pub(super) struct TransientTexturePool {
     // lifetime covers the heaps its textures were placed on.
     heaps: Vec<Retained<ProtocolObject<dyn MTLHeap>>>,
     textures: Vec<PooledTexture>,
+    // The member labels of each slot, in the order they reuse its memory. Read
+    // back by the executor's per-frame soundness assertion: members of one slot
+    // share bytes, so two live at once is silent corruption.
+    slot_labels: Vec<Vec<&'static str>>,
 }
 
 impl TransientTexturePool {
@@ -84,10 +79,11 @@ impl TransientTexturePool {
     // before its first use.)
     pub(super) fn build(
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<Self, String> {
         let mut heaps = Vec::with_capacity(slots.len());
         let mut textures = Vec::new();
+        let slot_labels: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
         // What the members would cost with one allocation each; the heaps' real
         // size is the aliased footprint. The difference is the VRAM aliasing
         // reclaims, reported below.
@@ -115,7 +111,11 @@ impl TransientTexturePool {
             }
             heaps.push(heap);
         }
-        let pool = Self { heaps, textures };
+        let pool = Self {
+            heaps,
+            textures,
+            slot_labels,
+        };
         let aliased_bytes = pool.heap_bytes();
         tracing::info!(
             "transient texture pool: {} slot heap(s), {} KiB ({} KiB saved by aliasing)",
@@ -147,6 +147,12 @@ impl TransientTexturePool {
         self.heaps.iter().map(|h| h.size() as u64).sum()
     }
 
+    // The member labels of each slot, for the executor's per-frame check that
+    // no slot has two resources live at once in the graph it is about to run.
+    pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
+        &self.slot_labels
+    }
+
     fn lookup(&self, label: &str) -> Option<&PooledTexture> {
         self.textures.iter().find(|t| t.label == label)
     }
@@ -161,7 +167,7 @@ impl TransientTexturePool {
     pub(super) fn rebuild(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<(), String> {
         *self = Self::build(device, slots)?;
         Ok(())
@@ -186,132 +192,124 @@ fn new_slot_heap(
         .ok_or_else(|| format!("failed to create {size}-byte transient slot heap"))
 }
 
-// The descriptor for a managed transient: single-sample 2D, one mip, sampled
-// render target, GPU-private to match its heap's storage mode.
-fn texture_descriptor(spec: &TextureSpec) -> Retained<MTLTextureDescriptor> {
+// Translate one graph-declared transient into its Metal descriptor. This is the
+// backend's whole share of describing a pooled resource: the extent, format,
+// mip count and usage all come from the graph, so there is no second table here
+// that could disagree with it. GPU-private to match its heap's storage mode.
+fn texture_descriptor(spec: &TransientTexture) -> Retained<MTLTextureDescriptor> {
     let desc = MTLTextureDescriptor::new();
     unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(spec.format);
+        desc.setTextureType(texture_type(spec));
+        desc.setPixelFormat(pixel_format(spec.format));
         desc.setWidth(spec.width.max(1) as usize);
         desc.setHeight(spec.height.max(1) as usize);
-        desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
+        desc.setDepth(spec.depth.max(1) as usize);
+        desc.setArrayLength(spec.array_layers.max(1) as usize);
+        desc.setMipmapLevelCount(spec.mip_levels.max(1) as usize);
+        desc.setSampleCount(spec.sample_count.max(1) as usize);
+        desc.setUsage(texture_usage(spec.usage));
         desc.setStorageMode(MTLStorageMode::Private);
     }
     desc
 }
 
-// Build the alias-slot list for the transients the pool manages this build.
-// Centralises the label -> (format, extent) mapping and the slot grouping so
-// init and resize stay in lockstep. The shared `gfx::render_graph::alias`
-// planner decides which of the managed transients may share a heap;
-// `group_by_plan` packs them into one `SlotSpec` per planner slot, so
-// disjoint-lifetime transients alias -- `ao_output` (used early, [SsaoBlur,
-// Main]) and `bloom_top` (used late, [Bloom, Composite]) share ONE slot, with
-// `ao_output` first since it uses the memory first.
+fn texture_type(spec: &TransientTexture) -> MTLTextureType {
+    match (
+        spec.depth.max(1) > 1,
+        spec.array_layers.max(1) > 1,
+        spec.sample_count.max(1) > 1,
+    ) {
+        (true, _, _) => MTLTextureType::Type3D,
+        (_, true, _) => MTLTextureType::Type2DArray,
+        (_, _, true) => MTLTextureType::Type2DMultisample,
+        _ => MTLTextureType::Type2D,
+    }
+}
+
+fn pixel_format(format: PixelFormat) -> MTLPixelFormat {
+    match format {
+        PixelFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
+        PixelFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
+        PixelFormat::Rg16Float => MTLPixelFormat::RG16Float,
+        PixelFormat::R8Unorm => MTLPixelFormat::R8Unorm,
+        PixelFormat::R32Float => MTLPixelFormat::R32Float,
+        PixelFormat::Depth32Float => MTLPixelFormat::Depth32Float,
+        PixelFormat::BgraSwapchain => MTLPixelFormat::BGRA8Unorm,
+    }
+}
+
+fn texture_usage(usage: TextureUsage) -> MTLTextureUsage {
+    let mut bits = 0;
+    if usage.contains(TextureUsage::SHADER_READ) {
+        bits |= MTLTextureUsage::ShaderRead.0;
+    }
+    if usage.contains(TextureUsage::RENDER_TARGET) || usage.contains(TextureUsage::DEPTH_STENCIL) {
+        bits |= MTLTextureUsage::RenderTarget.0;
+    }
+    if usage.contains(TextureUsage::STORAGE) {
+        bits |= MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0;
+    }
+    MTLTextureUsage(bits)
+}
+
+// The transients this pool owns. Everything else the graph declares transient
+// stays backend-owned; adding a label here is what hands it to the pool.
+// `gbuffer_depth` is deliberately absent while its three colour siblings are
+// here, matching DirectX and Vulkan. Metal has no format obstacle of its own --
+// the D3D12 reason is that a shader-readable depth target needs a typeless
+// resource format `PixelFormat` cannot express -- but the pooled set is kept
+// identical across backends so their footprints stay comparable, and pooling it
+// would reclaim nothing anyway: its one-pass planning lifetime is an artifact of
+// a graph that cannot model the upscaler (see
+// `the_prepass_depth_is_short_lived_only_in_the_planning_graph`).
+fn pooled(label: &str) -> bool {
+    matches!(
+        label,
+        "ao_output"
+            | "bloom_top"
+            | "gbuffer_normal_depth"
+            | "gbuffer_roughness"
+            | "gbuffer_velocity"
+    )
+}
+
+// The alias-slot list for the transients the pool manages this build, taken
+// straight from the graph: `plan_transient_slots` decides the grouping and
+// hands back each member's extent, format and usage, so init and resize cannot
+// drift apart and neither can the graph and the texture it describes.
+//
+// `render_extent` sizes the render-resolution transients and `output_extent` is
+// the drawable the half-resolution ones scale off; under temporal upscaling
+// they differ, which is exactly why both are passed rather than derived.
+//
+// A planning graph that does not compile is a hard error rather than an empty
+// pool: every consumer reads its target back out by label, so silently pooling
+// nothing would fail later and further from the cause.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
-    ao_extent: (u32, u32),
-    bloom_top_extent: (u32, u32),
-) -> Vec<SlotSpec> {
-    // `bloom_top` is always managed. Unlike Vulkan, where bloom is a build-time
-    // flag, Metal toggles bloom per frame off `bloom_intensity` while the
-    // composite binds mip 0 unconditionally, so a pool built at init / resize
-    // cannot gate on it. DirectX manages it always for the same reason.
-    let mut specs = vec![bloom_top_spec(bloom_top_extent)];
-    if ssao_enabled {
-        specs.push(ao_output_spec(ao_extent));
-    }
-    group_by_plan(specs, ssao_enabled)
-}
-
-// Group the managed specs into shared slots per the aliasing planner. The
-// planner runs on a minimal worst-case graph (only the managed features on, and
-// bloom forced on since it toggles per frame yet the heap must cover the frames
-// where it is live) so the generic greedy pairs exactly the pooled candidates --
-// on the full frame graph it could instead pair `bloom_top` with the unpooled
-// `gbuffer`. The grouping is lifetime-based, so the extent passed for the
-// planner's sizing is irrelevant and a fixed one is used. Members of a planner
-// slot keep its order (lifetime-start). Falls back to one slot per spec if the
-// worst-case graph fails to compile, leaving the build render-neutral.
-fn group_by_plan(specs: Vec<TextureSpec>, ssao_enabled: bool) -> Vec<SlotSpec> {
-    use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph, plan_aliasing};
-
-    let mut inputs = FrameGraphInputs::all_off();
-    inputs.bloom_enabled = true;
-    inputs.ssao_enabled = ssao_enabled;
-
-    let groups: Vec<Vec<usize>> = match build_frame_graph(&inputs) {
-        Ok(graph) => {
-            let plan = plan_aliasing(&graph, 1920, 1080);
-            let by_label: std::collections::HashMap<&str, usize> = specs
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (s.label, i))
-                .collect();
-            let mut groups: Vec<Vec<usize>> = Vec::new();
-            let mut grouped = vec![false; specs.len()];
-            for slot in &plan.slots {
-                let group: Vec<usize> = slot
-                    .members
-                    .iter()
-                    .filter_map(|&res_idx| by_label.get(graph.resources[res_idx].label).copied())
-                    .collect();
-                for &si in &group {
-                    grouped[si] = true;
-                }
-                if !group.is_empty() {
-                    groups.push(group);
-                }
-            }
-            // Any managed spec the planner did not place (no graph resource for
-            // it) gets its own un-aliased slot.
-            for (si, placed) in grouped.iter().enumerate() {
-                if !placed {
-                    groups.push(vec![si]);
-                }
-            }
-            groups
-        }
-        Err(_) => (0..specs.len()).map(|i| vec![i]).collect(),
-    };
-
-    // Materialize: move each spec into its group's slot.
-    let mut specs_opt: Vec<Option<TextureSpec>> = specs.into_iter().map(Some).collect();
-    groups
-        .into_iter()
-        .map(|g| SlotSpec {
-            members: g
-                .into_iter()
-                .map(|si| specs_opt[si].take().expect("each spec joins one group"))
-                .collect(),
-        })
-        .collect()
-}
-
-// `bloom_top`: bloom mip 0, half the extent the bloom chain was built for,
-// sampled by the composite. The prefilter writes it, the downsample chain reads
-// it, the final upsample accumulates into it.
-fn bloom_top_spec((width, height): (u32, u32)) -> TextureSpec {
-    TextureSpec {
-        label: "bloom_top",
-        width,
-        height,
-        format: super::post::BLOOM_FORMAT,
-    }
-}
-
-// `ao_output`: SSAO's blurred occlusion at full render resolution, single-channel
-// R8, sampled by the main pass's ambient term.
-fn ao_output_spec((width, height): (u32, u32)) -> TextureSpec {
-    TextureSpec {
-        label: "ao_output",
-        width,
-        height,
-        format: super::post::SSAO_OCCLUSION_FORMAT,
-    }
+    gbuffer_enabled: bool,
+    render_extent: (u32, u32),
+    output_extent: (u32, u32),
+) -> Result<Vec<TransientSlot>, String> {
+    let mut build = FrameGraphInputs::all_off();
+    build.hdr_width = render_extent.0;
+    build.hdr_height = render_extent.1;
+    build.ssao_enabled = ssao_enabled;
+    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
+    // nodes rather than adding to them, so `planning_inputs` cannot force it on
+    // the way it does the purely additive passes: it has to follow the build.
+    // `velocity_enabled` is what makes the node appear once the flag is set.
+    // This gate must match the one that builds the pre-pass itself, or a
+    // consumer reads a label the pool never created.
+    build.unified_gbuffer_prepass = gbuffer_enabled;
+    build.velocity_enabled = gbuffer_enabled;
+    // Metal toggles bloom per frame off `bloom_intensity` while the composite
+    // binds mip 0 unconditionally, so a pool built at init / resize cannot gate
+    // on it and the heap must cover the frames where it is live. DirectX
+    // manages it always for the same reason; Vulkan gates on it.
+    build.bloom_enabled = true;
+    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
+        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
 }
 
 impl MtlContext {
@@ -324,6 +322,29 @@ impl MtlContext {
             .texture_for("ao_output")
             .unwrap_or_else(|| self.ssao.white.as_ref())
     }
+
+    // The unified pre-pass's three colour channels, read straight out of the
+    // pool at the point of use. Nothing caches these, and that is deliberate:
+    // **a pool rebuild repacks every slot**, so a handle cached when SSAO was
+    // toggled would point into a heap region that now belongs to a different
+    // resource. The explicit backends have to re-point their descriptors and
+    // framebuffers at every rebuild for exactly this reason; fetching by label
+    // costs a short scan per encode and makes the whole class impossible here.
+    //
+    // `None` when the pre-pass is not built, which is the same gate the pool
+    // was created under, so a consumer that finds `None` should skip rather
+    // than substitute a fallback.
+    pub(in crate::metal) fn gbuffer_normal_depth(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
+        self.transient_pool.texture_for("gbuffer_normal_depth")
+    }
+
+    pub(in crate::metal) fn gbuffer_roughness(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
+        self.transient_pool.texture_for("gbuffer_roughness")
+    }
+
+    pub(in crate::metal) fn gbuffer_velocity(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
+        self.transient_pool.texture_for("gbuffer_velocity")
+    }
 }
 
 #[cfg(test)]
@@ -334,51 +355,132 @@ mod tests {
     // the planner-routed grouping is testable headlessly.
 
     #[test]
-    fn ssao_and_bloom_alias_into_one_slot() {
-        // Both managed: the planner sees `ao_output` (early: SsaoBlur -> Main)
-        // and `bloom_top` (late: Bloom -> Composite) with disjoint lifetimes, so
-        // the pool packs them into one shared slot -- one heap instead of two.
-        let slots = transient_slots(true, (1024, 768), (512, 384));
-        assert_eq!(
-            slots.len(),
-            1,
-            "ao_output + bloom_top should share one slot"
+    fn the_late_bloom_target_aliases_an_early_one() {
+        // The pool's whole saving, in the configuration a real session runs:
+        // SSAO on implies the G-buffer pre-pass is on, so both gates are true
+        // here. `bloom_top` is the only genuinely late member (Bloom ->
+        // Composite), so it is the one that can reuse an earlier member's
+        // memory; everything else is live across most of the frame and needs
+        // its own heap. A plan where `bloom_top` sits alone means the aliasing
+        // stopped working -- which is exactly what happened on Metal between
+        // pooling the G-buffer on the explicit backends and pooling it here.
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let shared: Vec<Vec<&str>> = slots
+            .iter()
+            .map(|s| s.labels())
+            .filter(|l| l.len() > 1)
+            .collect();
+        assert!(
+            shared.iter().any(|l| l.contains(&"bloom_top")),
+            "bloom_top should reuse an earlier member's heap: {:?}",
+            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
         );
-        let labels: Vec<&str> = slots[0].members.iter().map(|m| m.label).collect();
-        assert!(labels.contains(&"ao_output"), "{labels:?}");
-        assert!(labels.contains(&"bloom_top"), "{labels:?}");
-        // `ao_output` uses the memory first, so it must be the first member:
-        // members are kept in the planner's lifetime-start order.
-        assert_eq!(slots[0].members[0].label, "ao_output", "{labels:?}");
+        // Whatever it pairs with must start first: members are kept in the
+        // planner's lifetime-start order, which is the order they reuse the heap.
+        let pair = shared
+            .iter()
+            .find(|l| l.contains(&"bloom_top"))
+            .expect("checked above");
+        assert_ne!(pair[0], "bloom_top", "{pair:?}");
+    }
+
+    #[test]
+    fn the_gbuffer_colour_targets_are_pooled_and_depth_is_not() {
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        for want in [
+            "gbuffer_normal_depth",
+            "gbuffer_roughness",
+            "gbuffer_velocity",
+        ] {
+            assert!(labels.contains(&want), "{want} pooled: {labels:?}");
+        }
+        assert!(
+            !labels.contains(&"gbuffer_depth"),
+            "gbuffer_depth must stay feature-owned: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn the_gbuffer_gate_is_what_places_them() {
+        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
+        // so `planning_inputs` cannot force it on and the pool must follow the
+        // build. Without the gate the pre-pass node is absent and none of its
+        // targets are placed -- which would leave every consumer reading a
+        // label the pool never created, and the pre-pass encoder erroring out.
+        let slots = transient_slots(true, false, (1024, 768), (1024, 768)).expect("plans");
+        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        assert!(!labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
     }
 
     #[test]
     fn bloom_top_alone_is_unshared() {
-        // SSAO off: `bloom_top` is the only managed transient, so it sits in its
-        // own single-member slot (no aliasing).
-        let slots = transient_slots(false, (1024, 768), (512, 384));
+        // Nothing else managed: `bloom_top` sits in its own single-member slot.
+        let slots = transient_slots(false, false, (1024, 768), (1024, 768)).expect("plans");
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].members.len(), 1);
         assert_eq!(slots[0].members[0].label, "bloom_top");
     }
 
     #[test]
-    fn slots_carry_the_feature_formats_and_extents() {
-        // The pool sizes and formats each member off its owning feature, so a
-        // divergence here would silently mis-back the texture the feature binds.
-        let slots = transient_slots(true, (1024, 768), (512, 384));
+    fn translated_descriptors_match_the_feature_formats() {
+        // The graph is the single source of the shape now, so what this pins is
+        // the *translation*: the descriptor the pool creates must still be the
+        // one each feature's own constant describes, or the pool silently
+        // mis-backs the texture that feature binds.
+        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
         let member = |label: &str| {
-            slots[0]
-                .members
+            slots
                 .iter()
+                .flat_map(|s| &s.members)
                 .find(|m| m.label == label)
                 .expect("member present")
         };
-        let ao = member("ao_output");
-        assert_eq!((ao.width, ao.height), (1024, 768));
-        assert_eq!(ao.format, super::super::post::SSAO_OCCLUSION_FORMAT);
-        let bloom = member("bloom_top");
-        assert_eq!((bloom.width, bloom.height), (512, 384));
-        assert_eq!(bloom.format, super::super::post::BLOOM_FORMAT);
+
+        let ao = texture_descriptor(member("ao_output"));
+        assert_eq!(
+            ao.pixelFormat(),
+            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
+        );
+        assert_eq!((ao.width(), ao.height()), (1024, 768));
+        assert_eq!(ao.textureType(), MTLTextureType::Type2D);
+        assert_eq!(ao.mipmapLevelCount(), 1);
+        assert_eq!(ao.sampleCount(), 1);
+        assert_eq!(
+            ao.usage().0,
+            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0
+        );
+
+        // Half the *output* extent, which is what `create_bloom_targets` sizes
+        // its mip 0 to.
+        let bloom = texture_descriptor(member("bloom_top"));
+        assert_eq!(bloom.pixelFormat(), super::super::post::bloom::BLOOM_FORMAT);
+        assert_eq!((bloom.width(), bloom.height()), (512, 384));
+    }
+
+    #[test]
+    fn a_volume_translates_to_a_3d_descriptor() {
+        // Nothing pooled is a volume yet, but the froxel volume's desc is now
+        // real, so the translator has to handle it before it can be pooled.
+        let desc = texture_descriptor(&TransientTexture {
+            label: "probe_volume",
+            width: 80,
+            height: 45,
+            depth: 64,
+            format: PixelFormat::Rgba16Float,
+            sample_count: 1,
+            array_layers: 1,
+            mip_levels: 1,
+            usage: TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+            // Carried by the graph for DirectX's sake; the Metal descriptor has
+            // nowhere to put it.
+            clear: crate::gfx::render_graph::ClearValue::Color([0.0; 4]),
+        });
+        assert_eq!(desc.textureType(), MTLTextureType::Type3D);
+        assert_eq!(desc.depth(), 64);
+        assert_eq!(
+            desc.usage().0,
+            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0
+        );
     }
 }

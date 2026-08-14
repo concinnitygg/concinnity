@@ -27,6 +27,10 @@ use ash::{Device, vk};
 use super::texture::{
     create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
 };
+use crate::gfx::render_graph::{
+    FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
+    plan_transient_slots,
+};
 
 // The raw device handles the pool allocates with. The pool deliberately stays
 // off the device allocator: its slots alias images on purpose, which the
@@ -38,26 +42,6 @@ pub(super) struct TransientPoolGpu<'a> {
     pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
-}
-
-// One managed transient image: the graph label plus the concrete Vulkan
-// parameters the pool needs to allocate it. The label is the same string the
-// shared `build_frame_graph` declares, so the barrier registry and every
-// feature consumer agree on one identifier.
-pub(super) struct ImageSpec {
-    pub label: &'static str,
-    pub width: u32,
-    pub height: u32,
-    pub format: vk::Format,
-    pub usage: vk::ImageUsageFlags,
-    pub aspect: vk::ImageAspectFlags,
-}
-
-// One alias slot: the set of images that share backing memory. A single-member
-// slot is a plain per-frame target; a multi-member slot realises an alias (the
-// members have disjoint lifetimes, so they reuse one allocation per frame).
-pub(super) struct SlotSpec {
-    pub members: Vec<ImageSpec>,
 }
 
 // One managed image, resolved for one frame in flight.
@@ -81,6 +65,10 @@ pub(super) struct TransientImagePool {
     // slot's memory). Drives the executor's aliasing barriers: a member's
     // predecessor in this list is the resource it reuses memory from.
     slot_labels: Vec<Vec<&'static str>>,
+    // The pool's aliased footprint: the sum of its slot allocations across every
+    // frame in flight. Reported to the memory ledger, which would otherwise not
+    // see this pool at all -- it deliberately sits off the device allocator.
+    allocated_bytes: u64,
 }
 
 impl TransientImagePool {
@@ -95,7 +83,7 @@ impl TransientImagePool {
     pub(super) fn build(
         ctx: &TransientPoolGpu,
         frames: usize,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<Self, String> {
         let &TransientPoolGpu {
             instance,
@@ -121,7 +109,7 @@ impl TransientImagePool {
                 // Create every member image (unbound), gathering the combined
                 // memory requirements: the slot's allocation must be large
                 // enough for the biggest member and of a type all members accept.
-                let mut member_images: Vec<(&ImageSpec, vk::Image)> =
+                let mut member_images: Vec<(&TransientTexture, vk::Image)> =
                     Vec::with_capacity(slot.members.len());
                 let mut type_bits = u32::MAX;
                 let mut slot_size: vk::DeviceSize = 0;
@@ -157,13 +145,14 @@ impl TransientImagePool {
                 for (spec, image) in member_images {
                     unsafe { device.bind_image_memory(image, memory, 0) }
                         .map_err(|e| format!("transient pool bind {}: {e}", spec.label))?;
-                    let view = create_image_view(device, image, spec.format, spec.aspect)?;
+                    let aspect = image_aspect(spec.format);
+                    let view = create_image_view(device, image, image_format(spec.format), aspect)?;
                     images.push(TransientImage {
                         label: spec.label,
                         frame: f,
                         image,
                         view,
-                        aspect: spec.aspect,
+                        aspect,
                     });
                 }
             }
@@ -192,6 +181,7 @@ impl TransientImagePool {
             slot_memories,
             images,
             slot_labels,
+            allocated_bytes: aliased_bytes,
         })
     }
 
@@ -211,6 +201,36 @@ impl TransientImagePool {
             }
         }
         None
+    }
+
+    // The pool's aliased footprint in bytes, for the memory ledger.
+    pub(super) fn allocated_bytes(&self) -> u64 {
+        self.allocated_bytes
+    }
+
+    // The pooled G-buffer colour channels for every frame in flight. Empty
+    // `Vec`s when the pool was built without the G-buffer gate (no screen-space
+    // consumer, so the pre-pass node is absent and nothing was allocated); the
+    // caller treats that as "the feature is not built" rather than an error,
+    // matching every other `*_for` lookup here.
+    pub(super) fn gbuffer_pooled(&self, frames: usize) -> super::post::gbuffer::GbufferPooled {
+        let channel = |label: &str| {
+            self.pairs_for_frames(label, frames)
+                .into_iter()
+                .map(|(image, view)| super::post::gbuffer::PooledTarget { image, view })
+                .collect()
+        };
+        super::post::gbuffer::GbufferPooled {
+            normal_depth: channel("gbuffer_normal_depth"),
+            roughness: channel("gbuffer_roughness"),
+            velocity: channel("gbuffer_velocity"),
+        }
+    }
+
+    // The member labels of each slot, for the executor's per-frame check that
+    // no slot has two resources live at once in the graph it is about to run.
+    pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
+        &self.slot_labels
     }
 
     // The managed image for `label` at frame-in-flight `frame`, or `None` when
@@ -260,7 +280,7 @@ impl TransientImagePool {
         &mut self,
         ctx: &TransientPoolGpu,
         frames: usize,
-        slots: &[SlotSpec],
+        slots: &[TransientSlot],
     ) -> Result<(), String> {
         self.destroy(ctx.device);
         *self = Self::build(ctx, frames, slots)?;
@@ -283,153 +303,144 @@ impl TransientImagePool {
         self.images.clear();
         self.slot_memories.clear();
         self.slot_labels.clear();
+        self.allocated_bytes = 0;
     }
 }
 
-// Create a 2D `VkImage` without backing memory: the pool binds it into a slot
+// Create a `VkImage` without backing memory: the pool binds it into a slot
 // allocation afterward (so several aliased images can share one allocation).
-// Mirrors `texture::create_image` minus the allocate + bind.
-fn create_image_unbound(device: &Device, spec: &ImageSpec) -> Result<vk::Image, String> {
+// Mirrors `texture::create_image` minus the allocate + bind, and translates the
+// graph's declared shape rather than restating it.
+fn create_image_unbound(device: &Device, spec: &TransientTexture) -> Result<vk::Image, String> {
     let info = vk::ImageCreateInfo::default()
-        .image_type(vk::ImageType::TYPE_2D)
+        .image_type(if spec.depth.max(1) > 1 {
+            vk::ImageType::TYPE_3D
+        } else {
+            vk::ImageType::TYPE_2D
+        })
         .extent(vk::Extent3D {
             width: spec.width.max(1),
             height: spec.height.max(1),
-            depth: 1,
+            depth: spec.depth.max(1),
         })
-        .mip_levels(1)
-        .array_layers(1)
-        .format(spec.format)
+        .mip_levels(spec.mip_levels.max(1))
+        .array_layers(spec.array_layers.max(1))
+        .format(image_format(spec.format))
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(spec.usage)
+        .usage(image_usage(spec.usage))
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .samples(vk::SampleCountFlags::TYPE_1);
+        .samples(sample_count(spec.sample_count));
     unsafe { device.create_image(&info, None) }.map_err(|e| format!("transient pool image: {e}"))
 }
 
-// Build the alias-slot list for the transients the pool manages this build.
-// Centralises the label to Vulkan format / usage mapping and the slot grouping
-// so init and resize stay in lockstep. A transient is managed only while its
-// owning feature is on: `ao_output` with SSAO, `bloom_top` with bloom. The
-// shared `gfx::render_graph::alias` planner decides which of the managed
-// transients may share a slot; `group_by_plan` packs them into one `SlotSpec`
-// per planner slot, so disjoint-lifetime transients alias -- `ao_output` (used
-// early, [SsaoBlur, Main]) and `bloom_top` (used late, [Bloom, Composite]) share
-// ONE per-frame slot when both are on, with `ao_output` first since it reuses
-// the memory first.
+fn image_format(format: PixelFormat) -> vk::Format {
+    match format {
+        PixelFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+        PixelFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        PixelFormat::Rg16Float => vk::Format::R16G16_SFLOAT,
+        PixelFormat::R8Unorm => vk::Format::R8_UNORM,
+        PixelFormat::R32Float => vk::Format::R32_SFLOAT,
+        PixelFormat::Depth32Float => vk::Format::D32_SFLOAT,
+        PixelFormat::BgraSwapchain => vk::Format::B8G8R8A8_UNORM,
+    }
+}
+
+fn image_aspect(format: PixelFormat) -> vk::ImageAspectFlags {
+    if format.is_depth() {
+        vk::ImageAspectFlags::DEPTH
+    } else {
+        vk::ImageAspectFlags::COLOR
+    }
+}
+
+fn image_usage(usage: TextureUsage) -> vk::ImageUsageFlags {
+    let mut flags = vk::ImageUsageFlags::empty();
+    if usage.contains(TextureUsage::SHADER_READ) {
+        flags |= vk::ImageUsageFlags::SAMPLED;
+    }
+    if usage.contains(TextureUsage::RENDER_TARGET) {
+        flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+    }
+    if usage.contains(TextureUsage::DEPTH_STENCIL) {
+        flags |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    }
+    if usage.contains(TextureUsage::STORAGE) {
+        flags |= vk::ImageUsageFlags::STORAGE;
+    }
+    if usage.contains(TextureUsage::TRANSFER_SRC) {
+        flags |= vk::ImageUsageFlags::TRANSFER_SRC;
+    }
+    if usage.contains(TextureUsage::TRANSFER_DST) {
+        flags |= vk::ImageUsageFlags::TRANSFER_DST;
+    }
+    flags
+}
+
+fn sample_count(samples: u32) -> vk::SampleCountFlags {
+    match samples.max(1) {
+        2 => vk::SampleCountFlags::TYPE_2,
+        4 => vk::SampleCountFlags::TYPE_4,
+        8 => vk::SampleCountFlags::TYPE_8,
+        16 => vk::SampleCountFlags::TYPE_16,
+        _ => vk::SampleCountFlags::TYPE_1,
+    }
+}
+
+// The transients this pool owns. Everything else the graph declares transient
+// stays backend-owned; adding a label here is what hands it to the pool.
+//
+// `gbuffer_depth` is deliberately absent while its three colour siblings are
+// here, matching DirectX: the pool creates one image per (slot, frame) with a
+// single format, and a shader-readable depth target needs different resource
+// and view formats on D3D12. Keeping the pooled set identical across the two
+// explicit backends is what makes their footprints comparable.
+fn pooled(label: &str) -> bool {
+    matches!(
+        label,
+        "ao_output"
+            | "bloom_top"
+            | "gbuffer_normal_depth"
+            | "gbuffer_roughness"
+            | "gbuffer_velocity"
+    )
+}
+
+// The alias-slot list for the transients the pool manages this build, taken
+// straight from the graph: `plan_transient_slots` decides the grouping and
+// hands back each member's extent, format and usage, so init and resize cannot
+// drift apart and neither can the graph and the image it describes.
+//
+// `render_extent` sizes the render-resolution transients and `output_extent` is
+// the drawable the half-resolution ones scale off; under temporal upscaling
+// they differ, which is exactly why both are passed rather than derived. Unlike
+// Metal and DirectX (where `bloom_top` is managed unconditionally because bloom
+// toggles per frame), Vulkan manages it only while bloom is on, so the build
+// configuration carries the real flag.
+//
+// A planning graph that does not compile is a hard error rather than an empty
+// pool: every consumer reads its image back out by label, so silently pooling
+// nothing would fail later and further from the cause.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
     bloom_enabled: bool,
-    ao_extent: vk::Extent2D,
-    bloom_extent: vk::Extent2D,
-) -> Vec<SlotSpec> {
-    let mut specs = Vec::new();
-    if ssao_enabled {
-        specs.push(ao_output_spec(ao_extent));
-    }
-    if bloom_enabled {
-        specs.push(bloom_top_spec(bloom_extent));
-    }
-    group_by_plan(specs, ssao_enabled, bloom_enabled)
-}
-
-// Group the managed specs into shared slots per the aliasing planner. The
-// planner runs on a minimal worst-case graph (only the managed features on) so
-// the generic greedy pairs exactly the pooled candidates -- on the full frame
-// graph it could instead pair `bloom_top` with the unpooled `gbuffer`. The
-// grouping is lifetime-based, so the extent passed for the planner's sizing is
-// irrelevant and a fixed one is used. Members of a planner slot keep its order
-// (lifetime-start), which the pool's cyclic predecessor wiring relies on. Falls
-// back to one slot per spec if the worst-case graph fails to compile, leaving
-// the build render-neutral. Unlike DirectX (where `bloom_top` is always managed
-// and bloom toggles per frame, so the planner graph forces bloom on), Vulkan
-// manages `bloom_top` only while bloom is on, so the planner graph uses the real
-// bloom flag.
-fn group_by_plan(specs: Vec<ImageSpec>, ssao_enabled: bool, bloom_enabled: bool) -> Vec<SlotSpec> {
-    use crate::gfx::render_graph::{FrameGraphInputs, build_frame_graph, plan_aliasing};
-
-    let mut inputs = FrameGraphInputs::all_off();
-    inputs.ssao_enabled = ssao_enabled;
-    inputs.bloom_enabled = bloom_enabled;
-
-    let groups: Vec<Vec<usize>> = match build_frame_graph(&inputs) {
-        Ok(graph) => {
-            let plan = plan_aliasing(&graph, 1920, 1080);
-            let mut by_label: std::collections::HashMap<&str, usize> =
-                std::collections::HashMap::new();
-            for (i, s) in specs.iter().enumerate() {
-                by_label.insert(s.label, i);
-            }
-            let mut groups: Vec<Vec<usize>> = Vec::new();
-            let mut grouped = vec![false; specs.len()];
-            for slot in &plan.slots {
-                let group: Vec<usize> = slot
-                    .members
-                    .iter()
-                    .filter_map(|&res_idx| by_label.get(graph.resources[res_idx].label).copied())
-                    .collect();
-                for &si in &group {
-                    grouped[si] = true;
-                }
-                if !group.is_empty() {
-                    groups.push(group);
-                }
-            }
-            // Any managed spec the planner did not place (no graph resource for
-            // it) gets its own un-aliased slot.
-            for (si, placed) in grouped.iter().enumerate() {
-                if !placed {
-                    groups.push(vec![si]);
-                }
-            }
-            groups
-        }
-        Err(_) => (0..specs.len()).map(|i| vec![i]).collect(),
-    };
-
-    // Materialize: move each spec into its group's slot.
-    let mut specs_opt: Vec<Option<ImageSpec>> = specs.into_iter().map(Some).collect();
-    groups
-        .into_iter()
-        .map(|g| SlotSpec {
-            members: g
-                .into_iter()
-                .map(|si| {
-                    specs_opt[si]
-                        .take()
-                        .expect("each spec index appears in exactly one alias group")
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-// `ao_output`: SSAO's blurred occlusion at full render resolution, single-channel
-// R8, sampled by the main pass's ambient term.
-fn ao_output_spec(extent: vk::Extent2D) -> ImageSpec {
-    ImageSpec {
-        label: "ao_output",
-        width: extent.width,
-        height: extent.height,
-        format: super::post::ssao::SSAO_OCCLUSION_FORMAT,
-        usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        aspect: vk::ImageAspectFlags::COLOR,
-    }
-}
-
-// `bloom_top`: bloom mip 0, half the output (swapchain) extent, HDR_FORMAT. The
-// prefilter writes it, the downsample chain reads it, the final upsample
-// accumulates into it, and composite samples it.
-fn bloom_top_spec(extent: vk::Extent2D) -> ImageSpec {
-    ImageSpec {
-        label: "bloom_top",
-        width: (extent.width >> 1).max(1),
-        height: (extent.height >> 1).max(1),
-        format: super::context::HDR_FORMAT,
-        usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        aspect: vk::ImageAspectFlags::COLOR,
-    }
+    gbuffer_enabled: bool,
+    render_extent: vk::Extent2D,
+    output_extent: vk::Extent2D,
+) -> Result<Vec<TransientSlot>, String> {
+    let mut build = FrameGraphInputs::all_off();
+    build.hdr_width = render_extent.width;
+    build.hdr_height = render_extent.height;
+    build.ssao_enabled = ssao_enabled;
+    build.bloom_enabled = bloom_enabled;
+    // `unified_gbuffer_prepass` substitutes for the separate SsrPrepass /
+    // Velocity nodes rather than adding to them, so `planning_inputs` cannot
+    // force it on: it is a build gate the pool follows. `velocity_enabled` is
+    // what makes the node appear once the flag is set.
+    build.unified_gbuffer_prepass = gbuffer_enabled;
+    build.velocity_enabled = gbuffer_enabled;
+    plan_transient_slots(&build, &pooled, output_extent.width, output_extent.height)
+        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
 }
 
 #[cfg(test)]
@@ -444,29 +455,40 @@ mod tests {
     }
 
     #[test]
-    fn ssao_and_bloom_alias_into_one_slot() {
-        // Both on: the planner sees `ao_output` (early: SsaoBlur -> Main) and
-        // `bloom_top` (late: Bloom -> Composite) with disjoint lifetimes, so the
-        // pool packs them into one shared slot -- one allocation instead of two.
-        let slots = transient_slots(true, true, extent(1024, 768), extent(1024, 768));
-        assert_eq!(
-            slots.len(),
-            1,
-            "ao_output + bloom_top should share one slot"
+    fn the_late_bloom_target_aliases_an_early_one() {
+        // The pool's whole saving, in the configuration a real session runs:
+        // SSAO on implies the G-buffer pre-pass is on, so all three gates are
+        // true here. `bloom_top` is the only genuinely late member (Bloom ->
+        // Composite), so it is the one that can reuse an earlier member's
+        // allocation; everything else is live across most of the frame and needs
+        // its own. Mirrors the DirectX test.
+        let slots =
+            transient_slots(true, true, true, extent(1024, 768), extent(1024, 768)).expect("plans");
+        let shared: Vec<Vec<&str>> = slots
+            .iter()
+            .map(|s| s.labels())
+            .filter(|l| l.len() > 1)
+            .collect();
+        assert!(
+            shared.iter().any(|l| l.contains(&"bloom_top")),
+            "bloom_top should reuse an earlier member's allocation: {:?}",
+            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
         );
-        let labels: Vec<&str> = slots[0].members.iter().map(|m| m.label).collect();
-        assert!(labels.contains(&"ao_output"), "{labels:?}");
-        assert!(labels.contains(&"bloom_top"), "{labels:?}");
-        // `ao_output` reuses the memory first, so it must be the first member:
-        // the pool's cyclic predecessor wiring depends on lifetime-start order.
-        assert_eq!(slots[0].members[0].label, "ao_output", "{labels:?}");
+        // Whatever it pairs with must start first: the pool's predecessor wiring
+        // depends on lifetime-start order.
+        let pair = shared
+            .iter()
+            .find(|l| l.contains(&"bloom_top"))
+            .expect("checked above");
+        assert_ne!(pair[0], "bloom_top", "{pair:?}");
     }
 
     #[test]
     fn ao_output_alone_is_unshared() {
         // SSAO on, bloom off: `ao_output` is the only managed transient, so it
         // sits in its own single-member slot (no aliasing barriers).
-        let slots = transient_slots(true, false, extent(1024, 768), extent(1024, 768));
+        let slots = transient_slots(true, false, false, extent(1024, 768), extent(1024, 768))
+            .expect("plans");
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].members.len(), 1);
         assert_eq!(slots[0].members[0].label, "ao_output");
@@ -475,7 +497,8 @@ mod tests {
     #[test]
     fn bloom_top_alone_is_unshared() {
         // Bloom on, SSAO off: `bloom_top` is the only managed transient.
-        let slots = transient_slots(false, true, extent(1024, 768), extent(1024, 768));
+        let slots = transient_slots(false, true, false, extent(1024, 768), extent(1024, 768))
+            .expect("plans");
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].members.len(), 1);
         assert_eq!(slots[0].members[0].label, "bloom_top");
@@ -484,7 +507,123 @@ mod tests {
     #[test]
     fn nothing_managed_yields_no_slots() {
         // Neither feature on: the pool manages nothing, so there are no slots.
-        let slots = transient_slots(false, false, extent(1024, 768), extent(1024, 768));
+        let slots = transient_slots(false, false, false, extent(1024, 768), extent(1024, 768))
+            .expect("plans");
         assert!(slots.is_empty());
+    }
+
+    #[test]
+    fn translated_images_match_the_feature_formats() {
+        // The graph is the single source of the shape now, so what this pins is
+        // the *translation*: a divergence from each feature's own constant
+        // would silently mis-back the image that feature binds.
+        let slots = transient_slots(true, true, true, extent(1024, 768), extent(1920, 1080))
+            .expect("plans");
+        let member = |label: &str| {
+            slots
+                .iter()
+                .flat_map(|s| &s.members)
+                .find(|m| m.label == label)
+                .unwrap_or_else(|| panic!("{label} pooled"))
+                .clone()
+        };
+
+        // `ao_output` follows the render extent; `bloom_top` is half the
+        // output extent, which is what `create_bloom_chain` sizes mip 0 to.
+        let ao = member("ao_output");
+        assert_eq!((ao.width, ao.height), (1024, 768));
+        assert_eq!(
+            image_format(ao.format),
+            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
+        );
+        assert_eq!(image_aspect(ao.format), vk::ImageAspectFlags::COLOR);
+        assert_eq!(
+            image_usage(ao.usage),
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED
+        );
+
+        let bloom = member("bloom_top");
+        assert_eq!((bloom.width, bloom.height), (960, 540));
+        assert_eq!(
+            image_format(bloom.format),
+            super::super::context::HDR_FORMAT
+        );
+
+        // The G-buffer colour channels. A format divergence here would silently
+        // mis-back an MRT attachment the pre-pass render pass declares, which is
+        // a framebuffer-incompatibility error rather than a wrong picture.
+        use super::super::post::gbuffer::{
+            GBUFFER_NORMAL_DEPTH_FORMAT, GBUFFER_ROUGHNESS_FORMAT, GBUFFER_VELOCITY_FORMAT,
+        };
+        for (label, format) in [
+            ("gbuffer_normal_depth", GBUFFER_NORMAL_DEPTH_FORMAT),
+            ("gbuffer_roughness", GBUFFER_ROUGHNESS_FORMAT),
+            ("gbuffer_velocity", GBUFFER_VELOCITY_FORMAT),
+        ] {
+            let m = member(label);
+            assert_eq!(image_format(m.format), format, "{label}");
+            // Render extent, not the drawable: the pre-pass rasterises at the
+            // scene resolution, which differs under temporal upscaling.
+            assert_eq!((m.width, m.height), (1024, 768), "{label}");
+            assert_eq!(
+                image_usage(m.usage),
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gbuffer_gate_places_its_colour_channels() {
+        // `unified_gbuffer_prepass` substitutes passes rather than adding them,
+        // so `planning_inputs` cannot force it on and the pool follows the build
+        // gate. Off, none of the channels are placed -- and the pre-pass
+        // framebuffers would have nothing to attach, which is why init derives
+        // the gate once and uses it for both.
+        let off = transient_slots(true, true, false, extent(1024, 768), extent(1024, 768))
+            .expect("plans");
+        let off_labels: Vec<&str> = off.iter().flat_map(|s| s.labels()).collect();
+        assert!(
+            !off_labels.contains(&"gbuffer_normal_depth"),
+            "{off_labels:?}"
+        );
+
+        let on =
+            transient_slots(true, true, true, extent(1024, 768), extent(1024, 768)).expect("plans");
+        let on_labels: Vec<&str> = on.iter().flat_map(|s| s.labels()).collect();
+        for want in [
+            "gbuffer_normal_depth",
+            "gbuffer_roughness",
+            "gbuffer_velocity",
+        ] {
+            assert!(on_labels.contains(&want), "{want}: {on_labels:?}");
+        }
+        // `gbuffer_depth` stays feature-owned on both explicit backends.
+        assert!(!on_labels.contains(&"gbuffer_depth"), "{on_labels:?}");
+    }
+
+    #[test]
+    fn depth_and_storage_usages_translate() {
+        // Nothing pooled needs these yet, but the descs the graph now carries
+        // do, so the translator has to be right before they can be pooled.
+        assert_eq!(
+            image_format(PixelFormat::Depth32Float),
+            vk::Format::D32_SFLOAT
+        );
+        assert_eq!(
+            image_aspect(PixelFormat::Depth32Float),
+            vk::ImageAspectFlags::DEPTH
+        );
+        assert_eq!(
+            image_usage(TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ)),
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED
+        );
+        assert_eq!(
+            image_usage(TextureUsage::STORAGE.union(TextureUsage::SHADER_READ)),
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED
+        );
+        assert_eq!(sample_count(4), vk::SampleCountFlags::TYPE_4);
+        assert_eq!(sample_count(1), vk::SampleCountFlags::TYPE_1);
+        assert_eq!(sample_count(0), vk::SampleCountFlags::TYPE_1);
     }
 }

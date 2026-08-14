@@ -167,33 +167,6 @@ fn create_prepass_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .map_err(|e| format!("gbuffer prepass render pass: {e}"))
 }
 
-// Allocate a single-format colour render target usable as both attachment and
-// sampled texture. No pre-transition: the render pass declares an `UNDEFINED`
-// initial layout.
-fn create_color_target(
-    alloc: &DeviceAllocator,
-    device: &Device,
-    width: u32,
-    height: u32,
-    format: vk::Format,
-) -> Result<GpuImage, String> {
-    let pooled = create_image(
-        alloc,
-        &ImageSpec {
-            width,
-            height,
-            format,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
 // Render pass + pipeline layout a pre-pass pipeline binds against.
 #[derive(Clone, Copy)]
 struct PrepassPipelineTargets {
@@ -603,10 +576,34 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     })
 }
 
+// One pooled colour channel for one frame in flight. The transient pool owns
+// the image, its memory and its view; this is a borrowed record so the G-buffer
+// can build framebuffers over them and hand views to readers. Field names match
+// `GpuImage` so a consumer reading `.image` / `.view` does not care which it
+// holds -- but it must NOT be destroyed here.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct PooledTarget {
+    pub image: vk::Image,
+    pub view: vk::ImageView,
+}
+
+// The pooled colour channels for every frame in flight, as the transient pool
+// hands them over. Each `Vec` has one entry per frame; the caller builds this
+// from `pairs_for_frames` right after the pool is built or rebuilt, and passing
+// a stale one is what a use-after-free would look like.
+#[derive(Clone, Default)]
+pub(in crate::vulkan) struct GbufferPooled {
+    pub normal_depth: Vec<PooledTarget>,
+    pub roughness: Vec<PooledTarget>,
+    pub velocity: Vec<PooledTarget>,
+}
+
 // Unified G-buffer pre-pass resources held by `VkContext` when any screen-space
-// consumer is enabled. All `vk::*` handles are owned by this struct and freed
-// on `destroy`. Holds per-frame MRT images / framebuffers because the velocity
-// target is read per-frame-in-flight by TAA, mirroring taa.rs's `Vec` shape.
+// consumer is enabled. Every `vk::*` handle here is owned by this struct and
+// freed on `destroy`, EXCEPT the three pooled colour channels (see
+// `PooledTarget`). Holds per-frame MRT targets / framebuffers because the
+// velocity target is read per-frame-in-flight by TAA, mirroring taa.rs's `Vec`
+// shape.
 pub(in crate::vulkan) struct GbufferResources {
     // Render pass.
     pub(in crate::vulkan) prepass_render_pass: vk::RenderPass,
@@ -628,9 +625,14 @@ pub(in crate::vulkan) struct GbufferResources {
 
     // Per-frame MRT targets + private depth + framebuffers (rebuilt on resize).
     // One slot per frame in flight: TAA reads `velocity_images[frame_idx]`.
-    pub(in crate::vulkan) normal_depth_images: Vec<GpuImage>,
-    pub(in crate::vulkan) roughness_images: Vec<GpuImage>,
-    pub(in crate::vulkan) velocity_images: Vec<GpuImage>,
+    //
+    // The three colour channels are `PooledTarget`: the transient pool owns
+    // their images, memory and views, so this struct only records the handles it
+    // needs to build framebuffers and hand views to readers. The private depth
+    // stays feature-owned (`GpuImage`, retired through the allocator on drop).
+    pub(in crate::vulkan) normal_depth_images: Vec<PooledTarget>,
+    pub(in crate::vulkan) roughness_images: Vec<PooledTarget>,
+    pub(in crate::vulkan) velocity_images: Vec<PooledTarget>,
     pub(in crate::vulkan) depth_images: Vec<GpuImage>,
     pub(in crate::vulkan) framebuffers: Vec<vk::Framebuffer>,
 
@@ -766,6 +768,7 @@ impl GbufferResources {
         ssbo_layouts: GbufferSsboLayouts,
         object_count: usize,
         hot_reload: bool,
+        pooled: &GbufferPooled,
     ) -> Result<Self, String> {
         let GbufferDeviceCtx { alloc, device } = ctx;
         // Only the frame count is needed here (for the view-UBO ring); the
@@ -958,7 +961,7 @@ impl GbufferResources {
             prev_models: vec![IDENTITY4; object_count],
             hot_reload,
         };
-        me.build_targets(ctx, queue, extent)?;
+        me.build_targets(ctx, queue, extent, pooled)?;
         Ok(me)
     }
 
@@ -969,6 +972,7 @@ impl GbufferResources {
         ctx: GbufferDeviceCtx,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
+        pooled: &GbufferPooled,
     ) -> Result<(), String> {
         let GbufferDeviceCtx { alloc, device } = ctx;
         let GbufferQueueCtx {
@@ -982,11 +986,21 @@ impl GbufferResources {
         } = extent;
         let w = width.max(1);
         let h = height.max(1);
-        for _ in 0..frames {
-            let normal_depth =
-                create_color_target(alloc, device, w, h, GBUFFER_NORMAL_DEPTH_FORMAT)?;
-            let roughness = create_color_target(alloc, device, w, h, GBUFFER_ROUGHNESS_FORMAT)?;
-            let velocity = create_color_target(alloc, device, w, h, GBUFFER_VELOCITY_FORMAT)?;
+        for f in 0..frames {
+            // The three colour channels come from the transient pool, which
+            // holds one image per (label, frame) exactly as this loop expects.
+            let normal_depth = *pooled
+                .normal_depth
+                .get(f)
+                .ok_or("gbuffer: pooled normal_depth slot out of range")?;
+            let roughness = *pooled
+                .roughness
+                .get(f)
+                .ok_or("gbuffer: pooled roughness slot out of range")?;
+            let velocity = *pooled
+                .velocity
+                .get(f)
+                .ok_or("gbuffer: pooled velocity slot out of range")?;
             let depth = create_depth_image(
                 &GpuUploadContext {
                     alloc,
@@ -1017,29 +1031,13 @@ impl GbufferResources {
             self.depth_images.push(depth);
             self.framebuffers.push(framebuffer);
         }
-        // Rest the sampled channels in `SHADER_READ_ONLY_OPTIMAL`, where the
+        // The sampled channels rest in `SHADER_READ_ONLY_OPTIMAL`, where the
         // pre-pass render pass leaves them, so a consumer that samples one before
         // the pre-pass has ever run binds a valid layout (the Composite samples
         // normal+depth and roughness unconditionally for the debug view modes, but
-        // a world hidden behind an opaque menu masks the pre-pass off). The render
-        // pass loads them as `UNDEFINED`, so this changes nothing once it runs.
-        one_shot_submit(device, command_pool, queue, |cmd| {
-            for img in self
-                .normal_depth_images
-                .iter()
-                .chain(&self.roughness_images)
-                .chain(&self.velocity_images)
-            {
-                transition_image_layout(
-                    device,
-                    cmd,
-                    img.image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::ImageAspectFlags::COLOR,
-                );
-            }
-        })?;
+        // a world hidden behind an opaque menu masks the pre-pass off). The pool
+        // already puts every image it allocates in that layout, so there is
+        // nothing to do here now that these three are pooled.
         Ok(())
     }
 
@@ -1095,8 +1093,10 @@ impl GbufferResources {
         for &fb in &self.framebuffers {
             unsafe { device.destroy_framebuffer(fb, None) };
         }
-        // The cleared target images retire through the allocator as they drop.
         self.framebuffers.clear();
+        // The three colour channels are pool-owned: dropping these records frees
+        // nothing, which is the point. The private depth images retire through
+        // the allocator as they drop.
         self.normal_depth_images.clear();
         self.roughness_images.clear();
         self.velocity_images.clear();
@@ -1104,16 +1104,19 @@ impl GbufferResources {
     }
 
     // Rebuild the per-frame targets at a new swapchain extent. The caller has
-    // already idled the device. The descriptor sets and UBOs are
-    // resolution-independent and untouched.
+    // already idled the device and rebuilt the transient pool, so `pooled` names
+    // the new images; the framebuffers built here reference them, which is why
+    // this must run after every pool rebuild and not only after a resize. The
+    // descriptor sets and UBOs are resolution-independent and untouched.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         ctx: GbufferDeviceCtx,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
+        pooled: &GbufferPooled,
     ) -> Result<(), String> {
         self.destroy_targets(ctx.device);
-        self.build_targets(ctx, queue, extent)?;
+        self.build_targets(ctx, queue, extent, pooled)?;
         Ok(())
     }
 

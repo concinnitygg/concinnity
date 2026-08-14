@@ -1661,6 +1661,7 @@ impl VkContext {
             (0, empty_pass_times)
         };
         let vram_bytes = self.query_vram_bytes();
+        let transient_pool_bytes = self.transient_pool.allocated_bytes();
         // Reset the parallel-safe draw-call accumulator for this frame; the
         // encoders fetch_add into it during recording and `record_frame`
         // drains it back into `frame_stats.draw_calls` once recording is done.
@@ -1673,6 +1674,7 @@ impl VkContext {
             skinned_pool_free,
             gpu_frame_us,
             vram_bytes,
+            transient_pool_bytes,
             pass_times_us,
             // Adapted auto-exposure EV for the StatHud `EV` chip. `Some` only
             // when the world opted into auto-exposure (the EMA state is then

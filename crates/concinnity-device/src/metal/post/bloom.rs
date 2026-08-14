@@ -97,17 +97,10 @@ fn bloom_mip_count(width: u32, height: u32) -> u32 {
     levels.clamp(4, 6) as u32
 }
 
-// Extent of `mips[0]` for an HDR resolve target of `width`x`height`: half, at
-// least one texel. The transient pool sizes `bloom_top` through this, so the
-// pooled texture and the chain that binds it cannot drift apart.
-pub(crate) fn bloom_top_extent(width: u32, height: u32) -> (u32, u32) {
-    ((width.max(1) >> 1).max(1), (height.max(1) >> 1).max(1))
-}
-
 // Create the bloom mip chain for an HDR resolve target of `width`x`height`.
 // `mips[i]` has resolution `(width >> (i + 1), height >> (i + 1))`, floored
-// at one texel. `bloom_top` is the pool's `mips[0]`; the caller must have built
-// the pool at `bloom_top_extent(width, height)`.
+// at one texel. `bloom_top` is the pool's `mips[0]`, which the pool sizes from
+// the graph's own half-drawable desc.
 pub(crate) fn create_bloom_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,

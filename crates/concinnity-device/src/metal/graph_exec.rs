@@ -190,6 +190,32 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
 unsafe impl<'a> Send for GraphFrameParams<'a> {}
 unsafe impl<'a> Sync for GraphFrameParams<'a> {}
 
+// Assert no alias slot has two members live at once in the graph this frame is
+// about to run. Members of a slot share bytes, so two live at once means one
+// reads memory the other overwrote -- and unlike a barrier gap that has no
+// validation layer behind it, on any backend.
+//
+// This is the layer the sweep in `render_graph::transient` cannot be: the pool
+// is planned once per build configuration while graphs compile per frame, and
+// passes that *substitute* for one another mean there is no single maximal
+// graph to plan against. What the sweep covers is the input space it models;
+// this covers the graph actually in hand.
+#[cfg(debug_assertions)]
+fn debug_assert_pool_aliasing_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>]) {
+    use crate::gfx::render_graph::slot_conflicts;
+
+    let conflicts = slot_conflicts(graph, slot_labels);
+    assert!(
+        conflicts.is_empty(),
+        "transient pool (metal): alias slot members are simultaneously live: {}",
+        conflicts
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
 impl MtlContext {
     // Walk a compiled render graph and dispatch each pass to its
     // existing per-backend encoder. `params` carries the per-frame state
@@ -209,6 +235,9 @@ impl MtlContext {
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
+        #[cfg(debug_assertions)]
+        debug_assert_pool_aliasing_sound(graph, self.transient_pool.slot_labels());
+
         let particle_frame = self.prepare_particle_pass(params.elapsed);
         self.draw_calls_accum.store(0, Ordering::Relaxed);
 

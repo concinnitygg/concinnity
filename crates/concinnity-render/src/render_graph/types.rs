@@ -319,13 +319,18 @@ pub struct PassRange {
 }
 
 // Texture-shape description carried by both imported and transient
-// resources. Imported resources just declare it for documentation +
-// the aliaser's compatibility check; transients use it to drive
-// allocation later.
+// resources. This is the authoritative shape: the aliaser sizes a
+// resource from it and each backend's transient pool translates it into
+// a native descriptor, so a desc that disagrees with what the backend
+// would have created is a defect rather than a documentation slip.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TextureDesc {
     pub width: TextureSize,
     pub height: TextureSize,
+    // Depth extent of a 3D texture, 1 for 2D and 2D-array textures. Distinct
+    // from `array_layers`: 3D slices mip down with the other two axes, array
+    // layers do not.
+    pub depth: u32,
     pub format: PixelFormat,
     // MSAA sample count, 1 for non-multisample. The graph doesn't care
     // what value this is; the backend executor maps it to its API's
@@ -334,7 +339,30 @@ pub struct TextureDesc {
     // Number of array layers. 1 for plain 2D, 6 for cube, N for CSM
     // shadow-map arrays.
     pub array_layers: u32,
+    // Mip levels in the chain, 1 for a single-level target. A resource whose
+    // consumers sample coarser levels (the Hi-Z pyramid, a bloom octave chain)
+    // carries its real count, since the levels past 0 are a third of the
+    // footprint the aliaser packs.
+    pub mip_levels: u32,
     pub usage: TextureUsage,
+    // The value this target is cleared to at the head of the pass that writes
+    // it. Part of the shape rather than the encoder's business because D3D12
+    // bakes an *optimized* clear value into the resource at creation: a placed
+    // resource created with one value and cleared to another is both a
+    // debug-layer warning and a real decompression cost, and the pool creates
+    // the resource while the feature owns the clear. A target whose background
+    // means something (roughness clears to 1.0 = fully rough, so untouched
+    // pixels reflect nothing) reads wrong on its first frame if these disagree.
+    pub clear: ClearValue,
+}
+
+// What a target's clear resolves to. Split by kind rather than carried as four
+// floats so a depth target cannot silently be given a colour.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ClearValue {
+    Color([f32; 4]),
+    // Depth clear value; stencil is always 0 (no engine target has stencil).
+    Depth(f32),
 }
 
 // Buffer-shape description. Size is optional because some
@@ -416,15 +444,110 @@ impl TextureSize {
     }
 }
 
+// Levels in a full mip chain for a target of `width` x `height`:
+// `floor(log2(max(w, h))) + 1`. Power-of-two sources end exactly at 1x1;
+// non-power-of-two sources stop one level short of 1x1 on the smaller axis,
+// which is what each backend's Hi-Z build already does.
+pub const fn full_mip_levels(width: u32, height: u32) -> u32 {
+    let m = if width > height { width } else { height };
+    let m = if m < 1 { 1 } else { m };
+    32 - m.leading_zeros()
+}
+
 impl TextureDesc {
+    // A single-sample, single-mip, single-layer 2D texture: the shape almost
+    // every graph target has. The axes that differ are added by the `with_*`
+    // methods below, so a desc that names one is saying something.
+    pub const fn texture_2d(
+        width: TextureSize,
+        height: TextureSize,
+        format: PixelFormat,
+        usage: TextureUsage,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            depth: 1,
+            format,
+            sample_count: 1,
+            array_layers: 1,
+            mip_levels: 1,
+            usage,
+            // Zero / far, which is what every target the graph models clears to
+            // unless it says otherwise via `with_clear_color`.
+            clear: if format.is_depth() {
+                ClearValue::Depth(1.0)
+            } else {
+                ClearValue::Color([0.0; 4])
+            },
+        }
+    }
+
+    // A single-mip 3D texture of `depth` slices (the volumetric-fog froxel
+    // volume). Distinct from an array: the slices are a sampled third axis.
+    pub const fn volume_3d(
+        width: TextureSize,
+        height: TextureSize,
+        depth: u32,
+        format: PixelFormat,
+        usage: TextureUsage,
+    ) -> Self {
+        Self {
+            depth,
+            ..Self::texture_2d(width, height, format, usage)
+        }
+    }
+
+    pub const fn with_sample_count(self, sample_count: u32) -> Self {
+        Self {
+            sample_count,
+            ..self
+        }
+    }
+
+    pub const fn with_array_layers(self, array_layers: u32) -> Self {
+        Self {
+            array_layers,
+            ..self
+        }
+    }
+
+    pub const fn with_mip_levels(self, mip_levels: u32) -> Self {
+        Self { mip_levels, ..self }
+    }
+
+    // Override the colour a target clears to. Only for a target whose cleared
+    // background carries meaning; see `clear`.
+    pub const fn with_clear_color(self, color: [f32; 4]) -> Self {
+        Self {
+            clear: ClearValue::Color(color),
+            ..self
+        }
+    }
+
+    // Resolved pixel extent at the given drawable extent, as the backend must
+    // create it: `(width, height, depth)`.
+    pub fn extent(&self, drawable_w: u32, drawable_h: u32) -> (u32, u32, u32) {
+        (
+            self.width.resolve(drawable_w),
+            self.height.resolve(drawable_h),
+            self.depth.max(1),
+        )
+    }
+
     // The resource's memory footprint in bytes at the given drawable extent:
-    // width * height * bytes-per-texel * sample_count * array_layers (single
-    // mip; the engine's graph targets are all single-level). The aliasing
-    // planner sums and packs these.
+    // the summed texel count of every mip level, times bytes-per-texel,
+    // sample count and array layers. The aliasing planner sums and packs
+    // these. Sample count multiplies the whole chain, which is exact for the
+    // only shape that carries both (a multisample target is single-mip).
     pub fn byte_size(&self, drawable_w: u32, drawable_h: u32) -> u64 {
-        let w = self.width.resolve(drawable_w) as u64;
-        let h = self.height.resolve(drawable_h) as u64;
-        w * h
+        let (w, h, d) = self.extent(drawable_w, drawable_h);
+        let mut texels: u64 = 0;
+        for level in 0..self.mip_levels.max(1) {
+            let at = |n: u32| n.checked_shr(level).unwrap_or(0).max(1) as u64;
+            texels += at(w) * at(h) * at(d);
+        }
+        texels
             * self.format.bytes_per_texel() as u64
             * self.sample_count.max(1) as u64
             * self.array_layers.max(1) as u64
@@ -562,29 +685,105 @@ mod tests {
 
     #[test]
     fn texture_desc_byte_size_multiplies_every_factor() {
-        let base = TextureDesc {
-            width: TextureSize::Drawable,
-            height: TextureSize::Drawable,
-            format: PixelFormat::Rgba16Float, // 8 bytes / texel
-            sample_count: 1,
-            array_layers: 1,
-            usage: TextureUsage::RENDER_TARGET,
-        };
+        let base = TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::Rgba16Float, // 8 bytes / texel
+            TextureUsage::RENDER_TARGET,
+        );
         assert_eq!(base.byte_size(4, 2), 4 * 2 * 8);
         // Sample count and array layers both multiply in.
-        let multi = TextureDesc {
-            sample_count: 4,
-            array_layers: 6,
-            ..base
-        };
+        let multi = base.with_sample_count(4).with_array_layers(6);
         assert_eq!(multi.byte_size(4, 2), 4 * 2 * 8 * 4 * 6);
         // A zero sample count / layer count clamps to 1 rather than zeroing.
         let degenerate = TextureDesc {
             sample_count: 0,
             array_layers: 0,
+            mip_levels: 0,
             ..base
         };
         assert_eq!(degenerate.byte_size(4, 2), 4 * 2 * 8);
+    }
+
+    #[test]
+    fn byte_size_sums_the_mip_chain() {
+        // A 3-level chain over 8x8: 64 + 16 + 4 texels, not 64. Under-counting
+        // the tail is what would let the aliaser undersize a shared slot.
+        let chain = TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::R8Unorm,
+            TextureUsage::SHADER_READ,
+        )
+        .with_mip_levels(3);
+        assert_eq!(chain.byte_size(8, 8), 64 + 16 + 4);
+        // Levels floor at one texel rather than vanishing, so an over-long
+        // chain keeps adding 1 instead of 0.
+        let over_long = chain.with_mip_levels(6);
+        assert_eq!(over_long.byte_size(8, 8), 64 + 16 + 4 + 1 + 1 + 1);
+    }
+
+    #[test]
+    fn byte_size_counts_volume_slices_and_mips_them() {
+        // 3D depth multiplies like the other two axes, and mips down with
+        // them -- which is what separates it from `array_layers`.
+        let volume = TextureDesc::volume_3d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            4,
+            PixelFormat::R8Unorm,
+            TextureUsage::STORAGE,
+        );
+        assert_eq!(volume.byte_size(8, 8), 8 * 8 * 4);
+        assert_eq!(
+            volume.with_mip_levels(2).byte_size(8, 8),
+            8 * 8 * 4 + 4 * 4 * 2
+        );
+        // An array of the same nominal size does not shrink its layer count.
+        let array = TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::R8Unorm,
+            TextureUsage::STORAGE,
+        )
+        .with_array_layers(4)
+        .with_mip_levels(2);
+        assert_eq!(array.byte_size(8, 8), (8 * 8 + 4 * 4) * 4);
+    }
+
+    #[test]
+    fn constructors_default_the_uninteresting_axes() {
+        let d = TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Absolute(7),
+            PixelFormat::Rgba8Unorm,
+            TextureUsage::SHADER_READ,
+        );
+        assert_eq!(
+            (d.depth, d.sample_count, d.array_layers, d.mip_levels),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(d.extent(3, 99), (3, 7, 1));
+        let v = TextureDesc::volume_3d(
+            TextureSize::Absolute(2),
+            TextureSize::Absolute(3),
+            5,
+            PixelFormat::Rgba8Unorm,
+            TextureUsage::STORAGE,
+        );
+        assert_eq!(v.extent(0, 0), (2, 3, 5));
+        assert_eq!(v.array_layers, 1, "a volume is not an array");
+    }
+
+    #[test]
+    fn full_mip_levels_matches_the_backends_hiz_chain() {
+        // Mirrors each backend's `hiz_mip_count`: floor(log2(max)) + 1.
+        assert_eq!(full_mip_levels(1, 1), 1);
+        assert_eq!(full_mip_levels(2, 1), 2);
+        assert_eq!(full_mip_levels(1920, 1080), 11);
+        assert_eq!(full_mip_levels(1024, 1024), 11);
+        // Zero on either axis still yields a one-level chain.
+        assert_eq!(full_mip_levels(0, 0), 1);
     }
 
     #[test]

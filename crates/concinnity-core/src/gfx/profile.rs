@@ -48,6 +48,11 @@ pub struct RenderStats {
     // unified-memory hardware (Apple Silicon) this is the device's share of
     // system memory rather than dedicated VRAM.
     pub vram_bytes: u64,
+    // Bytes the render graph's transient pool holds: the aliased footprint of
+    // the slots backing the graph-owned transients. Part of `vram_bytes`, which
+    // is a device-wide total; carried separately so the shared memory ledger can
+    // attribute it rather than leaving it in the unaccounted remainder.
+    pub transient_pool_bytes: u64,
     // Per-pass GPU microseconds for the most recently completed frame.
     // Filled by the active backend only when its GPU supports timestamp
     // sampling; otherwise every slot stays at the default
@@ -81,6 +86,7 @@ impl Default for RenderStats {
             skinned_pool_free: 0,
             gpu_frame_us: 0,
             vram_bytes: 0,
+            transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],
             auto_exposure_ev: None,
             max_edr: None,

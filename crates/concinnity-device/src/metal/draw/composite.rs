@@ -76,16 +76,10 @@ impl MtlContext {
             // G-buffer was never built.
             if channel_view != 0 {
                 let nd = self
-                    .gbuffer
-                    .targets
-                    .as_ref()
-                    .map(|t| t.normal_depth.as_ref())
+                    .gbuffer_normal_depth()
                     .unwrap_or_else(|| self.ssao.white.as_ref());
                 let rough = self
-                    .gbuffer
-                    .targets
-                    .as_ref()
-                    .map(|t| t.roughness.as_ref())
+                    .gbuffer_roughness()
                     .unwrap_or_else(|| self.ssao.white.as_ref());
                 post_encoder.setFragmentTexture_atIndex(Some(nd), 3);
                 post_encoder.setFragmentTexture_atIndex(Some(rough), 4);

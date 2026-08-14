@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
 use crate::directx::context::{DxContext, FRAMES};
-use crate::directx::post::bloom::{bloom_top_extent, create_bloom_mips_at, write_color_rtv};
+use crate::directx::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
@@ -256,14 +256,16 @@ impl DxContext {
         // `ao_output` RTV/SRV from it. The device is idle at the top of resize,
         // so dropping the old placed resources + heaps is sound.
         let ssao_on = self.ssao.resources.is_some();
+        let gbuffer_on = self.gbuffer.is_some();
         self.transient_pool.rebuild(
             &self.device,
             &self.command_queue,
             &super::transient_pool::transient_slots(
                 ssao_on,
+                gbuffer_on,
                 (render_w, render_h),
-                bloom_top_extent(new_w, new_h),
-            ),
+                (new_w, new_h),
+            )?,
         )?;
 
         // 4) Bloom mip chain. Keep the count fixed at the init-time value
@@ -323,10 +325,20 @@ impl DxContext {
             ssr.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
         }
 
-        // 7-gbuffer) Unified G-buffer pre-pass: normal+depth + roughness +
-        // velocity + private depth, all at render resolution.
-        if let Some(gbuffer) = self.gbuffer.as_mut() {
-            gbuffer.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+        // 7-gbuffer) Unified G-buffer pre-pass: the three colour targets are
+        // pooled and were relocated by the rebuild above, so this re-points
+        // their views; the private depth is feature-owned and recreated.
+        if let Some(pooled) = self.transient_pool.gbuffer_pooled()
+            && let Some(gbuffer) = self.gbuffer.as_mut()
+        {
+            gbuffer.resize_to(
+                &self.device,
+                render_w,
+                render_h,
+                srv_cpu_base,
+                srv_gpu_base,
+                &pooled,
+            )?;
         }
 
         // 7-ssgi) SSGI gather target. Re-uses its pre-reserved RTV/SRV slots;

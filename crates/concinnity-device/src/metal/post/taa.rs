@@ -117,11 +117,11 @@ impl MtlContext {
             .pipeline_state
             .as_ref()
             .ok_or("TAA enabled but pipeline missing")?;
-        let gbuf = self
-            .gbuffer
-            .targets
-            .as_ref()
-            .ok_or("TAA enabled but G-buffer targets missing")?;
+        // Pool-owned, so it is fetched at encode time: a pool rebuild repacks
+        // every slot, and a cached handle would point at another resource.
+        let velocity = self
+            .gbuffer_velocity()
+            .ok_or("TAA enabled but the pooled G-buffer velocity is missing")?;
         let history = &self.taa.targets[1 - self.taa.dst];
         let dst = &self.taa.targets[self.taa.dst];
 
@@ -136,7 +136,7 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(scene_input), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuf.velocity.as_ref()), 1);
+                enc.setFragmentTexture_atIndex(Some(velocity), 1);
                 enc.setFragmentTexture_atIndex(Some(history.as_ref()), 2);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
                 enc.setFragmentBytes_length_atIndex(
