@@ -160,6 +160,81 @@ pub fn plan_transient_slots(
     )
 }
 
+// The transients a backend pool owns; everything else the graph declares
+// transient stays backend-owned. One set for every backend, because which
+// labels are pooled is policy rather than a per-backend capability: a set that
+// differed per backend would make their footprints incomparable and would leave
+// the soundness sweep below checking a grouping no backend builds.
+//
+// `gbuffer_depth` is deliberately absent while its three colour siblings are
+// here. D3D12 creates a shader-readable depth target with a typeless resource
+// format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`, while
+// `PixelFormat::Depth32Float` names one format for all three roles, so the pool
+// would create a resource the feature's SRV cannot view. Pooling it would
+// reclaim nothing anyway: its one-pass planning lifetime is an artifact of a
+// graph that cannot model the upscaler (see
+// `the_prepass_depth_is_short_lived_only_in_the_planning_graph`).
+pub fn pooled(label: &str) -> bool {
+    matches!(
+        label,
+        "ao_output"
+            | "bloom_top"
+            | "gbuffer_normal_depth"
+            | "gbuffer_roughness"
+            | "gbuffer_velocity"
+    )
+}
+
+// The feature gates a backend's transient pool is built for, i.e. the ones it
+// is rebuilt on. Everything else `planning_inputs` forces live.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PoolGates {
+    // SSAO is built, so `ao_output` exists.
+    pub ssao: bool,
+    // The bloom chain's top octave is managed. Metal and DirectX pass `true`
+    // unconditionally: they toggle bloom per frame off the post-process
+    // intensity while the composite binds mip 0 either way, so a pool built at
+    // init / resize cannot gate on it. Vulkan rebuilds on the flag and passes
+    // the real value.
+    pub bloom: bool,
+    // The unified G-buffer pre-pass is built, so its colour channels exist.
+    pub gbuffer: bool,
+}
+
+// The alias-slot list a pool built for `gates` should allocate, taken straight
+// from the graph: the grouping and each member's extent, format and usage come
+// from one planning graph, so init and resize cannot drift apart and neither
+// can the graph and the resource it describes.
+//
+// `render_extent` sizes the render-resolution transients and `output_extent` is
+// the drawable the half-resolution ones scale off; under temporal upscaling
+// they differ, which is why both are passed rather than derived.
+//
+// A planning graph that does not compile is a hard error rather than an empty
+// pool: every consumer reads its target back out by label, so silently pooling
+// nothing would fail later and further from the cause.
+pub fn plan_pool_slots(
+    gates: PoolGates,
+    render_extent: (u32, u32),
+    output_extent: (u32, u32),
+) -> Result<Vec<TransientSlot>, String> {
+    let mut build = FrameGraphInputs::all_off();
+    build.hdr_width = render_extent.0;
+    build.hdr_height = render_extent.1;
+    build.ssao_enabled = gates.ssao;
+    build.bloom_enabled = gates.bloom;
+    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
+    // nodes rather than adding to them, so `planning_inputs` cannot force it on
+    // the way it does the purely additive passes: it has to follow the build.
+    // `velocity_enabled` is what makes the node appear once the flag is set,
+    // and this gate must match the one that builds the pre-pass itself, or a
+    // consumer reads a label the pool never created.
+    build.unified_gbuffer_prepass = gates.gbuffer;
+    build.velocity_enabled = gates.gbuffer;
+    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
+        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
+}
+
 // One graph resource as the pool must create it.
 fn resolve(
     graph: &CompiledGraph,
@@ -240,6 +315,34 @@ pub fn slot_conflicts(graph: &CompiledGraph, slots: &[Vec<&'static str>]) -> Vec
     conflicts
 }
 
+// Panic if any alias slot has two members live at once in `graph`. Members of a
+// slot share bytes, so two live at once means one reads memory the other
+// overwrote, and unlike a barrier gap there is no validation layer behind it on
+// any backend. Every executor calls this per frame under `debug_assertions`,
+// over the graph it is about to run; `backend` names the caller in the message.
+//
+// This is the layer the sweep in this module's tests cannot be: the pool is
+// planned once per build configuration while graphs compile per frame, and
+// passes that *substitute* for one another mean there is no single maximal
+// graph to plan against. The sweep covers the input space it models; this
+// covers the graph actually in hand.
+pub fn assert_slot_aliasing_sound(
+    graph: &CompiledGraph,
+    slot_labels: &[Vec<&'static str>],
+    backend: &str,
+) {
+    let conflicts = slot_conflicts(graph, slot_labels);
+    assert!(
+        conflicts.is_empty(),
+        "transient pool ({backend}): alias slot members are simultaneously live: {}",
+        conflicts
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,31 +371,12 @@ mod tests {
         i
     }
 
-    // The pooled set the widest backend manages today (DirectX). Keeping this
-    // in step with the backends' `pooled()` is what makes the sweep below mean
-    // anything: a label pooled by a backend and missing here is a grouping no
-    // headless test ever checks.
-    //
-    // `gbuffer_depth` is absent because no backend pools it: D3D12 needs a
-    // typeless resource format for a shader-readable depth target, which
-    // `PixelFormat` does not model.
-    fn poolable(label: &str) -> bool {
-        matches!(
-            label,
-            "ao_output"
-                | "bloom_top"
-                | "gbuffer_normal_depth"
-                | "gbuffer_roughness"
-                | "gbuffer_velocity"
-        )
-    }
-
     #[test]
     fn slots_carry_the_graphs_own_shape() {
-        // The whole point of B1: the extent, format and usage a pool creates
-        // come from the graph's desc, so there is no second description to
-        // disagree with it.
-        let slots = plan_transient_slots(&build_inputs(true, true), &poolable, 1920, 1080)
+        // The point of planning off the graph: the extent, format and usage a
+        // pool creates come from the graph's desc, so there is no second
+        // description to disagree with it.
+        let slots = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let member = |label: &str| {
             slots
@@ -328,7 +412,7 @@ mod tests {
         build.hdr_width = 1280;
         build.hdr_height = 720;
         let slots =
-            plan_transient_slots(&build, &poolable, 2560, 1440).expect("planning graph compiles");
+            plan_transient_slots(&build, &pooled, 2560, 1440).expect("planning graph compiles");
         let member = |label: &str| {
             slots
                 .iter()
@@ -367,26 +451,18 @@ mod tests {
     fn ssao_off_leaves_only_the_bloom_target() {
         // No SSAO and no G-buffer pre-pass: `bloom_top` is the only pooled
         // resource the graph declares.
-        let slots = plan_transient_slots(
-            &build_inputs_with(false, true, false),
-            &poolable,
-            1920,
-            1080,
-        )
-        .expect("planning graph compiles");
+        let slots =
+            plan_transient_slots(&build_inputs_with(false, true, false), &pooled, 1920, 1080)
+                .expect("planning graph compiles");
         let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
         assert_eq!(labels, vec!["bloom_top"]);
     }
 
     #[test]
     fn nothing_pooled_when_neither_feature_is_built() {
-        let slots = plan_transient_slots(
-            &build_inputs_with(false, false, false),
-            &poolable,
-            1920,
-            1080,
-        )
-        .expect("planning graph compiles");
+        let slots =
+            plan_transient_slots(&build_inputs_with(false, false, false), &pooled, 1920, 1080)
+                .expect("planning graph compiles");
         assert!(slots.is_empty());
     }
 
@@ -396,16 +472,15 @@ mod tests {
         // forces, so a pool built without it must place none of them -- which is
         // what makes it safe for a backend to pool them only when the pre-pass
         // exists.
-        let off =
-            plan_transient_slots(&build_inputs_with(true, true, false), &poolable, 1920, 1080)
-                .expect("planning graph compiles");
+        let off = plan_transient_slots(&build_inputs_with(true, true, false), &pooled, 1920, 1080)
+            .expect("planning graph compiles");
         let off_labels: Vec<&str> = off.iter().flat_map(|s| s.labels()).collect();
         assert!(
             !off_labels.contains(&"gbuffer_normal_depth"),
             "{off_labels:?}"
         );
 
-        let on = plan_transient_slots(&build_inputs(true, true), &poolable, 1920, 1080)
+        let on = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let on_labels: Vec<&str> = on.iter().flat_map(|s| s.labels()).collect();
         for want in [
@@ -481,7 +556,7 @@ mod tests {
         // pre-pass and read by a late consumer, so their lifetimes span most of
         // the frame. That is why pooling this group reclaims far less than the
         // HDR / post groups will.
-        let slots = plan_transient_slots(&build_inputs(true, true), &poolable, 1920, 1080)
+        let slots = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let shared: Vec<Vec<&'static str>> = slots
             .iter()
@@ -549,7 +624,7 @@ mod tests {
         // Main (to the Composite in the occlusion view) -- so they overlap each
         // other and each needs its own slot. Aliasing pays for *short* lifetimes,
         // and this renderer has few.
-        let slots = plan_transient_slots(&build_inputs(true, true), &poolable, 1920, 1080)
+        let slots = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let (aliased, unaliased) = slot_bytes(&slots);
         let saved = unaliased - aliased;
@@ -565,9 +640,6 @@ mod tests {
 
     #[test]
     fn the_prepass_depth_is_short_lived_only_in_the_planning_graph() {
-        // A trap that already cost one wrong measurement, pinned so it cannot
-        // cost another.
-        //
         // `gbuffer_depth` looks like the best aliasing candidate in the whole
         // graph: the planning graph gives it a ONE-PASS lifetime, and reading
         // that at face value says it could share memory with `hdr_depth` and
@@ -652,8 +724,8 @@ mod tests {
     // Assert the slots a pool built for `build` would allocate are conflict-free
     // in the graph `inputs` compiles to.
     fn assert_sound(build: &FrameGraphInputs, inputs: &FrameGraphInputs, what: &str) {
-        let slots = plan_transient_slots(build, &poolable, 1920, 1080)
-            .expect("the planning graph compiles");
+        let slots =
+            plan_transient_slots(build, &pooled, 1920, 1080).expect("the planning graph compiles");
         let grouped: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
         let graph = build_frame_graph(inputs)
             .unwrap_or_else(|e| panic!("graph failed to compile for {what}: {e}"));

@@ -253,9 +253,17 @@ fn emit_alias_barriers(device: &ash::Device, cmd: vk::CommandBuffer, images: &[v
     }
 }
 
-// Everything a pass owes its command buffer before its body: its graph-derived
-// transitions, then the aliasing barriers for any pooled transient it
-// first-writes.
+// Everything a pass owes its command buffer before its body: the aliasing
+// barriers for any pooled transient it first-writes, then its graph-derived
+// transitions.
+//
+// That order matches DirectX, and it is the order the two can be combined in: a
+// resource that is both aliased and graph-driven needs its slot claimed before
+// the derived transition that opens it for writing, since the aliasing barrier
+// is what makes the memory legally its own. No resource is both today (here
+// `ao_output` is driven but sits alone in its slot, while `bloom_top` aliases
+// but has no registry entry), so keeping the orders identical across backends
+// is what stops that from being discovered one backend at a time.
 //
 // One function because the two recording paths are otherwise asymmetric --
 // Composite records into the outer "end" buffer on the main thread while every
@@ -269,8 +277,8 @@ fn emit_pass_prologue(
     alias: &[vk::Image],
     pass: &CompiledPass,
 ) {
-    emit_graph_barriers(device, cmd, registry, pass);
     emit_alias_barriers(device, cmd, alias);
+    emit_graph_barriers(device, cmd, registry, pass);
 }
 
 // Check the graph's barrier coverage and cross-frame layout contract for every
@@ -287,32 +295,6 @@ fn emit_pass_prologue(
 // This is where a registry entry that claims a resource the graph does not fully
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself.
-// Assert no alias slot has two members live at once in the graph this frame is
-// about to run. Members of a slot share bytes, so two live at once means one
-// reads memory the other overwrote -- and unlike a barrier gap that has no
-// validation layer behind it, on any backend.
-//
-// This is the layer the sweep in `render_graph::transient` cannot be: the pool
-// is planned once per build configuration while graphs compile per frame, and
-// passes that *substitute* for one another mean there is no single maximal
-// graph to plan against. What the sweep covers is the input space it models;
-// this covers the graph actually in hand.
-#[cfg(debug_assertions)]
-fn debug_assert_pool_aliasing_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>]) {
-    use crate::gfx::render_graph::slot_conflicts;
-
-    let conflicts = slot_conflicts(graph, slot_labels);
-    assert!(
-        conflicts.is_empty(),
-        "transient pool (vulkan): alias slot members are simultaneously live: {}",
-        conflicts
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-}
-
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
     use super::barrier_translate::vk_state;
@@ -469,7 +451,11 @@ impl VkContext {
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &registry);
         #[cfg(debug_assertions)]
-        debug_assert_pool_aliasing_sound(graph, self.transient_pool.slot_labels());
+        crate::gfx::render_graph::assert_slot_aliasing_sound(
+            graph,
+            self.transient_pool.slot_labels(),
+            "vulkan",
+        );
         // Per-pass aliasing barriers for the pooled transients that share memory
         // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
         // slot is shared.
@@ -770,6 +756,18 @@ impl VkContext {
                 .hiz
                 .as_ref()
                 .map(|h| image(h.pyramid.image(), h.mip_count, 1, VkResting::Sampled)),
+            // Everything else the graph models is left to its encoder, and the
+            // scene spine is the bulk of it: `hdr_color`, `hdr_resolve`,
+            // `scene_pre_taa`, `scene_color`, `bloom_top` and the three
+            // `gbuffer_*` channels. Each is a render pass attachment whose
+            // initial / final layouts move it between the attachment and sampled
+            // layouts, and whose external subpass dependencies order it against
+            // the neighbouring passes -- a form the driver can fold into the
+            // pass, which a standalone barrier is not. So the ops the graph
+            // derives for them are deliberately dropped here rather than
+            // pending. Adding an entry above means taking the layout and the
+            // dependencies out of that resource's render pass in the same
+            // change, or it is transitioned twice.
             _ => None,
         }
     }

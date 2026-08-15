@@ -47,8 +47,7 @@ use objc2_metal::{
 // is consumed where the pass is encoded, not here. DirectX translates it at
 // creation, which is why its pool reads the field and this one does not.
 use crate::gfx::render_graph::{
-    FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
-    plan_transient_slots,
+    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
 use crate::metal::context::MtlContext;
 
@@ -252,64 +251,30 @@ fn texture_usage(usage: TextureUsage) -> MTLTextureUsage {
     MTLTextureUsage(bits)
 }
 
-// The transients this pool owns. Everything else the graph declares transient
-// stays backend-owned; adding a label here is what hands it to the pool.
-// `gbuffer_depth` is deliberately absent while its three colour siblings are
-// here, matching DirectX and Vulkan. Metal has no format obstacle of its own --
-// the D3D12 reason is that a shader-readable depth target needs a typeless
-// resource format `PixelFormat` cannot express -- but the pooled set is kept
-// identical across backends so their footprints stay comparable, and pooling it
-// would reclaim nothing anyway: its one-pass planning lifetime is an artifact of
-// a graph that cannot model the upscaler (see
-// `the_prepass_depth_is_short_lived_only_in_the_planning_graph`).
-fn pooled(label: &str) -> bool {
-    matches!(
-        label,
-        "ao_output"
-            | "bloom_top"
-            | "gbuffer_normal_depth"
-            | "gbuffer_roughness"
-            | "gbuffer_velocity"
-    )
-}
-
-// The alias-slot list for the transients the pool manages this build, taken
-// straight from the graph: `plan_transient_slots` decides the grouping and
-// hands back each member's extent, format and usage, so init and resize cannot
-// drift apart and neither can the graph and the texture it describes.
+// The alias-slot list for the transients the pool manages this build. The
+// grouping, the pooled label set and each member's shape all come from the
+// shared planner, so nothing here can disagree with the graph or with another
+// backend.
 //
-// `render_extent` sizes the render-resolution transients and `output_extent` is
-// the drawable the half-resolution ones scale off; under temporal upscaling
-// they differ, which is exactly why both are passed rather than derived.
-//
-// A planning graph that does not compile is a hard error rather than an empty
-// pool: every consumer reads its target back out by label, so silently pooling
-// nothing would fail later and further from the cause.
+// Bloom is always managed: Metal toggles it per frame off `bloom_intensity`
+// while the composite binds mip 0 unconditionally, so a pool built at init /
+// resize cannot gate on it and the heap must cover the frames where it is live.
+// DirectX does the same; Vulkan rebuilds on the flag and passes it through.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
     gbuffer_enabled: bool,
     render_extent: (u32, u32),
     output_extent: (u32, u32),
 ) -> Result<Vec<TransientSlot>, String> {
-    let mut build = FrameGraphInputs::all_off();
-    build.hdr_width = render_extent.0;
-    build.hdr_height = render_extent.1;
-    build.ssao_enabled = ssao_enabled;
-    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
-    // nodes rather than adding to them, so `planning_inputs` cannot force it on
-    // the way it does the purely additive passes: it has to follow the build.
-    // `velocity_enabled` is what makes the node appear once the flag is set.
-    // This gate must match the one that builds the pre-pass itself, or a
-    // consumer reads a label the pool never created.
-    build.unified_gbuffer_prepass = gbuffer_enabled;
-    build.velocity_enabled = gbuffer_enabled;
-    // Metal toggles bloom per frame off `bloom_intensity` while the composite
-    // binds mip 0 unconditionally, so a pool built at init / resize cannot gate
-    // on it and the heap must cover the frames where it is live. DirectX
-    // manages it always for the same reason; Vulkan gates on it.
-    build.bloom_enabled = true;
-    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
-        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
+    plan_pool_slots(
+        PoolGates {
+            ssao: ssao_enabled,
+            bloom: true,
+            gbuffer: gbuffer_enabled,
+        },
+        render_extent,
+        output_extent,
+    )
 }
 
 impl MtlContext {

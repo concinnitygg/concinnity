@@ -168,7 +168,8 @@ fn emit_graph_barriers(
 
 // Everything a pass owes its command list before its body: the aliasing barriers
 // for any pooled transient it first-writes (which must precede the resting ->
-// RENDER_TARGET transition below), then its graph-derived transitions.
+// RENDER_TARGET transition below), then its graph-derived transitions. Vulkan
+// emits the two halves in the same order, for the same reason.
 //
 // One function because the two recording paths are otherwise asymmetric --
 // Composite records into the outer "end" list on the main thread while every
@@ -231,32 +232,6 @@ fn emit_graph_restores(
 // This is where a registry entry that claims a resource the graph does not fully
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself. Mirrors the Vulkan executor's `debug_assert_graph_drives`.
-// Assert no alias slot has two members live at once in the graph this frame is
-// about to run. Members of a slot share bytes, so two live at once means one
-// reads memory the other overwrote -- and unlike a barrier gap that has no
-// validation layer behind it, on any backend.
-//
-// This is the layer the sweep in `render_graph::transient` cannot be: the pool
-// is planned once per build configuration while graphs compile per frame, and
-// passes that *substitute* for one another mean there is no single maximal
-// graph to plan against. What the sweep covers is the input space it models;
-// this covers the graph actually in hand.
-#[cfg(debug_assertions)]
-fn debug_assert_pool_aliasing_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>]) {
-    use crate::gfx::render_graph::slot_conflicts;
-
-    let conflicts = slot_conflicts(graph, slot_labels);
-    assert!(
-        conflicts.is_empty(),
-        "transient pool (directx): alias slot members are simultaneously live: {}",
-        conflicts
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-}
-
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
@@ -462,7 +437,11 @@ impl DxContext {
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &registry);
         #[cfg(debug_assertions)]
-        debug_assert_pool_aliasing_sound(graph, self.transient_pool.slot_labels());
+        crate::gfx::render_graph::assert_slot_aliasing_sound(
+            graph,
+            self.transient_pool.slot_labels(),
+            "directx",
+        );
         let registry_ref = &registry;
         // Likewise resolve the per-pass aliasing barriers (which pooled transients
         // reclaim a shared heap region) once, shared read-only into the workers.

@@ -7,11 +7,10 @@
 // barrier is *classified*; it says nothing about whether a classified barrier is
 // still *needed*. When a resource joins the registry, deleting its inline
 // transitions is a separate manual step, and a table left describing barriers
-// that are now redundant is perfectly self-consistent. That is exactly how the
-// DirectX buffer migration shipped: the registry entries landed, the encoders
-// kept transitioning the same buffers, and every frame announced a before-state
-// the resource had already left -- 129,909 debug-layer errors per run, found only
-// on Windows.
+// that are now redundant is perfectly self-consistent. What that leaves is a
+// frame announcing a before-state the resource has already left, once per
+// barrier per frame: a debug-layer error on every frame, and only on the backend
+// whose debug layer runs.
 //
 // The check is textual, for the same reason as `barrier_audit`: only one backend
 // compiles per build, so a macOS run has to audit the DirectX source as source if

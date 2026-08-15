@@ -1119,14 +1119,21 @@ pub(super) fn transition_barrier(
 
 // Unordered-access barrier ordering one UAV write against the next on the same
 // resource. Unlike a render-target write, which the pipeline orders by itself,
-// consecutive shader writes through a UAV have no implied ordering. Borrows the
-// resource pointer without an AddRef, same rationale as `transition_barrier`.
+// consecutive shader writes through a UAV have no implied ordering.
 pub(super) fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
         Anonymous: D3D12_RESOURCE_BARRIER_0 {
             UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                // SAFETY: `ID3D12Resource` is a transparent wrapper over its COM
+                // pointer, so `transmute_copy` yields that pointer and nothing
+                // else. It is borrowed rather than cloned because `pResource`
+                // sits in a `ManuallyDrop` that is never dropped: an AddRef here
+                // would leak one reference on every barrier. The caller's
+                // `&resource` outlives the `ResourceBarrier` call that consumes
+                // the returned struct, so the raw pointer stays valid. Same
+                // contract as `transition_barrier` above.
                 pResource: unsafe { std::mem::transmute_copy(resource) },
             }),
         },

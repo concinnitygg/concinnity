@@ -17,24 +17,7 @@ use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier};
-
-// Build a D3D12 UAV barrier for one buffer resource. `pResource` is borrowed
-// (no AddRef) via `transmute_copy`: it is a `ManuallyDrop`, so a `clone()` here
-// would never be released and would leak one reference to the resource on every
-// barrier. The caller's `&resource` outlives the `ResourceBarrier` call, so the
-// raw pointer stays valid. Mirrors `transition_barrier`.
-fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
-                pResource: unsafe { std::mem::transmute_copy(resource) },
-            }),
-        },
-    }
-}
+use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier, uav_barrier};
 
 // Compile the auto-exposure `build` + `average` compute kernels. Used at
 // init and by shader hot-reload to rebuild the two compute PSOs.

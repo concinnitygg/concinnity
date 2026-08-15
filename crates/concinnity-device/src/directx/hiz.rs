@@ -28,6 +28,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::texture::uav_barrier;
 
 // DWORD count of the `HizParams` cbuffer (dst_w, dst_h, src_mip, sample_count).
 const HIZ_PARAMS_DWORDS: u32 = 4;
@@ -399,23 +400,6 @@ impl HiZResources {
         self.init_single_pso = init_single_pso;
         self.init_msaa_pso = init_msaa_pso;
         self.downsample_pso = downsample_pso;
-    }
-}
-
-// UAV barrier helper, mirrors `auto_exposure::uav_barrier`. `pResource` is
-// borrowed (no AddRef) via `transmute_copy`: it is a `ManuallyDrop`, so a
-// `clone()` here would never be released and would leak one reference to the
-// resource on every barrier. The caller's `&resource` outlives the
-// `ResourceBarrier` call, so the raw pointer stays valid.
-fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
-                pResource: unsafe { std::mem::transmute_copy(resource) },
-            }),
-        },
     }
 }
 

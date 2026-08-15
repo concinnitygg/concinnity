@@ -412,9 +412,6 @@ impl DxContext {
             cmd.DrawInstanced(vertices.len() as u32, 1, 0, 0);
         }
         self.inc_draw_calls(1);
-
-        // `_scene_rmw` drops here: scene RT -> PSR for the SSR resolve / TAA /
-        // bloom / composite passes.
         Ok(())
     }
 }

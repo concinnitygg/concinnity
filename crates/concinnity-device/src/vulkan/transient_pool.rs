@@ -28,8 +28,7 @@ use super::texture::{
     create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
 };
 use crate::gfx::render_graph::{
-    FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
-    plan_transient_slots,
+    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
 
 // The raw device handles the pool allocates with. The pool deliberately stays
@@ -73,13 +72,21 @@ pub(super) struct TransientImagePool {
 
 impl TransientImagePool {
     // Allocate every slot's per-frame backing memory and bind its member images
-    // into it. Each member is pre-transitioned to `SHADER_READ_ONLY_OPTIMAL`, the
-    // resting layout a producing pass leaves it in, so a consumer that samples it
-    // before any producer has run binds a valid layout (the Composite samples
-    // `ao_output` and `bloom_top` unconditionally, but a world hidden behind an
-    // opaque menu masks off every pass that writes them). Producers still open
-    // from `UNDEFINED` and discard, so this costs nothing after the first frame.
-    // Matches the committed bloom mips and the TAA history images.
+    // into it. Every member is pre-transitioned to `SHADER_READ_ONLY_OPTIMAL`,
+    // the resting layout a producing pass leaves it in, so a consumer that
+    // samples one before any producer has run binds a valid layout. A world
+    // hidden behind an opaque menu masks off every pass that writes a pooled
+    // target while the Composite still samples them, so this is a real frame and
+    // not just the first one. Producers still open from `UNDEFINED` and discard,
+    // so it costs nothing afterwards.
+    //
+    // Every member and not just the last, even though members of a slot share an
+    // allocation: what aliasing makes undefined is an image's *contents*, and a
+    // frame with no producer reads nothing meaningful out of a pooled target
+    // either way. The layout is per-image state, and each member needs a legal
+    // one -- initialising only the last leaves `gbuffer_normal_depth` in
+    // `UNDEFINED` while the masked Composite samples it, which is 1110 layout
+    // errors over a 1036-frame `depth_consumers_masked` run.
     pub(super) fn build(
         ctx: &TransientPoolGpu,
         frames: usize,
@@ -387,40 +394,14 @@ fn sample_count(samples: u32) -> vk::SampleCountFlags {
     }
 }
 
-// The transients this pool owns. Everything else the graph declares transient
-// stays backend-owned; adding a label here is what hands it to the pool.
+// The alias-slot list for the transients the pool manages this build. The
+// grouping, the pooled label set and each member's shape all come from the
+// shared planner, so nothing here can disagree with the graph or with another
+// backend.
 //
-// `gbuffer_depth` is deliberately absent while its three colour siblings are
-// here, matching DirectX: the pool creates one image per (slot, frame) with a
-// single format, and a shader-readable depth target needs different resource
-// and view formats on D3D12. Keeping the pooled set identical across the two
-// explicit backends is what makes their footprints comparable.
-fn pooled(label: &str) -> bool {
-    matches!(
-        label,
-        "ao_output"
-            | "bloom_top"
-            | "gbuffer_normal_depth"
-            | "gbuffer_roughness"
-            | "gbuffer_velocity"
-    )
-}
-
-// The alias-slot list for the transients the pool manages this build, taken
-// straight from the graph: `plan_transient_slots` decides the grouping and
-// hands back each member's extent, format and usage, so init and resize cannot
-// drift apart and neither can the graph and the image it describes.
-//
-// `render_extent` sizes the render-resolution transients and `output_extent` is
-// the drawable the half-resolution ones scale off; under temporal upscaling
-// they differ, which is exactly why both are passed rather than derived. Unlike
-// Metal and DirectX (where `bloom_top` is managed unconditionally because bloom
-// toggles per frame), Vulkan manages it only while bloom is on, so the build
-// configuration carries the real flag.
-//
-// A planning graph that does not compile is a hard error rather than an empty
-// pool: every consumer reads its image back out by label, so silently pooling
-// nothing would fail later and further from the cause.
+// Unlike Metal and DirectX (where `bloom_top` is managed unconditionally
+// because bloom toggles per frame), Vulkan rebuilds on the flag, so the real
+// value goes through.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
     bloom_enabled: bool,
@@ -428,19 +409,15 @@ pub(super) fn transient_slots(
     render_extent: vk::Extent2D,
     output_extent: vk::Extent2D,
 ) -> Result<Vec<TransientSlot>, String> {
-    let mut build = FrameGraphInputs::all_off();
-    build.hdr_width = render_extent.width;
-    build.hdr_height = render_extent.height;
-    build.ssao_enabled = ssao_enabled;
-    build.bloom_enabled = bloom_enabled;
-    // `unified_gbuffer_prepass` substitutes for the separate SsrPrepass /
-    // Velocity nodes rather than adding to them, so `planning_inputs` cannot
-    // force it on: it is a build gate the pool follows. `velocity_enabled` is
-    // what makes the node appear once the flag is set.
-    build.unified_gbuffer_prepass = gbuffer_enabled;
-    build.velocity_enabled = gbuffer_enabled;
-    plan_transient_slots(&build, &pooled, output_extent.width, output_extent.height)
-        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
+    plan_pool_slots(
+        PoolGates {
+            ssao: ssao_enabled,
+            bloom: bloom_enabled,
+            gbuffer: gbuffer_enabled,
+        },
+        (render_extent.width, render_extent.height),
+        (output_extent.width, output_extent.height),
+    )
 }
 
 #[cfg(test)]

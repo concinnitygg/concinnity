@@ -27,8 +27,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::texture::{one_shot_submit, transition_barrier};
 use crate::gfx::render_graph::{
-    ClearValue, FrameGraphInputs, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
-    plan_transient_slots,
+    ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,
+    plan_pool_slots,
 };
 
 struct PlacedResource {
@@ -356,63 +356,30 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
     }
 }
 
-// The transients this pool owns. Everything else the graph declares transient
-// stays backend-owned; adding a label here is what hands it to the pool.
+// The alias-slot list for the transients the pool manages this build. The
+// grouping, the pooled label set and each member's shape all come from the
+// shared planner, so nothing here can disagree with the graph or with another
+// backend.
 //
-// `gbuffer_depth` is deliberately absent while its three colour siblings are
-// here. D3D12 creates a shader-readable depth target with a **typeless**
-// resource format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`,
-// and `PixelFormat::Depth32Float` names one format for all three roles -- so
-// the pool would create a resource the feature's SRV cannot view. Pooling it
-// needs `PixelFormat` to separate a resource format from its view formats;
-// until then it stays feature-owned, which is also why the barrier registry
-// leaves it out (see `graph_exec`).
-fn pooled(label: &str) -> bool {
-    matches!(
-        label,
-        "ao_output"
-            | "bloom_top"
-            | "gbuffer_normal_depth"
-            | "gbuffer_roughness"
-            | "gbuffer_velocity"
-    )
-}
-
-// The alias-slot list for the transients the pool manages this build, taken
-// straight from the graph: `plan_transient_slots` decides the grouping and
-// hands back each member's extent, format and usage, so init and resize cannot
-// drift apart and neither can the graph and the resource it describes.
-//
-// `render_extent` sizes the render-resolution transients and `output_extent` is
-// the drawable the half-resolution ones scale off; under temporal upscaling
-// they differ, which is exactly why both are passed rather than derived.
-//
-// A planning graph that does not compile is a hard error rather than an empty
-// pool: every consumer reads its resource back out by label, so silently
-// pooling nothing would fail later and further from the cause.
+// `bloom_top` is always managed: the bloom chain always exists and the
+// composite samples mip 0 even when bloom is disabled, so a pool built at init
+// / resize cannot gate on it. Metal does the same; Vulkan rebuilds on the flag
+// and passes it through.
 pub(super) fn transient_slots(
     ssao_enabled: bool,
     gbuffer_enabled: bool,
     render_extent: (u32, u32),
     output_extent: (u32, u32),
 ) -> Result<Vec<TransientSlot>, String> {
-    let mut build = FrameGraphInputs::all_off();
-    build.hdr_width = render_extent.0;
-    build.hdr_height = render_extent.1;
-    build.ssao_enabled = ssao_enabled;
-    // The unified pre-pass SUBSTITUTES for the separate SsrPrepass / Velocity
-    // nodes rather than adding to them, so it cannot be forced on in
-    // `planning_inputs` the way the purely additive passes are: it has to
-    // follow the build. `velocity_enabled` is what makes the node appear at
-    // all once the flag is set.
-    build.unified_gbuffer_prepass = gbuffer_enabled;
-    build.velocity_enabled = gbuffer_enabled;
-    // `bloom_top` is always managed: the bloom chain always exists and the
-    // composite samples mip 0 even when bloom is disabled, so a pool built at
-    // init / resize cannot gate on it.
-    build.bloom_enabled = true;
-    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
-        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
+    plan_pool_slots(
+        PoolGates {
+            ssao: ssao_enabled,
+            bloom: true,
+            gbuffer: gbuffer_enabled,
+        },
+        render_extent,
+        output_extent,
+    )
 }
 
 #[cfg(test)]

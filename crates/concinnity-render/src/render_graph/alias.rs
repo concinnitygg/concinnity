@@ -95,15 +95,12 @@ impl AliasPlan {
     }
 }
 
-// Compute the aliasing plan over every transient texture in `graph` at the
-// given drawable extent. Pure: the same graph + extent always produces the same
-// plan. See the module header for the packing strategy.
-pub fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) -> AliasPlan {
-    plan_aliasing_for(graph, drawable_w, drawable_h, &|_| true)
-}
-
-// The same plan restricted to the transients `poolable` accepts by label, i.e.
-// the ones a backend's pool actually owns. Restricting the *candidate set*
+// Compute the aliasing plan over the transients `poolable` accepts by label,
+// i.e. the ones a backend's pool actually owns, at the given drawable extent.
+// Pure: the same graph + extent + predicate always produces the same plan. See
+// the module header for the packing strategy.
+//
+// Restricting the *candidate set*
 // rather than filtering the finished plan is what lets a pool plan against the
 // real frame graph: the greedy then packs the pooled resources against each
 // other, instead of pairing one of them with an unpooled resource and leaving
@@ -213,6 +210,13 @@ mod tests {
     use crate::render_graph::types::{
         PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
     };
+
+    // The plan over every transient in the graph. Only the tests want this:
+    // production planning always restricts to one pool's own label set, so the
+    // unrestricted packing is exercised here rather than exported.
+    fn plan_aliasing(graph: &CompiledGraph, drawable_w: u32, drawable_h: u32) -> AliasPlan {
+        plan_aliasing_for(graph, drawable_w, drawable_h, &|_| true)
+    }
 
     // Mirror of `frame::tests::all_off` (that helper is private to the frame
     // test module). All gated passes off; used by the integration test below.

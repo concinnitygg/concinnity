@@ -587,9 +587,6 @@ impl DxContext {
             }
             self.inc_draw_calls(1);
         }
-
-        // `_scene_rmw` drops here: scene RT -> PSR for the SSR resolve / TAA /
-        // bloom / composite passes.
     }
 
     // GPU descriptor handle for decal `i`'s albedo SRV (written into the

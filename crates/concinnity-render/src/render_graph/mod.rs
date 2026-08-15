@@ -25,14 +25,14 @@ mod types;
 mod validate;
 mod view_mask;
 
-pub use alias::{AliasPlan, AliasSlot, plan_aliasing, plan_aliasing_for};
+pub use alias::{AliasPlan, AliasSlot, plan_aliasing_for};
 pub use builder::{GraphBuilder, PassBuilder, ResourceVersion};
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource, GraphError};
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use transient::{
-    SlotConflict, TransientSlot, TransientTexture, plan_transient_slots, planning_inputs,
-    slot_conflicts,
+    PoolGates, SlotConflict, TransientSlot, TransientTexture, assert_slot_aliasing_sound,
+    plan_pool_slots, plan_transient_slots, planning_inputs, pooled, slot_conflicts,
 };
 pub use types::{
     BarrierOp, BufferDesc, BufferHandle, BufferUsage, ClearValue, GraphResourceClass, PassKind,

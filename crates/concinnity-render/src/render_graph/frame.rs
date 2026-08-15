@@ -323,6 +323,7 @@ impl FrameGraphInputs {
 // the phase-1 status buffer and writes `draw_args2`; `Main2` RMWs
 // hdr_color / hdr_depth / hdr_resolve → v2, and that v2 (not v1)
 // becomes the head AutoExposure reads and the RMW chain extends.
+
 // The four attachments the unified G-buffer pre-pass writes in one draw. They
 // are separate resources rather than one handle because their shapes differ
 // (three colour formats and a depth target) and so do their consumers, so one
@@ -335,6 +336,8 @@ struct GBufferHandles {
     depth: TextureHandle,
 }
 
+// Compile the frame graph for `inputs`: the pass list above, gated down to the
+// passes this frame actually runs.
 pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
     // When an opaque menu backdrop hides the scene, every world pass is wasted:
     // nothing it produces is visible. Force every gated world pass off so the
@@ -1781,9 +1784,9 @@ mod tests {
 
     // A resource is declared only where a pass writes it. The engine points
     // several names at one texture depending on configuration, and declaring the
-    // second name anyway would give one GPU object two barrier timelines -- the
-    // shape that shipped 129,909 debug-layer errors when two entries drove one
-    // buffer. These pin the three configurations where that could recur.
+    // second name anyway would give one GPU object two barrier timelines, each
+    // transitioning it from a state the other just left. These pin the three
+    // configurations where that could recur.
 
     #[test]
     fn no_reflection_resolve_means_no_scene_pre_taa_resource() {

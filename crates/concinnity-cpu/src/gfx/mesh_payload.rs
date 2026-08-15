@@ -183,9 +183,9 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
 
     // Vertex block (56 bytes each), then LOD0 indices (2 bytes each).
     let vertex_count = cur.u32()? as usize;
-    cur.skip(vertex_count * 56)?;
+    cur.skip(checked_product("vertices", &[vertex_count, 56])?)?;
     let index_count = cur.u32()? as usize;
-    cur.skip(index_count * 2)?;
+    cur.skip(checked_product("indices", &[index_count, 2])?)?;
 
     // Optional LOD trailer: skip the whole block when present so the cursor
     // lands on the HFLD trailer (if any) that follows it.
@@ -195,7 +195,7 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
         for _ in 0..alt_count {
             cur.skip(4)?; // switch distance (f32)
             let n = cur.u32()? as usize;
-            cur.skip(n * 2)?;
+            cur.skip(checked_product("lod indices", &[n, 2])?)?;
         }
     }
 
@@ -206,11 +206,9 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
     cur.skip(4)?;
     let rows = cur.u32()? as usize;
     let cols = cur.u32()? as usize;
-    let count = rows
-        .checked_mul(cols)
-        .ok_or("heightfield trailer grid size overflow")?;
+    let count = checked_product("heightfield grid", &[rows, cols])?;
     let block = cur
-        .take(count * 4)
+        .take(checked_product("heightfield grid", &[count, 4])?)
         .map_err(|_| format!("heightfield trailer too short for {rows} x {cols} grid"))?;
     let heights = block.chunks_exact(4).map(|h| chunk_f32(h, 0)).collect();
     Ok(Some(HeightfieldGrid {
@@ -889,6 +887,26 @@ mod tests {
             .expect("trailer present");
         assert_eq!((grid.rows, grid.cols), (3, 3));
         assert_eq!(grid.heights, heights);
+    }
+
+    #[test]
+    fn a_heightfield_trailer_whose_footprint_overflows_is_rejected() {
+        // `rows * cols` fits a usize while the byte footprint `* 4` does not, so
+        // checking only the texel count leaves the multiply to wrap: the read
+        // then succeeds against an empty slice and hands back a grid whose
+        // declared extent has no heights behind it, which every consumer indexes
+        // straight off the end.
+        let verts = sample_static_verts();
+        let mut bytes = serialise_with_lods(&verts, &[0u16, 1, 2], &[]);
+        bytes.extend_from_slice(HFLD_MAGIC);
+        bytes.extend_from_slice(&0x8000_0000u32.to_le_bytes());
+        bytes.extend_from_slice(&0x8000_0000u32.to_le_bytes());
+
+        let err = match deserialise_heightfield(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("an overflowing grid must be rejected"),
+        };
+        assert!(err.contains("heightfield grid"), "{err}");
     }
 
     #[test]
