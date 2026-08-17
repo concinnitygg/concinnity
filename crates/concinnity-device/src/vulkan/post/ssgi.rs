@@ -38,15 +38,16 @@ pub(in crate::vulkan) struct SsgiShaders {
     pub composite_fs: Vec<u8>,
 }
 
-// Compile every SSGI GLSL source. `hot_reload` routes each source resolve
-// through the builtins' disk-first path.
+// Compile the SSGI stages from `src/shaders/ssgi.slang` plus the shared
+// single-source fullscreen vertex. `hot_reload` routes each source resolve
+// through the disk-first path.
 pub(in crate::vulkan) fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(SsgiShaders {
-        vs: builtins::SSGI_FULLSCREEN_VERT.compile(&ctx)?,
-        gather_fs: builtins::SSGI_GATHER_FRAG.compile(&ctx)?,
-        composite_fs: builtins::SSGI_COMPOSITE_FRAG.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
+        gather_fs: slang_builtins::SSGI_GATHER.compile(&ctx)?,
+        composite_fs: slang_builtins::SSGI_COMPOSITE.compile(&ctx)?,
     })
 }
 

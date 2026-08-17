@@ -60,6 +60,10 @@ const SLANG_MAIN_DEFINES: &[(&str, &str)] = &[
 // No POOL_SIZE: the DXIL pool is an unbounded array.
 const SLANG_DXIL_MAIN_DEFINES: &[(&str, &str)] = &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")];
 
+// The SSR resolve is the one post pass that reads the reflection-probe array,
+// so it needs the same probe count the main pass bakes in.
+const SLANG_PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
+
 // Every register the bindless main root signature in
 // `src/directx/init/pipelines.rs` declares, as (parameter, HLSL register). The
 // vertex stage reads only the first three; the rest are the fragment's.
@@ -151,6 +155,54 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         file: "bloom.slang",
         entries: &["bloom_upsample_fragment"],
         defines: &[("BLOOM_UPSAMPLE", "1")],
+    },
+    SlangLibSpec {
+        name: "composite_frag.slang",
+        file: "composite.slang",
+        entries: &["composite_fragment"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "ssao_kernel.slang",
+        file: "ssao.slang",
+        entries: &["ssao_kernel_fragment"],
+        defines: &[("SSAO_KERNEL", "1")],
+    },
+    SlangLibSpec {
+        name: "ssao_blur.slang",
+        file: "ssao.slang",
+        entries: &["ssao_blur_fragment"],
+        defines: &[("SSAO_BLUR", "1")],
+    },
+    SlangLibSpec {
+        name: "ssr_resolve.slang",
+        file: "ssr.slang",
+        entries: &["ssr_resolve_fragment"],
+        defines: SLANG_PROBE_DEFINES,
+    },
+    SlangLibSpec {
+        name: "ssgi_gather.slang",
+        file: "ssgi.slang",
+        entries: &["ssgi_gather_fragment"],
+        defines: &[("SSGI_GATHER", "1")],
+    },
+    SlangLibSpec {
+        name: "ssgi_composite.slang",
+        file: "ssgi.slang",
+        entries: &["ssgi_composite_fragment"],
+        defines: &[("SSGI_COMPOSITE", "1")],
+    },
+    SlangLibSpec {
+        name: "reflection_blur.slang",
+        file: "reflection.slang",
+        entries: &["reflection_blur_fragment"],
+        defines: &[("REFLECTION_BLUR", "1")],
+    },
+    SlangLibSpec {
+        name: "reflection_composite.slang",
+        file: "reflection.slang",
+        entries: &["reflection_composite_fragment"],
+        defines: &[("REFLECTION_COMPOSITE", "1")],
     },
 ];
 

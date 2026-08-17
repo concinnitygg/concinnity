@@ -15,10 +15,11 @@ use objc2_metal::{
 
 use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    set_fragment_sampler_range,
 };
+use crate::metal::slang_shaders::{REFLECTION_BLUR, REFLECTION_COMPOSITE, SSR_RESOLVE};
 
 // All screen-space-reflection feature state grouped into one unit: the
 // resolved tunables, the resolve-output target, and the resolve pipeline.
@@ -51,14 +52,12 @@ pub(crate) fn build_ssr_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "ssr.metal")?;
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "ssr_fullscreen_vertex",
-        "ssr_resolve_fragment",
+        &SSR_RESOLVE,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -70,14 +69,12 @@ pub(crate) fn build_reflection_composite_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "reflection_composite.metal")?;
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "reflection_composite_vertex",
-        "reflection_composite_fragment",
+        &REFLECTION_COMPOSITE,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -88,14 +85,12 @@ pub(crate) fn build_reflection_blur_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "reflection_composite.metal")?;
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "reflection_composite_vertex",
-        "reflection_blur_fragment",
+        &REFLECTION_BLUR,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -218,8 +213,17 @@ impl MtlContext {
                 for i in 0..crate::metal::uniforms::MAX_PROBES {
                     enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 4 + i);
                 }
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
-                enc.setFragmentSamplerState_atIndex(Some(self.cube_sampler.as_ref()), 1);
+                // The screen sources take the post sampler at 0..2; the
+                // prefilter cube and every probe cube take the cube sampler at
+                // 3..4+MAX_PROBES, one per texture slangc split the combined
+                // declarations into.
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
+                set_fragment_sampler_range(
+                    enc,
+                    self.cube_sampler.as_ref(),
+                    3,
+                    1 + crate::metal::uniforms::MAX_PROBES,
+                );
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssr_params).cast(),
                     std::mem::size_of::<crate::gfx::render_types::SsrParams>(),
@@ -272,7 +276,7 @@ impl MtlContext {
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gb_roughness), 1);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
             },
         )?;
         // Pass 2: lerp the sharp full-res reflection against the upsampled blur by
@@ -292,7 +296,7 @@ impl MtlContext {
                 enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 2);
                 enc.setFragmentTexture_atIndex(Some(gb_roughness), 3);
                 enc.setFragmentTexture_atIndex(Some(targets.blur.as_ref()), 4);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 5);
             },
         )?;
         Ok(())

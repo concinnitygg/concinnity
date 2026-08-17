@@ -17,7 +17,7 @@ use objc2_metal::{
     MTLRenderPipelineState,
 };
 
-use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
+use crate::metal::post::fullscreen::{FullscreenBlend, build_slang_fullscreen_pipeline};
 
 pub(super) fn ns_str(s: &str) -> Retained<NSString> {
     NSString::from_str(s)
@@ -85,14 +85,9 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         "line.metal" => include_str!("shaders/line.metal"),
         "main.metal" => include_str!("shaders/main.metal"),
         "particle.metal" => include_str!("shaders/particle.metal"),
-        "post.metal" => include_str!("shaders/post.metal"),
-        "reflection_composite.metal" => include_str!("shaders/reflection_composite.metal"),
         "rt_reflections.metal" => include_str!("shaders/rt_reflections.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
         "shadow.metal" => include_str!("shaders/shadow.metal"),
-        "ssao.metal" => include_str!("shaders/ssao.metal"),
-        "ssgi.metal" => include_str!("shaders/ssgi.metal"),
-        "ssr.metal" => include_str!("shaders/ssr.metal"),
         "text.metal" => include_str!("shaders/text.metal"),
         "water.metal" => include_str!("shaders/water.metal"),
         "water_rt.metal" => include_str!("shaders/water_rt.metal"),
@@ -249,16 +244,14 @@ pub(super) fn build_post_pipeline(
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "post.metal")?;
     // Single colour attachment matches the swapchain format chosen by
     // `configure_mtk_view` (`BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR).
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "post_vertex_main",
-        "post_fragment_main",
+        &super::slang_shaders::COMPOSITE_FRAG,
         swap_pixel_format,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -268,39 +261,35 @@ mod shader_source_tests {
 
     #[test]
     fn embedded_path_when_hot_reload_off() {
-        let s = shader_source(false, "post.metal");
+        let s = shader_source(false, "text.metal");
         assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
-        assert!(s.contains("post_fragment_main"));
+        assert!(s.contains("text_fragment_main"));
     }
 
     #[test]
     fn reflection_shaders_lock_shared_roughness_cut() {
-        // The SSR / RT / composite shaders each declare the roughness cut as a
-        // literal (they are precompiled at build, so no runtime injection is
-        // possible); this lock pins every declaration to the Rust source of
-        // truth, same as the existing main.metal REFL_RESOLVE_CUT lock.
+        // The remaining hand-written reflection shader declares the roughness
+        // cut as a literal (it is precompiled at build, so no runtime injection
+        // is possible); this lock pins the declaration to the Rust source of
+        // truth, same as the existing main.metal REFL_RESOLVE_CUT lock. The SSR
+        // resolve and the reflection composite now ship from `.slang`, locked
+        // by `reflection_roughness_cut_matches_canonical` in slang_shaders.rs.
         let expected = format!(
             "constant float REFLECTION_ROUGHNESS_CUT = {:?};",
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
         );
-        for name in [
-            "ssr.metal",
-            "rt_reflections.metal",
-            "reflection_composite.metal",
-        ] {
-            let src = shader_source(false, name);
-            assert!(
-                src.contains(&expected),
-                "{name}: REFLECTION_ROUGHNESS_CUT declaration drifted from \
-                 concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
-            );
-            // The old per-shader literals were `*_ROUGH_CUT = 0.<n>`; the shared
-            // name is `*_ROUGHNESS_CUT`, which does not contain that substring.
-            assert!(
-                !src.contains("ROUGH_CUT = 0."),
-                "{name}: still declares a local roughness-cut literal"
-            );
-        }
+        let src = shader_source(false, "rt_reflections.metal");
+        assert!(
+            src.contains(&expected),
+            "rt_reflections.metal: REFLECTION_ROUGHNESS_CUT declaration drifted from \
+             concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
+        );
+        // The old per-shader literal was `*_ROUGH_CUT = 0.<n>`; the shared name
+        // is `*_ROUGHNESS_CUT`, which does not contain that substring.
+        assert!(
+            !src.contains("ROUGH_CUT = 0."),
+            "rt_reflections.metal: still declares a local roughness-cut literal"
+        );
     }
 
     #[test]
@@ -325,8 +314,8 @@ mod shader_source_tests {
     fn hot_reload_prefers_disk_when_present() {
         // The shader files live in this checkout, so the disk-load path
         // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "post.metal");
-        assert!(s.contains("post_fragment_main"));
+        let s = shader_source(true, "text.metal");
+        assert!(s.contains("text_fragment_main"));
     }
 
     #[test]

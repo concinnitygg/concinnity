@@ -9,9 +9,11 @@
 // export-time precompile iterates `ALL` to populate a bundle's shader cache
 // from the very same declarations, so the two can never drift.
 //
-// Not declared here: the SdfVolume raymarch pipelines (raymarch.rs), whose
-// fragment source embeds world-authored shader text and therefore cannot be
-// enumerated ahead of a world; they compile at init through the same cache.
+// Not declared here: the single-source `.slang` programs (`slang_builtins`),
+// which compile to DXIL through slangc rather than FXC; and the SdfVolume
+// raymarch pipelines (raymarch.rs), whose fragment source embeds
+// world-authored shader text and therefore cannot be enumerated ahead of a
+// world. Both compile at init through the same cache.
 
 use std::borrow::Cow;
 
@@ -188,11 +190,8 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
 const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
 const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
 const SHADOW_VERT_HLSL: &str = include_str!("shaders/shadow_vert.hlsl");
-const COMPOSITE_VERT_HLSL: &str = include_str!("shaders/composite_vert.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
 const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
-const SSGI_HLSL: &str = include_str!("shaders/ssgi.hlsl");
-const REFLECTION_COMPOSITE_HLSL: &str = include_str!("shaders/reflection_composite.hlsl");
 const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
 const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
 const RT_REFLECTIONS_HLSL: &str = include_str!("shaders/rt_reflections.hlsl");
@@ -212,13 +211,6 @@ const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static s
     }
 }
 
-pub(super) static COMPOSITE_VERT: HlslProgram =
-    fxc_main("composite_vert.hlsl", COMPOSITE_VERT_HLSL, "vs_5_1");
-pub(super) static COMPOSITE_FRAG: HlslProgram = fxc_main(
-    "composite_frag.hlsl",
-    include_str!("shaders/composite_frag.hlsl"),
-    "ps_5_1",
-);
 pub(super) static TEXT_VERT: HlslProgram = fxc_main(
     "text_vert.hlsl",
     include_str!("shaders/text_vert.hlsl"),
@@ -437,76 +429,6 @@ pub(super) static GBUFFER_BINDLESS_FRAG: HlslProgram = fxc_main(
     "ps_5_1",
 );
 
-pub(super) static SSAO_FULLSCREEN_VERT: HlslProgram = fxc_main(
-    "ssao_fullscreen_vert.hlsl",
-    include_str!("shaders/ssao_fullscreen_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static SSAO_KERNEL_FRAG: HlslProgram = fxc_main(
-    "ssao_kernel_frag.hlsl",
-    include_str!("shaders/ssao_kernel_frag.hlsl"),
-    "ps_5_1",
-);
-pub(super) static SSAO_BLUR_FRAG: HlslProgram = fxc_main(
-    "ssao_blur_frag.hlsl",
-    include_str!("shaders/ssao_blur_frag.hlsl"),
-    "ps_5_1",
-);
-
-pub(super) static SSGI_FULLSCREEN_VERT: HlslProgram = HlslProgram {
-    entry: "ssgi_fullscreen_vert",
-    target: "vs_5_1",
-    ..fxc_main("ssgi.hlsl", SSGI_HLSL, "vs_5_1")
-};
-pub(super) static SSGI_GATHER_FRAG: HlslProgram = HlslProgram {
-    entry: "ssgi_gather_frag",
-    target: "ps_5_1",
-    ..fxc_main("ssgi.hlsl", SSGI_HLSL, "ps_5_1")
-};
-pub(super) static SSGI_COMPOSITE_FRAG: HlslProgram = HlslProgram {
-    entry: "ssgi_composite_frag",
-    target: "ps_5_1",
-    ..fxc_main("ssgi.hlsl", SSGI_HLSL, "ps_5_1")
-};
-
-pub(super) static SSR_FULLSCREEN_VERT: HlslProgram = fxc_main(
-    "ssr_fullscreen_vert.hlsl",
-    include_str!("shaders/ssr_fullscreen_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static SSR_RESOLVE_FRAG: HlslProgram = HlslProgram {
-    file: "ssr_resolve_frag.hlsl",
-    embedded: include_str!("shaders/ssr_resolve_frag.hlsl"),
-    entry: "main",
-    target: "ps_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly {
-        cut: true,
-        probe: true,
-        ..PLAIN
-    },
-};
-
-const REFLECTION_COMPOSITE_DECL: HlslProgram = HlslProgram {
-    file: "reflection_composite.hlsl",
-    embedded: REFLECTION_COMPOSITE_HLSL,
-    entry: "vs_main",
-    target: "vs_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly { cut: true, ..PLAIN },
-};
-pub(super) static REFLECTION_COMPOSITE_VERT: HlslProgram = REFLECTION_COMPOSITE_DECL;
-pub(super) static REFLECTION_BLUR_FRAG: HlslProgram = HlslProgram {
-    entry: "reflection_blur",
-    target: "ps_5_1",
-    ..REFLECTION_COMPOSITE_DECL
-};
-pub(super) static REFLECTION_COMPOSITE_FRAG: HlslProgram = HlslProgram {
-    entry: "reflection_composite",
-    target: "ps_5_1",
-    ..REFLECTION_COMPOSITE_DECL
-};
-
 // SM 6.5 programs (DXC): hardware ray-traced reflections, RT glass, and the
 // RT skinned-vertex refit kernel.
 const RT_REFLECTIONS_DECL: HlslProgram = HlslProgram {
@@ -570,8 +492,6 @@ pub(super) static RT_SKIN: HlslProgram = HlslProgram {
 
 // Every declared program, iterated by the export-time precompile.
 pub(crate) static ALL: &[&HlslProgram] = &[
-    &COMPOSITE_VERT,
-    &COMPOSITE_FRAG,
     &TEXT_VERT,
     &TEXT_FRAG,
     &MAIN_VERT,
@@ -604,17 +524,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &GBUFFER_PREPASS_FRAG,
     &GBUFFER_BINDLESS_VERT,
     &GBUFFER_BINDLESS_FRAG,
-    &SSAO_FULLSCREEN_VERT,
-    &SSAO_KERNEL_FRAG,
-    &SSAO_BLUR_FRAG,
-    &SSGI_FULLSCREEN_VERT,
-    &SSGI_GATHER_FRAG,
-    &SSGI_COMPOSITE_FRAG,
-    &SSR_FULLSCREEN_VERT,
-    &SSR_RESOLVE_FRAG,
-    &REFLECTION_COMPOSITE_VERT,
-    &REFLECTION_BLUR_FRAG,
-    &REFLECTION_COMPOSITE_FRAG,
     &RT_FULLSCREEN_VERT,
     &RT_REFLECTIONS_FRAG,
     &RT_REFLECTIONS_FRAG_TEXTURED,
@@ -654,7 +563,7 @@ mod tests {
         assert_eq!(FOG_VERT.assembly.msaa_variants(), &[false, true]);
         assert_eq!(GLASS_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(GLASS_RT_FRAG.assembly.msaa_variants(), &[false, true]);
-        assert_eq!(COMPOSITE_VERT.assembly.msaa_variants(), &[false]);
+        assert_eq!(TEXT_VERT.assembly.msaa_variants(), &[false]);
         assert_eq!(RT_REFLECTIONS_FRAG.assembly.msaa_variants(), &[false]);
     }
 

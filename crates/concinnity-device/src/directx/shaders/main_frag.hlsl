@@ -685,7 +685,7 @@ float4 main(PsIn p) : SV_TARGET
     ambient *= ssao_tex.Sample(linear_sampler, ssao_uv).r;
 
     // Linear-light HDR output. The ACES tonemap + gamma encode + FXAA run in
-    // the off-screen composite pass (see directx/pipeline.rs COMPOSITE_FRAG_HLSL).
+    // the off-screen composite pass (src/shaders/composite.slang).
     float3 color = ambient + Lo + emissive;
     return float4(color, albedo_samp.a);
 }

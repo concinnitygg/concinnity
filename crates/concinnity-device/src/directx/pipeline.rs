@@ -356,15 +356,13 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // scene target, composites the bloom mip, applies an exposure multiplier, the
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT colour grade, and a radial vignette, then writes the
-// swapchain backbuffer. Mirrors the Vulkan COMPOSITE_*_GLSL and the Metal post
-// pipeline. `builtins::COMPOSITE_VERT` is also reused by the bloom + TAA
-// resolve passes (each as their fullscreen-triangle VS).
+// swapchain backbuffer. Ships from `src/shaders/composite.slang`, paired with
+// the shared single-source fullscreen-triangle vertex every post pass uses.
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = super::builtins::Ctx::plain(hot_reload);
-    let vs = super::builtins::COMPOSITE_VERT.compile(&ctx)?;
-    let ps = super::builtins::COMPOSITE_FRAG.compile(&ctx)?;
+    let vs = super::slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
+    let ps = super::slang_builtins::COMPOSITE_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -378,12 +376,13 @@ pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
 // table at t1 (bloom mip 0), `COMPOSITE_ROOT_CONSTANTS` 32-bit root constants
 // at b0 (`CompositeParams`), a 1-SRV descriptor table at t2 (the 3D
 // colour-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
-// roughness, and SSAO channels the debug view modes visualize), and a static
-// linear-clamp sampler at s0. The scene SRV is its own
-// table (separate from bloom mip 0) so the runtime can re-point it at the
-// per-frame TAA output without the two needing to be heap-contiguous. Clamp
-// keeps the FXAA neighbour taps from wrapping at screen edges and the LUT taps
-// inside the cube.
+// roughness, and SSAO channels the debug view modes visualize), and static
+// linear-clamp samplers at s0..s5 -- one per source, because slangc splits each
+// combined sampler in the single source into its own texture/sampler pair. The
+// scene SRV is its own table (separate from bloom mip 0) so the runtime can
+// re-point it at the per-frame TAA output without the two needing to be
+// heap-contiguous. Clamp keeps the FXAA neighbour taps from wrapping at screen
+// edges and the LUT taps inside the cube.
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
 ) -> Result<ID3D12RootSignature, String> {
@@ -506,7 +505,9 @@ pub(super) fn create_composite_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
     ];
-    let static_sampler = D3D12_STATIC_SAMPLER_DESC {
+    // s0..s5: scene, bloom, LUT, and the three channel-view sources. Identical
+    // descriptors; the split is the shader's, not the pass's.
+    let static_samplers = [0u32, 1, 2, 3, 4, 5].map(|reg| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -515,16 +516,16 @@ pub(super) fn create_composite_root_signature(
         BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
-        ShaderRegister: 0, // s0
+        ShaderRegister: reg,
         RegisterSpace: 0,
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         ..Default::default()
-    };
+    });
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &static_sampler,
+        NumStaticSamplers: static_samplers.len() as u32,
+        pStaticSamplers: static_samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
     serialize_desc_and_create(device, &desc, "composite root sig")

@@ -390,8 +390,8 @@ pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>
 
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = builtins::Ctx::plain(hot_reload);
-    let vert = builtins::COMPOSITE_VERT.compile(&ctx)?;
-    let frag = builtins::COMPOSITE_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

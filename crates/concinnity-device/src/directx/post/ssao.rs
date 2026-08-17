@@ -16,9 +16,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::gfx::render_types::SsaoParams;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
@@ -40,11 +40,10 @@ struct SsaoShaders {
 // Compile every SSAO shader stage. Both the kernel + blur are fullscreen
 // passes that read the unified G-buffer; neither has a geometry input.
 fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(SsaoShaders {
-        fullscreen_vs: builtins::SSAO_FULLSCREEN_VERT.compile(&ctx)?,
-        kernel_ps: builtins::SSAO_KERNEL_FRAG.compile(&ctx)?,
-        blur_ps: builtins::SSAO_BLUR_FRAG.compile(&ctx)?,
+        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        kernel_ps: slang_builtins::SSAO_KERNEL.compile(hot_reload)?,
+        blur_ps: slang_builtins::SSAO_BLUR.compile(hot_reload)?,
     })
 }
 
@@ -110,8 +109,9 @@ fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
 }
 
 // Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
-// (raw occlusion at t0, G-buffer at t1) and a static linear-clamp sampler at
-// s0.
+// (raw occlusion at t0, G-buffer at t1) and static linear-clamp samplers at
+// s0 / s1 -- one per source, because slangc splits each combined sampler in the
+// single source into its own texture/sampler pair.
 fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let ao_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -149,7 +149,9 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSi
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
     ];
-    let static_sampler = D3D12_STATIC_SAMPLER_DESC {
+    // s0 / s1: raw occlusion, G-buffer. Identical descriptors; the split is the
+    // shader's, not the pass's.
+    let static_samplers = [0u32, 1].map(|reg| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -158,16 +160,16 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSi
         BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
-        ShaderRegister: 0,
+        ShaderRegister: reg,
         RegisterSpace: 0,
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         ..Default::default()
-    };
+    });
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &static_sampler,
+        NumStaticSamplers: static_samplers.len() as u32,
+        pStaticSamplers: static_samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
     serialize_desc_and_create(device, &desc, "ssao blur root sig")

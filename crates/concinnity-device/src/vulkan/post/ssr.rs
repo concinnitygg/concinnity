@@ -79,14 +79,14 @@ pub(in crate::vulkan) fn compile_ssr_shaders(
     hot_reload: bool,
     probe_cube_count: u32,
 ) -> Result<SsrShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx {
         probe_count: probe_cube_count as usize,
         ..builtins::Ctx::plain(hot_reload)
     };
     Ok(SsrShaders {
-        fullscreen_vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
-        resolve_fs: builtins::SSR_RESOLVE_FRAG.compile(&ctx)?,
+        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
+        resolve_fs: slang_builtins::SSR_RESOLVE.compile(&ctx)?,
     })
 }
 

@@ -40,6 +40,7 @@ use super::post::{
 use super::resources::skinning::{
     build_skinned_main_pipeline, build_skinned_shadow_pipeline, make_skinned_vertex_descriptor,
 };
+use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -282,11 +283,11 @@ impl MtlContext {
         let static_vdesc = static_vertex_descriptor();
         let ssao_kernel = rebuild_if_live!(
             self.ssao.kernel_pipeline.is_some(),
-            build_ssao_pipeline(device, "ssao_fragment", hr)
+            build_ssao_pipeline(device, &SSAO_KERNEL, hr)
         );
         let ssao_blur = rebuild_if_live!(
             self.ssao.blur_pipeline.is_some(),
-            build_ssao_pipeline(device, "ssao_blur_fragment", hr)
+            build_ssao_pipeline(device, &SSAO_BLUR, hr)
         );
         let gbuffer_prepass = rebuild_if_live!(
             self.gbuffer.prepass_pipeline.is_some(),

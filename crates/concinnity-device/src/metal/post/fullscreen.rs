@@ -21,6 +21,7 @@ use objc2_metal::{
 use crate::metal::context::MtlContext;
 use crate::metal::pass_timing::PassId;
 use crate::metal::pipeline::ns_str;
+use crate::metal::slang_shaders::{FULLSCREEN_VERT, SlangLib};
 
 // Blend configuration for a fullscreen pass's single colour attachment.
 #[derive(Clone, Copy)]
@@ -127,16 +128,46 @@ pub(crate) fn build_fullscreen_pipeline_split(
         .map_err(|e| format!("failed to create {} pipeline: {:?}", fragment_name, e))
 }
 
-// Bind `sampler` to fragment sampler slots `0..count`. The single-source post
-// passes declare their inputs as combined texture-samplers, which slangc lowers
-// to a texture and a sampler at the same index, so a pass sampling N textures
-// through one sampler state binds it N times.
+// Build a fullscreen-triangle pipeline whose fragment comes from a
+// single-source `.slang` program, paired with the one shared
+// `fullscreen_vertex`. The two stages come from separate libraries because a
+// fragment variant declares only the resources it binds, so each variant is its
+// own metallib while the vertex is compiled once for all of them.
+pub(in crate::metal) fn build_slang_fullscreen_pipeline(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    fragment: &SlangLib,
+    format: MTLPixelFormat,
+    blend: FullscreenBlend,
+    hot_reload: bool,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
+    let frag = fragment.library(device, hot_reload)?;
+    build_fullscreen_pipeline_split(
+        device,
+        FullscreenStages {
+            vertex_library: &vert,
+            vertex_name: "fullscreen_vertex",
+            fragment_library: &frag,
+            fragment_name: fragment.entries[0],
+        },
+        format,
+        blend,
+    )
+}
+
+// Bind `sampler` to fragment sampler slots `first..first + count`. The
+// single-source post passes declare their inputs as combined texture-samplers,
+// which slangc lowers to a texture and a sampler at the same index, so a pass
+// sampling N textures through one sampler state binds it N times. A pass that
+// samples through two sampler states (SSR: the screen sources through one, the
+// cubemaps through another) calls this once per contiguous run.
 pub(in crate::metal) fn set_fragment_sampler_range(
     enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
     sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    first: usize,
     count: usize,
 ) {
-    for i in 0..count {
+    for i in first..first + count {
         unsafe { enc.setFragmentSamplerState_atIndex(Some(sampler), i) };
     }
 }

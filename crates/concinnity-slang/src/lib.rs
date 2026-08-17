@@ -174,14 +174,23 @@ fn parse_version(version: &str) -> Option<(u32, u32)> {
 // are cleaned up afterwards). The invocation is fixed apart from the job
 // fields: `-matrix-layout-column-major` is mandatory because Slang defaults to
 // row-major and every CPU-uploaded matrix would read transposed without it.
+//
+// Each invocation gets its own subdirectory: two compiles of the same
+// `file_name` can run at once (one shared source serves several programs -- the
+// fullscreen vertex is compiled by every post pass), and a shared path means
+// one deletes the artifact the other is still reading. The scratch path reaches
+// only slangc's diagnostics and the `#line` directives of the text targets;
+// neither the metallib nor the SPIR-V embeds it, so per-invocation naming costs
+// no artifact determinism.
 pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     let slangc = match resolved() {
         Ok(found) => found.path.as_path(),
         Err(message) => return Err(message.clone()),
     };
-    std::fs::create_dir_all(work_dir)
-        .map_err(|e| format!("slang: create {}: {e}", work_dir.display()))?;
-    let src_path = work_dir.join(job.file_name);
+    let scratch = work_dir.join(scratch_name());
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("slang: create {}: {e}", scratch.display()))?;
+    let src_path = scratch.join(job.file_name);
     let out_path = src_path.with_extension(job.target.extension());
     std::fs::write(&src_path, job.source)
         .map_err(|e| format!("slang: write {}: {e}", src_path.display()))?;
@@ -217,7 +226,17 @@ pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     };
     let _ = std::fs::remove_file(&src_path);
     let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_dir(&scratch);
     result
+}
+
+// A scratch directory name no concurrent compile can share: the process id
+// pairs with a monotonic counter, so neither two threads nor two engine
+// processes (a `cn build` alongside a running editor) collide.
+fn scratch_name() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{seq}", std::process::id())
 }
 
 // The argument list after the source path and before `-o`. Split out so the

@@ -18,6 +18,19 @@ use concinnity_slang as slang;
 
 use super::builtins::Ctx;
 
+// Which runtime capacities a program bakes in as `#define`s. They ride the
+// source text rather than a command line so the shader cache keys them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sizes {
+    // No size defines.
+    None,
+    // The reflection-probe array length only: the SSR resolve binds the
+    // forward global set's probe cubes but none of the texture pool.
+    Probes,
+    // The bindless texture-pool capacity and the probe array length.
+    PoolAndProbes,
+}
+
 pub(crate) struct SlangProgram {
     // File name under `src/shaders/` for the `cn debug` disk-first resolve;
     // also the embedded fallback's origin.
@@ -28,9 +41,8 @@ pub(crate) struct SlangProgram {
     pub label: &'static str,
     // Fixed variant gate (e.g. HIZ_INIT_MSAA), injected as `#define <gate> 1`.
     pub gate: Option<&'static str>,
-    // Inject `POOL_SIZE` / `MAX_PROBES` from the context (the bindless main
-    // pair); the rest compile with no size defines.
-    pub sized: bool,
+    // Runtime capacities injected from the context.
+    pub sizes: Sizes,
 }
 
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
@@ -39,6 +51,11 @@ const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
+const COMPOSITE_SLANG: &str = include_str!("../shaders/composite.slang");
+const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
+const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
+const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
+const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 
 pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
@@ -46,7 +63,7 @@ pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     entry: "vertex_main_bindless",
     label: "vert_bindless.slang",
     gate: None,
-    sized: true,
+    sizes: Sizes::PoolAndProbes,
 };
 pub(super) static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
@@ -54,7 +71,7 @@ pub(super) static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     entry: "fragment_main_bindless",
     label: "frag_bindless.slang",
     gate: None,
-    sized: true,
+    sizes: Sizes::PoolAndProbes,
 };
 pub(super) static LIGHT_CULL: SlangProgram = SlangProgram {
     file: "light_cull.slang",
@@ -62,7 +79,7 @@ pub(super) static LIGHT_CULL: SlangProgram = SlangProgram {
     entry: "light_cull_kernel",
     label: "light_cull.slang",
     gate: None,
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
     file: "hiz_build.slang",
@@ -70,7 +87,7 @@ pub(super) static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
     entry: "hiz_init_msaa",
     label: "hiz_init_msaa.slang",
     gate: Some("HIZ_INIT_MSAA"),
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
     file: "hiz_build.slang",
@@ -78,7 +95,7 @@ pub(super) static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
     entry: "hiz_init_single",
     label: "hiz_init_single.slang",
     gate: Some("HIZ_INIT_SINGLE"),
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     file: "hiz_build.slang",
@@ -86,7 +103,7 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     entry: "hiz_downsample",
     label: "hiz_downsample.slang",
     gate: Some("HIZ_DOWNSAMPLE"),
-    sized: false,
+    sizes: Sizes::None,
 };
 
 // The fullscreen-triangle vertex stage every ported post pass pairs with; one
@@ -97,7 +114,7 @@ pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
     entry: "fullscreen_vertex",
     label: "fullscreen_vert.slang",
     gate: None,
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
     file: "taa.slang",
@@ -105,7 +122,7 @@ pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
     entry: "taa_fragment_main",
     label: "taa_frag.slang",
     gate: None,
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
     file: "bloom.slang",
@@ -113,7 +130,7 @@ pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
     entry: "bloom_prefilter_fragment",
     label: "bloom_prefilter.slang",
     gate: Some("BLOOM_PREFILTER"),
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
     file: "bloom.slang",
@@ -121,7 +138,7 @@ pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
     entry: "bloom_downsample_fragment",
     label: "bloom_downsample.slang",
     gate: Some("BLOOM_DOWNSAMPLE"),
-    sized: false,
+    sizes: Sizes::None,
 };
 pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
     file: "bloom.slang",
@@ -129,7 +146,71 @@ pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
     entry: "bloom_upsample_fragment",
     label: "bloom_upsample.slang",
     gate: Some("BLOOM_UPSAMPLE"),
-    sized: false,
+    sizes: Sizes::None,
+};
+pub(super) static COMPOSITE_FRAG: SlangProgram = SlangProgram {
+    file: "composite.slang",
+    embedded: COMPOSITE_SLANG,
+    entry: "composite_fragment",
+    label: "composite_frag.slang",
+    gate: None,
+    sizes: Sizes::None,
+};
+pub(super) static SSAO_KERNEL: SlangProgram = SlangProgram {
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entry: "ssao_kernel_fragment",
+    label: "ssao_kernel.slang",
+    gate: Some("SSAO_KERNEL"),
+    sizes: Sizes::None,
+};
+pub(super) static SSAO_BLUR: SlangProgram = SlangProgram {
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entry: "ssao_blur_fragment",
+    label: "ssao_blur.slang",
+    gate: Some("SSAO_BLUR"),
+    sizes: Sizes::None,
+};
+pub(super) static SSR_RESOLVE: SlangProgram = SlangProgram {
+    file: "ssr.slang",
+    embedded: SSR_SLANG,
+    entry: "ssr_resolve_fragment",
+    label: "ssr_resolve.slang",
+    gate: None,
+    sizes: Sizes::Probes,
+};
+pub(super) static SSGI_GATHER: SlangProgram = SlangProgram {
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entry: "ssgi_gather_fragment",
+    label: "ssgi_gather.slang",
+    gate: Some("SSGI_GATHER"),
+    sizes: Sizes::None,
+};
+pub(super) static SSGI_COMPOSITE: SlangProgram = SlangProgram {
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entry: "ssgi_composite_fragment",
+    label: "ssgi_composite.slang",
+    gate: Some("SSGI_COMPOSITE"),
+    sizes: Sizes::None,
+};
+pub(super) static REFLECTION_BLUR: SlangProgram = SlangProgram {
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entry: "reflection_blur_fragment",
+    label: "reflection_blur.slang",
+    gate: Some("REFLECTION_BLUR"),
+    sizes: Sizes::None,
+};
+pub(super) static REFLECTION_COMPOSITE: SlangProgram = SlangProgram {
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entry: "reflection_composite_fragment",
+    label: "reflection_composite.slang",
+    gate: Some("REFLECTION_COMPOSITE"),
+    sizes: Sizes::None,
 };
 
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
@@ -147,6 +228,14 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &BLOOM_PREFILTER,
     &BLOOM_DOWNSAMPLE,
     &BLOOM_UPSAMPLE,
+    &COMPOSITE_FRAG,
+    &SSAO_KERNEL,
+    &SSAO_BLUR,
+    &SSR_RESOLVE,
+    &SSGI_GATHER,
+    &SSGI_COMPOSITE,
+    &REFLECTION_BLUR,
+    &REFLECTION_COMPOSITE,
 ];
 
 impl SlangProgram {
@@ -158,13 +247,20 @@ impl SlangProgram {
         if let Some(gate) = self.gate {
             defines.push((gate, "1"));
         }
-        if self.sized {
+        if self.sizes == Sizes::PoolAndProbes {
             debug_assert!(
-                ctx.pool_size > 0 && ctx.probe_count > 0,
-                "{}: sized program assembled with no pool / probe counts",
+                ctx.pool_size > 0,
+                "{}: sized program assembled with no pool count",
                 self.label
             );
             defines.push(("POOL_SIZE", pool.as_str()));
+        }
+        if self.sizes != Sizes::None {
+            debug_assert!(
+                ctx.probe_count > 0,
+                "{}: sized program assembled with no probe count",
+                self.label
+            );
             defines.push(("MAX_PROBES", probes.as_str()));
         }
         crate::slang_source::assemble(ctx.hot_reload, self.file, self.embedded, &defines)
@@ -218,6 +314,10 @@ mod tests {
     fn sized_programs_inject_their_counts_and_gates_lead() {
         let src = MAIN_BINDLESS_FRAG.source(&ctx(17, 5));
         assert!(src.starts_with("#define POOL_SIZE 17\n#define MAX_PROBES 5\n"));
+        // The SSR resolve reads the probe array but none of the texture pool,
+        // so it takes the probe count alone.
+        let src = SSR_RESOLVE.source(&ctx(17, 5));
+        assert!(src.starts_with("#define MAX_PROBES 5\n"));
         let src = HIZ_INIT_MSAA.source(&ctx(0, 0));
         assert!(src.starts_with("#define HIZ_INIT_MSAA 1\n"));
         let src = LIGHT_CULL.source(&ctx(0, 0));

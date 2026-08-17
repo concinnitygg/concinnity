@@ -18,10 +18,11 @@ use objc2_metal::{
 
 use crate::gfx::ssao::SsaoSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    set_fragment_sampler_range,
 };
+use crate::metal::slang_shaders::SlangLib;
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
 // the kernel intermediate target, the kernel + blur pipelines, and the 1×1 white
@@ -44,21 +45,19 @@ pub(crate) const SSAO_OCCLUSION_FORMAT: MTLPixelFormat = MTLPixelFormat::R8Unorm
 // Pipelines
 
 // Build one SSAO fullscreen-triangle pipeline (the GTAO kernel or the blur).
-// Both target a single-sample occlusion texture and share
-// `ssao_fullscreen_vertex`; `fragment_entry` selects which fragment shader.
+// Both target a single-sample occlusion texture and pair with the shared
+// `fullscreen_vertex`; `fragment` selects which single-source variant.
 pub(crate) fn build_ssao_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment_entry: &str,
+    fragment: &SlangLib,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "ssao.metal")?;
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "ssao_fullscreen_vertex",
-        fragment_entry,
+        fragment,
         SSAO_OCCLUSION_FORMAT,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -153,7 +152,7 @@ impl MtlContext {
             },
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 0);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 1);
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssao_params).cast(),
                     std::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
@@ -175,7 +174,7 @@ impl MtlContext {
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.ao_raw.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
             },
         )?;
 

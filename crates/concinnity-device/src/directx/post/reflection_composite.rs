@@ -19,10 +19,10 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{create_rt_target, write_format_rtv, write_format_srv};
 
 // The blur pass runs at render-resolution / `blur_scale`. The blur is low-
@@ -41,22 +41,24 @@ struct ReflCompShaders {
     composite_ps: Vec<u8>,
 }
 
-// Compile the composite vertex shader + the blur + composite fragment entry
-// points (FXC ps_5_1). The shared `REFLECTION_ROUGHNESS_CUT` is injected ahead so
-// the blur ramp matches the SSR / RT resolve gates.
+// Compile the shared fullscreen vertex shader + the blur + composite fragment
+// entry points. `REFLECTION_ROUGHNESS_CUT` is a `static const` in
+// `reflection.slang`, locked to the canonical Rust value by unit test, so the
+// blur ramp matches the SSR / RT resolve gates.
 fn compile_refl_composite_shaders(hot_reload: bool) -> Result<ReflCompShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(ReflCompShaders {
-        vs: builtins::REFLECTION_COMPOSITE_VERT.compile(&ctx)?,
-        blur_ps: builtins::REFLECTION_BLUR_FRAG.compile(&ctx)?,
-        composite_ps: builtins::REFLECTION_COMPOSITE_FRAG.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        blur_ps: slang_builtins::REFLECTION_BLUR.compile(hot_reload)?,
+        composite_ps: slang_builtins::REFLECTION_COMPOSITE.compile(hot_reload)?,
     })
 }
 
 // Root signatures
 
-// A descriptor table of `count` consecutive SRVs starting at register t0. Both
-// passes index their inputs t0.. as APPEND ranges.
+// A descriptor table of `count` consecutive SRVs starting at register t0, plus
+// one static sampler per SRV. Both passes index their inputs t0.. as APPEND
+// ranges; the samplers are s0..s(count-1) because slangc splits each combined
+// sampler in the single source into its own texture/sampler pair.
 fn srv_table_root_sig(
     device: &ID3D12Device,
     count: u32,
@@ -84,26 +86,29 @@ fn srv_table_root_sig(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         })
         .collect();
-    // s0: linear-clamp for every input (the reflection / scene / G-buffer / blur).
-    let samp = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
+    // One linear-clamp sampler per input (reflection / scene / G-buffer / blur).
+    // Identical descriptors; the split is the shader's, not the pass's.
+    let samplers: Vec<D3D12_STATIC_SAMPLER_DESC> = (0..count)
+        .map(|reg| D3D12_STATIC_SAMPLER_DESC {
+            Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+            BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
+            MinLOD: 0.0,
+            MaxLOD: f32::MAX,
+            ShaderRegister: reg,
+            RegisterSpace: 0,
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+            ..Default::default()
+        })
+        .collect();
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &samp,
+        NumStaticSamplers: samplers.len() as u32,
+        pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
     serialize_desc_and_create(device, &desc, name)
@@ -233,8 +238,9 @@ impl ReflectionCompositeResources {
         write_format_srv(device, &blur, slots.blur_srv.0, SSR_OUTPUT_FORMAT);
 
         let shaders = compile_refl_composite_shaders(hot_reload)?;
-        // Blur reads reflection (t0) + roughness (t1); composite reads those plus
-        // scene (t2), G-buffer normal+depth (t3), and the blur (t4).
+        // Blur reads reflection (t0) + roughness (t1); the composite declares
+        // them in its own order -- reflection (t0), scene (t1), G-buffer
+        // normal+depth (t2), roughness (t3), blur (t4).
         let blur_root_sig = dump_on_err(
             info_queue,
             srv_table_root_sig(device, 2, "reflection blur root sig"),
@@ -395,10 +401,12 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(&rc.composite_pso);
             cmd.SetGraphicsRootSignature(&rc.composite_root_sig);
+            // t0 reflection, t1 scene, t2 G-buffer normal+depth, t3 roughness,
+            // t4 blur -- the order `reflection.slang`'s composite declares them.
             cmd.SetGraphicsRootDescriptorTable(0, reflection_srv);
-            cmd.SetGraphicsRootDescriptorTable(1, gbuffer.roughness_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(2, self.hdr.srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(3, gbuffer.normal_depth_srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(1, self.hdr.srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(2, gbuffer.normal_depth_srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(3, gbuffer.roughness_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(4, rc.blur_srv_gpu);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -412,12 +420,15 @@ impl DxContext {
 
 #[cfg(test)]
 mod tests {
-    // The composite shader (vert + blur + composite entries) is concatenated from
-    // the cut prelude + reflection_composite.hlsl and compiled at runtime (FXC).
-    // Compile it offline so a HLSL / register error fails a test instead of only an
-    // init failure on the GPU host.
+    // The blur + composite fragments compile from `reflection.slang` at renderer
+    // init. Compile them offline so a source or register error fails a test
+    // instead of only an init failure on the GPU host. Skipped on a host without
+    // slangc, matching `concinnity_slang`'s own round-trip tests.
     #[test]
     fn reflection_composite_shaders_compile() {
+        if concinnity_slang::slangc_path().is_none() {
+            return;
+        }
         super::compile_refl_composite_shaders(false)
             .expect("reflection composite shaders must compile");
     }

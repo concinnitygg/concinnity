@@ -20,7 +20,13 @@
 // `SamplerState` and numbers both from declaration order, so a pass with N
 // sources lands on t0..tN-1 *and* s0..sN-1 -- where the hand HLSL declared one
 // sampler for all of them. The root signatures name the samplers they hand out
-// (TAA's three static samplers are the same descriptor three times).
+// (a pass's static samplers are the same descriptor repeated).
+//
+// Declaration order is what the root signatures follow, and it is not always
+// the order the hand HLSL used: the SSR resolve's probe cube array lands at t4
+// (not the hand shader's t7) with its `ProbeSet` at b1 (not b4), and the
+// reflection composite reads scene / G-buffer / roughness at t1 / t2 / t3 where
+// the HLSL had roughness first.
 //
 // These are shader model 6.0 rather than the FXC path's 5.1: the bindless pool
 // index is non-uniform across a fragment wave, and `NonUniformResourceIndex`
@@ -48,6 +54,11 @@ const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
+const COMPOSITE_SLANG: &str = include_str!("../shaders/composite.slang");
+const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
+const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
+const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
+const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 
 // The bindless main pair's variant defines. `MAX_PROBES` sizes the probe cube
 // array the root signature's descriptor table covers; `probe_cube_count_matches`
@@ -55,6 +66,14 @@ const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
 // pool is an unbounded array, so the shader never over-declares the per-frame
 // descriptor region the host actually wrote.
 const MAIN_DEFINES: &[(&str, &str)] = &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")];
+
+// The SSR resolve reads the probe array but none of the texture pool, so it
+// takes the probe count alone. Same lock as `MAIN_DEFINES`.
+// `SPLIT_PROBE_SAMPLER` declares that array as a texture array plus one
+// sampler: D3D12 binds a shader sampler *array* only through a descriptor
+// table, so the combined form Metal and Vulkan use cannot be covered by static
+// samplers here (see the declaration in `ssr.slang`).
+const SSR_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8"), ("SPLIT_PROBE_SAMPLER", "1")];
 
 pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
@@ -105,8 +124,8 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
 
-// The fullscreen-triangle vertex stage every ported post pass pairs with; one
-// module serves them all, the way `composite_vert.hlsl` serves the rest.
+// The fullscreen-triangle vertex stage every post pass pairs with; one module
+// serves them all, retiring the four per-family `*_vert.hlsl` copies.
 pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
     file: "fullscreen.slang",
     embedded: FULLSCREEN_SLANG,
@@ -147,6 +166,70 @@ pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
     label: "bloom_upsample.slang",
     defines: &[("BLOOM_UPSAMPLE", "1")],
 };
+pub(super) static COMPOSITE_FRAG: SlangProgram = SlangProgram {
+    file: "composite.slang",
+    embedded: COMPOSITE_SLANG,
+    entry: "composite_fragment",
+    profile: "ps_6_0",
+    label: "composite_frag.slang",
+    defines: &[],
+};
+pub(super) static SSAO_KERNEL: SlangProgram = SlangProgram {
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entry: "ssao_kernel_fragment",
+    profile: "ps_6_0",
+    label: "ssao_kernel.slang",
+    defines: &[("SSAO_KERNEL", "1")],
+};
+pub(super) static SSAO_BLUR: SlangProgram = SlangProgram {
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entry: "ssao_blur_fragment",
+    profile: "ps_6_0",
+    label: "ssao_blur.slang",
+    defines: &[("SSAO_BLUR", "1")],
+};
+pub(super) static SSR_RESOLVE: SlangProgram = SlangProgram {
+    file: "ssr.slang",
+    embedded: SSR_SLANG,
+    entry: "ssr_resolve_fragment",
+    profile: "ps_6_0",
+    label: "ssr_resolve.slang",
+    defines: SSR_DEFINES,
+};
+pub(super) static SSGI_GATHER: SlangProgram = SlangProgram {
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entry: "ssgi_gather_fragment",
+    profile: "ps_6_0",
+    label: "ssgi_gather.slang",
+    defines: &[("SSGI_GATHER", "1")],
+};
+pub(super) static SSGI_COMPOSITE: SlangProgram = SlangProgram {
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entry: "ssgi_composite_fragment",
+    profile: "ps_6_0",
+    label: "ssgi_composite.slang",
+    defines: &[("SSGI_COMPOSITE", "1")],
+};
+pub(super) static REFLECTION_BLUR: SlangProgram = SlangProgram {
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entry: "reflection_blur_fragment",
+    profile: "ps_6_0",
+    label: "reflection_blur.slang",
+    defines: &[("REFLECTION_BLUR", "1")],
+};
+pub(super) static REFLECTION_COMPOSITE: SlangProgram = SlangProgram {
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entry: "reflection_composite_fragment",
+    profile: "ps_6_0",
+    label: "reflection_composite.slang",
+    defines: &[("REFLECTION_COMPOSITE", "1")],
+};
 
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated: which one a device runs depends on its MSAA
@@ -163,6 +246,14 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &BLOOM_PREFILTER,
     &BLOOM_DOWNSAMPLE,
     &BLOOM_UPSAMPLE,
+    &COMPOSITE_FRAG,
+    &SSAO_KERNEL,
+    &SSAO_BLUR,
+    &SSR_RESOLVE,
+    &SSGI_GATHER,
+    &SSGI_COMPOSITE,
+    &REFLECTION_BLUR,
+    &REFLECTION_COMPOSITE,
 ];
 
 impl SlangProgram {
@@ -235,7 +326,26 @@ mod tests {
                 .source(false)
                 .starts_with("#define HIZ_INIT_MSAA 1\n")
         );
+        // The SSR resolve reads the probe array but none of the texture pool.
+        assert!(
+            SSR_RESOLVE
+                .source(false)
+                .starts_with("#define MAX_PROBES 8\n")
+        );
         assert!(!LIGHT_CULL.source(false).starts_with("#define"));
+    }
+
+    // An unreplaced `{...}` fragment marker would reach slangc as a syntax
+    // error at renderer init; catch a missing splice here instead.
+    #[test]
+    fn every_program_assembles_with_its_fragments_spliced() {
+        for p in ALL {
+            assert!(
+                !p.source(false).contains("{POST_COMMON}"),
+                "{}: unspliced fragment marker",
+                p.label
+            );
+        }
     }
 
     // Two programs collide when they would compile identical source with the
@@ -264,16 +374,42 @@ mod tests {
         assert_eq!(MAIN_BINDLESS_FRAG.cache_key(&src).target, "ps_6_0");
     }
 
-    // The DXIL_ABI probe cube array must be exactly as long as the descriptor
-    // table the root signature binds, or a probe sample reads past it.
+    // Every probe cube array must be exactly as long as the descriptor table
+    // its root signature binds, or a probe sample reads past it.
     #[test]
     fn probe_cube_count_matches_the_host_constant() {
         let want = crate::directx::probe_uniforms::MAX_PROBES.to_string();
-        let value = MAIN_DEFINES
-            .iter()
-            .find(|(k, _)| *k == "MAX_PROBES")
-            .map(|(_, v)| *v);
-        assert_eq!(value, Some(want.as_str()));
+        for defines in [MAIN_DEFINES, SSR_DEFINES] {
+            let value = defines
+                .iter()
+                .find(|(k, _)| *k == "MAX_PROBES")
+                .map(|(_, v)| *v);
+            assert_eq!(value, Some(want.as_str()));
+        }
+    }
+
+    // The reflection-cut constant in every single-source fragment that gates on
+    // it must track the canonical Rust value: the SSR resolve, the composite
+    // blur, and the forward pass all decide "does this surface reflect" from it
+    // and cannot disagree. The Metal table asserts the same thing, but that
+    // module does not build on a DirectX host.
+    #[test]
+    fn reflection_roughness_cut_matches_canonical() {
+        let expected = format!(
+            "static const float REFLECTION_ROUGHNESS_CUT = {:?};",
+            crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
+        );
+        for (name, src) in [
+            ("main_bindless.slang", MAIN_BINDLESS_SLANG),
+            ("ssr.slang", SSR_SLANG),
+            ("reflection.slang", REFLECTION_SLANG),
+        ] {
+            assert!(
+                src.contains(&expected),
+                "{name} REFLECTION_ROUGHNESS_CUT drifted from \
+                 concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
+            );
+        }
     }
 
     // The single-source files carry cluster constants that must track the Rust

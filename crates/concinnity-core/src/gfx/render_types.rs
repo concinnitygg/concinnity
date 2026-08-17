@@ -1909,12 +1909,10 @@ mod tests {
 
     #[test]
     fn ssgi_params_layout_matches_shaders() {
-        // Eight floats, byte-identical across the MSL `SsgiParams` in
-        // ssgi.metal and the HLSL `SsgiParams` cbuffer in ssgi.hlsl. The last
-        // two floats (`rays`, `steps`) sit where `_pad0`/`_pad1` used to: the
-        // Metal shader reads them as loop bounds; backends that still bake
-        // compile-time counts leave those fields as inert padding, so the
-        // layout is unchanged.
+        // Eight floats, byte-identical against the `SsgiParams` in
+        // ssgi.slang, which every backend compiles. The last two floats
+        // (`rays`, `steps`) sit where `_pad0`/`_pad1` used to and are read as
+        // loop bounds.
         assert_eq!(size_of::<SsgiParams>(), 32);
         assert_eq!(offset_of!(SsgiParams, intensity), 0);
         assert_eq!(offset_of!(SsgiParams, max_distance), 4);

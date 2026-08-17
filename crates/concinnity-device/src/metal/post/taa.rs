@@ -16,10 +16,10 @@ use objc2_metal::{
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, FullscreenStages, PassTimer, build_fullscreen_pipeline_split,
+    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_shaders::{FULLSCREEN_VERT, TAA_FRAG};
+use crate::metal::slang_shaders::TAA_FRAG;
 use crate::metal::uniforms::TaaUniforms;
 
 // All temporal-anti-aliasing state grouped into one feature unit: the on/off
@@ -57,18 +57,12 @@ pub(crate) fn build_taa_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
-    let frag = TAA_FRAG.library(device, hot_reload)?;
-    build_fullscreen_pipeline_split(
+    build_slang_fullscreen_pipeline(
         device,
-        FullscreenStages {
-            vertex_library: &vert,
-            vertex_name: "fullscreen_vertex",
-            fragment_library: &frag,
-            fragment_name: "taa_fragment_main",
-        },
+        &TAA_FRAG,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -150,7 +144,7 @@ impl MtlContext {
                         0,
                     );
                 }
-                set_fragment_sampler_range(enc, &self.post_sampler, 3);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
             },
         )?;
         Ok(0)

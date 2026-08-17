@@ -25,10 +25,11 @@ use objc2_metal::{
 
 use crate::gfx::ssgi::SsgiSettings;
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    set_fragment_sampler_range,
 };
+use crate::metal::slang_shaders::{SSGI_COMPOSITE, SSGI_GATHER, SlangLib};
 
 // All screen-space-GI feature state grouped into one unit: the resolved
 // tunables, the `gi` gather target, and the gather + composite pipelines.
@@ -50,23 +51,21 @@ pub(crate) struct SsgiState {
 // target.
 fn build_ssgi_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment_entry: &str,
+    fragment: &SlangLib,
     additive: bool,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "ssgi.metal")?;
     let blend = if additive {
         FullscreenBlend::Additive
     } else {
         FullscreenBlend::Replace
     };
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "ssgi_fullscreen_vertex",
-        fragment_entry,
+        fragment,
         MTLPixelFormat::RGBA16Float,
         blend,
+        hot_reload,
     )
 }
 
@@ -75,7 +74,7 @@ pub(crate) fn build_ssgi_gather_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_ssgi_pipeline(device, "ssgi_gather_fragment", false, hot_reload)
+    build_ssgi_pipeline(device, &SSGI_GATHER, false, hot_reload)
 }
 
 // Build the SSGI composite pipeline (depth-aware blur, additively blended into
@@ -84,7 +83,7 @@ pub(crate) fn build_ssgi_composite_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_ssgi_pipeline(device, "ssgi_composite_fragment", true, hot_reload)
+    build_ssgi_pipeline(device, &SSGI_COMPOSITE, true, hot_reload)
 }
 
 // Targets
@@ -163,7 +162,7 @@ impl MtlContext {
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssgi_params).cast(),
                     std::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
@@ -187,7 +186,7 @@ impl MtlContext {
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.gi.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssgi_params).cast(),
                     std::mem::size_of::<crate::gfx::render_types::SsgiParams>(),

@@ -52,6 +52,15 @@ const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
+const COMPOSITE_SLANG: &str = include_str!("../shaders/composite.slang");
+const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
+const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
+const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
+const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
+
+// The SSR resolve reads the reflection-probe array, so it bakes in the same
+// probe count the main pass does.
+const PROBE_DEFINES: &[(&str, &str)] = &[("MAX_PROBES", "8")];
 
 pub(super) static MAIN_BINDLESS_VERT: SlangLib = SlangLib {
     name: "main_bindless_vert.slang",
@@ -126,6 +135,62 @@ pub(super) static BLOOM_UPSAMPLE: SlangLib = SlangLib {
     entries: &["bloom_upsample_fragment"],
     defines: &[("BLOOM_UPSAMPLE", "1")],
 };
+pub(super) static COMPOSITE_FRAG: SlangLib = SlangLib {
+    name: "composite_frag.slang",
+    file: "composite.slang",
+    embedded: COMPOSITE_SLANG,
+    entries: &["composite_fragment"],
+    defines: &[],
+};
+pub(super) static SSAO_KERNEL: SlangLib = SlangLib {
+    name: "ssao_kernel.slang",
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entries: &["ssao_kernel_fragment"],
+    defines: &[("SSAO_KERNEL", "1")],
+};
+pub(super) static SSAO_BLUR: SlangLib = SlangLib {
+    name: "ssao_blur.slang",
+    file: "ssao.slang",
+    embedded: SSAO_SLANG,
+    entries: &["ssao_blur_fragment"],
+    defines: &[("SSAO_BLUR", "1")],
+};
+pub(super) static SSR_RESOLVE: SlangLib = SlangLib {
+    name: "ssr_resolve.slang",
+    file: "ssr.slang",
+    embedded: SSR_SLANG,
+    entries: &["ssr_resolve_fragment"],
+    defines: PROBE_DEFINES,
+};
+pub(super) static SSGI_GATHER: SlangLib = SlangLib {
+    name: "ssgi_gather.slang",
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entries: &["ssgi_gather_fragment"],
+    defines: &[("SSGI_GATHER", "1")],
+};
+pub(super) static SSGI_COMPOSITE: SlangLib = SlangLib {
+    name: "ssgi_composite.slang",
+    file: "ssgi.slang",
+    embedded: SSGI_SLANG,
+    entries: &["ssgi_composite_fragment"],
+    defines: &[("SSGI_COMPOSITE", "1")],
+};
+pub(super) static REFLECTION_BLUR: SlangLib = SlangLib {
+    name: "reflection_blur.slang",
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entries: &["reflection_blur_fragment"],
+    defines: &[("REFLECTION_BLUR", "1")],
+};
+pub(super) static REFLECTION_COMPOSITE: SlangLib = SlangLib {
+    name: "reflection_composite.slang",
+    file: "reflection.slang",
+    embedded: REFLECTION_SLANG,
+    entries: &["reflection_composite_fragment"],
+    defines: &[("REFLECTION_COMPOSITE", "1")],
+};
 
 // Every registered variant, for the coverage test in `metallib.rs`.
 #[cfg(test)]
@@ -140,6 +205,14 @@ pub(super) static ALL: &[&SlangLib] = &[
     &BLOOM_PREFILTER,
     &BLOOM_DOWNSAMPLE,
     &BLOOM_UPSAMPLE,
+    &COMPOSITE_FRAG,
+    &SSAO_KERNEL,
+    &SSAO_BLUR,
+    &SSR_RESOLVE,
+    &SSGI_GATHER,
+    &SSGI_COMPOSITE,
+    &REFLECTION_BLUR,
+    &REFLECTION_COMPOSITE,
 ];
 
 impl SlangLib {
@@ -234,19 +307,27 @@ mod tests {
         }
     }
 
-    // The reflection-cut constant in the single-source fragment must track the
-    // canonical Rust value, like the equivalent locks on the MSL sources.
+    // The reflection-cut constant in every single-source fragment that gates on
+    // it must track the canonical Rust value, like the equivalent locks on the
+    // MSL sources: the resolve, the composite blur, and the forward pass all
+    // decide "does this surface reflect" from it and cannot disagree.
     #[test]
     fn reflection_roughness_cut_matches_canonical() {
         let expected = format!(
             "static const float REFLECTION_ROUGHNESS_CUT = {:?};",
             crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
         );
-        assert!(
-            MAIN_BINDLESS_SLANG.contains(&expected),
-            "main_bindless.slang REFLECTION_ROUGHNESS_CUT drifted from \
-             concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
-        );
+        for (name, src) in [
+            ("main_bindless.slang", MAIN_BINDLESS_SLANG),
+            ("ssr.slang", SSR_SLANG),
+            ("reflection.slang", REFLECTION_SLANG),
+        ] {
+            assert!(
+                src.contains(&expected),
+                "{name} REFLECTION_ROUGHNESS_CUT drifted from \
+                 concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
+            );
+        }
     }
 
     // Every entry-point name the renderer looks up must exist in the source it

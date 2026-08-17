@@ -90,17 +90,18 @@ pub(in crate::vulkan) struct SsaoShaders {
     pub blur_fs: Vec<u8>,
 }
 
-// Compile every SSAO GLSL source. `hot_reload` routes each source resolve
-// through the builtins' disk-first path so dev-loop edits take effect on the
-// next pipeline build. Called from `SsaoResources::new` at init and by the
-// Vulkan shader hot-reload path.
+// Compile the SSAO stages from `src/shaders/ssao.slang` plus the shared
+// single-source fullscreen vertex. `hot_reload` routes each source resolve
+// through the disk-first path so dev-loop edits take effect on the next
+// pipeline build. Called from `SsaoResources::new` at init and by the Vulkan
+// shader hot-reload path.
 pub(in crate::vulkan) fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(SsaoShaders {
-        fullscreen_vs: builtins::SSAO_FULLSCREEN_VERT.compile(&ctx)?,
-        kernel_fs: builtins::SSAO_KERNEL_FRAG.compile(&ctx)?,
-        blur_fs: builtins::SSAO_BLUR_FRAG.compile(&ctx)?,
+        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
+        kernel_fs: slang_builtins::SSAO_KERNEL.compile(&ctx)?,
+        blur_fs: slang_builtins::SSAO_BLUR.compile(&ctx)?,
     })
 }
 

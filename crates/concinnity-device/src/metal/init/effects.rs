@@ -37,6 +37,7 @@ use crate::metal::post::{
     create_gbuffer_targets, create_ssao_targets, create_ssgi_targets, create_ssr_targets,
     create_taa_targets,
 };
+use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
 use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
@@ -244,12 +245,8 @@ pub(crate) fn build_quality_effects(
     let (ssao_targets, ssao_kernel_pipeline, ssao_blur_pipeline) = if ssao_settings.is_some() {
         (
             Some(create_ssao_targets(device, render_w, render_h)?),
-            Some(build_ssao_pipeline(device, "ssao_fragment", hot_reload)?),
-            Some(build_ssao_pipeline(
-                device,
-                "ssao_blur_fragment",
-                hot_reload,
-            )?),
+            Some(build_ssao_pipeline(device, &SSAO_KERNEL, hot_reload)?),
+            Some(build_ssao_pipeline(device, &SSAO_BLUR, hot_reload)?),
         )
     } else {
         (None, None, None)

@@ -16,10 +16,10 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::gbuffer::GbufferResources;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };
@@ -32,6 +32,11 @@ pub const SSR_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // `gfx::render_types::SsrParams`.
 const SSR_PARAMS_UBO_SIZE: u64 = 96;
 
+// First register of the reflection-probe cube array, and the register of the one
+// sampler it shares. slangc numbers resources from declaration order, so this is
+// the count of screen sources `ssr.slang` declares ahead of the array.
+const PROBE_CUBE_REGISTER: u32 = 4;
+
 // Shader compilation
 
 struct SsrShaders {
@@ -43,10 +48,9 @@ struct SsrShaders {
 // geometry input; the view normal / depth / roughness come from the unified
 // G-buffer pre-pass.
 fn compile_ssr_shaders(hot_reload: bool) -> Result<SsrShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(SsrShaders {
-        resolve_vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
-        resolve_ps: builtins::SSR_RESOLVE_FRAG.compile(&ctx)?,
+        resolve_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        resolve_ps: slang_builtins::SSR_RESOLVE.compile(hot_reload)?,
     })
 }
 
@@ -54,8 +58,11 @@ fn compile_ssr_shaders(hot_reload: bool) -> Result<SsrShaders, String> {
 
 // Root signature for the fullscreen SSR resolve: a root CBV at b0 (the 96-byte
 // `SsrParams` block) and four 1-SRV descriptor tables: scene (t0), G-buffer
-// normal+depth (t1), roughness (t2), and the IBL prefilter cubemap (t3). Two
-// static samplers (linear-clamp + linear-clamp cube mip linear) at s0 / s1.
+// normal+depth (t1), roughness (t2), and the IBL prefilter cubemap (t3), then
+// the reflection-probe cube array at t4.. with its `ProbeSet` at b1. One static
+// sampler per texture the shader declares (s0..s3 plus s4.. for the probe
+// array), because slangc splits each combined sampler in `ssr.slang` into its
+// own texture/sampler pair.
 fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let scene_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -85,14 +92,14 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // [5] table: the reflection-probe cube array at t7..t7+MAX_PROBES (probe_common.hlsl
-    // `TextureCube probe_cubes[MAX_PROBES] : register(t7)`). Unbaked slots hold the sky
-    // prefilter cube, so a sample at any index is valid; the miss fallback box-projects
-    // these when ProbeSet.count > 0.
+    // [5] table: the reflection-probe cube array at t4..t4+MAX_PROBES, the next
+    // free register after the four screen sources `ssr.slang` declares ahead of
+    // it. Unbaked slots hold the sky prefilter cube, so a sample at any index is
+    // valid; the miss fallback box-projects these when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: crate::directx::probe_uniforms::MAX_PROBES as u32,
-        BaseShaderRegister: 7, // t7..
+        BaseShaderRegister: PROBE_CUBE_REGISTER,
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -152,7 +159,7 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [5] reflection-probe cube array table (t7..)
+        // [5] reflection-probe cube array table (t4..)
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -163,20 +170,26 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [6] Root CBV: ProbeSet at b4 (probe_common.hlsl `cbuffer ProbeBlock`)
+        // [6] Root CBV: ProbeSet at b1, the second constant buffer `ssr.slang`
+        // declares after the params push.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 4,
+                    ShaderRegister: 1,
                     RegisterSpace: 0,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
     ];
-    // s0: linear-clamp for scene / gbuffer / roughness.
-    let scene_samp = D3D12_STATIC_SAMPLER_DESC {
+    // One sampler per declared texture, all linear-clamp with mip-linear
+    // filtering: s0..s2 for the screen sources, s3 for the prefilter cube, and
+    // s4 shared by the whole probe cube array (which the shader declares as a
+    // texture array plus that one sampler, because D3D12 binds a sampler array
+    // only through a descriptor table). Identical descriptors; the per-texture
+    // split is the shader's, not the pass's.
+    let linear_clamp = |reg: u32| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -185,33 +198,14 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
         BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
-        ShaderRegister: 0,
+        ShaderRegister: reg,
         RegisterSpace: 0,
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         ..Default::default()
     };
-    // s1: linear-clamp + mip-linear cubemap sampler for the prefilter cube.
-    let cube_samp = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 1,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    // s2: cube mip-linear clamp for the reflection-probe cube array (probe_common.hlsl
-    // `cube_sampler : register(s2)`), identical filtering to the s1 prefilter sampler.
-    let probe_samp = D3D12_STATIC_SAMPLER_DESC {
-        ShaderRegister: 2,
-        ..cube_samp
-    };
-    let samplers = [scene_samp, cube_samp, probe_samp];
+    // s0..s3 plus the probe array's shared s4.
+    let samplers: Vec<D3D12_STATIC_SAMPLER_DESC> =
+        (0..=PROBE_CUBE_REGISTER).map(linear_clamp).collect();
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
@@ -672,12 +666,16 @@ impl FullscreenPass for SsrResolvePass<'_> {
 
 #[cfg(test)]
 mod tests {
-    // The SSR resolve fragment shader is concatenated from probe_common.hlsl +
-    // ssr_resolve_frag.hlsl and compiled at runtime (FXC ps_5_1). Compile it offline
-    // so a HLSL syntax / register error in the reflection-probe miss fallback fails a
-    // test instead of only surfacing as an init failure on the GPU host.
+    // The resolve fragment compiles from `ssr.slang` at renderer init. Compile it
+    // offline so a source or register error in the reflection-probe miss fallback
+    // fails a test instead of only surfacing as an init failure on the GPU host.
+    // Skipped on a host without slangc, matching `concinnity_slang`'s own
+    // round-trip tests.
     #[test]
     fn ssr_resolve_shaders_compile() {
+        if concinnity_slang::slangc_path().is_none() {
+            return;
+        }
         super::compile_ssr_shaders(false).expect("ssr resolve shaders must compile");
     }
 }

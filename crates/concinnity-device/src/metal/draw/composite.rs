@@ -85,7 +85,12 @@ impl MtlContext {
                 post_encoder.setFragmentTexture_atIndex(Some(rough), 4);
                 post_encoder.setFragmentTexture_atIndex(Some(self.ao_output_texture()), 5);
             }
-            post_encoder.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+            crate::metal::post::fullscreen::set_fragment_sampler_range(
+                &post_encoder,
+                &self.post_sampler,
+                0,
+                6,
+            );
             // Post-process tunables (bloom intensity) plus the scene-transition
             // fade at buffer(0).
             let composite = crate::gfx::render_types::CompositeParams {
@@ -99,8 +104,8 @@ impl MtlContext {
                 std::mem::size_of::<crate::gfx::render_types::CompositeParams>(),
                 0,
             );
-            // Fullscreen triangle: 3 vertices, no vertex buffer (post_vertex_main
-            // synthesises position + UV from [[vertex_id]]).
+            // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
+            // fullscreen_vertex synthesises position + UV from SV_VertexID).
             post_encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
         let mut draw_calls: u32 = 1;

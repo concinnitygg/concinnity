@@ -334,19 +334,6 @@ pub(super) static TEXT_FRAG: GlslProgram = glsl(
     Fragment,
     "text_frag.glsl",
 );
-pub(super) static COMPOSITE_VERT: GlslProgram = glsl(
-    "composite.vert",
-    include_str!("shaders/composite.vert"),
-    Vertex,
-    "composite_vert.glsl",
-);
-pub(super) static COMPOSITE_FRAG: GlslProgram = glsl(
-    "composite.frag",
-    include_str!("shaders/composite.frag"),
-    Fragment,
-    "composite_frag.glsl",
-);
-
 pub(super) static GBUFFER_PREPASS_VERT: GlslProgram = glsl(
     "gbuffer_prepass.vert",
     include_str!("shaders/gbuffer_prepass.vert"),
@@ -388,76 +375,6 @@ pub(super) static GBUFFER_BINDLESS_FRAG: GlslProgram = glsl(
     include_str!("shaders/gbuffer_bindless.frag"),
     Fragment,
     "gbuffer_bindless.frag",
-);
-
-pub(super) static SSAO_FULLSCREEN_VERT: GlslProgram = glsl(
-    "ssao_fullscreen.vert",
-    include_str!("shaders/ssao_fullscreen.vert"),
-    Vertex,
-    "ssao_fullscreen.vert",
-);
-pub(super) static SSAO_KERNEL_FRAG: GlslProgram = glsl(
-    "ssao_kernel.frag",
-    include_str!("shaders/ssao_kernel.frag"),
-    Fragment,
-    "ssao_kernel.frag",
-);
-pub(super) static SSAO_BLUR_FRAG: GlslProgram = glsl(
-    "ssao_blur.frag",
-    include_str!("shaders/ssao_blur.frag"),
-    Fragment,
-    "ssao_blur.frag",
-);
-
-pub(super) static SSGI_FULLSCREEN_VERT: GlslProgram = glsl(
-    "ssgi_fullscreen.vert",
-    include_str!("shaders/ssgi_fullscreen.vert"),
-    Vertex,
-    "ssgi_fullscreen.vert",
-);
-pub(super) static SSGI_GATHER_FRAG: GlslProgram = glsl(
-    "ssgi_gather.frag",
-    include_str!("shaders/ssgi_gather.frag"),
-    Fragment,
-    "ssgi_gather.frag",
-);
-pub(super) static SSGI_COMPOSITE_FRAG: GlslProgram = glsl(
-    "ssgi_composite.frag",
-    include_str!("shaders/ssgi_composite.frag"),
-    Fragment,
-    "ssgi_composite.frag",
-);
-
-pub(super) static SSR_FULLSCREEN_VERT: GlslProgram = glsl(
-    "ssr_fullscreen.vert",
-    include_str!("shaders/ssr_fullscreen.vert"),
-    Vertex,
-    "ssr_fullscreen.vert",
-);
-pub(super) static SSR_RESOLVE_FRAG: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        probe_desc_set: Some("1"),
-        ..PLAIN
-    },
-    ..glsl(
-        "ssr_resolve.frag",
-        include_str!("shaders/ssr_resolve.frag"),
-        Fragment,
-        "ssr_resolve.frag",
-    )
-};
-
-pub(super) static REFLECTION_BLUR_FRAG: GlslProgram = glsl(
-    "reflection_blur.frag",
-    include_str!("shaders/reflection_blur.frag"),
-    Fragment,
-    "reflection_blur.frag",
-);
-pub(super) static REFLECTION_COMPOSITE_FRAG: GlslProgram = glsl(
-    "reflection_composite.frag",
-    include_str!("shaders/reflection_composite.frag"),
-    Fragment,
-    "reflection_composite.frag",
 );
 
 pub(super) static PARTICLE_SIMULATE: GlslProgram = glsl(
@@ -684,24 +601,12 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &CULL_SHADOW,
     &TEXT_VERT,
     &TEXT_FRAG,
-    &COMPOSITE_VERT,
-    &COMPOSITE_FRAG,
     &GBUFFER_PREPASS_VERT,
     &GBUFFER_PREPASS_VERT_INSTANCED,
     &GBUFFER_PREPASS_VERT_SKINNED,
     &GBUFFER_PREPASS_FRAG,
     &GBUFFER_BINDLESS_VERT,
     &GBUFFER_BINDLESS_FRAG,
-    &SSAO_FULLSCREEN_VERT,
-    &SSAO_KERNEL_FRAG,
-    &SSAO_BLUR_FRAG,
-    &SSGI_FULLSCREEN_VERT,
-    &SSGI_GATHER_FRAG,
-    &SSGI_COMPOSITE_FRAG,
-    &SSR_FULLSCREEN_VERT,
-    &SSR_RESOLVE_FRAG,
-    &REFLECTION_BLUR_FRAG,
-    &REFLECTION_COMPOSITE_FRAG,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,

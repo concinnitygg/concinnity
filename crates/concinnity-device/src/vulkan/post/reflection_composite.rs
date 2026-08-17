@@ -85,12 +85,12 @@ pub(in crate::vulkan) struct ReflectionCompositeShaders {
 pub(in crate::vulkan) fn compile_reflection_composite_shaders(
     hot_reload: bool,
 ) -> Result<ReflectionCompositeShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(ReflectionCompositeShaders {
-        vs: builtins::SSR_FULLSCREEN_VERT.compile(&ctx)?,
-        blur_fs: builtins::REFLECTION_BLUR_FRAG.compile(&ctx)?,
-        composite_fs: builtins::REFLECTION_COMPOSITE_FRAG.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
+        blur_fs: slang_builtins::REFLECTION_BLUR.compile(&ctx)?,
+        composite_fs: slang_builtins::REFLECTION_COMPOSITE.compile(&ctx)?,
     })
 }
 

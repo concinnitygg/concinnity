@@ -14,11 +14,9 @@ use objc2_metal::{
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, FullscreenStages, PassTimer, build_fullscreen_pipeline_split,
+    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
 };
-use crate::metal::slang_shaders::{
-    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, FULLSCREEN_VERT, SlangLib,
-};
+use crate::metal::slang_shaders::{BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, SlangLib};
 
 // Pixel format of every mip in the bloom chain, including the `bloom_top` mip
 // the transient pool backs.
@@ -48,42 +46,16 @@ pub(crate) fn build_bloom_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<BloomPipelines, String> {
-    // One shared fullscreen-triangle vertex library; each fragment variant is
-    // its own metallib (a variant declares only the resources it binds).
-    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
-    let build = |lib: &SlangLib, frag_name: &str, blend: FullscreenBlend| {
-        let frag = lib.library(device, hot_reload)?;
-        build_fullscreen_pipeline_split(
-            device,
-            FullscreenStages {
-                vertex_library: &vert,
-                vertex_name: "fullscreen_vertex",
-                fragment_library: &frag,
-                fragment_name: frag_name,
-            },
-            BLOOM_FORMAT,
-            blend,
-        )
+    let build = |lib: &SlangLib, blend: FullscreenBlend| {
+        build_slang_fullscreen_pipeline(device, lib, BLOOM_FORMAT, blend, hot_reload)
     };
 
     Ok(BloomPipelines {
-        prefilter: build(
-            &BLOOM_PREFILTER,
-            "bloom_prefilter_fragment",
-            FullscreenBlend::Replace,
-        )?,
-        downsample: build(
-            &BLOOM_DOWNSAMPLE,
-            "bloom_downsample_fragment",
-            FullscreenBlend::Replace,
-        )?,
+        prefilter: build(&BLOOM_PREFILTER, FullscreenBlend::Replace)?,
+        downsample: build(&BLOOM_DOWNSAMPLE, FullscreenBlend::Replace)?,
         // One/One additive: each upsampled mip is added onto the destination
         // mip's existing downsampled content.
-        upsample: build(
-            &BLOOM_UPSAMPLE,
-            "bloom_upsample_fragment",
-            FullscreenBlend::Additive,
-        )?,
+        upsample: build(&BLOOM_UPSAMPLE, FullscreenBlend::Additive)?,
     })
 }
 

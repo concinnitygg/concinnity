@@ -24,9 +24,9 @@ use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
 use crate::gfx::ssgi::SsgiSettings;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_rt_target, write_format_rtv, write_format_srv,
 };
@@ -43,13 +43,12 @@ struct SsgiShaders {
     composite_ps: Vec<u8>,
 }
 
-// Compile the SSGI fullscreen vertex shader and both fragment entry points.
+// Compile the shared fullscreen vertex shader and both fragment entry points.
 fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(SsgiShaders {
-        vs: builtins::SSGI_FULLSCREEN_VERT.compile(&ctx)?,
-        gather_ps: builtins::SSGI_GATHER_FRAG.compile(&ctx)?,
-        composite_ps: builtins::SSGI_COMPOSITE_FRAG.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        gather_ps: slang_builtins::SSGI_GATHER.compile(hot_reload)?,
+        composite_ps: slang_builtins::SSGI_COMPOSITE.compile(hot_reload)?,
     })
 }
 
@@ -58,7 +57,9 @@ fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
 // Root signature shared by both SSGI passes: a root CBV at b0 (the 32-byte
 // `SsgiParams` block) and two 1-SRV descriptor tables: t0 (scene radiance for
 // the gather / the noisy gather output for the composite) and t1 (the SSR
-// pre-pass G-buffer). One static linear-clamp sampler at s0.
+// pre-pass G-buffer). Static linear-clamp samplers at s0 / s1 -- one per source,
+// because slangc splits each combined sampler in the single source into its own
+// texture/sampler pair.
 fn create_ssgi_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let t0_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -109,8 +110,9 @@ fn create_ssgi_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
     ];
-    // s0: linear-clamp for the scene / gi / G-buffer samples.
-    let sampler = D3D12_STATIC_SAMPLER_DESC {
+    // s0 / s1: linear-clamp for the scene / gi tap and the G-buffer. Identical
+    // descriptors; the split is the shader's, not the pass's.
+    let samplers = [0u32, 1].map(|reg| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -119,12 +121,11 @@ fn create_ssgi_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
         BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
-        ShaderRegister: 0,
+        ShaderRegister: reg,
         RegisterSpace: 0,
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         ..Default::default()
-    };
-    let samplers = [sampler];
+    });
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
