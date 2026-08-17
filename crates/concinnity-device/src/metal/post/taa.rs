@@ -15,10 +15,11 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, FullscreenStages, PassTimer, build_fullscreen_pipeline_split,
+    set_fragment_sampler_range,
 };
+use crate::metal::slang_shaders::{FULLSCREEN_VERT, TAA_FRAG};
 use crate::metal::uniforms::TaaUniforms;
 
 // All temporal-anti-aliasing state grouped into one feature unit: the on/off
@@ -56,12 +57,16 @@ pub(crate) fn build_taa_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "taa.metal")?;
-    build_fullscreen_pipeline(
+    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
+    let frag = TAA_FRAG.library(device, hot_reload)?;
+    build_fullscreen_pipeline_split(
         device,
-        &library,
-        "taa_vertex_main",
-        "taa_fragment_main",
+        FullscreenStages {
+            vertex_library: &vert,
+            vertex_name: "fullscreen_vertex",
+            fragment_library: &frag,
+            fragment_name: "taa_fragment_main",
+        },
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
     )
@@ -134,16 +139,18 @@ impl MtlContext {
                 pipeline,
                 label: "TAA resolve",
             },
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(scene_input), 0);
-                enc.setFragmentTexture_atIndex(Some(velocity), 1);
-                enc.setFragmentTexture_atIndex(Some(history.as_ref()), 2);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(taa_uniforms).cast(),
-                    std::mem::size_of::<TaaUniforms>(),
-                    0,
-                );
+            |enc| {
+                unsafe {
+                    enc.setFragmentTexture_atIndex(Some(scene_input), 0);
+                    enc.setFragmentTexture_atIndex(Some(velocity), 1);
+                    enc.setFragmentTexture_atIndex(Some(history.as_ref()), 2);
+                    enc.setFragmentBytes_length_atIndex(
+                        std::ptr::NonNull::from(taa_uniforms).cast(),
+                        std::mem::size_of::<TaaUniforms>(),
+                        0,
+                    );
+                }
+                set_fragment_sampler_range(enc, &self.post_sampler, 3);
             },
         )?;
         Ok(0)

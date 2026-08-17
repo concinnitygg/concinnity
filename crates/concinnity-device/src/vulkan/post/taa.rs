@@ -472,23 +472,18 @@ impl FullscreenPass for TaaResolvePass<'_> {
     }
 }
 
-//  TAA shaders (moved from pipeline.rs)
+//  TAA shaders
 
-// TAA resolve pass. A fullscreen triangle (composite.vert) blends the
-// current HDR scene with a reprojected, neighbourhood-clipped history buffer.
-// Per-pixel motion comes from the unified pre-pass's velocity channel. Mirrors
-// `taa_fragment_main` in metal/pipeline.rs (YCoCg variance clip + non-finite
-// sanitisation).
-
-// SPIR-V for the TAA resolve pass: the shared fullscreen-triangle vertex
-// shader plus the history-blend fragment shader.
+// SPIR-V for the TAA resolve pass: the shared single-source fullscreen-triangle
+// vertex stage plus the history-blend fragment (YCoCg variance clip + non-finite
+// sanitisation), both from `src/shaders/*.slang`.
 pub(in crate::vulkan) fn compile_taa_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
-    let vert = builtins::COMPOSITE_VERT.compile(&ctx)?;
-    let frag = builtins::TAA_FRAG.compile(&ctx)?;
+    let vert = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
+    let frag = slang_builtins::TAA_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

@@ -32,13 +32,13 @@ pub(in crate::vulkan) struct BloomShaders {
 }
 
 pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(BloomShaders {
-        vert: builtins::COMPOSITE_VERT.compile(&ctx)?,
-        prefilter: builtins::BLOOM_PREFILTER.compile(&ctx)?,
-        downsample: builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
-        upsample: builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
+        vert: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
+        prefilter: slang_builtins::BLOOM_PREFILTER.compile(&ctx)?,
+        downsample: slang_builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
+        upsample: slang_builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
     })
 }
 

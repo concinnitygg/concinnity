@@ -487,28 +487,6 @@ pub(super) static SSR_RESOLVE_FRAG: HlslProgram = HlslProgram {
     },
 };
 
-pub(super) static BLOOM_PREFILTER: HlslProgram = fxc_main(
-    "bloom_prefilter.hlsl",
-    include_str!("shaders/bloom_prefilter.hlsl"),
-    "ps_5_1",
-);
-pub(super) static BLOOM_DOWNSAMPLE: HlslProgram = fxc_main(
-    "bloom_downsample.hlsl",
-    include_str!("shaders/bloom_downsample.hlsl"),
-    "ps_5_1",
-);
-pub(super) static BLOOM_UPSAMPLE: HlslProgram = fxc_main(
-    "bloom_upsample.hlsl",
-    include_str!("shaders/bloom_upsample.hlsl"),
-    "ps_5_1",
-);
-
-pub(super) static TAA_FRAG: HlslProgram = fxc_main(
-    "taa_frag.hlsl",
-    include_str!("shaders/taa_frag.hlsl"),
-    "ps_5_1",
-);
-
 const REFLECTION_COMPOSITE_DECL: HlslProgram = HlslProgram {
     file: "reflection_composite.hlsl",
     embedded: REFLECTION_COMPOSITE_HLSL,
@@ -634,10 +612,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &SSGI_COMPOSITE_FRAG,
     &SSR_FULLSCREEN_VERT,
     &SSR_RESOLVE_FRAG,
-    &BLOOM_PREFILTER,
-    &BLOOM_DOWNSAMPLE,
-    &BLOOM_UPSAMPLE,
-    &TAA_FRAG,
     &REFLECTION_COMPOSITE_VERT,
     &REFLECTION_BLUR_FRAG,
     &REFLECTION_COMPOSITE_FRAG,

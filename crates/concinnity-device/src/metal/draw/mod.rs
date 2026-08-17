@@ -607,8 +607,6 @@ impl MtlContext {
         let taa_uniforms = if self.taa.enabled {
             Some(TaaUniforms {
                 history_valid: if self.taa.history_valid { 1.0 } else { 0.0 },
-                _pad0: 0.0,
-                _pad1: [0.0; 2],
             })
         } else {
             None

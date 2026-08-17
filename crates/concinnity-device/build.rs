@@ -16,8 +16,8 @@
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{
-    Backend, SdkOptions, SlangLibSpec, emit_backend_cfg, emit_check_cfgs, hash_sources,
-    precompile_metal_shaders, setup_graphics_sdks,
+    Backend, SdkOptions, SlangLibSpec, SlangShaders, emit_backend_cfg, emit_check_cfgs,
+    hash_sources, precompile_metal_shaders, setup_graphics_sdks,
 };
 use std::path::PathBuf;
 
@@ -36,6 +36,12 @@ const SOURCE_ONLY_METAL_SHADERS: &[&str] = &[
 // compiles from source. The `.msl` extension keeps a fragment out of the
 // `.metal` precompile scan: it is not a standalone library.
 const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_common.msl")];
+
+// The same idea for the single-source shaders, matching what
+// `crate::slang_source::assemble` splices when the renderer compiles one at
+// runtime. The two tables must agree: a mismatch would have the build script
+// and the renderer key different text for the same program.
+const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{POST_COMMON}", "post_common.slang")];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
 // baked into the single-source shaders at build time. Must match
@@ -116,6 +122,36 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         entries: &["hiz_downsample"],
         defines: &[("HIZ_DOWNSAMPLE", "1")],
     },
+    SlangLibSpec {
+        name: "fullscreen_vert.slang",
+        file: "fullscreen.slang",
+        entries: &["fullscreen_vertex"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "taa_frag.slang",
+        file: "taa.slang",
+        entries: &["taa_fragment_main"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "bloom_prefilter.slang",
+        file: "bloom.slang",
+        entries: &["bloom_prefilter_fragment"],
+        defines: &[("BLOOM_PREFILTER", "1")],
+    },
+    SlangLibSpec {
+        name: "bloom_downsample.slang",
+        file: "bloom.slang",
+        entries: &["bloom_downsample_fragment"],
+        defines: &[("BLOOM_DOWNSAMPLE", "1")],
+    },
+    SlangLibSpec {
+        name: "bloom_upsample.slang",
+        file: "bloom.slang",
+        entries: &["bloom_upsample_fragment"],
+        defines: &[("BLOOM_UPSAMPLE", "1")],
+    },
 ];
 
 // The modules that decide how a shader artifact is produced: the cache itself
@@ -157,8 +193,11 @@ fn main() {
             &shaders_dir,
             SOURCE_ONLY_METAL_SHADERS,
             METAL_SHADER_FRAGMENTS,
-            &slang_dir,
-            SLANG_METAL_LIBS,
+            &SlangShaders {
+                dir: &slang_dir,
+                fragments: SLANG_SHADER_FRAGMENTS,
+                specs: SLANG_METAL_LIBS,
+            },
         );
         assert_slang_metal_abi(&slang_dir);
         emit_slang_metal_defines();

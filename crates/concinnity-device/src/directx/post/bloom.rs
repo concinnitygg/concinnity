@@ -2,7 +2,7 @@
 //
 // Bloom post-process: prefilter + downsample chain + additive upsample chain.
 // Owns the per-mip render targets, the three PSOs they share (all using the
-// fullscreen-triangle composite VS), the root signature, and the
+// shared single-source fullscreen-triangle VS), the root signature, and the
 // `encode_bloom` per-frame encoder.
 //
 // Mirrors src/metal/post/bloom.rs: same mip-count clamp (4..=6), same
@@ -14,15 +14,15 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::gfx::render_types::PostProcessParams;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 // Shader compilation
 
 // Compiled bloom-chain shader bytecode. All three passes share the
-// fullscreen-triangle composite vertex shader.
+// single-source fullscreen-triangle vertex shader.
 pub(in crate::directx) struct BloomShaders {
     pub vs: Vec<u8>,
     pub prefilter_ps: Vec<u8>,
@@ -32,12 +32,11 @@ pub(in crate::directx) struct BloomShaders {
 
 // Compile the bloom prefilter / downsample / upsample shaders.
 pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(BloomShaders {
-        vs: builtins::COMPOSITE_VERT.compile(&ctx)?,
-        prefilter_ps: builtins::BLOOM_PREFILTER.compile(&ctx)?,
-        downsample_ps: builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
-        upsample_ps: builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        prefilter_ps: slang_builtins::BLOOM_PREFILTER.compile(hot_reload)?,
+        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
+        upsample_ps: slang_builtins::BLOOM_UPSAMPLE.compile(hot_reload)?,
     })
 }
 

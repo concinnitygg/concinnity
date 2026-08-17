@@ -29,22 +29,33 @@ pub struct SlangLibSpec {
     pub defines: &'static [(&'static str, &'static str)],
 }
 
+// The single-source half of the precompile: where the `.slang` files live, the
+// shared declarations spliced into the ones carrying a marker, and one spec per
+// metallib variant. Grouped because they always travel together, and because
+// the splice table has to match the renderer's `slang_source::assemble` exactly
+// -- the two produce the same text or the content-addressed cache serves one
+// path's bytes to the other.
+pub struct SlangShaders<'a> {
+    pub dir: &'a Path,
+    pub fragments: &'a [(&'a str, &'a str)],
+    pub specs: &'a [SlangLibSpec],
+}
+
 // Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
-// spec under `slang_dir`, into OUT_DIR and generate `engine_metallibs.rs`
-// there. `fragments` pairs a source marker with the file under `shaders_dir`
-// that replaces it, matching the substitution the renderer applies when it
-// compiles the same shader from source. Panics if the Metal toolchain is
-// present but a shader fails to compile: a broken shader must fail the build,
-// not surface at renderer init.
+// spec in `slang`, into OUT_DIR and generate `engine_metallibs.rs` there.
+// `fragments` pairs a source marker with the file under `shaders_dir` that
+// replaces it, matching the substitution the renderer applies when it compiles
+// the same shader from source. Panics if the Metal toolchain is present but a
+// shader fails to compile: a broken shader must fail the build, not surface at
+// renderer init.
 pub fn precompile_metal_shaders(
     shaders_dir: &Path,
     source_only: &[&str],
     fragments: &[(&str, &str)],
-    slang_dir: &Path,
-    slang_specs: &[SlangLibSpec],
+    slang: &SlangShaders,
 ) {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
-    println!("cargo:rerun-if-changed={}", slang_dir.display());
+    println!("cargo:rerun-if-changed={}", slang.dir.display());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let generated = out_dir.join("engine_metallibs.rs");
 
@@ -58,19 +69,12 @@ pub fn precompile_metal_shaders(
         return;
     }
 
-    let fragments: Vec<(&str, String)> = fragments
-        .iter()
-        .map(|(marker, file)| {
-            let path = shaders_dir.join(file);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read fragment {}: {e}", path.display()));
-            (*marker, text)
-        })
-        .collect();
+    let fragments = read_fragments(shaders_dir, fragments);
+    let slang_fragments = read_fragments(slang.dir, slang.fragments);
 
     let lib_dir = out_dir.join("engine_shaders");
     std::fs::create_dir_all(&lib_dir).expect("create engine_shaders dir");
-    let mut entries = Vec::with_capacity(shaders.len() + slang_specs.len());
+    let mut entries = Vec::with_capacity(shaders.len() + slang.specs.len());
     for path in &shaders {
         let name = path
             .file_name()
@@ -86,9 +90,27 @@ pub fn precompile_metal_shaders(
         compile_metallib(&assembled, &lib_path);
         entries.push((name, lib_path));
     }
-    entries.extend(precompile_slang_libs(slang_dir, slang_specs, &lib_dir));
+    entries.extend(precompile_slang_libs(
+        slang.dir,
+        slang.specs,
+        &slang_fragments,
+        &lib_dir,
+    ));
     std::fs::write(&generated, metallib_lookup_source(&entries))
         .expect("write engine_metallibs.rs");
+}
+
+// Load each `(marker, file)` pair's replacement text from `dir`.
+fn read_fragments<'a>(dir: &Path, fragments: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, String)> {
+    fragments
+        .iter()
+        .map(|(marker, file)| {
+            let path = dir.join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read fragment {}: {e}", path.display()));
+            (*marker, text)
+        })
+        .collect()
 }
 
 // Compile each single-source spec to a metallib via slangc. With slangc absent
@@ -98,6 +120,7 @@ pub fn precompile_metal_shaders(
 fn precompile_slang_libs(
     slang_dir: &Path,
     specs: &[SlangLibSpec],
+    fragments: &[(&str, String)],
     lib_dir: &Path,
 ) -> Vec<(String, PathBuf)> {
     if specs.is_empty() {
@@ -116,6 +139,7 @@ fn precompile_slang_libs(
             let path = slang_dir.join(spec.file);
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let source = assemble(&source, fragments);
             let job = slang::SlangJob {
                 source: &slang::inject_defines(&source, spec.defines),
                 file_name: spec.name,

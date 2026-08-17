@@ -161,15 +161,13 @@ pub struct CullUniforms {
     pub _pad_skin: u32,
 }
 
-// Uniforms pushed to the TAA resolve fragment shader at buffer(0). Layout
-// must match the `TaaUniforms` struct in `build_taa_pipeline`'s MSL. 16 bytes.
+// Uniforms pushed to the TAA resolve fragment shader at buffer(0). Layout must
+// match `TaaParams` in `shaders/taa.slang`. 4 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct TaaUniforms {
     // 0 on the first frame / after a resize, 1.0 otherwise.
     pub history_valid: f32,
-    pub _pad0: f32,
-    pub _pad1: [f32; 2],
 }
 
 // Per-frame uniforms for the TAA velocity pre-pass at buffer(0). Layout must
@@ -605,12 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn taa_uniforms_layout_matches_msl() {
-        // MSL `TaaUniforms` in taa.metal: history_valid + pad to 16 bytes.
-        assert_eq!(size_of::<TaaUniforms>(), 16);
+    fn taa_uniforms_layout_matches_slang() {
+        // `TaaParams` in shaders/taa.slang: one float.
+        assert_eq!(size_of::<TaaUniforms>(), 4);
         assert_eq!(offset_of!(TaaUniforms, history_valid), 0);
-        assert_eq!(offset_of!(TaaUniforms, _pad0), 4);
-        assert_eq!(offset_of!(TaaUniforms, _pad1), 8);
     }
 
     #[test]

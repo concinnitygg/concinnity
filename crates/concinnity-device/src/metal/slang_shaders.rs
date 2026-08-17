@@ -49,6 +49,9 @@ const MAIN_DEFINES: &[(&str, &str)] = &[
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
+const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
+const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
 
 pub(super) static MAIN_BINDLESS_VERT: SlangLib = SlangLib {
     name: "main_bindless_vert.slang",
@@ -86,6 +89,44 @@ pub(super) static HIZ_DOWNSAMPLE: SlangLib = SlangLib {
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
 
+// The fullscreen-triangle vertex stage every ported post pass pairs with; one
+// library serves them all, so their fragment metallibs carry no vertex entry.
+pub(super) static FULLSCREEN_VERT: SlangLib = SlangLib {
+    name: "fullscreen_vert.slang",
+    file: "fullscreen.slang",
+    embedded: FULLSCREEN_SLANG,
+    entries: &["fullscreen_vertex"],
+    defines: &[],
+};
+pub(super) static TAA_FRAG: SlangLib = SlangLib {
+    name: "taa_frag.slang",
+    file: "taa.slang",
+    embedded: TAA_SLANG,
+    entries: &["taa_fragment_main"],
+    defines: &[],
+};
+pub(super) static BLOOM_PREFILTER: SlangLib = SlangLib {
+    name: "bloom_prefilter.slang",
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entries: &["bloom_prefilter_fragment"],
+    defines: &[("BLOOM_PREFILTER", "1")],
+};
+pub(super) static BLOOM_DOWNSAMPLE: SlangLib = SlangLib {
+    name: "bloom_downsample.slang",
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entries: &["bloom_downsample_fragment"],
+    defines: &[("BLOOM_DOWNSAMPLE", "1")],
+};
+pub(super) static BLOOM_UPSAMPLE: SlangLib = SlangLib {
+    name: "bloom_upsample.slang",
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entries: &["bloom_upsample_fragment"],
+    defines: &[("BLOOM_UPSAMPLE", "1")],
+};
+
 // Every registered variant, for the coverage test in `metallib.rs`.
 #[cfg(test)]
 pub(super) static ALL: &[&SlangLib] = &[
@@ -94,6 +135,11 @@ pub(super) static ALL: &[&SlangLib] = &[
     &LIGHT_CULL,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &FULLSCREEN_VERT,
+    &TAA_FRAG,
+    &BLOOM_PREFILTER,
+    &BLOOM_DOWNSAMPLE,
+    &BLOOM_UPSAMPLE,
 ];
 
 impl SlangLib {
@@ -163,13 +209,20 @@ mod tests {
     }
 
     // Every variant assembles non-empty source with its defines up front, in
-    // both hot-reload modes (embedded and disk must agree on existence).
+    // both hot-reload modes (embedded and disk must agree on existence), and
+    // with every `{...}` fragment marker spliced -- an unreplaced marker would
+    // reach slangc as a syntax error at renderer init rather than here.
     #[test]
     fn variants_assemble_source_with_their_defines() {
         for lib in ALL {
             for hot_reload in [false, true] {
                 let src = lib.source(hot_reload);
                 assert!(!src.trim().is_empty(), "{}: empty source", lib.name);
+                assert!(
+                    !src.contains("{POST_COMMON}"),
+                    "{}: unspliced fragment marker",
+                    lib.name
+                );
                 for (k, v) in lib.defines {
                     assert!(
                         src.starts_with('#') && src.contains(&format!("#define {k} {v}\n")),
@@ -196,16 +249,15 @@ mod tests {
         );
     }
 
-    // The two entry-point names the renderer looks up must exist in the
-    // source, and each variant's gate define must select a real block.
+    // Every entry-point name the renderer looks up must exist in the source it
+    // is declared against, so a rename on one side fails a test rather than a
+    // pipeline build.
     #[test]
     fn entries_exist_in_their_sources() {
         for lib in ALL {
             for entry in lib.entries {
                 assert!(
-                    lib.embedded.contains(&format!("void {entry}"))
-                        || lib.embedded.contains(&format!("VertexOut {entry}"))
-                        || lib.embedded.contains(&format!("float4 {entry}")),
+                    lib.embedded.contains(&format!(" {entry}(")),
                     "{}: entry {entry} not found in {}",
                     lib.name,
                     lib.file

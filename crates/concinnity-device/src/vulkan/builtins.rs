@@ -447,32 +447,6 @@ pub(super) static SSR_RESOLVE_FRAG: GlslProgram = GlslProgram {
     )
 };
 
-pub(super) static BLOOM_PREFILTER: GlslProgram = glsl(
-    "bloom_prefilter.frag",
-    include_str!("shaders/bloom_prefilter.frag"),
-    Fragment,
-    "bloom_prefilter.glsl",
-);
-pub(super) static BLOOM_DOWNSAMPLE: GlslProgram = glsl(
-    "bloom_downsample.frag",
-    include_str!("shaders/bloom_downsample.frag"),
-    Fragment,
-    "bloom_downsample.glsl",
-);
-pub(super) static BLOOM_UPSAMPLE: GlslProgram = glsl(
-    "bloom_upsample.frag",
-    include_str!("shaders/bloom_upsample.frag"),
-    Fragment,
-    "bloom_upsample.glsl",
-);
-
-pub(super) static TAA_FRAG: GlslProgram = glsl(
-    "taa.frag",
-    include_str!("shaders/taa.frag"),
-    Fragment,
-    "taa_frag.glsl",
-);
-
 pub(super) static REFLECTION_BLUR_FRAG: GlslProgram = glsl(
     "reflection_blur.frag",
     include_str!("shaders/reflection_blur.frag"),
@@ -726,10 +700,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &SSGI_COMPOSITE_FRAG,
     &SSR_FULLSCREEN_VERT,
     &SSR_RESOLVE_FRAG,
-    &BLOOM_PREFILTER,
-    &BLOOM_DOWNSAMPLE,
-    &BLOOM_UPSAMPLE,
-    &TAA_FRAG,
     &REFLECTION_BLUR_FRAG,
     &REFLECTION_COMPOSITE_FRAG,
     &PARTICLE_SIMULATE,

@@ -36,6 +36,9 @@ pub(crate) struct SlangProgram {
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
+const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
+const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
 
 pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
@@ -86,6 +89,49 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     sized: false,
 };
 
+// The fullscreen-triangle vertex stage every ported post pass pairs with; one
+// module serves them all, the way `composite.vert` served the GLSL ones.
+pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
+    file: "fullscreen.slang",
+    embedded: FULLSCREEN_SLANG,
+    entry: "fullscreen_vertex",
+    label: "fullscreen_vert.slang",
+    gate: None,
+    sized: false,
+};
+pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
+    file: "taa.slang",
+    embedded: TAA_SLANG,
+    entry: "taa_fragment_main",
+    label: "taa_frag.slang",
+    gate: None,
+    sized: false,
+};
+pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_prefilter_fragment",
+    label: "bloom_prefilter.slang",
+    gate: Some("BLOOM_PREFILTER"),
+    sized: false,
+};
+pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_downsample_fragment",
+    label: "bloom_downsample.slang",
+    gate: Some("BLOOM_DOWNSAMPLE"),
+    sized: false,
+};
+pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_upsample_fragment",
+    label: "bloom_upsample.slang",
+    gate: Some("BLOOM_UPSAMPLE"),
+    sized: false,
+};
+
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated: which one a device runs depends on its MSAA
 // mode, and a bundle should be warm for either.
@@ -96,6 +142,11 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_MSAA,
     &HIZ_INIT_SINGLE,
     &HIZ_DOWNSAMPLE,
+    &FULLSCREEN_VERT,
+    &TAA_FRAG,
+    &BLOOM_PREFILTER,
+    &BLOOM_DOWNSAMPLE,
+    &BLOOM_UPSAMPLE,
 ];
 
 impl SlangProgram {
@@ -171,6 +222,20 @@ mod tests {
         assert!(src.starts_with("#define HIZ_INIT_MSAA 1\n"));
         let src = LIGHT_CULL.source(&ctx(0, 0));
         assert!(!src.starts_with("#define"));
+    }
+
+    // An unreplaced `{...}` fragment marker would reach slangc as a syntax
+    // error at renderer init; catch a missing splice here instead.
+    #[test]
+    fn every_program_assembles_with_its_fragments_spliced() {
+        for p in ALL {
+            let src = p.source(&ctx(4, 4));
+            assert!(
+                !src.contains("{POST_COMMON}"),
+                "{}: unspliced fragment marker",
+                p.label
+            );
+        }
     }
 
     // Two programs collide when they would compile identical source with the

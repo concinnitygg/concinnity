@@ -52,10 +52,47 @@ pub(crate) fn build_fullscreen_pipeline(
     format: MTLPixelFormat,
     blend: FullscreenBlend,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let vert_fn = library
+    build_fullscreen_pipeline_split(
+        device,
+        FullscreenStages {
+            vertex_library: library,
+            vertex_name,
+            fragment_library: library,
+            fragment_name,
+        },
+        format,
+        blend,
+    )
+}
+
+// The two stages of a fullscreen pass, each with the library it comes from.
+// The single-source passes take their vertex from one shared `fullscreen.slang`
+// library and their fragment from the effect's own, so the pair cannot be named
+// by one library plus two function names.
+pub(crate) struct FullscreenStages<'a> {
+    pub vertex_library: &'a ProtocolObject<dyn objc2_metal::MTLLibrary>,
+    pub vertex_name: &'a str,
+    pub fragment_library: &'a ProtocolObject<dyn objc2_metal::MTLLibrary>,
+    pub fragment_name: &'a str,
+}
+
+// `build_fullscreen_pipeline` with the stages drawn from separate libraries.
+pub(crate) fn build_fullscreen_pipeline_split(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    stages: FullscreenStages,
+    format: MTLPixelFormat,
+    blend: FullscreenBlend,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+    let FullscreenStages {
+        vertex_library,
+        vertex_name,
+        fragment_library,
+        fragment_name,
+    } = stages;
+    let vert_fn = vertex_library
         .newFunctionWithName(&ns_str(vertex_name))
         .ok_or_else(|| format!("{} not found", vertex_name))?;
-    let frag_fn = library
+    let frag_fn = fragment_library
         .newFunctionWithName(&ns_str(fragment_name))
         .ok_or_else(|| format!("{} not found", fragment_name))?;
 
@@ -88,6 +125,20 @@ pub(crate) fn build_fullscreen_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| format!("failed to create {} pipeline: {:?}", fragment_name, e))
+}
+
+// Bind `sampler` to fragment sampler slots `0..count`. The single-source post
+// passes declare their inputs as combined texture-samplers, which slangc lowers
+// to a texture and a sampler at the same index, so a pass sampling N textures
+// through one sampler state binds it N times.
+pub(in crate::metal) fn set_fragment_sampler_range(
+    enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+    sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    count: usize,
+) {
+    for i in 0..count {
+        unsafe { enc.setFragmentSamplerState_atIndex(Some(sampler), i) };
+    }
 }
 
 // Where a fullscreen pass sits within an effect's GPU-timing span. Most

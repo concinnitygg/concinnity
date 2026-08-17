@@ -14,17 +14,18 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_composite_pso, serialize_desc_and_create};
 use crate::directx::post::gbuffer::GbufferResources;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, create_rt_target, write_format_rtv, write_hdr_srv};
 
 // Shader compilation
 
-// Compiled TAA resolve shader bytecode. The resolve pass reuses the
-// fullscreen-triangle composite VS; the motion it reprojects through
-// comes from the unified G-buffer pre-pass.
+// Compiled TAA resolve shader bytecode. The resolve pass pairs the shared
+// single-source fullscreen-triangle VS with the single-source resolve
+// fragment; the motion it reprojects through comes from the unified G-buffer
+// pre-pass.
 struct TaaShaders {
     resolve_vs: Vec<u8>,
     resolve_ps: Vec<u8>,
@@ -32,10 +33,9 @@ struct TaaShaders {
 
 // Compile the TAA resolve shaders.
 fn compile_taa_shaders(hot_reload: bool) -> Result<TaaShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(TaaShaders {
-        resolve_vs: builtins::COMPOSITE_VERT.compile(&ctx)?,
-        resolve_ps: builtins::TAA_FRAG.compile(&ctx)?,
+        resolve_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        resolve_ps: slang_builtins::TAA_FRAG.compile(hot_reload)?,
     })
 }
 
@@ -44,8 +44,9 @@ fn compile_taa_shaders(hot_reload: bool) -> Result<TaaShaders, String> {
 // Root signature for the TAA resolve pass: three 1-SRV descriptor tables at
 // t0 (current scene), t1 (velocity), t2 (history), each its own table since
 // the history SRV alternates between two ping-pong heap slots, plus one
-// 32-bit root constant at b0 (`history_valid`) and a static linear-clamp
-// sampler at s0.
+// 32-bit root constant at b0 (`history_valid`) and static linear-clamp
+// samplers at s0..s2 -- one per source, because slangc splits each combined
+// `Sampler2D` in the single source into its own texture/sampler pair.
 fn create_taa_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let make_range = |reg: u32| D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -101,7 +102,7 @@ fn create_taa_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
     ];
-    let static_sampler = D3D12_STATIC_SAMPLER_DESC {
+    let linear_clamp = |reg: u32| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -110,16 +111,19 @@ fn create_taa_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
         BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
-        ShaderRegister: 0, // s0
+        ShaderRegister: reg,
         RegisterSpace: 0,
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         ..Default::default()
     };
+    // s0..s2: scene, velocity, history. Identical descriptors; the split is the
+    // shader's, not the pass's.
+    let static_samplers = [linear_clamp(0), linear_clamp(1), linear_clamp(2)];
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &static_sampler,
+        NumStaticSamplers: static_samplers.len() as u32,
+        pStaticSamplers: static_samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
     serialize_desc_and_create(device, &desc, "taa root sig")

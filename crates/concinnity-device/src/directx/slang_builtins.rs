@@ -14,6 +14,14 @@
 // compute kernels need no ABI block: slangc assigns b0/t0/u0 from declaration
 // order, which is what their root signatures already bind.
 //
+// The fullscreen post passes need no ABI block either, and for a stronger
+// reason than the compute kernels: nothing outside the engine binds them at
+// all. slangc splits each top-level `Sampler2D` into a `Texture2D` + a
+// `SamplerState` and numbers both from declaration order, so a pass with N
+// sources lands on t0..tN-1 *and* s0..sN-1 -- where the hand HLSL declared one
+// sampler for all of them. The root signatures name the samplers they hand out
+// (TAA's three static samplers are the same descriptor three times).
+//
 // These are shader model 6.0 rather than the FXC path's 5.1: the bindless pool
 // index is non-uniform across a fragment wave, and `NonUniformResourceIndex`
 // is an SM 6.0 construct.
@@ -37,6 +45,9 @@ pub(crate) struct SlangProgram {
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
+const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
+const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
 
 // The bindless main pair's variant defines. `MAX_PROBES` sizes the probe cube
 // array the root signature's descriptor table covers; `probe_cube_count_matches`
@@ -94,6 +105,49 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     defines: &[("HIZ_DOWNSAMPLE", "1")],
 };
 
+// The fullscreen-triangle vertex stage every ported post pass pairs with; one
+// module serves them all, the way `composite_vert.hlsl` serves the rest.
+pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
+    file: "fullscreen.slang",
+    embedded: FULLSCREEN_SLANG,
+    entry: "fullscreen_vertex",
+    profile: "vs_6_0",
+    label: "fullscreen_vert.slang",
+    defines: &[],
+};
+pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
+    file: "taa.slang",
+    embedded: TAA_SLANG,
+    entry: "taa_fragment_main",
+    profile: "ps_6_0",
+    label: "taa_frag.slang",
+    defines: &[],
+};
+pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_prefilter_fragment",
+    profile: "ps_6_0",
+    label: "bloom_prefilter.slang",
+    defines: &[("BLOOM_PREFILTER", "1")],
+};
+pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_downsample_fragment",
+    profile: "ps_6_0",
+    label: "bloom_downsample.slang",
+    defines: &[("BLOOM_DOWNSAMPLE", "1")],
+};
+pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
+    file: "bloom.slang",
+    embedded: BLOOM_SLANG,
+    entry: "bloom_upsample_fragment",
+    profile: "ps_6_0",
+    label: "bloom_upsample.slang",
+    defines: &[("BLOOM_UPSAMPLE", "1")],
+};
+
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated: which one a device runs depends on its MSAA
 // mode, and a bundle should be warm for either.
@@ -104,6 +158,11 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_SINGLE,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &FULLSCREEN_VERT,
+    &TAA_FRAG,
+    &BLOOM_PREFILTER,
+    &BLOOM_DOWNSAMPLE,
+    &BLOOM_UPSAMPLE,
 ];
 
 impl SlangProgram {

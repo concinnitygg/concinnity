@@ -13,9 +13,11 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, FullscreenStages, PassTimer, build_fullscreen_pipeline_split,
+};
+use crate::metal::slang_shaders::{
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, FULLSCREEN_VERT, SlangLib,
 };
 
 // Pixel format of every mip in the bloom chain, including the `bloom_top` mip
@@ -37,34 +39,51 @@ pub(crate) struct BloomPipelines {
     pub upsample: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
 }
 
-// Build the bloom prefilter / downsample / upsample pipelines from one inline
-// MSL source. The filter kernels are the Jimenez "Next Generation Post
-// Processing in Call of Duty" 13-tap downsample + 9-tap tent upsample; the
-// first downsample applies a Karis luma-weighted average to suppress
-// fireflies and a soft-knee luminance threshold.
+// Build the bloom prefilter / downsample / upsample pipelines from the
+// single-source `bloom.slang`. The filter kernels are the Jimenez "Next
+// Generation Post Processing in Call of Duty" 13-tap downsample + 9-tap tent
+// upsample; the first downsample applies a Karis luma-weighted average to
+// suppress fireflies and a soft-knee luminance threshold.
 pub(crate) fn build_bloom_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<BloomPipelines, String> {
-    // Loaded once; all three pipelines share the same `bloom.metal` library.
-    let library = shader_library(device, hot_reload, "bloom.metal")?;
-    let build = |frag_name: &str, blend: FullscreenBlend| {
-        build_fullscreen_pipeline(
+    // One shared fullscreen-triangle vertex library; each fragment variant is
+    // its own metallib (a variant declares only the resources it binds).
+    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
+    let build = |lib: &SlangLib, frag_name: &str, blend: FullscreenBlend| {
+        let frag = lib.library(device, hot_reload)?;
+        build_fullscreen_pipeline_split(
             device,
-            &library,
-            "bloom_vertex_main",
-            frag_name,
+            FullscreenStages {
+                vertex_library: &vert,
+                vertex_name: "fullscreen_vertex",
+                fragment_library: &frag,
+                fragment_name: frag_name,
+            },
             BLOOM_FORMAT,
             blend,
         )
     };
 
     Ok(BloomPipelines {
-        prefilter: build("bloom_prefilter_fragment", FullscreenBlend::Replace)?,
-        downsample: build("bloom_downsample_fragment", FullscreenBlend::Replace)?,
+        prefilter: build(
+            &BLOOM_PREFILTER,
+            "bloom_prefilter_fragment",
+            FullscreenBlend::Replace,
+        )?,
+        downsample: build(
+            &BLOOM_DOWNSAMPLE,
+            "bloom_downsample_fragment",
+            FullscreenBlend::Replace,
+        )?,
         // One/One additive: each upsampled mip is added onto the destination
         // mip's existing downsampled content.
-        upsample: build("bloom_upsample_fragment", FullscreenBlend::Additive)?,
+        upsample: build(
+            &BLOOM_UPSAMPLE,
+            "bloom_upsample_fragment",
+            FullscreenBlend::Additive,
+        )?,
     })
 }
 
