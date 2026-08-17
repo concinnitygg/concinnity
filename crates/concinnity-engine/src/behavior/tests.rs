@@ -53,6 +53,14 @@ fn system(world: &mut TestWorld) -> BehaviorSystem {
     sys
 }
 
+// Resolve one tag set through the production fill-in-place path.
+fn entities_matching(ctx: &PipelineContext, tags: &[u8]) -> Vec<Entity> {
+    let mut scratch = Vec::new();
+    let mut out = Vec::new();
+    BehaviorSystem::entities_matching_into(ctx, tags, &mut scratch, &mut out);
+    out
+}
+
 // Drive one tick with an explicit dt.
 fn tick(sys: &mut BehaviorSystem, world: &mut TestWorld, dt: f32) {
     world.elapsed += dt;
@@ -486,11 +494,11 @@ fn query_order_is_stable_across_a_removal() {
     let c = spawn_prop(&mut world, [2.0, 0.0, 0.0]);
     let sys = system(&mut world);
 
-    let before = BehaviorSystem::entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    let before = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
     assert_eq!(before, vec![a, b, c]);
 
     world.components.despawn(b);
-    let after = BehaviorSystem::entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    let after = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
     assert_eq!(after, vec![a, c], "the survivors keep their relative order");
 }
 
@@ -510,7 +518,7 @@ fn a_query_intersects_every_declared_component() {
     world.components.push_typed(Prop::default());
     let sys = system(&mut world);
 
-    let matched = BehaviorSystem::entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    let matched = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
     assert_eq!(matched, vec![placed]);
 }
 

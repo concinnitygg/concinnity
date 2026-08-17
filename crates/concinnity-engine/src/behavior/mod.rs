@@ -170,6 +170,10 @@ pub struct BehaviorSystem {
     // their capacity across ticks.
     jobs: Vec<(usize, Option<Entity>)>,
     bindings: Vec<Option<Val>>,
+    // The tick's resolved entity sets and the tag-intersection scratch, kept
+    // for their capacity across ticks like the buffers above.
+    snapshot: Snapshot,
+    tag_scratch: Vec<Entity>,
 }
 
 impl Default for BehaviorSystem {
@@ -193,6 +197,8 @@ impl Default for BehaviorSystem {
             eval_buckets: Vec::new(),
             jobs: Vec::new(),
             bindings: Vec::new(),
+            snapshot: Snapshot::default(),
+            tag_scratch: Vec::new(),
         }
     }
 }
@@ -318,6 +324,7 @@ impl System for BehaviorSystem {
 // Single-entity reads (a name, a position, a liveness test) are not here: no
 // body runs while the world is mutable, so they read the world directly and
 // cost one lookup each instead of a whole-world copy per tick.
+#[derive(Debug, Default)]
 struct Snapshot {
     // Per program, per declared query, in stable order.
     queries: Vec<Vec<Vec<Entity>>>,
@@ -407,44 +414,58 @@ struct EvalBucket {
 const PARALLEL_EVAL_MIN_JOBS: usize = 64;
 
 impl BehaviorSystem {
-    // Entities carrying every one of these component tags, in stable order.
-    // Column order shifts as entities are removed (swap-remove), so the result
-    // is sorted: an unstable iteration order would make a body's effects depend
-    // on unrelated despawns.
-    fn entities_matching(ctx: &PipelineContext, tags: &[u8]) -> Vec<Entity> {
+    // Entities carrying every one of these component tags, filled into `out`
+    // in stable order. Column order shifts as entities are removed
+    // (swap-remove), so the result is sorted: an unstable iteration order
+    // would make a body's effects depend on unrelated despawns. `scratch`
+    // holds each extra tag's sorted set; both buffers keep their capacity.
+    fn entities_matching_into(
+        ctx: &PipelineContext,
+        tags: &[u8],
+        scratch: &mut Vec<Entity>,
+        out: &mut Vec<Entity>,
+    ) {
+        out.clear();
         let Some((first, rest)) = tags.split_first() else {
-            return Vec::new();
+            return;
         };
-        let mut out: Vec<Entity> = ctx.entities_with_tag(*first).to_vec();
+        out.extend_from_slice(ctx.entities_with_tag(*first));
         for tag in rest {
-            let mut also: Vec<Entity> = ctx.entities_with_tag(*tag).to_vec();
-            also.sort_unstable_by_key(|e| e.to_bits());
+            scratch.clear();
+            scratch.extend_from_slice(ctx.entities_with_tag(*tag));
+            scratch.sort_unstable_by_key(|e| e.to_bits());
             out.retain(|e| {
-                also.binary_search_by_key(&e.to_bits(), |o| o.to_bits())
+                scratch
+                    .binary_search_by_key(&e.to_bits(), |o| o.to_bits())
                     .is_ok()
             });
         }
         out.sort_unstable_by_key(|e| e.to_bits());
-        out
     }
 
-    fn gather(&self, ctx: &PipelineContext) -> Snapshot {
-        let queries: Vec<Vec<Vec<Entity>>> = self
-            .programs
-            .iter()
-            .map(|p| {
-                p.queries
-                    .iter()
-                    .map(|tags| Self::entities_matching(ctx, tags))
-                    .collect()
-            })
-            .collect();
-        let scoped: Vec<Vec<Entity>> = self
-            .programs
-            .iter()
-            .map(|p| Self::entities_matching(ctx, &p.scope))
-            .collect();
-        Snapshot { queries, scoped }
+    // Refill the reused snapshot with this tick's entity sets. The shape
+    // (programs and their query counts) is fixed after `init`, so in steady
+    // state every vector here just refills in place.
+    fn gather(&mut self, ctx: &PipelineContext, snapshot: &mut Snapshot) {
+        snapshot.queries.resize_with(self.programs.len(), Vec::new);
+        snapshot.scoped.resize_with(self.programs.len(), Vec::new);
+        for (i, p) in self.programs.iter().enumerate() {
+            snapshot.queries[i].resize_with(p.queries.len(), Vec::new);
+            for (q, tags) in p.queries.iter().enumerate() {
+                Self::entities_matching_into(
+                    ctx,
+                    tags,
+                    &mut self.tag_scratch,
+                    &mut snapshot.queries[i][q],
+                );
+            }
+            Self::entities_matching_into(
+                ctx,
+                &p.scope,
+                &mut self.tag_scratch,
+                &mut snapshot.scoped[i],
+            );
+        }
     }
 
     // Create instances for newly matching entities and drop those whose entity
@@ -483,11 +504,15 @@ impl BehaviorSystem {
                         .is_ok()
                 })
             });
+            // The retained instances are a sorted subset of the sorted
+            // `matched`, so one merge walk finds the entities without an
+            // instance; in the steady state nothing is appended and the order
+            // already stands.
+            let before = self.instances[i].len();
+            let mut j = 0;
             for entity in matched {
-                if self.instances[i]
-                    .iter()
-                    .any(|inst| inst.entity == Some(*entity))
-                {
+                if j < before && self.instances[i][j].entity == Some(*entity) {
+                    j += 1;
                     continue;
                 }
                 let mut instance =
@@ -495,7 +520,9 @@ impl BehaviorSystem {
                 instance.last_value = baselines[i];
                 self.instances[i].push(instance);
             }
-            self.instances[i].sort_by_key(|inst| inst.entity.map(|e| e.to_bits()));
+            if self.instances[i].len() != before {
+                self.instances[i].sort_by_key(|inst| inst.entity.map(|e| e.to_bits()));
+            }
         }
     }
 
@@ -506,7 +533,8 @@ impl BehaviorSystem {
         let tracing = request.is_some();
         let mut fired: Vec<(usize, Vec<u32>)> = Vec::new();
 
-        let snapshot = self.gather(ctx);
+        let mut snapshot = std::mem::take(&mut self.snapshot);
+        self.gather(ctx, &mut snapshot);
         self.resync_instances(&snapshot);
         self.populated = true;
 
@@ -653,6 +681,7 @@ impl BehaviorSystem {
         self.eval_buckets = buckets;
         self.jobs = jobs;
         self.bindings = serial_bindings;
+        self.snapshot = snapshot;
 
         // One write per tick, after every effect has landed, so the file holds
         // this tick's final values.

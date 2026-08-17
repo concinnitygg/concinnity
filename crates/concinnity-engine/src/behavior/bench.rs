@@ -11,7 +11,7 @@
 // count and two world sizes: they must stay close. A cost that tracks the world
 // instead of the behaviors is the regression.
 
-use super::BehaviorSystem;
+use super::{BehaviorSystem, Snapshot};
 use crate::assets::{Behavior, BehaviorSource, Expr, Node, Prop, Transform};
 use crate::bench::{BenchWorld, bench};
 use crate::ecs::System;
@@ -82,9 +82,10 @@ fn behavior_tick() {
     // the half that used to carry the world-size term.
     for (props, label) in [(SMALL_WORLD, "1k"), (LARGE_WORLD, "20k")] {
         let mut world = world_with(BEHAVIORS, props);
-        let sys = started(&mut world);
+        let mut sys = started(&mut world);
+        let mut snapshot = Snapshot::default();
         bench(&format!("gather_world{label}"), BEHAVIORS as u64, || {
-            sys.gather(&world.ctx())
+            sys.gather(&world.ctx(), &mut snapshot)
         });
     }
 }
