@@ -493,7 +493,10 @@ impl GraphicsSystem {
             world_hidden: overlay.world_hidden,
             menu_active,
         };
-        snap.text_calls = overlay.calls;
+        // Adopt the overlay draw list wholesale and hand the spent one back to
+        // OverlaySystem, which recycles its buffers into the next build.
+        let spent = std::mem::replace(&mut snap.text_calls, overlay.calls);
+        ctx.insert_resource(crate::gfx::overlay::OverlayRecycle(spent));
     }
 
     // Capture each slider row's runtime bookkeeping from its drag HitRegion +

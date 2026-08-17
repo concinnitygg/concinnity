@@ -10,7 +10,7 @@
 mod font;
 mod layout;
 
-use crate::assets::{Key, TextLabel, WindowArgs};
+use crate::assets::{Key, WindowArgs};
 use crate::ecs::FontHandle;
 use crate::gfx::backend::{FrameParams, RenderBackend};
 use crate::gfx::backend_init::BackendInit;
@@ -77,9 +77,8 @@ fn run_loop(
 
         let (win_w, win_h) = backend.logical_size();
         let screen = layout::build(message, win_w, win_h, fonts, font::HANDLE, hovered);
-        let labels: Vec<&TextLabel> = screen.labels.iter().collect();
         let text_calls = build_text_calls(
-            &labels,
+            &screen.labels,
             fonts,
             win_w,
             win_h,

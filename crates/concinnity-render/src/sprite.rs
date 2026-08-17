@@ -39,16 +39,16 @@ pub fn covers_canvas(s: &Sprite) -> bool {
 // canvas and are mapped onto the window so menus scale with it; HUD / scene
 // sprites (view == None) keep literal window pixels.
 pub fn build_sprite_calls(
-    sprites: &[&Sprite],
+    sprites: &[Sprite],
     default_atlas_slot: Option<usize>,
     texture_slots: &HashMap<TextureHandle, usize>,
     viewport: [f32; 2],
     clips: &HashMap<AssetId, [f32; 4]>,
     layers: &HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
-    let mut calls = Vec::with_capacity(sprites.len());
+    let mut out = crate::call_buffer::TextCallBuffer::default();
     build_sprite_calls_into(
-        &mut calls,
+        &mut out,
         sprites,
         default_atlas_slot,
         texture_slots,
@@ -56,14 +56,17 @@ pub fn build_sprite_calls(
         clips,
         layers,
     );
-    calls
+    out.take()
 }
 
 // `build_sprite_calls`, appending onto an existing draw list so a caller
-// assembling a frame from several element groups reuses one buffer.
+// assembling a frame from several element groups reuses one buffer (and, in
+// steady state, the pooled geometry of the spent frame it recycled). A
+// `follow_cursor` sprite is skipped: it is the cursor pass's silhouette
+// source (see `cursor.rs`), not a scene quad.
 pub fn build_sprite_calls_into(
-    out: &mut Vec<TextDrawCall>,
-    sprites: &[&Sprite],
+    out: &mut crate::call_buffer::TextCallBuffer,
+    sprites: &[Sprite],
     default_atlas_slot: Option<usize>,
     texture_slots: &HashMap<TextureHandle, usize>,
     viewport: [f32; 2],
@@ -79,7 +82,7 @@ pub fn build_sprite_calls_into(
     let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
     let [vw, vh] = viewport;
     for s in sprites {
-        if !s.visible {
+        if !s.visible || s.follow_cursor {
             continue;
         }
         let [r, g, b, a] = s.tint;
@@ -147,7 +150,8 @@ pub fn build_sprite_calls_into(
         };
         let radius = (s.corner_radius * scale).min(w / 2.0).min(h / 2.0);
         let border = (s.border_width * scale).min(w / 2.0).min(h / 2.0);
-        let (vertices, indices) = if border > 0.5 && s.border_color[3] > 0.0 {
+        let (mut vertices, mut indices) = out.geometry();
+        if border > 0.5 && s.border_color[3] > 0.0 {
             // Border stroke: an outer rounded rect in the border colour, with the
             // tinted fill inset by the stroke width drawn on top so a ring of the
             // border colour is left showing around it.
@@ -158,24 +162,26 @@ pub fn build_sprite_calls_into(
                 color: [br, bg, bb],
                 mode: 0.0,
             };
-            let (mut vertices, mut indices) = rect_geometry(x0, y0, x1, y1, radius, ba, border_v);
-            let base = vertices.len() as u16;
-            let (fill_verts, fill_indices) = rect_geometry(
-                x0 + border,
-                y0 + border,
-                x1 - border,
-                y1 - border,
+            rect_geometry(
+                &mut vertices,
+                &mut indices,
+                [x0, y0, x1, y1],
+                radius,
+                ba,
+                border_v,
+            );
+            rect_geometry(
+                &mut vertices,
+                &mut indices,
+                [x0 + border, y0 + border, x1 - border, y1 - border],
                 (radius - border).max(0.0),
                 a,
                 v,
             );
-            vertices.extend(fill_verts);
-            indices.extend(fill_indices.into_iter().map(|i| i + base));
-            (vertices, indices)
         } else {
-            rect_geometry(x0, y0, x1, y1, radius, a, v)
-        };
-        out.push(TextDrawCall {
+            rect_geometry(&mut vertices, &mut indices, [x0, y0, x1, y1], radius, a, v);
+        }
+        out.calls.push(TextDrawCall {
             vertices,
             indices,
             atlas_slot: texture_slot.unwrap_or(fill_slot),
@@ -187,29 +193,30 @@ pub fn build_sprite_calls_into(
     }
 }
 
-// A rectangle's geometry: a feathered rounded rect when the radius is set,
-// otherwise a plain two-triangle quad. Shared by the fill and the border ring.
+// Append a rectangle's geometry: a feathered rounded rect when the radius is
+// set, otherwise a plain two-triangle quad. Shared by the fill and the border
+// ring, which is why indices are rebased on the buffer's current length.
+// `rect` is `[x0, y0, x1, y1]`.
 fn rect_geometry(
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
     radius: f32,
     alpha: f32,
     mut v: impl FnMut(f32, f32, f32) -> TextVertex,
-) -> (Vec<TextVertex>, Vec<u16>) {
+) {
+    let [x0, y0, x1, y1] = rect;
     if radius > 0.5 {
-        rounded_rect_geometry(x0, y0, x1, y1, radius, alpha, v)
+        rounded_rect_geometry(vertices, indices, rect, radius, alpha, v);
     } else {
-        (
-            vec![
-                v(x0, y0, alpha),
-                v(x1, y0, alpha),
-                v(x1, y1, alpha),
-                v(x0, y1, alpha),
-            ],
-            vec![0, 1, 2, 0, 2, 3],
-        )
+        let base = vertices.len() as u16;
+        vertices.extend_from_slice(&[
+            v(x0, y0, alpha),
+            v(x1, y0, alpha),
+            v(x1, y1, alpha),
+            v(x0, y1, alpha),
+        ]);
+        indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
     }
 }
 
@@ -226,15 +233,15 @@ const EDGE_FEATHER: f32 = 1.25;
 // point, plus a fading ring out to the boundary for anti-aliasing. Vertex
 // alpha carries the fade (both sprite modes read per-vertex alpha).
 fn rounded_rect_geometry(
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
     radius: f32,
     alpha: f32,
     mut v: impl FnMut(f32, f32, f32) -> TextVertex,
-) -> (Vec<TextVertex>, Vec<u16>) {
+) {
     use std::f32::consts::{FRAC_PI_2, PI};
+    let [x0, y0, x1, y1] = rect;
     // Corner arc centers in polygon order, each with its start angle; y grows
     // downward so the arcs sweep clockwise around the boundary.
     let corners = [
@@ -243,32 +250,32 @@ fn rounded_rect_geometry(
         (x1 - radius, y1 - radius, 0.0),
         (x0 + radius, y1 - radius, FRAC_PI_2),
     ];
-    let mut boundary = Vec::with_capacity(4 * (CORNER_SEGMENTS + 1));
-    for &(cx, cy, start) in &corners {
+    let mut boundary = [(0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32); 4 * (CORNER_SEGMENTS + 1)];
+    for (c, &(cx, cy, start)) in corners.iter().enumerate() {
         for i in 0..=CORNER_SEGMENTS {
             let t = start + (i as f32 / CORNER_SEGMENTS as f32) * FRAC_PI_2;
-            boundary.push((cx, cy, t.cos(), t.sin()));
+            boundary[c * (CORNER_SEGMENTS + 1) + i] = (cx, cy, t.cos(), t.sin());
         }
     }
     let m = boundary.len();
+    let base = vertices.len() as u16;
     let inner_r = (radius - EDGE_FEATHER).max(0.0);
-    let mut vertices = Vec::with_capacity(2 * m);
+    vertices.reserve(2 * m);
     for &(cx, cy, cos, sin) in &boundary {
         vertices.push(v(cx + inner_r * cos, cy + inner_r * sin, alpha));
     }
     for &(cx, cy, cos, sin) in &boundary {
         vertices.push(v(cx + radius * cos, cy + radius * sin, 0.0));
     }
-    let mut indices = Vec::with_capacity(3 * (m - 2) + 6 * m);
+    indices.reserve(3 * (m - 2) + 6 * m);
     for i in 1..m - 1 {
-        indices.extend([0, i as u16, (i + 1) as u16]);
+        indices.extend([base, base + i as u16, base + (i + 1) as u16]);
     }
     for i in 0..m {
         let j = (i + 1) % m;
         let (i, j, m) = (i as u16, j as u16, m as u16);
-        indices.extend([i, j, m + j, i, m + j, m + i]);
+        indices.extend([i, j, m + j, i, m + j, m + i].map(|k| base + k));
     }
-    (vertices, indices)
 }
 
 #[cfg(test)]
@@ -311,7 +318,7 @@ mod tests {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 0.0, 0.0, 1.0]);
         assert!(
             build_sprite_calls(
-                &[&s],
+                std::slice::from_ref(&s),
                 None,
                 &no_slots(),
                 [0.0, 0.0],
@@ -326,7 +333,7 @@ mod tests {
     fn visible_sprite_emits_quad_with_sentinel_uv() {
         let s = sprite(10.0, 20.0, 100.0, 50.0, [0.5, 0.5, 0.5, 0.75]);
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [0.0, 0.0],
@@ -352,7 +359,7 @@ mod tests {
         let invisible = sprite(0.0, 0.0, 100.0, 50.0, [0.0, 0.0, 0.0, 0.0]);
         assert!(
             build_sprite_calls(
-                &[&invisible],
+                std::slice::from_ref(&invisible),
                 Some(0),
                 &no_slots(),
                 [0.0, 0.0],
@@ -367,7 +374,7 @@ mod tests {
         outline.border_width = 2.0;
         outline.border_color = [0.2, 0.4, 0.9, 1.0];
         let calls = build_sprite_calls(
-            &[&outline],
+            std::slice::from_ref(&outline),
             Some(0),
             &no_slots(),
             [0.0, 0.0],
@@ -386,7 +393,7 @@ mod tests {
         let mut slots = no_slots();
         slots.insert(TextureHandle(42), 3);
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &slots,
             [0.0, 0.0],
@@ -413,7 +420,7 @@ mod tests {
         let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
         s.corner_radius = 20.0;
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [0.0, 0.0],
@@ -453,7 +460,7 @@ mod tests {
         s.border_width = 2.0;
         s.border_color = [0.8, 0.4, 0.2, 1.0];
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [0.0, 0.0],
@@ -501,7 +508,7 @@ mod tests {
         s.border_width = 0.0;
         s.border_color = [1.0, 0.0, 0.0, 1.0];
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [0.0, 0.0],
@@ -525,7 +532,7 @@ mod tests {
         s.screen = Some(AssetId(7));
         s.corner_radius = 20.0;
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [2.0 * UI_REFERENCE_SIZE[0], 2.0 * UI_REFERENCE_SIZE[1]],
@@ -549,7 +556,7 @@ mod tests {
         s.texture = Some(TextureHandle(42));
         // The texture never made it into the atlas pool: solid-fill sentinel.
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(5),
             &no_slots(),
             [0.0, 0.0],
@@ -567,7 +574,7 @@ mod tests {
         s.visible = false;
         assert!(
             build_sprite_calls(
-                &[&s],
+                std::slice::from_ref(&s),
                 Some(0),
                 &no_slots(),
                 [0.0, 0.0],
@@ -583,7 +590,7 @@ mod tests {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 1.0, 1.0, 0.0]);
         assert!(
             build_sprite_calls(
-                &[&s],
+                std::slice::from_ref(&s),
                 Some(0),
                 &no_slots(),
                 [0.0, 0.0],
@@ -602,7 +609,7 @@ mod tests {
         let mut s = sprite(100.0, 100.0, 200.0, 100.0, [1.0, 1.0, 1.0, 1.0]);
         s.screen = Some(AssetId(7));
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
@@ -621,7 +628,7 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 1280.0, 720.0, [0.0, 0.0, 0.0, 0.5]);
         s.screen = Some(AssetId(7));
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
@@ -642,7 +649,7 @@ mod tests {
         s.screen = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [1024.0, 768.0],
@@ -675,7 +682,7 @@ mod tests {
         s.screen = Some(AssetId(7));
         s.fit = SpriteFit::Cover;
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [1024.0, 768.0],
@@ -691,7 +698,7 @@ mod tests {
         // A HUD / scene sprite (view == None) is never overlay-scaled.
         let s = sprite(10.0, 20.0, 100.0, 50.0, [0.5, 0.5, 0.5, 1.0]);
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
@@ -716,7 +723,7 @@ mod tests {
         // forward(400,260)=(800,520) -> clip [400,400,400,120].
         clips.insert(AssetId(7), [200.0, 200.0, 200.0, 60.0]);
         let calls = build_sprite_calls(
-            &[&s],
+            std::slice::from_ref(&s),
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
@@ -734,7 +741,7 @@ mod tests {
         other.asset_id = AssetId(9);
         other.screen = Some(AssetId(1));
         let calls = build_sprite_calls(
-            &[&other],
+            std::slice::from_ref(&other),
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
@@ -753,7 +760,7 @@ mod tests {
         let mut layers = std::collections::HashMap::new();
         layers.insert(AssetId(42), 7);
         let calls = build_sprite_calls(
-            &[&mapped],
+            std::slice::from_ref(&mapped),
             Some(0),
             &no_slots(),
             [100.0, 100.0],
@@ -765,7 +772,7 @@ mod tests {
         let mut unmapped = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         unmapped.asset_id = AssetId(99);
         let calls = build_sprite_calls(
-            &[&unmapped],
+            std::slice::from_ref(&unmapped),
             Some(0),
             &no_slots(),
             [100.0, 100.0],
@@ -773,5 +780,24 @@ mod tests {
             &layers,
         );
         assert_eq!(calls[0].layer, 0, "an unmapped id is layer 0");
+    }
+
+    // A `follow_cursor` sprite is the cursor pass's silhouette source, never a
+    // scene quad, so the whole component slice can be passed in.
+    #[test]
+    fn follow_cursor_sprites_are_skipped() {
+        let mut s = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
+        s.follow_cursor = true;
+        assert!(
+            build_sprite_calls(
+                std::slice::from_ref(&s),
+                Some(0),
+                &no_slots(),
+                [0.0, 0.0],
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
+        );
     }
 }

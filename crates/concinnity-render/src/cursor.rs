@@ -83,21 +83,42 @@ const CURSOR_LAYER: i32 = i32::MAX;
 // belongs to; the pointer stays at the live cursor position. Returns empty when
 // no font atlas is loaded (the text pipeline is inactive then).
 pub fn build_cursor_calls(
-    cursors: &[&Sprite],
+    sprites: &[Sprite],
     pointer: (f32, f32),
     shape: CursorShape,
     default_atlas_slot: Option<usize>,
     viewport: [f32; 2],
 ) -> Vec<TextDrawCall> {
+    let mut out = crate::call_buffer::TextCallBuffer::default();
+    build_cursor_calls_into(
+        &mut out,
+        sprites,
+        pointer,
+        shape,
+        default_atlas_slot,
+        viewport,
+    );
+    out.take()
+}
+
+// `build_cursor_calls`, appending onto an existing draw list. Sprites without
+// `follow_cursor` are skipped, so the caller can pass its whole sprite slice.
+pub fn build_cursor_calls_into(
+    out: &mut crate::call_buffer::TextCallBuffer,
+    sprites: &[Sprite],
+    pointer: (f32, f32),
+    shape: CursorShape,
+    default_atlas_slot: Option<usize>,
+    viewport: [f32; 2],
+) {
     let atlas_slot = match default_atlas_slot {
         Some(s) => s,
-        None => return Vec::new(),
+        None => return,
     };
     let overlay_scale = OverlayTransform::from_viewport(viewport).scale();
     let sil = cursor_geometry(shape);
-    let mut calls = Vec::new();
-    for s in cursors {
-        if !s.visible {
+    for s in sprites {
+        if !s.follow_cursor || !s.visible {
             continue;
         }
         let alpha = s.tint[3];
@@ -113,9 +134,10 @@ pub fn build_cursor_calls(
         let outline = outline_color(fill);
         let outline_w = (size * OUTLINE_RATIO).max(1.0);
 
+        let (vertices, indices) = out.geometry();
         let mut call = TextDrawCall {
-            vertices: Vec::new(),
-            indices: Vec::new(),
+            vertices,
+            indices,
             atlas_slot,
             // The cursor is never clipped: it draws on top of everything.
             clip_rect: None,
@@ -128,9 +150,8 @@ pub fn build_cursor_calls(
             push_shape(&mut call, o, size, outline, alpha, &sil);
         }
         push_shape(&mut call, pointer, size, fill, alpha, &sil);
-        calls.push(call);
+        out.calls.push(call);
     }
-    calls
 }
 
 // A cursor silhouette: its boundary vertices, triangulation, and the rotation
@@ -234,8 +255,14 @@ mod tests {
     fn no_fonts_means_no_calls() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         assert!(
-            build_cursor_calls(&[&c], (10.0, 10.0), CursorShape::Default, None, [0.0, 0.0])
-                .is_empty()
+            build_cursor_calls(
+                std::slice::from_ref(&c),
+                (10.0, 10.0),
+                CursorShape::Default,
+                None,
+                [0.0, 0.0]
+            )
+            .is_empty()
         );
     }
 
@@ -243,7 +270,7 @@ mod tests {
     fn builds_outline_then_fill_mesh() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
-            &[&c],
+            std::slice::from_ref(&c),
             (100.0, 50.0),
             CursorShape::Default,
             Some(0),
@@ -273,7 +300,7 @@ mod tests {
         hidden.visible = false;
         assert!(
             build_cursor_calls(
-                &[&hidden],
+                std::slice::from_ref(&hidden),
                 (0.0, 0.0),
                 CursorShape::Default,
                 Some(0),
@@ -284,7 +311,7 @@ mod tests {
         let clear = cursor([1.0, 1.0, 1.0, 0.0], 22.0);
         assert!(
             build_cursor_calls(
-                &[&clear],
+                std::slice::from_ref(&clear),
                 (0.0, 0.0),
                 CursorShape::Default,
                 Some(0),
@@ -304,8 +331,13 @@ mod tests {
     #[test]
     fn unset_height_falls_back_to_default_size() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 0.0);
-        let calls =
-            build_cursor_calls(&[&c], (0.0, 0.0), CursorShape::Default, Some(0), [0.0, 0.0]);
+        let calls = build_cursor_calls(
+            std::slice::from_ref(&c),
+            (0.0, 0.0),
+            CursorShape::Default,
+            Some(0),
+            [0.0, 0.0],
+        );
         // The lowest vertex (tail tip, ny = 1.0) reaches the default height.
         let max_y = calls[0]
             .vertices
@@ -322,7 +354,7 @@ mod tests {
         // arrow (the last stamp) so the outline ring's extra width is excluded.
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
-            &[&c],
+            std::slice::from_ref(&c),
             (0.0, 0.0),
             CursorShape::Default,
             Some(0),
@@ -340,7 +372,7 @@ mod tests {
     fn resize_shape_draws_a_centered_double_arrow() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
-            &[&c],
+            std::slice::from_ref(&c),
             (100.0, 100.0),
             CursorShape::ResizeEW,
             Some(0),
@@ -371,7 +403,7 @@ mod tests {
     fn resize_ns_rotates_onto_the_vertical_axis() {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
-            &[&c],
+            std::slice::from_ref(&c),
             (100.0, 100.0),
             CursorShape::ResizeNS,
             Some(0),

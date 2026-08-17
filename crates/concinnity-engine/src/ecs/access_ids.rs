@@ -84,6 +84,7 @@ define_access_ids! {
         crate::app::budget::ThreadBudget,
         crate::gfx::overlay::OverlayFrame,
         crate::gfx::overlay::OverlayAssets,
+        crate::gfx::overlay::OverlayRecycle,
     ],
     events: [
         crate::assets::ControlsCommand,

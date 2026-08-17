@@ -28,6 +28,7 @@ pub mod area_light;
 pub mod backend;
 pub mod backend_init;
 pub mod bvh;
+pub mod call_buffer;
 pub mod chunk_window;
 pub mod csm;
 pub mod cursor;

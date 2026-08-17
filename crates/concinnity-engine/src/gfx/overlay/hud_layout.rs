@@ -45,12 +45,20 @@ pub(super) fn apply_label_layout(
     }
 }
 
+// Corner margin (window pixels) every chip strip anchors against.
+const MARGIN: f32 = 10.0;
+
+// The axis a chip strip packs along, with its gap between chips.
+enum ChipStrip {
+    // Stack downward from the top-right corner, each chip right-anchored.
+    DownFromRight { win_w: f32, gap: f32 },
+    // Pack rightward from the top-left corner into a tight row.
+    Rightward { gap: f32 },
+}
+
 // Anchor the DebugHud chips to the top-right of the window, stacked downward in
-// id order (cursor, passes, camera). A blank chip (the HUD hidden, or a stat the
-// backend cannot supply) reserves no space. Measured each frame so a chip that
-// changes width -- the multi-line passes chip in particular -- re-anchors
-// flush-right. HUD labels are literal window pixels (no overlay scaling), so
-// this positions in window space directly.
+// id order (cursor, passes, camera). Measured each frame so a chip that changes
+// width -- the multi-line passes chip in particular -- re-anchors flush-right.
 //
 // Timing: DebugHudSystem writes each chip's content AFTER the overlay build in
 // the schedule, so the content present here is what DebugHudSystem wrote last
@@ -64,68 +72,66 @@ pub(super) fn position_debug_hud(
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     win_w: f32,
 ) {
-    if chip_ids.is_empty() || win_w <= 0.0 {
+    if win_w <= 0.0 {
         return;
     }
-    const MARGIN: f32 = 10.0;
-    const GAP: f32 = 6.0;
-    let mut y = MARGIN;
-    for &id in chip_ids {
-        // Measure the chip's box from its current (last-frame) content; skip a
-        // blank chip so a hidden readout reserves no vertical space.
-        let measured = ctx
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id && !l.content.is_empty())
-            .and_then(|l| text::measure_label_box(l, loaded_fonts));
-        let Some(b) = measured else {
-            continue;
-        };
-        // Right-anchor the box (its left edge sits `pad` left of the text
-        // origin) and place its top at the running y.
-        let x = (win_w - MARGIN - b.w + b.pad).max(MARGIN);
-        if let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) {
-            l.x = x;
-            l.y = y + b.top_inset;
-        }
-        y += b.h + GAP;
-    }
+    let strip = ChipStrip::DownFromRight { win_w, gap: 6.0 };
+    position_chip_strip(ctx, chip_ids, loaded_fonts, strip);
 }
 
 // Pack the StatHud chips (fps, vram, ev, edr) into a tight strip from the
-// top-left of the window, left to right with a small gap. A blank chip (a
-// readout hidden by the video settings, or a stat the world/display does not
-// supply) reserves no width, so the strip stays as narrow as the live content
-// and hidden chips leave no hole. Measured each frame so a chip that changes
-// width re-packs its neighbours. HUD labels are literal window pixels (no
-// overlay scaling), so this positions in window space directly.
+// top-left of the window. Measured each frame (same timing rationale as the
+// DebugHud stack) so a chip that changes width re-packs its neighbours.
 pub(super) fn position_stat_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
 ) {
-    if chip_ids.is_empty() {
-        return;
-    }
-    const MARGIN: f32 = 10.0;
-    const GAP: f32 = 4.0;
-    let mut x = MARGIN;
+    position_chip_strip(
+        ctx,
+        chip_ids,
+        loaded_fonts,
+        ChipStrip::Rightward { gap: 4.0 },
+    );
+}
+
+// Place one chip strip: each chip measured from its current (last-frame)
+// content and packed along the strip's axis. A blank chip (a hidden readout,
+// or a stat the backend cannot supply) reserves no space, so neighbours close
+// the gap. HUD labels are literal window pixels (no overlay scaling), so this
+// positions in window space directly. Measure and write share one lookup per
+// chip.
+fn position_chip_strip(
+    ctx: &mut PipelineContext,
+    chip_ids: &[AssetId],
+    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    strip: ChipStrip,
+) {
+    let mut run = MARGIN;
     for &id in chip_ids {
-        // Measure the chip's box from its current (last-frame) content; skip a
-        // blank chip so a hidden readout reserves no horizontal space.
-        let measured = ctx
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id && !l.content.is_empty())
-            .and_then(|l| text::measure_label_box(l, loaded_fonts));
-        let Some(b) = measured else {
+        let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) else {
             continue;
         };
-        // The box's left edge sits `pad` left of the text origin, so offset the
-        // origin by `pad` to line the box up at the running x.
-        if let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) {
-            l.x = x + b.pad;
-            l.y = MARGIN + b.top_inset;
+        if l.content.is_empty() {
+            continue;
         }
-        x += b.w + GAP;
+        let Some(b) = text::measure_label_box(l, loaded_fonts) else {
+            continue;
+        };
+        // The box's left edge sits `pad` left of the text origin and its top
+        // `top_inset` above it, which both anchors below account for.
+        match strip {
+            ChipStrip::DownFromRight { win_w, gap } => {
+                l.x = (win_w - MARGIN - b.w + b.pad).max(MARGIN);
+                l.y = run + b.top_inset;
+                run += b.h + gap;
+            }
+            ChipStrip::Rightward { gap } => {
+                l.x = run + b.pad;
+                l.y = MARGIN + b.top_inset;
+                run += b.w + gap;
+            }
+        }
     }
 }
 

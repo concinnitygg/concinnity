@@ -301,31 +301,24 @@ pub fn measure_label_box(
 // its call scissored to that band (mapped to the window), so a scrollable
 // panel's off-band rows do not bleed over its chrome.
 pub fn build_text_calls(
-    labels: &[&TextLabel],
+    labels: &[TextLabel],
     loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
     win_w: f32,
     win_h: f32,
     clips: &std::collections::HashMap<AssetId, [f32; 4]>,
     layers: &std::collections::HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
-    let mut calls = Vec::with_capacity(labels.len());
-    build_text_calls_into(
-        &mut calls,
-        labels,
-        loaded_fonts,
-        win_w,
-        win_h,
-        clips,
-        layers,
-    );
-    calls
+    let mut out = crate::call_buffer::TextCallBuffer::default();
+    build_text_calls_into(&mut out, labels, loaded_fonts, win_w, win_h, clips, layers);
+    out.take()
 }
 
 // `build_text_calls`, appending onto an existing draw list so a caller
-// assembling a frame from several element groups reuses one buffer.
+// assembling a frame from several element groups reuses one buffer (and, in
+// steady state, the pooled geometry of the spent frame it recycled).
 pub fn build_text_calls_into(
-    out: &mut Vec<TextDrawCall>,
-    labels: &[&TextLabel],
+    out: &mut crate::call_buffer::TextCallBuffer,
+    labels: &[TextLabel],
     loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
     win_w: f32,
     win_h: f32,
@@ -354,8 +347,9 @@ pub fn build_text_calls_into(
         // One quad per glyph plus the optional background box; the byte length
         // upper-bounds the glyph count.
         let quads = content.len() + 1;
-        let mut vertices: Vec<TextVertex> = Vec::with_capacity(4 * quads);
-        let mut indices: Vec<u16> = Vec::with_capacity(6 * quads);
+        let (mut vertices, mut indices) = out.geometry();
+        vertices.reserve(4 * quads);
+        indices.reserve(6 * quads);
 
         // For centered labels, auto-scale to fill ~85% of the viewport while
         // preserving the text's aspect ratio. The label's scale field is used
@@ -516,8 +510,10 @@ pub fn build_text_calls_into(
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             x_cursor += m.advance_px * scale;
         }
-        if !vertices.is_empty() {
-            out.push(TextDrawCall {
+        if vertices.is_empty() {
+            out.park(vertices, indices);
+        } else {
+            out.calls.push(TextDrawCall {
                 vertices,
                 indices,
                 atlas_slot: font.atlas_slot,
@@ -681,7 +677,7 @@ mod tests {
         // Two lines of five glyphs, not one line of eight.
         assert!(boxed.w <= 50.0, "{boxed:?}");
         let calls = build_text_calls(
-            std::slice::from_ref(&&label),
+            std::slice::from_ref(&label),
             &fonts,
             200.0,
             200.0,
@@ -707,7 +703,15 @@ mod tests {
         let fonts = std::collections::HashMap::new();
         let label = make_label(FontHandle(99), "hello", 0.0);
         assert!(
-            build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers()).is_empty()
+            build_text_calls(
+                std::slice::from_ref(&label),
+                &fonts,
+                0.0,
+                0.0,
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
         );
     }
 
@@ -717,7 +721,14 @@ mod tests {
         let mut fonts = std::collections::HashMap::new();
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A", 0.0);
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         assert_eq!(calls[0].indices.len(), 6);
@@ -732,7 +743,14 @@ mod tests {
         let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         label.padding = 4.0;
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         // 4 box verts prepended + 4 glyph verts; 6 box indices + 6 glyph.
         assert_eq!(calls[0].vertices.len(), 8);
@@ -768,7 +786,14 @@ mod tests {
         let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.1, 0.1, 0.1, 1.0];
         label.padding = 4.0;
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         let v = &calls[0].vertices;
         // Verts 0..4 are the box; 4..8 the glyph quad.
         let (box_top, box_bot) = (v[0].pos[1], v[2].pos[1]);
@@ -794,7 +819,15 @@ mod tests {
         label.background = [0.0, 0.3, 0.1, 0.85];
         // A blanked label (e.g. a toggled-off HUD chip) draws no box.
         assert!(
-            build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers()).is_empty()
+            build_text_calls(
+                std::slice::from_ref(&label),
+                &fonts,
+                0.0,
+                0.0,
+                &no_clips(),
+                &no_layers()
+            )
+            .is_empty()
         );
     }
 
@@ -806,7 +839,14 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // Two spaces then 'A': only 'A' produces geometry.
         let label = make_label(FontHandle(0), "  A", 0.0);
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         // 'A' quad starts after 2 × advance_px(space) = 16.0
@@ -831,7 +871,14 @@ mod tests {
         let mut fonts = std::collections::HashMap::new();
         fonts.insert(FontHandle(0), make_font(&[('X', zero), ('A', g)]));
         let label = make_label(FontHandle(0), "XA", 0.0);
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A'
         // 'A' starts at x = advance_px('X') = 5.0
@@ -846,7 +893,14 @@ mod tests {
         let mut fonts = std::collections::HashMap::new();
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A\nA", 0.0);
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         // Two glyphs -> two quads -> 8 vertices, 12 indices.
         assert_eq!(calls[0].vertices.len(), 8);
@@ -877,7 +931,14 @@ mod tests {
         // line_height = 16*5.3125 = 85; baseline centers the cap band:
         // baseline = 7.5 + (85 + 12*5.3125)/2 = 7.5 + 74.375 = 81.875
         // gx = x0 + bearing_x*scale = 46.875, gy = baseline - bearing_y*scale = 81.875 - 63.75 = 18.125
-        let calls = build_text_calls(&[&label], &fonts, 200.0, 100.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            200.0,
+            100.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         let v = &calls[0].vertices[0];
         assert!((v.pos[0] - 46.875).abs() < 1e-3, "gx={}", v.pos[0]);
@@ -901,9 +962,16 @@ mod tests {
 
         // 2x reference viewport (1280x720 -> 2560x1440): scale 2, centered.
         let vp = (2560.0, 1440.0);
-        let hud_calls = build_text_calls(&[&hud], &fonts, vp.0, vp.1, &no_clips(), &no_layers());
+        let hud_calls = build_text_calls(
+            std::slice::from_ref(&hud),
+            &fonts,
+            vp.0,
+            vp.1,
+            &no_clips(),
+            &no_layers(),
+        );
         let ovl_calls = build_text_calls(
-            &[&overlay_label],
+            std::slice::from_ref(&overlay_label),
             &fonts,
             vp.0,
             vp.1,
@@ -970,8 +1038,16 @@ mod tests {
         let first_x = |align: TextAlign| {
             let mut l = make_label(FontHandle(0), "AA", 100.0);
             l.align = align;
-            build_text_calls(&[&l], &fonts, 0.0, 0.0, &no_clips(), &no_layers())[0].vertices[0].pos
-                [0]
+            build_text_calls(
+                std::slice::from_ref(&l),
+                &fonts,
+                0.0,
+                0.0,
+                &no_clips(),
+                &no_layers(),
+            )[0]
+            .vertices[0]
+                .pos[0]
         };
         assert!((first_x(TextAlign::Left) - 100.0).abs() < 1e-4);
         assert!((first_x(TextAlign::Center) - 90.0).abs() < 1e-4);
@@ -991,12 +1067,26 @@ mod tests {
         let mut clips = std::collections::HashMap::new();
         let band = [10.0, 20.0, 300.0, 40.0];
         clips.insert(AssetId(7), band);
-        let calls = build_text_calls(&[&label], &fonts, 1280.0, 720.0, &clips, &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            1280.0,
+            720.0,
+            &clips,
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].clip_rect, Some(band));
         // A label absent from `clips` (asset_id 0) draws unclipped.
         let other = make_label(FontHandle(0), "A", 0.0);
-        let unclipped = build_text_calls(&[&other], &fonts, 1280.0, 720.0, &clips, &no_layers());
+        let unclipped = build_text_calls(
+            std::slice::from_ref(&other),
+            &fonts,
+            1280.0,
+            720.0,
+            &clips,
+            &no_layers(),
+        );
         assert_eq!(unclipped[0].clip_rect, None);
     }
 
@@ -1027,7 +1117,15 @@ mod tests {
             l.y = 600.0;
             l.screen = Some(AssetId(5));
             l.fit = fit;
-            build_text_calls(&[&l], &fonts, vp.0, vp.1, &no_clips(), &no_layers())[0].vertices[0]
+            build_text_calls(
+                std::slice::from_ref(&l),
+                &fonts,
+                vp.0,
+                vp.1,
+                &no_clips(),
+                &no_layers(),
+            )[0]
+            .vertices[0]
                 .pos[1]
         };
         let fit_y = first_y(SpriteFit::Fit);
@@ -1050,7 +1148,14 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // '?' has no metric; it consumes one space advance before 'A'.
         let label = make_label(FontHandle(0), "?A", 0.0);
-        let calls = build_text_calls(&[&label], &fonts, 0.0, 0.0, &no_clips(), &no_layers());
+        let calls = build_text_calls(
+            std::slice::from_ref(&label),
+            &fonts,
+            0.0,
+            0.0,
+            &no_clips(),
+            &no_layers(),
+        );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A' draws a quad
         assert!((calls[0].vertices[0].pos[0] - 7.0).abs() < 1e-4);

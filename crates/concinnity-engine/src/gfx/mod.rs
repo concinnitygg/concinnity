@@ -35,7 +35,7 @@ pub use concinnity_render::{
     scene_residency, snapshot, volumetric_fog,
 };
 pub(crate) use concinnity_render::{
-    chunk_window, cursor, display_mode, keymap, lights, sprite, text,
+    call_buffer, chunk_window, cursor, display_mode, keymap, lights, sprite, text,
 };
 // Seeded / driven by the client's GraphicsSystem on Metal today; the other
 // backends' probe + planar ports have not landed, so unused off macOS.

@@ -780,6 +780,27 @@ fn first_declared_scene_applies_start_visibility() {
     assert_eq!(s.visibility.get(&1), Some(&true));
 }
 
+// Each frame's extract adopts the overlay draw list wholesale and hands the
+// spent one back through `OverlayRecycle`, which the next overlay build
+// consumes -- the loop that keeps the overlay's buffers recycling.
+#[test]
+fn extract_hands_the_spent_overlay_list_back() {
+    let (_state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    for _ in 0..2 {
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+        assert!(
+            world
+                .resources
+                .get::<crate::gfx::overlay::OverlayRecycle>()
+                .is_some(),
+            "extraction returned the spent draw list"
+        );
+    }
+}
+
 #[test]
 fn frame_steps_draw_and_publish_input() {
     let (state, hooks) = recording_hooks();

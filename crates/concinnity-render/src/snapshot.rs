@@ -132,7 +132,9 @@ pub struct RenderSnapshot {
     /// Updated morph-target weights, keyed by skinned instance index.
     pub morphs: SpanBuffer<f32>,
     /// The frame's overlay draw list (UI text + sprites), adopted whole from
-    /// the overlay build.
+    /// the overlay build. `clear` leaves it untouched: extraction replaces the
+    /// list wholesale and hands the spent one back to the overlay build, so
+    /// its buffers recycle instead of dropping here.
     pub text_calls: Vec<TextDrawCall>,
     /// Expanded world-space line ribbons for this frame's camera.
     pub lines: Vec<LineVertex>,
@@ -150,7 +152,6 @@ impl RenderSnapshot {
         self.skinned_models.clear();
         self.poses.clear();
         self.morphs.clear();
-        self.text_calls.clear();
         self.lines.clear();
         self.scene_ops.clear();
     }

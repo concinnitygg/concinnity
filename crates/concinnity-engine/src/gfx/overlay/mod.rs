@@ -62,16 +62,21 @@ pub struct OverlayFrame {
     pub world_hidden: bool,
 }
 
+// A spent frame's overlay draw list, handed back by graphics extraction when
+// it adopts the new one. The next build recycles it whole (the list and every
+// call's geometry buffers), so a steady-state frame allocates nothing.
+#[derive(Default)]
+pub struct OverlayRecycle(pub Vec<crate::gfx::render_types::TextDrawCall>);
+
 #[derive(Debug, Default)]
 pub struct OverlaySystem {
     // Base for the caret-blink clock, set on the first step.
     start_time: Option<Instant>,
     // Scratch for the per-element draw-layer merge, reused across frames.
     layers: std::collections::HashMap<AssetId, i32>,
-    // Last frame's draw-call count, seeding the next build's list capacity
-    // (the built Vec moves into the render snapshot, so only its length
-    // survives here).
-    call_capacity: usize,
+    // The draw list under construction plus the pooled geometry of recycled
+    // frames; the finished list moves out through `OverlayFrame` each tick.
+    buffer: crate::gfx::call_buffer::TextCallBuffer,
 }
 
 impl OverlaySystem {
@@ -101,6 +106,7 @@ impl System for OverlaySystem {
             .writes_resources(crate::resource_mask![
                 crate::gfx::overlay::OverlayAssets,
                 crate::gfx::overlay::OverlayFrame,
+                crate::gfx::overlay::OverlayRecycle,
                 crate::ecs::MenuActive,
             ])
     }
@@ -151,6 +157,11 @@ impl OverlaySystem {
         assets: &OverlayAssets,
         elapsed: f32,
     ) -> OverlayFrame {
+        // Recycle the previous frame's spent draw list (handed back by
+        // graphics extraction), so this build reuses its allocations.
+        if let Some(spent) = ctx.remove_resource::<OverlayRecycle>() {
+            self.buffer.recycle(spent.0);
+        }
         // The viewport InputSystem sampled at the end of the previous tick, or
         // the init-time size before the first poll. A live resize is picked up
         // one frame later, which is invisible mid-drag.
@@ -173,8 +184,11 @@ impl OverlaySystem {
         // Pack the StatHud chips into a tight strip in the top-left corner.
         hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
         let default_atlas_slot = assets.fonts.values().next().map(|f| f.atlas_slot);
-        let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
-            ctx.query::<Sprite>().partition(|s| s.follow_cursor);
+        // The component columns are contiguous, so the shapers take the whole
+        // slices; each skips what is not its own (hidden elements, and
+        // `follow_cursor` sprites, which only the cursor pass draws).
+        let sprites: &[Sprite] = ctx.query::<Sprite>().as_slice();
+        let labels: &[TextLabel] = ctx.query::<TextLabel>().as_slice();
 
         // Per-element draw layers, from two sources merged into one map:
         //   - the screen stack: every element of an active Screen takes its
@@ -213,20 +227,18 @@ impl OverlaySystem {
         }
         let hud_layers = &self.layers;
 
-        let mut calls = Vec::with_capacity(self.call_capacity);
         gfx_sprite::build_sprite_calls_into(
-            &mut calls,
-            &scene_sprites,
+            &mut self.buffer,
+            sprites,
             default_atlas_slot,
             &assets.sprite_texture_slots,
             [win_w, win_h],
             &assets.clip_rects,
             hud_layers,
         );
-        let labels: Vec<&TextLabel> = ctx.query::<TextLabel>().collect();
         text::build_text_calls_into(
-            &mut calls,
-            &labels,
+            &mut self.buffer,
+            labels,
             &assets.fonts,
             win_w,
             win_h,
@@ -244,21 +256,19 @@ impl OverlaySystem {
         {
             let no_clips = std::collections::HashMap::new();
             let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
-            let sprite_refs: Vec<&Sprite> = dd_sprites.iter().collect();
-            let dd_start = calls.len();
+            let dd_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
-                &mut calls,
-                &sprite_refs,
+                &mut self.buffer,
+                &dd_sprites,
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
                 &no_clips,
                 &empty_layers,
             );
-            let label_refs: Vec<&TextLabel> = dd_labels.iter().collect();
             text::build_text_calls_into(
-                &mut calls,
-                &label_refs,
+                &mut self.buffer,
+                &dd_labels,
                 &assets.fonts,
                 win_w,
                 win_h,
@@ -268,7 +278,7 @@ impl OverlaySystem {
             // The synthesised list carries no asset id, so nothing would lift it out
             // of layer 0 -- where the sort below buries it under the opaque rows it
             // drops from (functional, but invisible).
-            for c in &mut calls[dd_start..] {
+            for c in &mut self.buffer.calls[dd_start..] {
                 c.layer = DROPDOWN_LAYER;
             }
         }
@@ -292,28 +302,26 @@ impl OverlaySystem {
             // default id -- otherwise a focused panel's text fields would sink
             // below it.
             let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
-            let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
-            let ti_start = calls.len();
+            let ti_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
-                &mut calls,
-                &sprite_refs,
+                &mut self.buffer,
+                &ti_sprites,
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
                 &assets.clip_rects,
                 &empty_layers,
             );
-            let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
             text::build_text_calls_into(
-                &mut calls,
-                &label_refs,
+                &mut self.buffer,
+                &ti_labels,
                 &assets.fonts,
                 win_w,
                 win_h,
                 &assets.clip_rects,
                 &empty_layers,
             );
-            for c in &mut calls[ti_start..] {
+            for c in &mut self.buffer.calls[ti_start..] {
                 c.layer = ti_layer;
             }
         }
@@ -324,7 +332,9 @@ impl OverlaySystem {
         // inside the window: when it leaves in windowed / borderless modes
         // the arrow is hidden instead of lingering at the edge. The backend
         // confines the cursor in fullscreen, so it reports "inside" there.
-        let menu_cursor = cursor_sprites.iter().any(|s| s.visible && s.tint[3] > 0.0);
+        let menu_cursor = sprites
+            .iter()
+            .any(|s| s.follow_cursor && s.visible && s.tint[3] > 0.0);
         let want_ui_cursor = menu_cursor && !cursor.outside_window;
         if want_ui_cursor {
             // The `cn editor` HUD switches the silhouette to a resize cursor over a
@@ -333,13 +343,14 @@ impl OverlaySystem {
                 .resource::<crate::ecs::DesiredCursor>()
                 .map(|c| c.0)
                 .unwrap_or_default();
-            calls.extend(crate::gfx::cursor::build_cursor_calls(
-                &cursor_sprites,
+            crate::gfx::cursor::build_cursor_calls_into(
+                &mut self.buffer,
+                sprites,
                 cursor.pos,
                 cursor_shape,
                 default_atlas_slot,
                 [win_w, win_h],
-            ));
+            );
         }
         // A menu is "active" while any active screen pauses the world (the
         // screen stack publishes the flag); used to drive cursor capture and to
@@ -354,21 +365,21 @@ impl OverlaySystem {
         // wasted. A translucent dim keeps the world faintly visible and so
         // does not qualify.
         let world_hidden = menu_active
-            && scene_sprites
-                .iter()
-                .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
+            && sprites.iter().any(|s| {
+                !s.follow_cursor && s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s)
+            });
         // Reorder the overlay by layer when any call carries one (an active screen
         // stack, the editor's focus-stack overrides, an open dropdown, the cursor):
         // a stable sort keeps same-layer order (so the sprites-then-text order
         // within a panel is intact) while lifting a screen's or focused panel's
         // whole content above the others'. Skipped entirely when nothing is
         // layered, so draw order stays pure insertion order.
+        let calls = &mut self.buffer.calls;
         if calls.iter().any(|c| c.layer != 0) {
             calls.sort_by_key(|c| c.layer);
         }
-        self.call_capacity = calls.len();
         OverlayFrame {
-            calls,
+            calls: self.buffer.take(),
             want_ui_cursor,
             menu_active,
             world_hidden,
@@ -734,6 +745,28 @@ mod tests {
         // reserved band regardless of the screen's own layer.
         assert_eq!(frame.calls[0].layer, 7);
         assert_eq!(frame.calls[1].layer, HUD_OVERRIDE_LAYER_BASE + 3);
+    }
+
+    // A spent draw list handed back through `OverlayRecycle` backs the next
+    // build, so a steady-state frame reuses the list allocation instead of
+    // growing a fresh one.
+    #[test]
+    fn a_recycled_draw_list_backs_the_next_build() {
+        let mut w = TestWorld::new();
+        w.push(sprite(AssetId(1)));
+        let a = assets();
+        let mut sys = OverlaySystem::new();
+        let frame = sys.build_frame(&mut w.ctx(), &a, 0.0);
+        assert_eq!(frame.calls.len(), 1);
+        let spent_ptr = frame.calls.as_ptr();
+        w.resources.insert(OverlayRecycle(frame.calls));
+        let frame = sys.build_frame(&mut w.ctx(), &a, 0.0);
+        assert_eq!(frame.calls.as_ptr(), spent_ptr, "list backing reused");
+        assert_eq!(frame.calls.len(), 1);
+        assert!(
+            w.resources.get::<OverlayRecycle>().is_none(),
+            "the spent list was consumed"
+        );
     }
 
     // With no screen stack and no editor overrides nothing is layered, so the
