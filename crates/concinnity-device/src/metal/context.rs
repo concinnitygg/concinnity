@@ -46,8 +46,16 @@ pub(super) const BINDLESS_TEXTURE_COUNT: usize = 1024;
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
 // shader unusable from an indirect command buffer on Apple GPUs, so the
 // texture pool + shadow/IBL maps travel in an argument buffer instead. Must
-// match the `[[buffer(7)]]` on `fragment_main_bindless` in `main.metal`.
+// match the buffer(7) slot of the engine fragment in `src/shaders/
+// main_bindless.slang` (locked by the build script's ABI assertion) and of
+// every world-authored bindless fragment.
 pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
+
+// Fragment buffer index of the engine sampler block: indirect-command
+// execution cannot see encoder-bound sampler state, so the engine's
+// single-source fragment reads its three static samplers from this argument
+// buffer. World-authored fragments declare inline samplers and ignore it.
+pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
 
 // Stores the NSView* pointer set by cn_preview_start before world.start() is called.
 // MtlContext::new() atomically takes it: non-null → embedded mode, null → windowed mode.
@@ -152,11 +160,16 @@ pub struct MtlContext {
     // shaders keep the legacy per-draw CPU loop). See [`CullState`].
     pub(super) cull: CullState,
     // Encoder that packs the bindless pass's textures into a per-frame
-    // argument buffer (`BindlessTextures` in `main.metal`). `Some` only
+    // argument buffer (the `BindlessTextures` block). `Some` only
     // when `bindless`; the argument buffer itself is rebuilt every frame so
     // streamed texture swaps are picked up and the GPU never reads a buffer
     // the CPU is mid-rewrite. (A main-pass resource, not part of `cull`.)
     pub(super) bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // The engine sampler block bound at fragment buffer(10) for the
+    // single-source main program: three static samplers written once at init
+    // (samplers never stream, so no per-frame ring is needed). `None` when a
+    // world-authored fragment owns the main pass.
+    pub(super) bindless_sampler_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
     // Read-only depth state: `LessEqual` test, no write. Used by translucent
     // draws that must be occluded by nearer opaque geometry but must not

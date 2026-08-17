@@ -39,6 +39,7 @@ mod resources;
 mod scoped_encoder;
 mod screenshot;
 mod shader_reflect;
+mod slang_shaders;
 mod streaming;
 mod texture;
 mod transient;

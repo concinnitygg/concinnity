@@ -48,10 +48,10 @@ macro_rules! rebuild_if_live {
 }
 
 // Shader-source extensions the watcher reacts to. GLSL sources land as
-// `.vert` / `.frag` / `.comp`; the helper rejects every other event so
-// editor swap files, README updates, and tmp files don't trigger a
-// rebuild.
-const SHADER_EXTENSIONS: &[&str] = &["vert", "frag", "comp"];
+// `.vert` / `.frag` / `.comp`, the single-source programs as `.slang`; the
+// helper rejects every other event so editor swap files, README updates, and
+// tmp files don't trigger a rebuild.
+const SHADER_EXTENSIONS: &[&str] = &["vert", "frag", "comp", "slang"];
 
 // Live watcher handle. Held by `VkContext` purely to keep the watcher
 // thread alive; dropping it stops the watcher. The flag itself is shared
@@ -134,6 +134,20 @@ pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
             e
         );
         return None;
+    }
+
+    // The single-source shader directory rides the same watcher: a `.slang`
+    // save rebuilds through the same flag. Best-effort, like the main dir.
+    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("shaders");
+    if slang_dir.is_dir()
+        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
+    {
+        tracing::warn!(
+            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
+            slang_dir.display()
+        );
     }
 
     tracing::info!(

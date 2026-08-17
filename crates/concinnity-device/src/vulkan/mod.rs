@@ -45,6 +45,7 @@ mod render_pass;
 mod resources;
 mod screenshot;
 mod shadow;
+pub(crate) mod slang_builtins;
 mod spot_shadow;
 mod swapchain;
 mod texture;

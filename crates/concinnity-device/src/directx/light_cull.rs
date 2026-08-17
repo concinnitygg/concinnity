@@ -9,9 +9,9 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{create_buffer, create_uav_buffer};
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
@@ -50,9 +50,9 @@ impl LightCullState {
     }
 }
 
-// Compile the clustered light-binning compute kernel to DXBC.
+// Compile the clustered light-binning compute kernel to DXIL.
 pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::LIGHT_CULL.compile(&Ctx::plain(hot_reload))
+    slang_builtins::LIGHT_CULL.compile(hot_reload)
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
@@ -248,17 +248,16 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    // The HLSL kernel hardcodes the list stride + per-cluster cap as `static
-    // const uint`s (FXC has no cross-module constants), so they must track the
-    // Rust values the CPU sizes the buffer with.
+    // The kernel hardcodes the list stride + per-cluster cap as `static const
+    // uint`s, so they must track the Rust values the CPU sizes the buffer with.
     #[test]
-    fn hlsl_cluster_constants_match_render_types() {
-        assert!(builtins::LIGHT_CULL.embedded.contains(&format!(
+    fn kernel_cluster_constants_match_render_types() {
+        assert!(slang_builtins::LIGHT_CULL.embedded.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));
         let max_per_cluster = crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
         assert!(
-            builtins::LIGHT_CULL
+            slang_builtins::LIGHT_CULL
                 .embedded
                 .contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u"))
         );

@@ -195,6 +195,25 @@ pub(crate) fn precompile(
             );
         }
     }
+
+    // The single-source programs precompile through the same cache under their
+    // own compiler id, so a bundle is warm for them too.
+    for program in super::slang_builtins::ALL {
+        let ctx = Ctx {
+            hot_reload: false,
+            msaa: false,
+            pool_size,
+            probe_count: super::probe_uniforms::MAX_PROBES,
+        };
+        let source = program.source(&ctx);
+        let key = program.cache_key(&source);
+        report.record(
+            program.label,
+            crate::shader_cache::ensure_in(out_dir, &key, || {
+                super::slang_builtins::compile_uncached(program, &source)
+            }),
+        );
+    }
 }
 
 // Declaration shorthand: default target, no assembly.
@@ -232,32 +251,6 @@ pub(super) static MAIN_FRAG: GlslProgram = glsl(
     Fragment,
     "frag.glsl",
 );
-pub(super) static MAIN_BINDLESS_VERT: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "main_bindless.vert",
-        include_str!("shaders/main_bindless.vert"),
-        Vertex,
-        "vert_bindless.glsl",
-    )
-};
-pub(super) static MAIN_BINDLESS_FRAG: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        probe_desc_set: Some("0"),
-        pool_size: true,
-        object_data: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "main_bindless.frag",
-        include_str!("shaders/main_bindless.frag"),
-        Fragment,
-        "frag_bindless.glsl",
-    )
-};
 pub(super) static MAIN_VERT_INSTANCED: GlslProgram = glsl(
     "instanced.vert",
     include_str!("shaders/instanced.vert"),
@@ -525,22 +518,6 @@ pub(super) static AUTO_EXPOSURE_AVERAGE: GlslProgram = glsl(
     "auto_exposure_average.comp",
 );
 
-pub(super) static HIZ_INIT: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "hiz_init.comp",
-        include_str!("shaders/hiz_init.comp"),
-        Compute,
-        "hiz_init.glsl",
-    )
-};
-pub(super) static HIZ_DOWNSAMPLE: GlslProgram = glsl(
-    "hiz_downsample.comp",
-    include_str!("shaders/hiz_downsample.comp"),
-    Compute,
-    "hiz_downsample.glsl",
-);
-
 pub(super) static FOG_VERT: GlslProgram = GlslProgram {
     assembly: MSAA,
     ..glsl(
@@ -600,13 +577,6 @@ pub(super) static LINE_FRAG: GlslProgram = GlslProgram {
         "line.frag",
     )
 };
-
-pub(super) static LIGHT_CULL: GlslProgram = glsl(
-    "light_cull.comp",
-    include_str!("shaders/light_cull.comp"),
-    Compute,
-    "light_cull.comp",
-);
 
 pub(super) static GLASS_VERT: GlslProgram = GlslProgram {
     assembly: MSAA,
@@ -730,8 +700,6 @@ pub(super) static RAYMARCH_SHADOW_PROXY_VERT: GlslProgram = glsl(
 pub(crate) static ALL: &[&GlslProgram] = &[
     &MAIN_VERT,
     &MAIN_FRAG,
-    &MAIN_BINDLESS_VERT,
-    &MAIN_BINDLESS_FRAG,
     &MAIN_VERT_INSTANCED,
     &SHADOW_VERT,
     &SHADOW_BINDLESS_VERT,
@@ -769,8 +737,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &PARTICLE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
-    &HIZ_INIT,
-    &HIZ_DOWNSAMPLE,
     &FOG_VERT,
     &FOG_FRAG,
     &FOG_FROXEL,
@@ -778,7 +744,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &DECAL_FRAG,
     &LINE_VERT,
     &LINE_FRAG,
-    &LIGHT_CULL,
     &GLASS_VERT,
     &GLASS_FRAG,
     &GLASS_RT_VERT,
@@ -872,7 +837,7 @@ mod tests {
             pool_size: 3,
             probe_count: 3,
         };
-        let src = HIZ_INIT.source(&ctx);
+        let src = FOG_VERT.source(&ctx);
         let mut lines = src.lines();
         assert!(lines.next().unwrap().starts_with("#version"));
         assert_eq!(lines.next().unwrap(), "#define USE_MSAA 1");
@@ -929,7 +894,7 @@ mod tests {
             );
             spliced += usize::from(declares);
         }
-        assert_eq!(spliced, 7, "object-data program count changed");
+        assert_eq!(spliced, 5, "object-data program count changed");
     }
 
     // Every probe program sizes its cube array from the context, so the GLSL

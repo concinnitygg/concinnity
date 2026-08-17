@@ -203,6 +203,7 @@ impl MtlContext {
             cull_pipeline_phase2,
             cull_icb2_arg_encoder,
             bindless_tex_arg_encoder,
+            bindless_sampler_arg_encoder,
         ) = if requirements.scene {
             let pipelines::MainPipelineBundle {
                 pipeline_state,
@@ -212,6 +213,7 @@ impl MtlContext {
                 cull_pipeline_phase2,
                 cull_icb2_arg_encoder,
                 bindless_tex_arg_encoder,
+                bindless_sampler_arg_encoder,
             } = pipelines::build_main_pipeline(
                 &device,
                 &vert_desc,
@@ -227,9 +229,10 @@ impl MtlContext {
                 cull_pipeline_phase2,
                 cull_icb2_arg_encoder,
                 bindless_tex_arg_encoder,
+                bindless_sampler_arg_encoder,
             )
         } else {
-            (None, false, None, None, None, None, None)
+            (None, false, None, None, None, None, None, None)
         };
 
         // Two-pass occlusion is only usable on the bindless cull path (the
@@ -450,6 +453,9 @@ impl MtlContext {
             desc.setSAddressMode(MTLSamplerAddressMode::Repeat);
             desc.setTAddressMode(MTLSamplerAddressMode::Repeat);
             desc.setMaxAnisotropy(anisotropy.clamp(1, 16) as usize);
+            // Written into the engine sampler block (an argument buffer) for
+            // the single-source main program, which requires this flag.
+            desc.setSupportArgumentBuffers(true);
             device
                 .newSamplerStateWithDescriptor(&desc)
                 .ok_or("failed to create sampler state")?
@@ -464,6 +470,8 @@ impl MtlContext {
             desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
             desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
             desc.setCompareFunction(MTLCompareFunction::LessEqual);
+            // Rides the engine sampler block alongside the pool sampler.
+            desc.setSupportArgumentBuffers(true);
             device
                 .newSamplerStateWithDescriptor(&desc)
                 .ok_or("failed to create shadow sampler state")?
@@ -479,9 +487,24 @@ impl MtlContext {
             desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
             desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
             desc.setRAddressMode(MTLSamplerAddressMode::ClampToEdge);
+            // Rides the engine sampler block alongside the pool sampler.
+            desc.setSupportArgumentBuffers(true);
             device
                 .newSamplerStateWithDescriptor(&desc)
                 .ok_or("failed to create cube sampler state")?
+        };
+
+        // The engine sampler block for the single-source main program, written
+        // once now that the three sampler states exist.
+        let bindless_sampler_args = match &bindless_sampler_arg_encoder {
+            Some(enc) => Some(pipelines::build_bindless_sampler_args(
+                &device,
+                enc,
+                &sampler,
+                &shadow_sampler,
+                &cube_sampler,
+            )?),
+            None => None,
         };
 
         // IBL: either upload the supplied EnvironmentMap payload or build a
@@ -1177,6 +1200,7 @@ impl MtlContext {
                 mirror_icb_capacity: 0,
             },
             bindless_tex_arg_encoder,
+            bindless_sampler_args,
             depth_state,
             depth_state_read_only,
             vertex_buffer,

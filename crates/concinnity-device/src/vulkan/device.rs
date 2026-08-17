@@ -339,6 +339,20 @@ pub(super) fn create_logical_device(
     let mut sub_enable = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default()
         .shader_subgroup_extended_types(sub_probe.shader_subgroup_extended_types != 0);
 
+    // The single-source bindless vertex reads the BaseInstance builtin (Slang
+    // lowers SV_StartInstanceLocation to it), which needs shaderDrawParameters
+    // enabled. Core since Vulkan 1.1 and universally supported on desktop
+    // drivers (MoltenVK included); probed anyway so an exotic device degrades
+    // to a validation error rather than a crash.
+    let mut draw_params_probe = vk::PhysicalDeviceShaderDrawParametersFeatures::default();
+    {
+        let mut probe = vk::PhysicalDeviceFeatures2::default().push_next(&mut draw_params_probe);
+        unsafe { instance.get_physical_device_features2(pd, &mut probe) };
+    }
+    let want_draw_params = draw_params_probe.shader_draw_parameters != 0;
+    let mut draw_params_enable = vk::PhysicalDeviceShaderDrawParametersFeatures::default()
+        .shader_draw_parameters(want_draw_params);
+
     // DLSS (NGX) needs the `bufferDeviceAddress` *feature* enabled, not just the
     // `VK_EXT_buffer_device_address` extension NGX lists: NGX calls
     // `vkGetBufferDeviceAddress` + allocates memory with
@@ -391,7 +405,12 @@ pub(super) fn create_logical_device(
     // the `Vulkan12Features` XeSS adds (chaining both is a validation error), and
     // FSR is not the active backend under XeSS so its enablers are unneeded.
     if upscaler_sdk.choice == ResolvedBackend::Xess {
+        // ShaderDrawParameters is its own feature struct (not part of the
+        // `Vulkan12Features` XeSS appends), so chaining it here is valid.
         let mut features2 = vk::PhysicalDeviceFeatures2::default().features(features);
+        if want_draw_params {
+            features2 = features2.push_next(&mut draw_params_enable);
+        }
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
@@ -433,6 +452,9 @@ pub(super) fn create_logical_device(
     }
     if want_bda {
         device_info = device_info.push_next(&mut bda_enable);
+    }
+    if want_draw_params {
+        device_info = device_info.push_next(&mut draw_params_enable);
     }
     if rt_capable {
         device_info = device_info

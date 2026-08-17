@@ -15,18 +15,36 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// Precompile every eligible `.metal` under `shaders_dir` into OUT_DIR and
-// generate `engine_metallibs.rs` there. `fragments` pairs a source marker with
-// the file under `shaders_dir` that replaces it, matching the substitution the
-// renderer applies when it compiles the same shader from source. Panics if the
-// Metal toolchain is present but a shader fails to compile: a broken shader
-// must fail the build, not surface at renderer init.
+use concinnity_slang as slang;
+
+// One single-source shader library to precompile to a metallib: the `.slang`
+// file under the slang shader directory, the entry points linked into the
+// library, and the `#define`s that select its variant. `name` is the key the
+// renderer's lookup uses (distinct from `file` when one source yields several
+// variant libraries).
+pub struct SlangLibSpec {
+    pub name: &'static str,
+    pub file: &'static str,
+    pub entries: &'static [&'static str],
+    pub defines: &'static [(&'static str, &'static str)],
+}
+
+// Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
+// spec under `slang_dir`, into OUT_DIR and generate `engine_metallibs.rs`
+// there. `fragments` pairs a source marker with the file under `shaders_dir`
+// that replaces it, matching the substitution the renderer applies when it
+// compiles the same shader from source. Panics if the Metal toolchain is
+// present but a shader fails to compile: a broken shader must fail the build,
+// not surface at renderer init.
 pub fn precompile_metal_shaders(
     shaders_dir: &Path,
     source_only: &[&str],
     fragments: &[(&str, &str)],
+    slang_dir: &Path,
+    slang_specs: &[SlangLibSpec],
 ) {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
+    println!("cargo:rerun-if-changed={}", slang_dir.display());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let generated = out_dir.join("engine_metallibs.rs");
 
@@ -52,7 +70,7 @@ pub fn precompile_metal_shaders(
 
     let lib_dir = out_dir.join("engine_shaders");
     std::fs::create_dir_all(&lib_dir).expect("create engine_shaders dir");
-    let mut entries = Vec::with_capacity(shaders.len());
+    let mut entries = Vec::with_capacity(shaders.len() + slang_specs.len());
     for path in &shaders {
         let name = path
             .file_name()
@@ -68,8 +86,50 @@ pub fn precompile_metal_shaders(
         compile_metallib(&assembled, &lib_path);
         entries.push((name, lib_path));
     }
+    entries.extend(precompile_slang_libs(slang_dir, slang_specs, &lib_dir));
     std::fs::write(&generated, metallib_lookup_source(&entries))
         .expect("write engine_metallibs.rs");
+}
+
+// Compile each single-source spec to a metallib via slangc. With slangc absent
+// the specs are skipped behind a cargo warning: their names miss the generated
+// lookup and the renderer compiles them at startup instead (which needs slangc
+// at runtime and errors clearly when it is missing there too).
+fn precompile_slang_libs(
+    slang_dir: &Path,
+    specs: &[SlangLibSpec],
+    lib_dir: &Path,
+) -> Vec<(String, PathBuf)> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+    if slang::slangc_path().is_none() {
+        println!(
+            "cargo:warning=slangc not found; single-source engine shaders will compile at \
+             startup (install the Vulkan SDK or a standalone Slang release)"
+        );
+        return Vec::new();
+    }
+    specs
+        .iter()
+        .map(|spec| {
+            let path = slang_dir.join(spec.file);
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let job = slang::SlangJob {
+                source: &slang::inject_defines(&source, spec.defines),
+                file_name: spec.name,
+                entries: spec.entries,
+                target: slang::SlangTarget::Metallib,
+            };
+            let bytes = slang::compile(&job, lib_dir)
+                .unwrap_or_else(|e| panic!("slang metallib precompile failed: {e}"));
+            let lib_path = lib_dir.join(spec.name).with_extension("metallib");
+            std::fs::write(&lib_path, bytes)
+                .unwrap_or_else(|e| panic!("write {}: {e}", lib_path.display()));
+            (spec.name.to_string(), lib_path)
+        })
+        .collect()
 }
 
 // Replace every fragment marker in `source`. Kept pure for unit testing.

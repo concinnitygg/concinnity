@@ -58,6 +58,11 @@ pub(crate) mod appkit;
 // Metal precompiles into the binary via the toolchain crate).
 pub(crate) mod shader_cache;
 
+// Shared source assembly for the single-source `.slang` shaders every backend
+// draws from.
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
+pub(crate) mod slang_source;
+
 // Disk persistence for driver pipeline blobs (VkPipelineCache, D3D12 pipeline
 // library). Metal needs none: its libraries are precompiled or cached above,
 // and the OS maintains the per-app pipeline binary cache.

@@ -61,14 +61,6 @@ using namespace metal;
 
 constant constexpr uint NUM_SHADOW_CASCADES = 4;
 
-// Size of the bindless texture pool the static main pass reads through the
-// `BindlessTextures` argument buffer. The pool holds every albedo texture
-// (including emissive and ORM maps) followed by every normal map; each
-// GpuObjectData carries pool indices into it. Must match BINDLESS_TEXTURE_COUNT
-// in metal/context.rs. This is an argument-buffer texture array (not a direct
-// per-stage binding), so it is not bound by the 128-texture stage limit; large
-// scenes like a full city block need room for hundreds of unique textures.
-constant constexpr uint BINDLESS_TEXTURE_COUNT = 1024;
 
 struct Vertex {
     float3 pos     [[attribute(0)]];
@@ -88,10 +80,10 @@ struct VertexOut {
     // View-space depth (positive in front of camera). Used by the fragment
     // shader to pick a shadow cascade.
     float  view_depth;
-    // Object id (index into the GpuObjectData buffer). Set by vertex_main from
-    // [[base_instance]]; read by fragment_main_bindless to fetch material +
-    // texture indices. The instanced/skinned vertex shaders set it to 0 since
-    // their fragment_main pairing does not consult it.
+    // Object id (index into the GpuObjectData buffer). Set by vertex_main
+    // from [[base_instance]]. The single-source bindless program has its own
+    // vertex stage; the instanced/skinned vertex shaders here set it to 0
+    // since their fragment_main pairing does not consult it.
     uint   obj_id [[flat]];
 };
 
@@ -127,8 +119,8 @@ struct ProbeUniforms {
     float4 probe_pos; // xyz = capture position
 };
 
-// Maximum reflection probes bound per frame. Must match metal::uniforms::MAX_PROBES
-// and the `BindlessTextures.probes` cube-array length.
+// Maximum reflection probes bound per frame. Must match
+// metal::uniforms::MAX_PROBES.
 constant constexpr uint MAX_PROBES = 8u;
 
 // Probe blend falloff, as a fraction of a box's smallest half-extent. Each probe's
@@ -914,11 +906,9 @@ static float3 probe_set_specular(
         probe_cubes[near_i], set.probes[near_i], world_pos, R, lod, cube_sampler);
 }
 
-// Shared Cook-Torrance GGX shading body. Both fragment entry points resolve
-// their inputs differently (`fragment_main` from per-draw bindings,
-// `fragment_main_bindless` from the GpuObjectData buffer + texture pool), then
-// call this. Keeping the lighting in one place means the two binding models
-// never drift apart.
+// Shared Cook-Torrance GGX shading body for the per-draw `fragment_main`
+// entry point. (The bindless main program ships from the single-source
+// `src/shaders/main_bindless.slang` and carries its own shading body.)
 static float4 shade_surface(
     VertexOut                in,
     constant ViewUniforms   &view,
@@ -1392,83 +1382,4 @@ fragment float4 fragment_main(
         cube_sampler);
 }
 
-// Every texture the bindless static pass samples, packed into one argument
-// buffer bound at buffer(7). Discrete [[texture(n)]] bindings make a fragment
-// shader incompatible with indirect command buffers on Apple GPUs, and the
-// GPU-driven cull pass issues this shader through an ICB, so its
-// textures must arrive through an argument buffer instead. The renderer fills
-// `tex_pool` with every albedo texture followed by every normal map (the same
-// layout the GpuObjectData pool indices address).
-struct BindlessTextures {
-    array<texture2d<float>, BINDLESS_TEXTURE_COUNT> tex_pool [[id(0)]];
-    depth2d_array<float> shadow_map [[id(BINDLESS_TEXTURE_COUNT)]];
-    texturecube<float>   irradiance [[id(BINDLESS_TEXTURE_COUNT + 1)]];
-    texturecube<float>   prefilter  [[id(BINDLESS_TEXTURE_COUNT + 2)]];
-    // Blurred SSAO occlusion (1x1 white when SSAO is disabled).
-    texture2d<float>     ssao       [[id(BINDLESS_TEXTURE_COUNT + 3)]];
-    // Local reflection-probe prefiltered radiance: one scene-captured cube per
-    // probe. Sampled for the specular reflection term only (the skybox + diffuse
-    // keep the sky `prefilter`). Unused slices + the pre-bake state alias the sky
-    // `prefilter`, so reflections are unchanged until a probe is baked.
-    array<texturecube<float>, MAX_PROBES> probes [[id(BINDLESS_TEXTURE_COUNT + 4)]];
-    // Spot shadow map array: one depth slice per shadow-casting spot light.
-    depth2d_array<float> spot_shadow_map [[id(BINDLESS_TEXTURE_COUNT + 4 + MAX_PROBES)]];
-    // Area-light LTC tables: the inverse transforms and the (albedo, Fresnel)
-    // pairs.
-    texture2d<float> ltc_matrix    [[id(BINDLESS_TEXTURE_COUNT + 5 + MAX_PROBES)]];
-    texture2d<float> ltc_magnitude [[id(BINDLESS_TEXTURE_COUNT + 6 + MAX_PROBES)]];
-};
 
-// Fragment entry point for the bindless static main pass. Material scalars and
-// the albedo/normal texture-pool indices come from the GpuObjectData buffer at
-// buffer(9), indexed by the [[base_instance]] object id forwarded through
-// VertexOut.obj_id. The texture pool + shadow/IBL maps arrive in the
-// `BindlessTextures` argument buffer at buffer(7); samplers are declared inline
-// so the shader binds no discrete texture or sampler slots, which is what keeps
-// it usable from an indirect command buffer.
-fragment float4 fragment_main_bindless(
-    VertexOut in                        [[stage_in]],
-    constant ViewUniforms     &view     [[buffer(0)]],
-    constant LightUniforms    &lights   [[buffer(4)]],
-    constant ShadowUniforms   &shadow   [[buffer(5)]],
-    constant ProbeSet         &probes   [[buffer(6)]],
-    constant GpuObjectData    *objects  [[buffer(9)]],
-    constant GpuLight         *local_lights [[buffer(8)]],
-    constant ClusterParams    &cluster  [[buffer(11)]],
-    constant uint             *cluster_light_list [[buffer(12)]],
-    constant SpotShadowData   *spot_shadows [[buffer(13)]],
-    constant AreaLightData    *area_lights [[buffer(14)]],
-    constant BindlessTextures &tex      [[buffer(7)]]
-) {
-    // Static engine samplers, declared inline. Parameters mirror the
-    // MTLSamplerDescriptors built in metal/context.rs (albedo / shadow-compare
-    // / cubemap), so the bindless pass samples identically to the legacy path.
-    constexpr sampler tex_sampler(filter::linear, address::repeat);
-    constexpr sampler shadow_sampler(filter::linear, address::clamp_to_edge,
-                                     compare_func::less_equal);
-    constexpr sampler cube_sampler(filter::linear, mip_filter::linear,
-                                   address::clamp_to_edge);
-    GpuObjectData obj = objects[in.obj_id];
-    // The specular reflection blends every probe whose influence box covers this
-    // surface (partition of unity), selected + sampled inside `shade_surface` via
-    // `probe_set_specular`. The whole set + cube array are passed through; an unbaked
-    // or absent probe (count == 0) leaves the sky fallback in those slots.
-    return shade_surface(
-        in, view, probes,
-        obj.roughness, obj.metallic, obj.macro_variation,
-        obj.terrain_blend, obj.secondary_blend_sharpness, obj.alpha_cutoff,
-        obj.tint, obj.emissive,
-        lights, local_lights, spot_shadows, area_lights, cluster, cluster_light_list, shadow,
-        tex.tex_pool[obj.albedo_index],
-        tex.tex_pool[obj.normal_index],
-        tex.tex_pool[obj.albedo_secondary_index],
-        tex.tex_pool[obj.normal_secondary_index],
-        tex.tex_pool[obj.emissive_map_index],
-        tex.tex_pool[obj.orm_map_index],
-        obj.emissive_map_index != 0,
-        obj.orm_map_index != 0,
-        tex.shadow_map, tex.spot_shadow_map, tex.ltc_matrix, tex.ltc_magnitude,
-        tex.irradiance, tex.prefilter,
-        tex.probes, tex.ssao,
-        tex_sampler, shadow_sampler, cube_sampler);
-}

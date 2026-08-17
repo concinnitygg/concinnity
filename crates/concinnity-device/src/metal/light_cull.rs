@@ -17,7 +17,7 @@ use objc2_metal::{
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_library};
+use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
 // Clustered-lighting GPU state: the binning compute pipeline and the per-cluster
@@ -82,13 +82,14 @@ impl MtlContext {
     }
 }
 
-// Build the clustered light-binning compute pipeline from `light_cull.metal`.
-// Mirrors `build_fog_froxel_pipeline`'s hot-reload-aware source pickup.
+// Build the clustered light-binning compute pipeline from the single-source
+// `light_cull.slang` (params buffer(0), lights buffer(1), list buffer(2) --
+// the same slots the encode above binds).
 pub(super) fn build_light_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "light_cull.metal")?;
+    let library = super::slang_shaders::LIGHT_CULL.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("light_cull_kernel"))
         .ok_or("light_cull_kernel not found")?;

@@ -8,9 +8,10 @@
 // view-projection, picks the Hi-Z mip whose texels are ~the size of the
 // projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
 // its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-// implementation in `directx/hiz.rs` + `directx/shaders/hiz_build.hlsl`.
+// implementation in `directx/hiz.rs`.
 //
-// Two compute kernels share `shaders/hiz_build.metal`:
+// Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
+// (one precompiled variant library each):
 //
 //   * `hiz_init_msaa`: reduce the MSAA main-depth resource into mip 0, taking
 //                      the MAX over every sample so the result is conservative.
@@ -23,11 +24,10 @@
 // worker fan-out and off the graph's RMW chain on the main depth attachment
 // (decals, fog, water, and the SSAO/SSR pre-passes already share that target).
 //
-// The source mip is read through the whole-texture read binding (lod =
-// `src_mip`); the destination mip is a single-level texture view bound with
-// write access. Reading mip M while writing mip M+1 never aliases the same
-// texels, and Metal auto-barriers successive dispatches in the serial compute
-// encoder, so the downsample chain stays correct.
+// Source and destination mips are both bound as single-level texture views.
+// Reading mip M while writing mip M+1 never aliases the same texels, and
+// Metal auto-barriers successive dispatches in the serial compute encoder, so
+// the downsample chain stays correct.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
@@ -40,7 +40,7 @@ use objc2_metal::{
 };
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
-use super::pipeline::{ns_str, shader_library};
+use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) push struct; lives in concinnity-render so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
@@ -78,22 +78,24 @@ pub(super) struct HiZResources {
     pub(super) mip_count: u32,
 }
 
-// The init and downsample compute pipelines produced from `hiz_build.metal`.
+// The init and downsample compute pipelines produced from `hiz_build.slang`.
 type HizPipelines = (
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
 );
 
-// Compile both Hi-Z compute kernels from `hiz_build.metal`.
+// Build both Hi-Z compute kernels from the single-source `hiz_build.slang`
+// (one variant library per kernel, so each declares only what it binds).
 pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<HizPipelines, String> {
-    let library = shader_library(device, hot_reload, "hiz_build.metal")?;
-    let init_fn = library
+    let init_lib = super::slang_shaders::HIZ_INIT_MSAA.library(device, hot_reload)?;
+    let downsample_lib = super::slang_shaders::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
+    let init_fn = init_lib
         .newFunctionWithName(&ns_str("hiz_init_msaa"))
         .ok_or("hiz_init_msaa not found in hiz library")?;
-    let downsample_fn = library
+    let downsample_fn = downsample_lib
         .newFunctionWithName(&ns_str("hiz_downsample"))
         .ok_or("hiz_downsample not found in hiz library")?;
     let init_pipeline = device
@@ -254,9 +256,9 @@ impl MtlContext {
         }
         dispatch_2d(&enc, hiz.width, hiz.height);
 
-        // Downsample chain: each dispatch reads the prior mip (via the
-        // whole-texture read binding at `src_mip`) and writes the next mip
-        // through its single-level view.
+        // Downsample chain: each dispatch reads the prior mip through its
+        // single-level view and writes the next mip through its own view (the
+        // kernel sizes its taps from the source view's dimensions).
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -275,7 +277,7 @@ impl MtlContext {
                     std::mem::size_of::<HizParams>(),
                     0,
                 );
-                enc.setTexture_atIndex(Some(hiz.texture.as_ref()), 0);
+                enc.setTexture_atIndex(Some(hiz.mip_views[(mip - 1) as usize].as_ref()), 0);
                 enc.setTexture_atIndex(Some(hiz.mip_views[mip as usize].as_ref()), 1);
             }
             dispatch_2d(&enc, next_w, next_h);

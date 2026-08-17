@@ -33,7 +33,7 @@ mod metal_shaders;
 mod sdks;
 mod source_hash;
 
-pub use metal_shaders::precompile_metal_shaders;
+pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
 use sdks::SdkEnv;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

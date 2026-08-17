@@ -162,7 +162,8 @@ pub(in crate::vulkan) fn build_light_cull(
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("light cull pipeline layout: {e}"))?;
 
-    let spirv = super::builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
+    let spirv =
+        super::slang_builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spirv)?;
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -298,12 +299,11 @@ mod tests {
     use super::*;
     use crate::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
 
-    // The GLSL kernel hardcodes the list stride + per-cluster cap as `const
-    // uint`s (shaderc has no cross-module constants), so they must track the
-    // Rust values the CPU sizes the buffer with.
+    // The kernel hardcodes the list stride + per-cluster cap as constants, so
+    // they must track the Rust values the CPU sizes the buffer with.
     #[test]
-    fn glsl_cluster_constants_match_render_types() {
-        let src = crate::vulkan::builtins::LIGHT_CULL.embedded;
+    fn kernel_cluster_constants_match_render_types() {
+        let src = crate::vulkan::slang_builtins::LIGHT_CULL.embedded;
         assert!(src.contains(&format!(
             "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
         )));

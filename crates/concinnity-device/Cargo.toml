@@ -29,6 +29,7 @@ concinnity-core = { path = "../concinnity-core" }
 concinnity-cpu = { path = "../concinnity-cpu" }
 concinnity-store = { path = "../concinnity-store" }
 concinnity-render = { path = "../concinnity-render" }
+concinnity-slang = { path = "../concinnity-slang" }
 
 bytemuck = { version = "1", features = ["derive"] }
 libloading = "0.9.0"
@@ -89,4 +90,5 @@ objc2-metal-kit = "0.3.2"
 objc2-quartz-core = "0.3.2"
 
 [build-dependencies]
+concinnity-slang = { path = "../concinnity-slang" }
 concinnity-toolchain = { path = "../concinnity-toolchain" }

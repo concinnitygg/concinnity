@@ -8,14 +8,13 @@
 // view-projection, picks the Hi-Z mip whose texels are ~the size of the
 // projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
 // its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-// implementation in `directx/hiz.rs` + `directx/shaders/hiz_build.hlsl` and the
-// Metal one in `metal/hiz.rs` + `metal/shaders/hiz_build.metal`.
+// implementation in `directx/hiz.rs` and the Metal one in `metal/hiz.rs`; every
+// backend's kernels ship from the single-source
+// `src/shaders/hiz_build.slang` (one variant compile per kernel):
 //
-// Two compute kernels build the pyramid:
-//
-//   * `hiz_init.comp`     : reduce the (MSAA) main depth into mip 0, taking the
-//                           MAX over every sample so the result is conservative.
-//   * `hiz_downsample.comp`: MAX-reduce 2x2 source texels into the next mip.
+//   * `hiz_init_msaa` / `hiz_init_single`: reduce the main depth into mip 0,
+//     taking the MAX over every sample so the result is conservative.
+//   * `hiz_downsample`: MAX-reduce 2x2 source texels into the next mip.
 //
 // The build is a graph node: `HizFinal` (terminal, reducing the frame's last
 // depth version for the next frame's cull) and, under two-pass occlusion,
@@ -194,15 +193,17 @@ fn build_hiz_pipelines(
     sample_count: u32,
     hot_reload: bool,
 ) -> Result<(vk::Pipeline, vk::Pipeline), String> {
-    // The init kernel branches on a `USE_MSAA` define injected after `#version`
-    // (the depth resource is a `sampler2DMS` when multisampled, a `sampler2D`
-    // otherwise), mirroring the decal shader's MSAA split.
-    let ctx = super::builtins::Ctx {
-        msaa: sample_count > 1,
-        ..super::builtins::Ctx::plain(hot_reload)
+    // The init kernel is a per-variant compile of the single-source
+    // `hiz_build.slang`: the depth resource is a `Texture2DMS` when
+    // multisampled, a `Texture2D` otherwise (a sampled image either way; the
+    // kernel reads texels by coordinate, so no sampler is bound).
+    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let init_spv = if sample_count > 1 {
+        super::slang_builtins::HIZ_INIT_MSAA.compile(&ctx)?
+    } else {
+        super::slang_builtins::HIZ_INIT_SINGLE.compile(&ctx)?
     };
-    let init_spv = super::builtins::HIZ_INIT.compile(&ctx)?;
-    let downsample_spv = super::builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;
+    let downsample_spv = super::slang_builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;
     let init = create_compute_pipeline(device, init_layout, &init_spv)?;
     let downsample = create_compute_pipeline(device, downsample_layout, &downsample_spv)?;
     Ok((init, downsample))
@@ -279,11 +280,12 @@ impl HiZResources {
         let HiZDeviceCtx { alloc, device, .. } = ctx;
         let HiZTarget { width, height, .. } = target;
         // Set layouts.
-        // Init: binding 0 depth sampler, binding 1 dst-mip storage image.
+        // Init: binding 0 depth (sampled image, read by coordinate -- no
+        // sampler), binding 1 dst-mip storage image.
         let init_set_layout = create_set_layout(
             device,
             &[
-                (0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+                (0, vk::DescriptorType::SAMPLED_IMAGE),
                 (1, vk::DescriptorType::STORAGE_IMAGE),
             ],
         )?;
@@ -451,7 +453,7 @@ impl HiZResources {
         // Init sets: binding 0 = that frame's main depth, binding 1 = mip 0.
         for (i, &set) in init_sets.iter().enumerate() {
             let depth = depth_views[i.min(depth_views.len().saturating_sub(1))];
-            write_sampler(device, set, 0, depth, self.sampler);
+            write_sampled_image(device, set, 0, depth);
             write_storage_image(device, set, 1, mip_views[0]);
         }
         // Downsample sets: step m reads mip m-1, writes mip m.
@@ -751,10 +753,14 @@ fn create_pool(
     // each with a sampler + a UBO descriptor.
     let read_rings = if two_pass { 2 } else { 1 };
     let sizes = [
-        // init depth (frames) + cull-read Hi-Z (frames per read ring).
+        // cull-read Hi-Z (frames per read ring).
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count((1 + read_rings) * f),
+            .descriptor_count(read_rings * f),
+        // init depth (frames): read by coordinate, no sampler.
+        vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::SAMPLED_IMAGE)
+            .descriptor_count(f),
         // init dst (frames) + downsample src+dst (2 per step).
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
@@ -805,6 +811,20 @@ fn write_sampler(
         .dst_set(set)
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(std::slice::from_ref(&info));
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+}
+
+// Sampled-image write with no sampler: the init kernel reads the depth by
+// texel coordinate, so only the image view is bound.
+fn write_sampled_image(device: &Device, set: vk::DescriptorSet, binding: u32, view: vk::ImageView) {
+    let info = vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(view);
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(binding)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(std::slice::from_ref(&info));
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }

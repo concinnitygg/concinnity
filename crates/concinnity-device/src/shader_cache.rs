@@ -26,6 +26,7 @@
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // SHADER_COMPILE_SOURCE_HASH: derived by build.rs from the modules that decide
@@ -79,6 +80,7 @@ pub(crate) fn cached(
     if !enabled() {
         return compile();
     }
+    verify_toolchain();
     let digest = key.digest();
     if let Some(bytes) = load(&digest) {
         HITS.fetch_add(1, Ordering::Relaxed);
@@ -120,6 +122,9 @@ pub(crate) fn ensure_in(
     key: &Key<'_>,
     compile: impl FnOnce() -> Result<Vec<u8>, String>,
 ) -> Result<Ensured, String> {
+    if enabled() {
+        verify_toolchain();
+    }
     let digest = key.digest();
     if load_in(dir, &digest).is_some() {
         return Ok(Ensured::Present);
@@ -171,6 +176,55 @@ fn enabled() -> bool {
 
 fn cache_dir() -> PathBuf {
     concinnity_store::paths::shader_cache_dir()
+}
+
+// Scratch directory for runtime slangc invocations (the compiler works on
+// files; source and artifact are removed after each compile). Lives beside
+// the cache so it stays inside the engine's state root. Entries in `prune`'s
+// walk are filtered to files, so the subdirectory never confuses eviction.
+pub(crate) fn slang_work_dir() -> PathBuf {
+    cache_dir().join("slang-work")
+}
+
+// Names the shader toolchains this directory's entries were produced by. Not a
+// digest, so it can never collide with one.
+const TOOLCHAIN_STAMP: &str = "toolchain";
+
+// Discard the writable tier when the shader toolchain changes. An entry is a
+// function of its source, not of what compiled it, and slangc is an external
+// binary that can be upgraded -- or shadowed by another install earlier on
+// PATH -- without a byte of source moving; without this, that upgrade never
+// takes effect and the old compiler's output is replayed forever. The
+// read-only tier is deliberately left alone: a bundle ships it on purpose, and
+// it is what a host with no compiler of its own has to run from.
+//
+// Costs one `slangc -version` per process, which is why it is a `OnceLock`.
+fn verify_toolchain() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        let dir = cache_dir();
+        let current = concinnity_slang::compiler_id();
+        let stamp = dir.join(TOOLCHAIN_STAMP);
+        if std::fs::read_to_string(&stamp).is_ok_and(|found| found == current) {
+            return;
+        }
+        discard_entries(&dir);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(&stamp, current);
+        }
+    });
+}
+
+// Drop every artifact in `dir`, leaving subdirectories (the slang work dir) be.
+fn discard_entries(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.metadata().is_ok_and(|meta| meta.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn load(digest: &str) -> Option<Vec<u8>> {
@@ -229,7 +283,9 @@ fn prune(dir: &Path, budget: u64) {
         .flatten()
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            if !meta.is_file() {
+            // The stamp is not an artifact, and evicting it would make the next
+            // run read the directory as another toolchain's and discard it all.
+            if !meta.is_file() || e.file_name() == TOOLCHAIN_STAMP {
                 return None;
             }
             Some((meta.modified().ok()?, meta.len(), e.path()))
@@ -323,6 +379,44 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A toolchain change drops the entries but not the slang work directory, so
+    // a compile already writing into it is not pulled out from under itself.
+    #[test]
+    fn discarding_entries_spares_subdirectories() {
+        let tmp = std::env::temp_dir().join(format!("cn_sc_discard_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        store_in(&tmp, "cafe", &[1, 2]);
+        store_in(&tmp, "f00d", &[3, 4]);
+        let work = tmp.join("slang-work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("in-flight.slang"), "x").unwrap();
+
+        discard_entries(&tmp);
+
+        assert!(load_in(&tmp, "cafe").is_none());
+        assert!(load_in(&tmp, "f00d").is_none());
+        assert!(work.join("in-flight.slang").exists());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Evicting the stamp would make the next run read the directory as another
+    // toolchain's and throw away everything the eviction just made room for.
+    #[test]
+    fn pruning_never_evicts_the_toolchain_stamp() {
+        let tmp = std::env::temp_dir().join(format!("cn_sc_stamp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Oldest file in the directory, so an LRU walk would reach it first.
+        std::fs::write(tmp.join(TOOLCHAIN_STAMP), "slang 2026.1").unwrap();
+        store_in(&tmp, "cafe", &[0u8; 512]);
+
+        prune(&tmp, 16);
+
+        assert!(tmp.join(TOOLCHAIN_STAMP).exists());
+        assert!(load_in(&tmp, "cafe").is_none(), "artifact should evict");
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

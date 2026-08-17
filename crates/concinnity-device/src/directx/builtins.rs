@@ -191,7 +191,6 @@ const SHADOW_VERT_HLSL: &str = include_str!("shaders/shadow_vert.hlsl");
 const COMPOSITE_VERT_HLSL: &str = include_str!("shaders/composite_vert.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
 const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
-const HIZ_BUILD_HLSL: &str = include_str!("shaders/hiz_build.hlsl");
 const SSGI_HLSL: &str = include_str!("shaders/ssgi.hlsl");
 const REFLECTION_COMPOSITE_HLSL: &str = include_str!("shaders/reflection_composite.hlsl");
 const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
@@ -252,30 +251,6 @@ pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_
 pub(super) static SHADOW_VERT: HlslProgram =
     fxc_main("shadow_vert.hlsl", SHADOW_VERT_HLSL, "vs_5_1");
 
-pub(super) static MAIN_BINDLESS_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "main_bindless_vert.hlsl",
-        include_str!("shaders/main_bindless_vert.hlsl"),
-        "vs_5_1",
-    )
-};
-pub(super) static MAIN_BINDLESS_FRAG: HlslProgram = HlslProgram {
-    file: "main_bindless_frag.hlsl",
-    embedded: include_str!("shaders/main_bindless_frag.hlsl"),
-    entry: "main",
-    target: "ps_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly {
-        cut: true,
-        probe: true,
-        object_data: true,
-        ..PLAIN
-    },
-};
 pub(super) static SHADOW_BINDLESS_VERT: HlslProgram = HlslProgram {
     assembly: Assembly {
         object_data: true,
@@ -313,12 +288,6 @@ pub(super) static CULL: HlslProgram = fxc_cull("main");
 pub(super) static CULL_PHASE2: HlslProgram = fxc_cull("main_phase2");
 pub(super) static CULL_SHADOW: HlslProgram = fxc_cull("main_shadow");
 
-pub(super) static LIGHT_CULL: HlslProgram = fxc_main(
-    "light_cull.hlsl",
-    include_str!("shaders/light_cull.hlsl"),
-    "cs_5_1",
-);
-
 pub(super) static AUTO_EXPOSURE_BUILD: HlslProgram = HlslProgram {
     entry: "build",
     ..fxc_main("auto_exposure.hlsl", AUTO_EXPOSURE_HLSL, "cs_5_1")
@@ -326,19 +295,6 @@ pub(super) static AUTO_EXPOSURE_BUILD: HlslProgram = HlslProgram {
 pub(super) static AUTO_EXPOSURE_AVERAGE: HlslProgram = HlslProgram {
     entry: "average",
     ..fxc_main("auto_exposure.hlsl", AUTO_EXPOSURE_HLSL, "cs_5_1")
-};
-
-pub(super) static HIZ_INIT_SINGLE: HlslProgram = HlslProgram {
-    entry: "init_single",
-    ..fxc_main("hiz_build.hlsl", HIZ_BUILD_HLSL, "cs_5_1")
-};
-pub(super) static HIZ_INIT_MSAA: HlslProgram = HlslProgram {
-    entry: "init_msaa",
-    ..fxc_main("hiz_build.hlsl", HIZ_BUILD_HLSL, "cs_5_1")
-};
-pub(super) static HIZ_DOWNSAMPLE: HlslProgram = HlslProgram {
-    entry: "downsample",
-    ..fxc_main("hiz_build.hlsl", HIZ_BUILD_HLSL, "cs_5_1")
 };
 
 pub(super) static FOG_VERT: HlslProgram = HlslProgram {
@@ -644,20 +600,14 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,
     &SHADOW_VERT,
-    &MAIN_BINDLESS_VERT,
-    &MAIN_BINDLESS_FRAG,
     &SHADOW_BINDLESS_VERT,
     &SKINNED_VERT,
     &SKINNED_SHADOW_VERT,
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
-    &LIGHT_CULL,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
-    &HIZ_INIT_SINGLE,
-    &HIZ_INIT_MSAA,
-    &HIZ_DOWNSAMPLE,
     &FOG_VERT,
     &FOG_FRAG,
     &FOG_FROXEL,
@@ -792,21 +742,18 @@ mod tests {
             );
             spliced += usize::from(declares);
         }
-        assert_eq!(spliced, 7, "object-data program count changed");
+        assert_eq!(spliced, 5, "object-data program count changed");
     }
 
     // The sky shell's half-extent tracks the camera far plane, so its corners
     // always fall outside it. Every vertex path that rasterises scene geometry
     // must pin sky verts to the far plane or those corners clip and the clear
     // colour shows through. Skinned and instanced paths are excluded: neither
-    // ever carries skybox geometry.
+    // ever carries skybox geometry. The bindless main pass ships from
+    // `src/shaders/main_bindless.slang` and is locked in `slang_builtins`.
     #[test]
     fn scene_vertex_shaders_pin_sky_to_the_far_plane() {
         const MUST_PIN: &[(&str, &str)] = &[
-            (
-                "main_bindless_vert.hlsl",
-                include_str!("shaders/main_bindless_vert.hlsl"),
-            ),
             (
                 "gbuffer_prepass_vert.hlsl",
                 include_str!("shaders/gbuffer_prepass_vert.hlsl"),

@@ -30,6 +30,7 @@ use crate::directx::pipeline::{
     create_composite_root_signature, create_text_pso, create_text_root_signature,
     main_input_layout, serialize_and_create_root_sig,
 };
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
 
 // Shader compilation
@@ -94,14 +95,14 @@ pub(super) fn compile_all_shaders(
 }
 
 // Compile the bindless static-pass shaders (bindless static pass). Always built
-// from the inline HLSL; the bindless path only ever drives the built-in
-// shader; worlds that supply a custom main shader keep the legacy pipeline.
+// from the single-source `.slang` pair; the bindless path only ever drives the
+// built-in shader, and worlds that supply a custom main shader either keep the
+// legacy pipeline or bring their own bucket PSO.
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx::plain(hot_reload);
-    let vs = builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
-    let ps = builtins::MAIN_BINDLESS_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::MAIN_BINDLESS_VERT.compile(hot_reload)?;
+    let ps = slang_builtins::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -601,7 +602,7 @@ fn create_main_bindless_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
         // [12] Root SRV: per-scene StructuredBuffer<GpuLight> at t1 (matches
-        // main_bindless_frag.hlsl).
+        // main_bindless.slang's DXIL_ABI block).
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -1828,10 +1829,10 @@ pub(super) fn build_composite_pipeline(
 
 #[cfg(test)]
 mod tests {
-    // The bindless main fragment shader is concatenated from probe_common.hlsl +
-    // main_bindless_frag.hlsl and compiled at runtime (FXC ps_5_1). This compiles
-    // it offline so a HLSL syntax / register error in the reflection-probe sampling
-    // fails a test instead of only surfacing as an init failure on the GPU host.
+    // The bindless main pair compiles from `src/shaders/main_bindless.slang` at
+    // runtime (slangc, DXIL sm 6.0). This compiles it offline so a syntax or
+    // register error fails a test instead of only surfacing as an init failure
+    // on a GPU host. Needs slangc; the compile reports its own absence.
     #[test]
     fn bindless_main_shaders_compile() {
         super::compile_main_bindless_shaders(false).expect("bindless main shaders must compile");

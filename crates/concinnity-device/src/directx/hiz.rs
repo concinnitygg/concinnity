@@ -8,13 +8,14 @@
 // texels are roughly the size of the projected rect, and culls the AABB when
 // its nearest projected depth is behind the rasterised occluder depth.
 //
-// Three compute kernels share one root signature (see `shaders/hiz_build.hlsl`):
+// Three compute kernels share one root signature (see `src/shaders/hiz_build.slang`):
 //
-//   * `init_single`: copy a single-sample main depth resource into HiZ mip 0.
-//   * `init_msaa`  : reduce an MSAA main depth resource into HiZ mip 0,
-//                    taking the MAX over every sample so the result is
-//                    conservative.
-//   * `downsample` : MAX-reduce 2x2 source texels into the next mip.
+//   * `hiz_init_single`: copy a single-sample main depth resource into HiZ mip 0.
+//   * `hiz_init_msaa`  : reduce an MSAA main depth resource into HiZ mip 0,
+//                        taking the MAX over every sample so the result is
+//                        conservative.
+//   * `hiz_downsample` : MAX-reduce 2x2 source texels into the next mip, both
+//                        mips bound as single-level UAV views.
 //
 // The pyramid is *not* a graph node; it runs inline on the outer "end" cmd
 // list after `execute_graph` returns (see `directx/draw/mod.rs`). Treating
@@ -25,9 +26,9 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::uav_barrier;
 
 // DWORD count of the `HizParams` cbuffer (dst_w, dst_h, src_mip, sample_count).
@@ -66,8 +67,7 @@ pub(super) struct HiZResources {
     // sample it.
     pub(super) rest_state: D3D12_RESOURCE_STATES,
 
-    // CPU descriptor handle for the SRV covering the whole mip chain. Used
-    // by the `downsample` kernel (which Loads from the prior mip) and by
+    // CPU descriptor handle for the SRV covering the whole mip chain. Used by
     // the GPU-cull kernel (4 corner Loads at a picked mip).
     pub(super) srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(super) srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -88,16 +88,18 @@ pub(super) struct HiZResources {
 type HizShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> Result<HizShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
-    let init_single = builtins::HIZ_INIT_SINGLE.compile(&ctx)?;
-    let init_msaa = builtins::HIZ_INIT_MSAA.compile(&ctx)?;
-    let downsample = builtins::HIZ_DOWNSAMPLE.compile(&ctx)?;
+    let init_single = slang_builtins::HIZ_INIT_SINGLE.compile(hot_reload)?;
+    let init_msaa = slang_builtins::HIZ_INIT_MSAA.compile(hot_reload)?;
+    let downsample = slang_builtins::HIZ_DOWNSAMPLE.compile(hot_reload)?;
     Ok((init_single, init_msaa, downsample))
 }
 
 // Root signature: 4 root constants (HizParams at b0), one SRV descriptor
-// table (depth source for init / HiZ for downsample), one UAV descriptor
-// table (destination mip).
+// table (the main-depth source the init kernels read), one 2-descriptor UAV
+// table. The init kernels bind only `u0` (the destination, mip 0); downsample
+// reads `u0` and writes `u1`, so its table base is the source mip's descriptor
+// and the destination follows it. The per-mip UAVs are contiguous in the heap,
+// which is what lets one range cover the pair.
 pub(in crate::directx) fn create_hiz_root_signature(
     device: &ID3D12Device,
 ) -> Result<ID3D12RootSignature, String> {
@@ -110,8 +112,8 @@ pub(in crate::directx) fn create_hiz_root_signature(
     };
     let uav_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // u0
+        NumDescriptors: 2,
+        BaseShaderRegister: 0, // u0..u1
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -443,9 +445,11 @@ impl crate::directx::context::DxContext {
         }
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };
 
-        // 2. Downsample chain. Each dispatch reads the prior mip via the
-        //    all-mips SRV and writes the next mip via its UAV. Finer than the
-        //    graph's one-state-per-resource granularity, so it stays inline.
+        // 2. Downsample chain. Each dispatch reads the prior mip and writes the
+        //    next, both as single-level UAV views: the table base is the source
+        //    mip's descriptor, so the destination is the one that follows it.
+        //    Finer than the graph's one-state-per-resource granularity, so it
+        //    stays inline.
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
@@ -466,7 +470,7 @@ impl crate::directx::context::DxContext {
                     0,
                 );
                 cmd.SetComputeRootDescriptorTable(1, hiz.srv_gpu);
-                cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[mip as usize]);
+                cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[(mip - 1) as usize]);
                 cmd.Dispatch(next_w.div_ceil(8), next_h.div_ceil(8), 1);
                 cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]);
             }

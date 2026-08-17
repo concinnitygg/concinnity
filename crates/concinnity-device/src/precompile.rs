@@ -51,7 +51,10 @@ pub fn precompile_builtin_shaders(out_dir: &Path, texture_count: usize) -> Repor
     #[cfg(not(backend_vk))]
     let _ = texture_count;
     #[cfg(backend_dx)]
-    crate::directx::builtins::precompile(out_dir, &mut report);
+    {
+        crate::directx::builtins::precompile(out_dir, &mut report);
+        crate::directx::slang_builtins::precompile(out_dir, &mut report);
+    }
     #[cfg(backend_vk)]
     crate::vulkan::builtins::precompile(out_dir, texture_count, &mut report);
     report

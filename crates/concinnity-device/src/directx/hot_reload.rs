@@ -1,8 +1,9 @@
 // src/directx/hot_reload.rs
 //
 // Filesystem watcher driving D3D12 shader hot-reload. A background notify
-// watcher tails `<CARGO_MANIFEST_DIR>/src/directx/shaders/` and, on any modify
-// event for a `.hlsl` file, flips a shared `Arc<AtomicBool>`. The main thread
+// watcher tails `<CARGO_MANIFEST_DIR>/src/directx/shaders/` and the
+// single-source `src/shaders/` beside it and, on any modify event for a known
+// shader source, flips a shared `Arc<AtomicBool>`. The main thread
 // polls that flag at the top of `draw_frame` and calls
 // `DxContext::reload_shaders` when it's set. Same flag is also set by the
 // `reload-shaders` debug WebSocket command, so the two trigger paths converge.
@@ -32,6 +33,12 @@ macro_rules! rebuild_if_live {
     };
 }
 
+// Shader-source extensions the watcher reacts to. The per-backend sources land
+// as `.hlsl`, the single-source programs as `.slang`; the helper rejects every
+// other event so editor swap files, README updates, and tmp files don't trigger
+// a rebuild.
+const SHADER_EXTENSIONS: &[&str] = &["hlsl", "slang"];
+
 // Live watcher handle. Held by `DxContext` purely to keep the watcher
 // thread alive; dropping it stops the watcher. The flag itself is shared
 // via [`DxContext::shader_reload_pending`].
@@ -47,7 +54,7 @@ pub(crate) struct WatcherHandle {
 }
 
 // Spawn a `notify` watcher over the D3D12 shader source directory and wire
-// it to flip `flag` on any `.hlsl` file modify event. The path is derived
+// it to flip `flag` on any known shader-source modify event. The path is derived
 // from `CARGO_MANIFEST_DIR` at compile time so the watcher works no matter
 // where the binary is launched from, but only as long as the source tree
 // still exists at that path. A shipped binary should never be hot-reload-
@@ -115,16 +122,34 @@ pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
         return None;
     }
 
-    tracing::info!("hot-reload: watching {} for .hlsl changes", dir.display());
+    // The single-source shader directory rides the same watcher: a `.slang`
+    // save rebuilds through the same flag. Best-effort, like the main dir.
+    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("shaders");
+    if slang_dir.is_dir()
+        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
+    {
+        tracing::warn!(
+            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
+            slang_dir.display()
+        );
+    }
+
+    tracing::info!(
+        "hot-reload: watching {} for {} changes",
+        dir.display(),
+        SHADER_EXTENSIONS.join("/"),
+    );
     Some(WatcherHandle {
         watcher,
         watched_dir: dir,
     })
 }
 
-// True when this notify event is a modify of a `.hlsl` file we care about.
-// Filters out unrelated paths (e.g. swap files, sub-directory churn) and the
-// non-mutating events notify emits (e.g. access/metadata).
+// True when this notify event is a modify of a known shader file. Filters out
+// unrelated paths (e.g. swap files, sub-directory churn) and the non-mutating
+// events notify emits (e.g. access/metadata).
 fn is_relevant(event: &Event) -> bool {
     if !matches!(
         event.kind,
@@ -132,10 +157,13 @@ fn is_relevant(event: &Event) -> bool {
     ) {
         return false;
     }
-    event
-        .paths
-        .iter()
-        .any(|p| p.extension().is_some_and(|e| e == "hlsl"))
+    event.paths.iter().any(|p| {
+        p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            SHADER_EXTENSIONS
+                .iter()
+                .any(|&se| se.eq_ignore_ascii_case(e))
+        })
+    })
 }
 
 impl DxContext {

@@ -135,16 +135,34 @@ pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
         return None;
     }
 
-    tracing::info!("hot-reload: watching {} for .metal changes", dir.display());
+    // The single-source shader directory rides the same watcher: a `.slang`
+    // save rebuilds through the same flag. Best-effort, like the main dir.
+    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("shaders");
+    if slang_dir.is_dir()
+        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
+    {
+        tracing::warn!(
+            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
+            slang_dir.display()
+        );
+    }
+
+    tracing::info!(
+        "hot-reload: watching {} for .metal and .slang changes",
+        dir.display()
+    );
     Some(WatcherHandle {
         watcher,
         watched_dir: dir,
     })
 }
 
-// True when this notify event is a modify of a `.metal` file we care about.
-// Filters out unrelated paths (e.g. swap files, sub-directory churn) and the
-// non-mutating events notify emits (e.g. access/metadata).
+// True when this notify event is a modify of a shader source file we care
+// about (`.metal`, or a single-source `.slang`). Filters out unrelated paths
+// (e.g. swap files, sub-directory churn) and the non-mutating events notify
+// emits (e.g. access/metadata).
 fn is_relevant(event: &Event) -> bool {
     if !matches!(
         event.kind,
@@ -155,7 +173,7 @@ fn is_relevant(event: &Event) -> bool {
     event
         .paths
         .iter()
-        .any(|p| p.extension().is_some_and(|e| e == "metal"))
+        .any(|p| p.extension().is_some_and(|e| e == "metal" || e == "slang"))
 }
 
 // Static-vertex-layout descriptor used by the velocity / SSAO / SSR pre-pass
@@ -247,7 +265,7 @@ impl MtlContext {
         );
         // Hi-Z build kernels are engine built-ins (independent of the world
         // shader); rebuild them whenever a Hi-Z resource exists so a saved
-        // edit to `hiz_build.metal` is picked up. The texture + mip views are
+        // edit to `hiz_build.slang` is picked up. The texture + mip views are
         // kept: only the pipelines swap.
         let hiz = rebuild_if_live!(self.cull.hiz.is_some(), build_hiz_pipelines(device, hr));
         let auto_ev = rebuild_if_live!(
@@ -581,6 +599,23 @@ impl MtlContext {
             None
         };
 
+        // The engine sampler block rides the fresh fragment's encoder; built
+        // here (still before the swap) so a failure leaves the live state
+        // untouched.
+        let new_sampler_args = match new_main
+            .as_ref()
+            .and_then(|m| m.bindless_sampler_arg_encoder.as_ref())
+        {
+            Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
+                &self.device,
+                enc,
+                &self.sampler,
+                &self.shadow_sampler,
+                &self.cube_sampler,
+            )?),
+            None => None,
+        };
+
         // All builds succeeded: swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
@@ -593,6 +628,7 @@ impl MtlContext {
                 cull_pipeline_phase2,
                 cull_icb2_arg_encoder,
                 bindless_tex_arg_encoder,
+                bindless_sampler_arg_encoder: _,
             } = new_main;
             self.pipeline_state = Some(pipeline_state);
             // Swap the bindless flag + dependent state. The flag is the
@@ -611,6 +647,7 @@ impl MtlContext {
             self.cull.pipeline_phase2 = cull_pipeline_phase2;
             self.cull.icb_2_arg_encoder = cull_icb2_arg_encoder;
             self.bindless_tex_arg_encoder = bindless_tex_arg_encoder;
+            self.bindless_sampler_args = new_sampler_args;
             // Force a fresh ICB on the next frame so its argument-buffer encoding
             // re-binds to the new encoder. Matches the `cull` swap in
             // `reload_shaders`; the phase-2 ICB + status buffer rebuild alongside.

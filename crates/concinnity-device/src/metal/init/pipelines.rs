@@ -18,7 +18,9 @@ use objc2_metal::{
 };
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT};
+use crate::metal::context::{
+    BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT,
+};
 use crate::metal::cull::build_cull_pipeline;
 use crate::metal::pipeline::{load_library, ns_str, shader_library, stage_library};
 
@@ -34,6 +36,10 @@ pub(crate) struct MainPipelineBundle {
     pub cull_pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub cull_icb2_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // Encoder for the engine sampler block at buffer(10). `Some` only for the
+    // engine's single-source program: world-authored bindless fragments keep
+    // their own inline samplers and declare no sampler block.
+    pub bindless_sampler_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
 }
 
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
@@ -96,34 +102,52 @@ pub(crate) fn build_main_pipeline(
     frag_lib_bytes: &[u8],
     hot_reload: bool,
 ) -> Result<MainPipelineBundle, String> {
-    let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
-        .map_err(|e| format!("failed to load vertex metallib: {}", e))?;
-    let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
-        .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
+    // Fully engine-supplied stages ship from the single-source Slang program,
+    // which is always bindless (the engine has no per-draw static path of its
+    // own any more). A world-authored stage keeps the legacy detection: a
+    // fragment exposing `fragment_main_bindless` picks the GPU-driven path,
+    // anything else the per-draw one. A world vertex paired with the engine
+    // fragment stays on the per-draw pairing: the Slang fragment's varying
+    // names cannot interface-match a hand-written vertex stage.
+    let engine_stages = vert_lib_bytes.is_empty() && frag_lib_bytes.is_empty();
 
-    let vert_fn = vert_library
-        .newFunctionWithName(&ns_str("vertex_main"))
-        .ok_or("vertex_main not found in metallib")?;
-
-    let frag_fn = frag_library
-        .newFunctionWithName(&ns_str("fragment_main"))
-        .ok_or("fragment_main not found in metallib")?;
-
-    // GPU-driven static pass: when the world's fragment shader provides a
-    // `fragment_main_bindless` entry point (main.metal does), the static
-    // main pass reads each object's model matrix, material, and texture
-    // indices from one GpuObjectData buffer and a bindless texture pool --
-    // every static draw call then carries no per-draw state. Shaders
-    // without it (custom shaders) fall back to the legacy
-    // per-draw binding path in `draw_frame`.
-    let bindless_frag_fn = frag_library.newFunctionWithName(&ns_str("fragment_main_bindless"));
-    let bindless = bindless_frag_fn.is_some();
-    let main_frag_fn = bindless_frag_fn.as_deref().unwrap_or(&*frag_fn);
+    let (vert_fn, main_frag_fn, bindless, engine_single_source) = if engine_stages {
+        let vert_library = super::super::slang_shaders::MAIN_BINDLESS_VERT
+            .library(device, hot_reload)
+            .map_err(|e| format!("failed to load engine vertex library: {e}"))?;
+        let frag_library = super::super::slang_shaders::MAIN_BINDLESS_FRAG
+            .library(device, hot_reload)
+            .map_err(|e| format!("failed to load engine fragment library: {e}"))?;
+        let vert_fn = vert_library
+            .newFunctionWithName(&ns_str("vertex_main_bindless"))
+            .ok_or("vertex_main_bindless not found in engine library")?;
+        let frag_fn = frag_library
+            .newFunctionWithName(&ns_str("fragment_main_bindless"))
+            .ok_or("fragment_main_bindless not found in engine library")?;
+        (vert_fn, frag_fn, true, true)
+    } else {
+        let vert_library = stage_library(device, hot_reload, vert_lib_bytes)
+            .map_err(|e| format!("failed to load vertex metallib: {}", e))?;
+        let frag_library = stage_library(device, hot_reload, frag_lib_bytes)
+            .map_err(|e| format!("failed to load fragment metallib: {}", e))?;
+        let vert_fn = vert_library
+            .newFunctionWithName(&ns_str("vertex_main"))
+            .ok_or("vertex_main not found in metallib")?;
+        let bindless_frag_fn = frag_library.newFunctionWithName(&ns_str("fragment_main_bindless"));
+        let bindless = bindless_frag_fn.is_some();
+        let frag_fn = match bindless_frag_fn {
+            Some(f) => f,
+            None => frag_library
+                .newFunctionWithName(&ns_str("fragment_main"))
+                .ok_or("fragment_main not found in metallib")?,
+        };
+        (vert_fn, frag_fn, bindless, false)
+    };
 
     let pipeline_desc = MTLRenderPipelineDescriptor::new();
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
     pipeline_desc.setVertexFunction(Some(&vert_fn));
-    pipeline_desc.setFragmentFunction(Some(main_frag_fn));
+    pipeline_desc.setFragmentFunction(Some(&main_frag_fn));
     // Off-screen HDR pass: RGBA16Float colour + 4x MSAA. Output is linear
     // light; ACES tonemap + gamma + FXAA run in the composite pass.
     pipeline_desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
@@ -167,6 +191,20 @@ pub(crate) fn build_main_pipeline(
         None
     };
 
+    // The engine's single-source fragment reaches its samplers through the
+    // block at buffer(10) (indirect-command execution cannot see encoder-bound
+    // sampler state); world-authored fragments keep inline samplers instead.
+    let bindless_sampler_arg_encoder = if engine_single_source {
+        // SAFETY: BINDLESS_SAMPLER_ARG_BUFFER_INDEX is the static buffer index
+        // the engine fragment declares its sampler block at (locked by the
+        // build script's ABI assertion).
+        Some(unsafe {
+            main_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX)
+        })
+    } else {
+        None
+    };
+
     Ok(MainPipelineBundle {
         pipeline_state,
         bindless,
@@ -175,7 +213,36 @@ pub(crate) fn build_main_pipeline(
         cull_pipeline_phase2,
         cull_icb2_arg_encoder,
         bindless_tex_arg_encoder,
+        bindless_sampler_arg_encoder,
     })
+}
+
+// Write the engine sampler block once: the pool sampler (trilinear +
+// anisotropic + repeat, the same object the legacy path binds), the shadow
+// compare sampler, and the cube sampler. Member order mirrors EngineSamplers
+// in `src/shaders/main_bindless.slang`. Samplers never stream, so unlike the
+// texture argument buffer this is written a single time at init.
+pub(crate) fn build_bindless_sampler_args(
+    device: &ProtocolObject<dyn MTLDevice>,
+    encoder: &ProtocolObject<dyn MTLArgumentEncoder>,
+    tex_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    shadow_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    cube_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
+    use objc2_metal::MTLResourceOptions;
+    let len = encoder.encodedLength().max(16);
+    let buf = device
+        .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+        .ok_or("failed to allocate sampler argument buffer")?;
+    // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and the
+    // indices 0..2 are the EngineSamplers member ids in declaration order.
+    unsafe {
+        encoder.setArgumentBuffer_offset(Some(&buf), 0);
+        encoder.setSamplerState_atIndex(Some(tex_sampler), 0);
+        encoder.setSamplerState_atIndex(Some(shadow_sampler), 1);
+        encoder.setSamplerState_atIndex(Some(cube_sampler), 2);
+    }
+    Ok(buf)
 }
 
 // The main-pass pipelines of the material-referenced world shaders, indexed by

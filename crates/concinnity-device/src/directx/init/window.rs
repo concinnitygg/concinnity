@@ -126,6 +126,21 @@ pub(super) fn setup(
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false);
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false);
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false);
+            // A pipeline-library miss is how `pso_library` asks whether the
+            // blob already holds a PSO, and it builds the PSO when the answer
+            // is no. Every cold run would otherwise warn once per pipeline
+            // about a branch the engine took on purpose; `pipeline_cache`
+            // reports the library's real state in one line instead.
+            let mut denied = [D3D12_MESSAGE_ID_LOADPIPELINE_NAMENOTFOUND];
+            let filter = D3D12_INFO_QUEUE_FILTER {
+                DenyList: D3D12_INFO_QUEUE_FILTER_DESC {
+                    NumIDs: denied.len() as u32,
+                    pIDList: denied.as_mut_ptr(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let _ = iq.AddStorageFilterEntries(&filter);
         });
         if iq.is_none() {
             tracing::warn!("d3d12 info queue: unavailable; layer messages will not be logged");

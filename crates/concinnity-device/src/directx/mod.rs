@@ -37,6 +37,7 @@ mod raytrace;
 mod resize;
 mod resources;
 mod screenshot;
+pub(crate) mod slang_builtins;
 mod texture;
 mod transient_pool;
 mod upload_ring;

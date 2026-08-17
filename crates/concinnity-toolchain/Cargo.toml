@@ -17,5 +17,8 @@ name = "concinnity_toolchain"
 path = "src/lib.rs"
 doctest = false
 
+[dependencies]
+concinnity-slang = { path = "../concinnity-slang" }
+
 [dev-dependencies]
 tempfile = "3.25.0"

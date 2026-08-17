@@ -32,7 +32,8 @@ impl ShaderToolchain for DirectXToolchain {
 
 fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     use windows::Win32::Graphics::Direct3D::Fxc::{
-        D3DCOMPILE_DEBUG, D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR,
+        D3DCOMPILE_DEBUG, D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES,
+        D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR,
         D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompile,
     };
 
@@ -52,12 +53,20 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
     // silently ignores `#pragma pack_matrix(column_major)` for SRV-resident
     // matrices and defaults them to row_major; without this flag a custom
     // shader that reads e.g. an instance-matrix StructuredBuffer would see
-    // every transform transposed. Mirrors the same flag in
-    // `concinnity_device::directx::pipeline::compile_hlsl`.
+    // every transform transposed.
+    //
+    // Unbounded descriptor tables are enabled for the same reason: a world
+    // shader written against the engine's bindless layout declares the texture
+    // pool as `Texture2D tex_pool[] : register(t0, space1)`, which FXC rejects
+    // by default. Both flags mirror
+    // `concinnity_device::directx::pipeline::compile_hlsl`, so a stage the
+    // engine can compile is one the cook can compile.
+    let common =
+        D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES;
     let flags = if cfg!(debug_assertions) {
-        D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION | D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
+        common | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION
     } else {
-        D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR
+        common | D3DCOMPILE_OPTIMIZATION_LEVEL3
     };
 
     let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
@@ -147,6 +156,21 @@ mod tests {
         let src = "float4 main() : SV_TARGET { return float4(0,0,0,1); }";
         let bytes = compile_hlsl(src, &args("good_stage", "fragment")).expect("valid HLSL");
         assert!(!bytes.is_empty(), "bytecode is never empty");
+    }
+
+    // A world shader written against the engine's bindless layout declares the
+    // texture pool as an unbounded array. FXC rejects that unless the compile
+    // opts in, so without the flag this stage fails to cook even though the
+    // engine compiles the identical declaration in its own shaders.
+    #[test]
+    fn an_unbounded_bindless_pool_compiles() {
+        let src = "Texture2D pool[] : register(t0, space1);\n\
+                   SamplerState s : register(s1);\n\
+                   float4 main(float2 uv : TEXCOORD0) : SV_TARGET {\n\
+                       return pool[NonUniformResourceIndex(0)].Sample(s, uv);\n\
+                   }";
+        let bytes = compile_hlsl(src, &args("pool_stage", "fragment")).expect("unbounded pool");
+        assert!(!bytes.is_empty());
     }
 
     // A vertex stage selects the vertex profile, not the pixel one.

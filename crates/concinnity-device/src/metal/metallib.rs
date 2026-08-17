@@ -34,6 +34,24 @@ mod tests {
         }
     }
 
+    // Every registered single-source variant must be precompiled too, unless
+    // the build host lacked slangc (then all of them miss together and the
+    // runtime compile path takes over, warned at build time).
+    #[test]
+    fn slang_precompiled_coverage_is_all_or_nothing() {
+        if embedded_metallib("post.metal").is_none() {
+            return;
+        }
+        let present: Vec<bool> = crate::metal::slang_shaders::ALL
+            .iter()
+            .map(|lib| embedded_metallib(lib.name).is_some_and(|b| !b.is_empty()))
+            .collect();
+        assert!(
+            present.iter().all(|&p| p) || present.iter().all(|&p| !p),
+            "partial slang metallib coverage: {present:?}"
+        );
+    }
+
     #[test]
     fn unregistered_names_return_none() {
         assert!(embedded_metallib("nope.metal").is_none());

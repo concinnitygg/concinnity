@@ -485,6 +485,16 @@ impl MtlContext {
                 0,
                 BINDLESS_TEXTURE_ARG_BUFFER_INDEX,
             );
+            // The engine sampler block (single-source main program only;
+            // world-authored fragments use inline samplers and ignore the
+            // slot).
+            if let Some(sampler_args) = &self.bindless_sampler_args {
+                enc.setFragmentBuffer_offset_atIndex(
+                    Some(sampler_args),
+                    0,
+                    crate::metal::context::BINDLESS_SAMPLER_ARG_BUFFER_INDEX,
+                );
+            }
         }
         self.use_bindless_textures(enc);
 

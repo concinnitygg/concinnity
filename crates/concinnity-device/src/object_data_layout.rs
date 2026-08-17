@@ -4,6 +4,9 @@
 // once per shading language (vulkan/shaders/object_common.glsl,
 // directx/shaders/object_common.hlsl, metal/shaders/object_common.msl) and each
 // fragment is spliced into its backend's passes at an `{OBJECT_DATA}` marker.
+// The single-source bindless main pass carries a fourth declaration inside
+// `shaders/main_bindless.slang`, which every backend now strides the same
+// buffer through, so it is checked alongside them.
 //
 // Only one backend compiles per build, so the fragments are checked here as
 // plain text rather than through any backend module: a macOS build still catches
@@ -60,6 +63,12 @@ const FRAGMENTS: &[Fragment] = &[
         source: include_str!("metal/shaders/object_common.msl"),
         mat4: "float4x4",
         vec3: "packed_float3",
+    },
+    Fragment {
+        label: "main_bindless.slang",
+        source: include_str!("shaders/main_bindless.slang"),
+        mat4: "float4x4",
+        vec3: "float3",
     },
 ];
 
