@@ -515,20 +515,37 @@ impl VkContext {
         // frame's submit) before this face's cull (rewrites the shared indirect
         // buffer) and resolve (rewrites the shared colour). Intra-queue, so the
         // queue's submission order preserves it across the separate submits.
+        //
+        // The attachment writes are here for a second reason: all six faces share
+        // one framebuffer, and `main_render_pass` declares `initial_layout =
+        // UNDEFINED`, so this face's `vkCmdBeginRenderPass` performs a layout
+        // transition that write-after-writes the previous face's storeOp. The
+        // render pass's own external dependency declares an empty src access mask,
+        // an execution dependency with no availability operation, so nothing else
+        // covers it.
         if face > 0 {
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(
-                    vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::INDIRECT_COMMAND_READ,
+                    vk::AccessFlags::TRANSFER_READ
+                        | vk::AccessFlags::INDIRECT_COMMAND_READ
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 )
                 .dst_access_mask(
-                    vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    vk::AccessFlags::SHADER_WRITE
+                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::DRAW_INDIRECT,
+                    vk::PipelineStageFlags::TRANSFER
+                        | vk::PipelineStageFlags::DRAW_INDIRECT
+                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                     vk::PipelineStageFlags::COMPUTE_SHADER
-                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
                     vk::DependencyFlags::empty(),
                     std::slice::from_ref(&barrier),
                     &[],
