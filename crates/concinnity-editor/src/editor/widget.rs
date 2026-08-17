@@ -292,6 +292,26 @@ pub(crate) fn hide_field(world: &mut World, id: AssetId) {
     }
 }
 
+// Hide every listed element (the F1-hidden pass, or when a panel is toggled
+// off). Fields are blurred as well, so a hidden field cannot keep keyboard
+// focus.
+pub(crate) fn hide_all(
+    world: &mut World,
+    sprites: &[AssetId],
+    labels: &[AssetId],
+    fields: &[AssetId],
+) {
+    for &id in sprites {
+        set_sprite_visible(world, id, false);
+    }
+    for &id in labels {
+        set_label_visible(world, id, false);
+    }
+    for &id in fields {
+        hide_field(world, id);
+    }
+}
+
 // Set a field's text + caret and give it focus (a mode transition; the hook
 // calls this so the field is ready to type into immediately).
 pub(crate) fn focus_field_with(world: &mut World, id: AssetId, content: &str) {

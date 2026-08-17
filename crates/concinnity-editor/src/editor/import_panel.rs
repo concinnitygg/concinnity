@@ -435,13 +435,7 @@ fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2], w: f32, r
 // Hide every panel element, blurring the path field so a hidden field cannot
 // keep keyboard focus.
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
-    widget::hide_field(world, PATH_INPUT);
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
 }
 
 // Every panel sprite id, in draw (insertion) order: chrome, then the list

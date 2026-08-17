@@ -1145,15 +1145,7 @@ fn place_center_label(
 // Hide every panel element, including the typed fields (and blur them so a
 // hidden field cannot keep keyboard focus).
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
-    for id in all_field_ids() {
-        widget::hide_field(world, id);
-    }
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
 }
 
 // Every panel sprite id. THE ORDER OF THIS VEC IS THE DRAW ORDER (inject.rs

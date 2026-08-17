@@ -331,12 +331,7 @@ fn place_text(
 }
 
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 
 // Draw order: the panel surface, then each row's track, its used fill, and the

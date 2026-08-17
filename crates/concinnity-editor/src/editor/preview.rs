@@ -15,7 +15,7 @@
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};
 use super::snap::SnapSettings;
-use super::widget::point_in;
+use super::widget::{self, point_in};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -136,7 +136,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
 
 // Hide every panel element (the F1-hidden pass).
 pub(crate) fn hide_all(world: &mut World) {
-    list_panel::hide_all(world, &all_sprite_ids(), &all_label_ids());
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 
 // Every panel sprite / label id, for injection and the hidden pass.

@@ -7,11 +7,11 @@
 // chip cycles the kind filter. Pure geometry + draw here; the item assembly
 // and click handling live in `hook/content_edit.rs`.
 
+use super::billboards;
 use super::registry::{self, PanelKey};
 use super::theme;
 use super::thumbs::{self, Thumb};
 use super::widget::{self, point_in};
-use super::{billboards, list_panel};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 
@@ -293,8 +293,7 @@ pub(crate) fn all_field_ids() -> Vec<(AssetId, &'static str)> {
 }
 
 pub(crate) fn hide_all(world: &mut World) {
-    list_panel::hide_all(world, &all_sprite_ids(), &all_label_ids());
-    widget::hide_field(world, SEARCH_INPUT);
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[SEARCH_INPUT]);
 }
 
 // Whether the wheel over `(mx, my)` belongs to the grid body.

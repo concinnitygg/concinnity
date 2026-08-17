@@ -278,12 +278,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2],
 
 // Hide every panel element (the closed / F1-hidden pass).
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 
 // Every panel sprite id, for injection and the hidden pass. THE ORDER IS THE DRAW

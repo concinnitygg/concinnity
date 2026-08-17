@@ -460,12 +460,7 @@ fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
 }
 
 pub(crate) fn hide_all(world: &mut World) {
-    for id in all_sprite_ids() {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 
 pub(crate) fn all_sprite_ids() -> Vec<AssetId> {

@@ -257,16 +257,6 @@ pub(crate) fn all_label_ids(base: u32, rows: usize, values: bool) -> Vec<AssetId
     ids
 }
 
-// Hide every listed element (the F1-hidden pass, or when a panel is toggled off).
-pub(crate) fn hide_all(world: &mut World, sprite_ids: &[AssetId], label_ids: &[AssetId]) {
-    for &id in sprite_ids {
-        widget::set_sprite_visible(world, id, false);
-    }
-    for &id in label_ids {
-        widget::set_label_visible(world, id, false);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,10 +501,11 @@ mod tests {
             &[Row::checkbox("a", true), Row::checkbox("b", false)],
             [0.0, 0.0],
         );
-        hide_all(
+        widget::hide_all(
             &mut world,
             &all_sprite_ids(BASE, 2, true),
             &all_label_ids(BASE, 2, true),
+            &[],
         );
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

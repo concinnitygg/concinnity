@@ -80,7 +80,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], m
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
 pub(crate) fn hide_all(world: &mut World) {
-    list_panel::hide_all(world, &all_sprite_ids(), &all_label_ids());
+    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
 }
 
 // Every panel sprite / label id, for injection and the hidden pass.
