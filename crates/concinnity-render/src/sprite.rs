@@ -46,15 +46,38 @@ pub fn build_sprite_calls(
     clips: &HashMap<AssetId, [f32; 4]>,
     layers: &HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
+    let mut calls = Vec::with_capacity(sprites.len());
+    build_sprite_calls_into(
+        &mut calls,
+        sprites,
+        default_atlas_slot,
+        texture_slots,
+        viewport,
+        clips,
+        layers,
+    );
+    calls
+}
+
+// `build_sprite_calls`, appending onto an existing draw list so a caller
+// assembling a frame from several element groups reuses one buffer.
+pub fn build_sprite_calls_into(
+    out: &mut Vec<TextDrawCall>,
+    sprites: &[&Sprite],
+    default_atlas_slot: Option<usize>,
+    texture_slots: &HashMap<TextureHandle, usize>,
+    viewport: [f32; 2],
+    clips: &HashMap<AssetId, [f32; 4]>,
+    layers: &HashMap<AssetId, i32>,
+) {
     let fill_slot = match default_atlas_slot {
         Some(s) => s,
-        None => return Vec::new(),
+        None => return,
     };
     let overlay = OverlayTransform::from_viewport(viewport);
     let cover = OverlayTransform::cover_from_viewport(viewport);
     let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
     let [vw, vh] = viewport;
-    let mut calls = Vec::new();
     for s in sprites {
         if !s.visible {
             continue;
@@ -152,7 +175,7 @@ pub fn build_sprite_calls(
         } else {
             rect_geometry(x0, y0, x1, y1, radius, a, v)
         };
-        calls.push(TextDrawCall {
+        out.push(TextDrawCall {
             vertices,
             indices,
             atlas_slot: texture_slot.unwrap_or(fill_slot),
@@ -162,7 +185,6 @@ pub fn build_sprite_calls(
             layer: layers.get(&s.asset_id).copied().unwrap_or(0),
         });
     }
-    calls
 }
 
 // A rectangle's geometry: a feathered rounded rect when the radius is set,

@@ -9,6 +9,7 @@ use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::OverlayTransform;
+use std::borrow::Cow;
 
 // Per-font data kept in memory after init() so step() can build text quads each frame.
 pub struct LoadedFont {
@@ -86,65 +87,126 @@ fn measure_text_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
 // `label.scale`, which gives the same breaks as measuring in window pixels: a
 // screen-owned label scales its advances and its wrap width by the same overlay
 // factor. A centered label has no container (it is fitted to the viewport), so
-// it is left alone.
-fn laid_out(label: &TextLabel, font: &LoadedFont) -> String {
+// it is left alone. Borrows the authored content whenever no line breaks or
+// truncates, so a fitting label allocates nothing.
+fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> Cow<'a, str> {
     if label.centered || (label.wrap_width <= 0.0 && label.max_lines == 0) {
-        return label.content.clone();
+        return Cow::Borrowed(&label.content);
     }
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<&str> = Vec::new();
+    let mut authored_lines = 0usize;
     for authored in label.content.split('\n') {
+        authored_lines += 1;
         if label.wrap_width > 0.0 {
             wrap_line(authored, font, label.scale, label.wrap_width, &mut lines);
         } else {
-            lines.push(authored.to_string());
+            lines.push(authored);
         }
     }
     let max = label.max_lines as usize;
-    if max > 0 && lines.len() > max {
+    let truncated = max > 0 && lines.len() > max;
+    if truncated {
         lines.truncate(max);
-        if let Some(last) = lines.last_mut() {
-            *last = with_ellipsis(last, font, label.scale, label.wrap_width);
-        }
     }
-    lines.join("\n")
+    if !truncated && lines.len() == authored_lines {
+        return Cow::Borrowed(&label.content);
+    }
+    let ellipsized = truncated
+        .then(|| lines.pop())
+        .flatten()
+        .map(|last| with_ellipsis(last, font, label.scale, label.wrap_width));
+    let mut out = String::with_capacity(label.content.len() + 4);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    if let Some(last) = ellipsized {
+        if !lines.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&last);
+    }
+    Cow::Owned(out)
 }
 
-// Greedily pack `line`'s words into `out`, breaking at spaces. A word too wide
-// to fit a line of its own is split mid-word, since leaving it whole would put
-// it back outside the container wrapping exists to respect.
-fn wrap_line(line: &str, font: &LoadedFont, scale: f32, width: f32, out: &mut Vec<String>) {
-    let mut current = String::new();
+// Greedily pack `line`'s words into `out` as subslices of `line`, breaking at
+// spaces. A word too wide to fit a line of its own is split mid-word, since
+// leaving it whole would put it back outside the container wrapping exists to
+// respect. Widths accumulate one glyph advance at a time in authored order,
+// matching a from-scratch measure of the same text.
+fn wrap_line<'a>(line: &'a str, font: &LoadedFont, scale: f32, width: f32, out: &mut Vec<&'a str>) {
+    let advance = |ch: char| {
+        font.metrics
+            .get(&(ch as u32))
+            .map(|m| m.advance_px * scale)
+            .unwrap_or_else(|| {
+                font.metrics
+                    .get(&(b' ' as u32))
+                    .map(|m| m.advance_px * scale)
+                    .unwrap_or(0.0)
+            })
+    };
+    // The line under construction, `line[start..end]`, and its measured width.
+    let (mut start, mut end) = (0usize, 0usize);
+    let mut current_width = 0.0_f32;
+    // Byte offset of the next word (words are separated by single spaces).
+    let mut pos = 0usize;
     for word in line.split(' ') {
-        let candidate = if current.is_empty() {
-            word.to_string()
+        let word_end = pos + word.len();
+        // The candidate: the word appended to the current line (joined by the
+        // space between them), or the word alone when the line is empty.
+        let (cand_start, cand_width) = if end > start {
+            let mut w = current_width;
+            for ch in line[end..word_end].chars() {
+                w += advance(ch);
+            }
+            (start, w)
         } else {
-            format!("{current} {word}")
+            let mut w = 0.0_f32;
+            for ch in word.chars() {
+                w += advance(ch);
+            }
+            (pos, w)
         };
-        if measure_text_width(&candidate, font, scale) <= width {
-            current = candidate;
+        if cand_width <= width {
+            (start, end, current_width) = (cand_start, word_end, cand_width);
+            pos = word_end + 1;
             continue;
         }
-        if !current.is_empty() {
-            out.push(std::mem::take(&mut current));
+        if end > start {
+            out.push(&line[start..end]);
         }
         // The word now starts a line of its own; split it if even that overflows.
-        current = word.to_string();
-        while measure_text_width(&current, font, scale) > width && current.chars().count() > 1 {
-            let mut head = String::new();
-            for ch in current.chars() {
-                let mut next = head.clone();
-                next.push(ch);
-                if !head.is_empty() && measure_text_width(&next, font, scale) > width {
+        (start, end) = (pos, word_end);
+        loop {
+            let (mut w, mut chars) = (0.0_f32, 0usize);
+            for ch in line[start..end].chars() {
+                w += advance(ch);
+                chars += 1;
+            }
+            if w <= width || chars <= 1 {
+                current_width = w;
+                break;
+            }
+            // The longest head (at least one char) that fits the width.
+            let mut acc = 0.0_f32;
+            let mut head_end = start;
+            for (i, ch) in line[start..end].char_indices() {
+                let next = acc + advance(ch);
+                if head_end > start && next > width {
                     break;
                 }
-                head = next;
+                acc = next;
+                head_end = start + i + ch.len_utf8();
             }
-            let rest: String = current.chars().skip(head.chars().count()).collect();
-            out.push(head);
-            current = rest;
+            out.push(&line[start..head_end]);
+            start = head_end;
         }
+        pos = word_end + 1;
     }
-    out.push(current);
+    out.push(&line[start..end]);
 }
 
 // `line` shortened until it and a trailing ellipsis fit `width`. A zero width
@@ -246,6 +308,30 @@ pub fn build_text_calls(
     clips: &std::collections::HashMap<AssetId, [f32; 4]>,
     layers: &std::collections::HashMap<AssetId, i32>,
 ) -> Vec<TextDrawCall> {
+    let mut calls = Vec::with_capacity(labels.len());
+    build_text_calls_into(
+        &mut calls,
+        labels,
+        loaded_fonts,
+        win_w,
+        win_h,
+        clips,
+        layers,
+    );
+    calls
+}
+
+// `build_text_calls`, appending onto an existing draw list so a caller
+// assembling a frame from several element groups reuses one buffer.
+pub fn build_text_calls_into(
+    out: &mut Vec<TextDrawCall>,
+    labels: &[&TextLabel],
+    loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
+    win_w: f32,
+    win_h: f32,
+    clips: &std::collections::HashMap<AssetId, [f32; 4]>,
+    layers: &std::collections::HashMap<AssetId, i32>,
+) {
     // Screen-owned labels are overlay UI authored in the reference canvas; map
     // them to the live window so menus scale with the window. HUD labels
     // (view == None) keep literal window pixels.
@@ -253,7 +339,6 @@ pub fn build_text_calls(
     // Alternate mappings a view-owned label may opt into via `fit`.
     let bottom = OverlayTransform::bottom_anchored_from_viewport([win_w, win_h]);
     let cover = OverlayTransform::cover_from_viewport([win_w, win_h]);
-    let mut calls = Vec::new();
     for label in labels {
         if !label.visible {
             continue;
@@ -262,12 +347,15 @@ pub fn build_text_calls(
             Some(f) => f,
             None => continue,
         };
-        let mut vertices: Vec<TextVertex> = Vec::new();
-        let mut indices: Vec<u16> = Vec::new();
         // Everything below reads the laid-out content, not the authored string,
         // so alignment, the background box, and the glyph run agree on the lines
         // that are actually drawn.
         let content = laid_out(label, font);
+        // One quad per glyph plus the optional background box; the byte length
+        // upper-bounds the glyph count.
+        let quads = content.len() + 1;
+        let mut vertices: Vec<TextVertex> = Vec::with_capacity(4 * quads);
+        let mut indices: Vec<u16> = Vec::with_capacity(6 * quads);
 
         // For centered labels, auto-scale to fill ~85% of the viewport while
         // preserving the text's aspect ratio. The label's scale field is used
@@ -429,7 +517,7 @@ pub fn build_text_calls(
             x_cursor += m.advance_px * scale;
         }
         if !vertices.is_empty() {
-            calls.push(TextDrawCall {
+            out.push(TextDrawCall {
                 vertices,
                 indices,
                 atlas_slot: font.atlas_slot,
@@ -440,7 +528,6 @@ pub fn build_text_calls(
             });
         }
     }
-    calls
 }
 
 // Map a reference-space clip band `[x, y, width, height]` to a window-space

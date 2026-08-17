@@ -114,6 +114,34 @@ struct PanelState {
     thumb_h: f32,
 }
 
+// One sprite's accumulated scroll-layout write; only the set fields apply.
+#[derive(Debug, Default, Clone, Copy)]
+struct SpriteUpdate {
+    y: Option<f32>,
+    height: Option<f32>,
+    visible: Option<bool>,
+}
+
+// One label's accumulated scroll-layout write; only the set fields apply.
+#[derive(Debug, Default)]
+struct LabelUpdate {
+    y: Option<f32>,
+    visible: Option<bool>,
+    content: Option<String>,
+}
+
+// Scratch buffers for the per-frame scroll-layout solve/apply, kept on the
+// system so the pass reuses their capacity instead of reallocating each frame.
+#[derive(Debug, Default)]
+struct LayoutScratch {
+    sprites: HashMap<AssetId, SpriteUpdate>,
+    labels: HashMap<AssetId, LabelUpdate>,
+    specs: Vec<RowSpec>,
+    collapsed: Vec<bool>,
+    // Per-panel `(active, row placements)` for the region reflow.
+    solved_rows: Vec<(bool, Vec<scroll_layout::RowPlacement>)>,
+}
+
 // A settings dropdown whose floating option list is open. Owned by
 // UiInputSystem: while set, the list overlays the menu and consumes the frame's
 // input (a pick sends a SetIndex command; an outside click or Escape dismisses
@@ -235,6 +263,14 @@ pub struct UiInputSystem {
     // Last frame's cursor position, to detect the mouse movement that
     // dismisses focus.
     last_cursor: Option<(f32, f32)>,
+    // Ids of the labels follow-label regions track, gathered at init so the
+    // hit-test pass resolves them in one label query instead of one full scan
+    // per region.
+    follow_label_ids: std::collections::HashSet<AssetId>,
+    // Scratch: each followed label's (y, is-empty) this frame.
+    follow_labels: HashMap<AssetId, (f32, bool)>,
+    // Scratch buffers for the scroll-layout solve/apply.
+    layout: LayoutScratch,
 }
 
 impl UiInputSystem {
@@ -257,6 +293,9 @@ impl UiInputSystem {
             disabled_rows_cache: std::collections::HashSet::new(),
             focus: None,
             last_cursor: None,
+            follow_label_ids: std::collections::HashSet::new(),
+            follow_labels: HashMap::new(),
+            layout: LayoutScratch::default(),
         }
     }
 }
@@ -353,6 +392,11 @@ impl System for UiInputSystem {
                 fit,
             });
         }
+        self.follow_label_ids = self
+            .regions
+            .iter()
+            .filter_map(|e| e.follow.map(|(id, _)| id))
+            .collect();
 
         // Build screen → UI-element maps by reading each Sprite/TextLabel's
         // resolved `screen` field (the build pipeline writes it from the
@@ -722,6 +766,20 @@ impl System for UiInputSystem {
         let confirm_fallback = confirm && focus_index.is_none();
         let mut confirm_used = false;
 
+        // Resolve each followed label's (y, is-empty) in one query pass, so the
+        // loop below reads a map instead of scanning every TextLabel per region.
+        self.follow_labels.clear();
+        if !self.follow_label_ids.is_empty() {
+            for l in ctx.query::<TextLabel>() {
+                if self.follow_label_ids.contains(&l.asset_id) {
+                    self.follow_labels
+                        .entry(l.asset_id)
+                        .or_insert((l.y, l.content.is_empty()));
+                }
+            }
+        }
+        let follow_labels = &self.follow_labels;
+
         let disabled_rows = &self.disabled_rows_cache;
         for (i, entry) in self.regions.iter_mut().enumerate() {
             // A region is inert this frame when it cannot hover or fire:
@@ -745,11 +803,7 @@ impl System for UiInputSystem {
             // A follow-label region tracks its label's y and goes inert while
             // the label is empty (a hidden menu entry catches no clicks).
             let follow_inert = if let Some((label_id, offset)) = entry.follow {
-                match ctx
-                    .query::<TextLabel>()
-                    .find(|l| l.asset_id == label_id)
-                    .map(|l| (l.y, l.content.is_empty()))
-                {
+                match follow_labels.get(&label_id).copied() {
                     Some((ly, empty)) => {
                         entry.region.y = ly + offset;
                         empty
@@ -1526,27 +1580,29 @@ impl UiInputSystem {
         }
         let active = self.screens.top_capture();
 
-        // Accumulate component writes, then apply in single passes.
-        let mut sprite_updates: HashMap<AssetId, (f32, Option<f32>, bool)> = HashMap::new();
-        let mut label_updates: HashMap<AssetId, (f32, bool)> = HashMap::new();
-        let mut track_visible: Vec<(AssetId, bool)> = Vec::new();
-        let mut header_text: Vec<(AssetId, String)> = Vec::new();
-        // Per-panel `(active, row placements)` for the region reflow below.
-        let mut solved_rows: Vec<(bool, Vec<scroll_layout::RowPlacement>)> =
-            Vec::with_capacity(self.panels.len());
+        // Accumulate component writes into the reused scratch maps, then apply
+        // in one pass per component type.
+        self.layout.sprites.clear();
+        self.layout.labels.clear();
+        self.layout.solved_rows.clear();
 
         for panel in self.panels.iter_mut() {
             let panel_active = panel.screen == active;
-            let collapsed: Vec<bool> = panel.groups.iter().map(|g| g.collapsed).collect();
-            let specs: Vec<RowSpec> = panel
-                .rows
-                .iter()
-                .map(|r| RowSpec {
-                    height: r.height,
-                    group: r.group,
-                })
-                .collect();
-            let solved = scroll_layout::solve(&specs, &collapsed, panel.band[3], panel.scroll);
+            self.layout.collapsed.clear();
+            self.layout
+                .collapsed
+                .extend(panel.groups.iter().map(|g| g.collapsed));
+            self.layout.specs.clear();
+            self.layout.specs.extend(panel.rows.iter().map(|r| RowSpec {
+                height: r.height,
+                group: r.group,
+            }));
+            let solved = scroll_layout::solve(
+                &self.layout.specs,
+                &self.layout.collapsed,
+                panel.band[3],
+                panel.scroll,
+            );
             panel.scroll = solved.scroll;
             panel.content_height = solved.content_height;
             panel.thumb_h = solved.thumb_frac * panel.track_h;
@@ -1556,33 +1612,41 @@ impl UiInputSystem {
                     let pl = solved.rows[ri];
                     for (k, id) in row.elements.iter().enumerate() {
                         let y = row.base_ys[k] + pl.dy;
-                        sprite_updates.insert(*id, (y, None, pl.visible));
-                        label_updates.insert(*id, (y, pl.visible));
+                        let s = self.layout.sprites.entry(*id).or_default();
+                        s.y = Some(y);
+                        s.visible = Some(pl.visible);
+                        let l = self.layout.labels.entry(*id).or_default();
+                        l.y = Some(y);
+                        l.visible = Some(pl.visible);
                     }
                 }
                 let scrollable = solved.scrollable();
                 if let Some(thumb) = panel.thumb {
                     let thumb_y = panel.track_y + solved.thumb_offset_frac * panel.track_h;
-                    sprite_updates.insert(thumb, (thumb_y, Some(panel.thumb_h), scrollable));
+                    let s = self.layout.sprites.entry(thumb).or_default();
+                    s.y = Some(thumb_y);
+                    s.height = Some(panel.thumb_h);
+                    s.visible = Some(scrollable);
                 }
                 if let Some(track) = panel.track {
-                    track_visible.push((track, scrollable));
+                    self.layout.sprites.entry(track).or_default().visible = Some(scrollable);
                 }
                 for g in &panel.groups {
                     if let Some(h) = g.header {
                         let prefix = if g.collapsed { "+ " } else { "- " };
-                        header_text.push((h, format!("{prefix}{}", g.title)));
+                        self.layout.labels.entry(h).or_default().content =
+                            Some(format!("{prefix}{}", g.title));
                     }
                 }
             }
-            solved_rows.push((panel_active, solved.rows));
+            self.layout.solved_rows.push((panel_active, solved.rows));
         }
 
         // Reflow each panel-owned region in memory (positions the click loop
         // hit-tests against next frame).
         for entry in self.regions.iter_mut() {
             if let Some((pi, ri)) = entry.scroll_row
-                && let Some((panel_active, rows)) = solved_rows.get(pi)
+                && let Some((panel_active, rows)) = self.layout.solved_rows.get(pi)
                 && *panel_active
             {
                 let pl = rows[ri];
@@ -1593,33 +1657,28 @@ impl UiInputSystem {
 
         // Apply the accumulated component writes.
         for s in ctx.query_mut::<Sprite>() {
-            if let Some(&(y, h, vis)) = sprite_updates.get(&s.asset_id) {
-                s.y = y;
-                if let Some(hh) = h {
-                    s.height = hh;
+            if let Some(u) = self.layout.sprites.get(&s.asset_id) {
+                if let Some(y) = u.y {
+                    s.y = y;
                 }
-                s.visible = vis;
-            }
-        }
-        for (id, vis) in &track_visible {
-            for s in ctx.query_mut::<Sprite>() {
-                if s.asset_id == *id {
-                    s.visible = *vis;
-                    break;
+                if let Some(h) = u.height {
+                    s.height = h;
+                }
+                if let Some(vis) = u.visible {
+                    s.visible = vis;
                 }
             }
         }
         for l in ctx.query_mut::<TextLabel>() {
-            if let Some(&(y, vis)) = label_updates.get(&l.asset_id) {
-                l.y = y;
-                l.visible = vis;
-            }
-        }
-        for (id, text) in &header_text {
-            for l in ctx.query_mut::<TextLabel>() {
-                if l.asset_id == *id {
-                    l.content = text.clone();
-                    break;
+            if let Some(u) = self.layout.labels.get_mut(&l.asset_id) {
+                if let Some(y) = u.y {
+                    l.y = y;
+                }
+                if let Some(vis) = u.visible {
+                    l.visible = vis;
+                }
+                if let Some(content) = u.content.take() {
+                    l.content = content;
                 }
             }
         }

@@ -66,6 +66,12 @@ pub struct OverlayFrame {
 pub struct OverlaySystem {
     // Base for the caret-blink clock, set on the first step.
     start_time: Option<Instant>,
+    // Scratch for the per-element draw-layer merge, reused across frames.
+    layers: std::collections::HashMap<AssetId, i32>,
+    // Last frame's draw-call count, seeding the next build's list capacity
+    // (the built Vec moves into the render snapshot, so only its length
+    // survives here).
+    call_capacity: usize,
 }
 
 impl OverlaySystem {
@@ -110,7 +116,7 @@ impl System for OverlaySystem {
             .get_or_insert_with(Instant::now)
             .elapsed()
             .as_secs_f32();
-        let mut frame = build_overlay_frame(ctx, &assets, elapsed);
+        let mut frame = self.build_frame(ctx, &assets, elapsed);
         ctx.insert_resource(assets);
 
         // An external per-frame driver (the `cn editor` HUD) can force the
@@ -133,229 +139,240 @@ impl System for OverlaySystem {
     }
 }
 
-// Build the frame's overlay draw calls. Sprites render as solid-coloured
-// quads through the same UI pass as TextLabel (sentinel-UV path), so they
-// share the text pipeline and require no new render state. Backdrop / HUD
-// sprites are emitted first so labels composite on top; `follow_cursor`
-// sprites are emitted last so the cursor sits on top of everything.
-fn build_overlay_frame(
-    ctx: &mut PipelineContext,
-    assets: &OverlayAssets,
-    elapsed: f32,
-) -> OverlayFrame {
-    // The viewport InputSystem sampled at the end of the previous tick, or
-    // the init-time size before the first poll. A live resize is picked up
-    // one frame later, which is invisible mid-drag.
-    let (win_w, win_h) = ctx
-        .resource::<crate::assets::FrameInput>()
-        .map(|i| (i.viewport[0], i.viewport[1]))
-        .unwrap_or(assets.initial_viewport);
-    // The cursor state InputSystem sampled at the end of the previous tick
-    // (`follow_cursor` sprites are positioned a frame after the input that
-    // moved them).
-    let cursor = ctx
-        .resource::<crate::ecs::CursorState>()
-        .copied()
-        .unwrap_or_default();
-    // Reposition LayoutContainer-managed labels before measuring them
-    // for draw, so a HUD reflows to its live text each frame.
-    hud_layout::apply_label_layout(ctx, &assets.fonts);
-    // Anchor the DebugHud chips to the top-right corner, stacked.
-    hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
-    // Pack the StatHud chips into a tight strip in the top-left corner.
-    hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
-    let default_atlas_slot = assets.fonts.values().next().map(|f| f.atlas_slot);
-    let sprites: Vec<&Sprite> = ctx.query::<Sprite>().collect();
-    let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
-        sprites.into_iter().partition(|s| s.follow_cursor);
-
-    // Per-element draw layers, from two sources merged into one map:
-    //   - the screen stack: every element of an active Screen takes its
-    //     screen's computed layer (stack position within the authored layer
-    //     band), so screens draw in stack order and above the layer-0 HUD;
-    //   - the `cn editor` HUD's per-frame overrides, lifted into a reserved
-    //     top range so the editor panels always occlude world screens while
-    //     keeping their own focus order.
-    // An id absent from the map is layer 0. When the map ends up empty (no
-    // active screen, no editor), the sort below is skipped and draw order is
-    // pure insertion order, as before.
-    let empty_layers = std::collections::HashMap::new();
-    let screen_layers = ctx.resource::<crate::ecs::ScreenStack>().map(|s| &s.layers);
-    let mut effective_layers: std::collections::HashMap<AssetId, i32> =
-        std::collections::HashMap::new();
-    if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
-        for s in ctx.query::<Sprite>() {
-            if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id)) {
-                effective_layers.insert(s.asset_id, *layer);
-            }
-        }
-        for l in ctx.query::<TextLabel>() {
-            if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id)) {
-                effective_layers.insert(l.asset_id, *layer);
-            }
-        }
-        for t in ctx.query::<TextInput>() {
-            if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id)) {
-                effective_layers.insert(t.asset_id, *layer);
-            }
-        }
-    }
-    if let Some(overrides) = ctx.resource::<crate::ecs::HudLayers>() {
-        for (id, layer) in &overrides.0 {
-            effective_layers.insert(*id, HUD_OVERRIDE_LAYER_BASE + layer);
-        }
-    }
-    let hud_layers = &effective_layers;
-
-    let mut calls = gfx_sprite::build_sprite_calls(
-        &scene_sprites,
-        default_atlas_slot,
-        &assets.sprite_texture_slots,
-        [win_w, win_h],
-        &assets.clip_rects,
-        hud_layers,
-    );
-    let labels: Vec<&TextLabel> = ctx.query::<TextLabel>().collect();
-    calls.extend(text::build_text_calls(
-        &labels,
-        &assets.fonts,
-        win_w,
-        win_h,
-        &assets.clip_rects,
-        hud_layers,
-    ));
-
-    // A settings dropdown's open list draws on top of the menu (after the
-    // clipped row text, before the cursor) and unclipped, so it escapes
-    // the scroll band's scissor. Built as transient overlay Sprites +
-    // TextLabels fed through the same shapers (with no clip bands).
-    if let Some(screen) = ctx
-        .resource::<crate::ecs::OpenDropdown>()
-        .and_then(|d| d.0.clone())
-    {
-        let no_clips = std::collections::HashMap::new();
-        let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
-        let sprite_refs: Vec<&Sprite> = dd_sprites.iter().collect();
-        let mut dd_calls = gfx_sprite::build_sprite_calls(
-            &sprite_refs,
-            default_atlas_slot,
-            &assets.sprite_texture_slots,
-            [win_w, win_h],
-            &no_clips,
-            &empty_layers,
-        );
-        let label_refs: Vec<&TextLabel> = dd_labels.iter().collect();
-        dd_calls.extend(text::build_text_calls(
-            &label_refs,
-            &assets.fonts,
-            win_w,
-            win_h,
-            &no_clips,
-            &empty_layers,
-        ));
-        // The synthesised list carries no asset id, so nothing would lift it out
-        // of layer 0 -- where the sort below buries it under the opaque rows it
-        // drops from (functional, but invisible).
-        for c in &mut dd_calls {
-            c.layer = DROPDOWN_LAYER;
-        }
-        calls.extend(dd_calls);
-    }
-
-    // Text-input fields draw as a background box + their text + a caret,
-    // synthesised the same way as the dropdown overlay and fed through the
-    // shapers (clipped like the rest, so a field inside a scroll band
-    // scissors correctly).
-    let text_inputs: Vec<&TextInput> = ctx.query::<TextInput>().collect();
-    // Caret blink: visible for the first half of each period so a focused
-    // field's caret pulses rather than sitting solid.
-    const CARET_BLINK_PERIOD: f32 = 1.06;
-    let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
-    for ti in text_inputs.iter().filter(|t| t.visible) {
-        let (ti_sprites, ti_labels) =
-            widgets::build_text_input_overlay(ti, &assets.fonts, caret_visible);
-        // The synthesised overlay carries no asset id, so its calls take the
-        // field's own layer (from the field's id) rather than looking up the
-        // default id -- otherwise a focused panel's text fields would sink
-        // below it.
-        let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
-        let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
-        let mut ti_calls = gfx_sprite::build_sprite_calls(
-            &sprite_refs,
-            default_atlas_slot,
-            &assets.sprite_texture_slots,
-            [win_w, win_h],
-            &assets.clip_rects,
-            &empty_layers,
-        );
-        let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
-        ti_calls.extend(text::build_text_calls(
-            &label_refs,
-            &assets.fonts,
-            win_w,
-            win_h,
-            &assets.clip_rects,
-            &empty_layers,
-        ));
-        for c in &mut ti_calls {
-            c.layer = ti_layer;
-        }
-        calls.extend(ti_calls);
-    }
-
-    // A menu cursor is present when any visible follow_cursor sprite is
-    // opaque. Draw it (as an arrow pointer at the latest mouse position,
-    // after the text so it sits on top) only while the real cursor is
-    // inside the window: when it leaves in windowed / borderless modes
-    // the arrow is hidden instead of lingering at the edge. The backend
-    // confines the cursor in fullscreen, so it reports "inside" there.
-    let menu_cursor = cursor_sprites.iter().any(|s| s.visible && s.tint[3] > 0.0);
-    let want_ui_cursor = menu_cursor && !cursor.outside_window;
-    if want_ui_cursor {
-        // The `cn editor` HUD switches the silhouette to a resize cursor over a
-        // panel edge; every other cursor stays the arrow (the default absence).
-        let cursor_shape = ctx
-            .resource::<crate::ecs::DesiredCursor>()
-            .map(|c| c.0)
+impl OverlaySystem {
+    // Build the frame's overlay draw calls. Sprites render as solid-coloured
+    // quads through the same UI pass as TextLabel (sentinel-UV path), so they
+    // share the text pipeline and require no new render state. Backdrop / HUD
+    // sprites are emitted first so labels composite on top; `follow_cursor`
+    // sprites are emitted last so the cursor sits on top of everything.
+    fn build_frame(
+        &mut self,
+        ctx: &mut PipelineContext,
+        assets: &OverlayAssets,
+        elapsed: f32,
+    ) -> OverlayFrame {
+        // The viewport InputSystem sampled at the end of the previous tick, or
+        // the init-time size before the first poll. A live resize is picked up
+        // one frame later, which is invisible mid-drag.
+        let (win_w, win_h) = ctx
+            .resource::<crate::assets::FrameInput>()
+            .map(|i| (i.viewport[0], i.viewport[1]))
+            .unwrap_or(assets.initial_viewport);
+        // The cursor state InputSystem sampled at the end of the previous tick
+        // (`follow_cursor` sprites are positioned a frame after the input that
+        // moved them).
+        let cursor = ctx
+            .resource::<crate::ecs::CursorState>()
+            .copied()
             .unwrap_or_default();
-        calls.extend(crate::gfx::cursor::build_cursor_calls(
-            &cursor_sprites,
-            cursor.pos,
-            cursor_shape,
+        // Reposition LayoutContainer-managed labels before measuring them
+        // for draw, so a HUD reflows to its live text each frame.
+        hud_layout::apply_label_layout(ctx, &assets.fonts);
+        // Anchor the DebugHud chips to the top-right corner, stacked.
+        hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
+        // Pack the StatHud chips into a tight strip in the top-left corner.
+        hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
+        let default_atlas_slot = assets.fonts.values().next().map(|f| f.atlas_slot);
+        let (cursor_sprites, scene_sprites): (Vec<&Sprite>, Vec<&Sprite>) =
+            ctx.query::<Sprite>().partition(|s| s.follow_cursor);
+
+        // Per-element draw layers, from two sources merged into one map:
+        //   - the screen stack: every element of an active Screen takes its
+        //     screen's computed layer (stack position within the authored layer
+        //     band), so screens draw in stack order and above the layer-0 HUD;
+        //   - the `cn editor` HUD's per-frame overrides, lifted into a reserved
+        //     top range so the editor panels always occlude world screens while
+        //     keeping their own focus order.
+        // An id absent from the map is layer 0. When the map ends up empty (no
+        // active screen, no editor), the sort below is skipped and draw order is
+        // pure insertion order, as before.
+        let empty_layers = std::collections::HashMap::new();
+        let screen_layers = ctx.resource::<crate::ecs::ScreenStack>().map(|s| &s.layers);
+        self.layers.clear();
+        if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
+            for s in ctx.query::<Sprite>() {
+                if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id)) {
+                    self.layers.insert(s.asset_id, *layer);
+                }
+            }
+            for l in ctx.query::<TextLabel>() {
+                if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id)) {
+                    self.layers.insert(l.asset_id, *layer);
+                }
+            }
+            for t in ctx.query::<TextInput>() {
+                if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id)) {
+                    self.layers.insert(t.asset_id, *layer);
+                }
+            }
+        }
+        if let Some(overrides) = ctx.resource::<crate::ecs::HudLayers>() {
+            for (id, layer) in &overrides.0 {
+                self.layers.insert(*id, HUD_OVERRIDE_LAYER_BASE + layer);
+            }
+        }
+        let hud_layers = &self.layers;
+
+        let mut calls = Vec::with_capacity(self.call_capacity);
+        gfx_sprite::build_sprite_calls_into(
+            &mut calls,
+            &scene_sprites,
             default_atlas_slot,
+            &assets.sprite_texture_slots,
             [win_w, win_h],
-        ));
-    }
-    // A menu is "active" while any active screen pauses the world (the
-    // screen stack publishes the flag); used to drive cursor capture and to
-    // freeze gameplay input + simulation. A screen with `pauses_world` off
-    // (a passthrough overlay, a live console) shows without pausing.
-    let menu_active = ctx
-        .resource::<crate::ecs::ScreenStack>()
-        .is_some_and(|s| s.pauses_world);
-    // The whole world render can be skipped when an opaque full-canvas
-    // backdrop covers the scene (a menu authored with its dim alpha at
-    // 1.0): nothing of the scene is visible, so every world pass is
-    // wasted. A translucent dim keeps the world faintly visible and so
-    // does not qualify.
-    let world_hidden = menu_active
-        && scene_sprites
-            .iter()
-            .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
-    // Reorder the overlay by layer when any call carries one (an active screen
-    // stack, the editor's focus-stack overrides, an open dropdown, the cursor):
-    // a stable sort keeps same-layer order (so the sprites-then-text order
-    // within a panel is intact) while lifting a screen's or focused panel's
-    // whole content above the others'. Skipped entirely when nothing is
-    // layered, so draw order stays pure insertion order.
-    if calls.iter().any(|c| c.layer != 0) {
-        calls.sort_by_key(|c| c.layer);
-    }
-    OverlayFrame {
-        calls,
-        want_ui_cursor,
-        menu_active,
-        world_hidden,
+            &assets.clip_rects,
+            hud_layers,
+        );
+        let labels: Vec<&TextLabel> = ctx.query::<TextLabel>().collect();
+        text::build_text_calls_into(
+            &mut calls,
+            &labels,
+            &assets.fonts,
+            win_w,
+            win_h,
+            &assets.clip_rects,
+            hud_layers,
+        );
+
+        // A settings dropdown's open list draws on top of the menu (after the
+        // clipped row text, before the cursor) and unclipped, so it escapes
+        // the scroll band's scissor. Built as transient overlay Sprites +
+        // TextLabels fed through the same shapers (with no clip bands).
+        if let Some(screen) = ctx
+            .resource::<crate::ecs::OpenDropdown>()
+            .and_then(|d| d.0.clone())
+        {
+            let no_clips = std::collections::HashMap::new();
+            let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
+            let sprite_refs: Vec<&Sprite> = dd_sprites.iter().collect();
+            let dd_start = calls.len();
+            gfx_sprite::build_sprite_calls_into(
+                &mut calls,
+                &sprite_refs,
+                default_atlas_slot,
+                &assets.sprite_texture_slots,
+                [win_w, win_h],
+                &no_clips,
+                &empty_layers,
+            );
+            let label_refs: Vec<&TextLabel> = dd_labels.iter().collect();
+            text::build_text_calls_into(
+                &mut calls,
+                &label_refs,
+                &assets.fonts,
+                win_w,
+                win_h,
+                &no_clips,
+                &empty_layers,
+            );
+            // The synthesised list carries no asset id, so nothing would lift it out
+            // of layer 0 -- where the sort below buries it under the opaque rows it
+            // drops from (functional, but invisible).
+            for c in &mut calls[dd_start..] {
+                c.layer = DROPDOWN_LAYER;
+            }
+        }
+
+        // Text-input fields draw as a background box + their text + a caret,
+        // synthesised the same way as the dropdown overlay and fed through the
+        // shapers (clipped like the rest, so a field inside a scroll band
+        // scissors correctly).
+        // Caret blink: visible for the first half of each period so a focused
+        // field's caret pulses rather than sitting solid.
+        const CARET_BLINK_PERIOD: f32 = 1.06;
+        let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
+        for ti in ctx.query::<TextInput>() {
+            if !ti.visible {
+                continue;
+            }
+            let (ti_sprites, ti_labels) =
+                widgets::build_text_input_overlay(ti, &assets.fonts, caret_visible);
+            // The synthesised overlay carries no asset id, so its calls take the
+            // field's own layer (from the field's id) rather than looking up the
+            // default id -- otherwise a focused panel's text fields would sink
+            // below it.
+            let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
+            let sprite_refs: Vec<&Sprite> = ti_sprites.iter().collect();
+            let ti_start = calls.len();
+            gfx_sprite::build_sprite_calls_into(
+                &mut calls,
+                &sprite_refs,
+                default_atlas_slot,
+                &assets.sprite_texture_slots,
+                [win_w, win_h],
+                &assets.clip_rects,
+                &empty_layers,
+            );
+            let label_refs: Vec<&TextLabel> = ti_labels.iter().collect();
+            text::build_text_calls_into(
+                &mut calls,
+                &label_refs,
+                &assets.fonts,
+                win_w,
+                win_h,
+                &assets.clip_rects,
+                &empty_layers,
+            );
+            for c in &mut calls[ti_start..] {
+                c.layer = ti_layer;
+            }
+        }
+
+        // A menu cursor is present when any visible follow_cursor sprite is
+        // opaque. Draw it (as an arrow pointer at the latest mouse position,
+        // after the text so it sits on top) only while the real cursor is
+        // inside the window: when it leaves in windowed / borderless modes
+        // the arrow is hidden instead of lingering at the edge. The backend
+        // confines the cursor in fullscreen, so it reports "inside" there.
+        let menu_cursor = cursor_sprites.iter().any(|s| s.visible && s.tint[3] > 0.0);
+        let want_ui_cursor = menu_cursor && !cursor.outside_window;
+        if want_ui_cursor {
+            // The `cn editor` HUD switches the silhouette to a resize cursor over a
+            // panel edge; every other cursor stays the arrow (the default absence).
+            let cursor_shape = ctx
+                .resource::<crate::ecs::DesiredCursor>()
+                .map(|c| c.0)
+                .unwrap_or_default();
+            calls.extend(crate::gfx::cursor::build_cursor_calls(
+                &cursor_sprites,
+                cursor.pos,
+                cursor_shape,
+                default_atlas_slot,
+                [win_w, win_h],
+            ));
+        }
+        // A menu is "active" while any active screen pauses the world (the
+        // screen stack publishes the flag); used to drive cursor capture and to
+        // freeze gameplay input + simulation. A screen with `pauses_world` off
+        // (a passthrough overlay, a live console) shows without pausing.
+        let menu_active = ctx
+            .resource::<crate::ecs::ScreenStack>()
+            .is_some_and(|s| s.pauses_world);
+        // The whole world render can be skipped when an opaque full-canvas
+        // backdrop covers the scene (a menu authored with its dim alpha at
+        // 1.0): nothing of the scene is visible, so every world pass is
+        // wasted. A translucent dim keeps the world faintly visible and so
+        // does not qualify.
+        let world_hidden = menu_active
+            && scene_sprites
+                .iter()
+                .any(|s| s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s));
+        // Reorder the overlay by layer when any call carries one (an active screen
+        // stack, the editor's focus-stack overrides, an open dropdown, the cursor):
+        // a stable sort keeps same-layer order (so the sprites-then-text order
+        // within a panel is intact) while lifting a screen's or focused panel's
+        // whole content above the others'. Skipped entirely when nothing is
+        // layered, so draw order stays pure insertion order.
+        if calls.iter().any(|c| c.layer != 0) {
+            calls.sort_by_key(|c| c.layer);
+        }
+        self.call_capacity = calls.len();
+        OverlayFrame {
+            calls,
+            want_ui_cursor,
+            menu_active,
+            world_hidden,
+        }
     }
 }
 
@@ -547,7 +564,7 @@ mod tests {
         // by the test rather than the wall clock.
         fn build(&mut self, elapsed: f32) -> OverlayFrame {
             let a = assets();
-            build_overlay_frame(&mut self.ctx(), &a, elapsed)
+            OverlaySystem::new().build_frame(&mut self.ctx(), &a, elapsed)
         }
     }
 
