@@ -10,6 +10,8 @@
 // depends on this crate and constructs `PhysicsSystem` through its system
 // registry; the dependency arrow is concinnity-physics <- concinnity-engine.
 
+// The cached capsule a character move is resolved against.
+mod character;
 // Contact-event shaping: extraction, per-frame batching, per-pair refractory.
 mod contacts;
 mod convert;
@@ -19,12 +21,15 @@ mod interp;
 mod layers;
 // Raycast probe answering for animation IK and the follow camera.
 mod probes;
+// Prop bodies with their handle -> entity and tracked-entity indices.
+mod props;
 // Root-motion character rigs: one kinematic capsule per `CharacterRig`.
 mod rig;
 // The internal physics system that builds and steps the simulation from the
 // world's bodies, driven by an optional `PhysicsConfig`.
 mod system;
 
+pub use character::CharacterShape;
 pub use contacts::ContactHit;
 pub use layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerMask};
 // The physics system the engine registry wraps, plus the shared gravity
@@ -115,9 +120,6 @@ pub struct DynamicParams {
 // [`PhysicsWorld::move_character`].
 #[derive(Debug, Clone, Copy)]
 pub struct CharacterMoveInput {
-    // Capsule cylinder half-height (excludes the hemisphere caps).
-    pub half_height: f32,
-    pub radius: f32,
     // World-space capsule centre before the move.
     pub center: [f32; 3],
     // Desired translation for this tick.
@@ -556,11 +558,17 @@ impl PhysicsWorld {
 
     // Resolve a desired move of a character capsule against the world without
     // mutating it. Apply the result with [`Self::set_kinematic_translation`].
+    // `shape` is the mover's capsule, owned by the caller so the fixed tick
+    // reuses one per character instead of building a fresh one per call.
     // `input.exclude` is the moving capsule's own body (from
     // [`Self::add_character`]), left out of the query so the character does
     // not collide with itself; other characters' capsules stay solid to it.
     // Sensors never block the move.
-    pub fn move_character(&self, input: &CharacterMoveInput) -> CharacterMove {
+    pub fn move_character(
+        &self,
+        shape: &CharacterShape,
+        input: &CharacterMoveInput,
+    ) -> CharacterMove {
         let dispatcher = DefaultQueryDispatcher;
         let filter = QueryFilter::default()
             .exclude_rigid_body(input.exclude.0)
@@ -569,11 +577,10 @@ impl PhysicsWorld {
         let query =
             self.broad_phase
                 .as_query_pipeline(&dispatcher, &self.bodies, &self.colliders, filter);
-        let shape = SharedShape::capsule_y(input.half_height, input.radius);
         let movement = self.character.move_shape(
             input.dt.max(1.0e-4),
             &query,
-            &*shape,
+            &**shape.shape(),
             &Pose::from_translation(to_vec(input.center)),
             to_vec(input.desired),
             |_collision| {},
@@ -797,15 +804,16 @@ mod tests {
         let capsule = world.add_character(0.6, 0.3, [0.0, 1.0, 0.0], LayerMask::ALL);
         // The broad-phase BVH the movement query reads is built by step().
         world.step(1.0 / 60.0);
-        let moved = world.move_character(&CharacterMoveInput {
-            half_height: 0.6,
-            radius: 0.3,
-            center: [0.0, 1.0, 0.0],
-            desired: [5.0, 0.0, 0.0],
-            dt: 1.0 / 60.0,
-            exclude: capsule,
-            mask: LayerMask::ALL,
-        });
+        let moved = world.move_character(
+            &CharacterShape::capsule(0.6, 0.3),
+            &CharacterMoveInput {
+                center: [0.0, 1.0, 0.0],
+                desired: [5.0, 0.0, 0.0],
+                dt: 1.0 / 60.0,
+                exclude: capsule,
+                mask: LayerMask::ALL,
+            },
+        );
         // The wall stands at x = 1.25 (1.5 - 0.25); a 0.3-radius capsule from
         // x = 0 cannot advance the full 5 units into it.
         assert!(
@@ -823,15 +831,16 @@ mod tests {
         // sits 0.6 above the floor, so a 10-unit drop should be arrested.
         let capsule = world.add_character(0.6, 0.3, [0.0, 1.5, 0.0], LayerMask::ALL);
         world.step(1.0 / 60.0);
-        let moved = world.move_character(&CharacterMoveInput {
-            half_height: 0.6,
-            radius: 0.3,
-            center: [0.0, 1.5, 0.0],
-            desired: [0.0, -10.0, 0.0],
-            dt: 1.0 / 60.0,
-            exclude: capsule,
-            mask: LayerMask::ALL,
-        });
+        let moved = world.move_character(
+            &CharacterShape::capsule(0.6, 0.3),
+            &CharacterMoveInput {
+                center: [0.0, 1.5, 0.0],
+                desired: [0.0, -10.0, 0.0],
+                dt: 1.0 / 60.0,
+                exclude: capsule,
+                mask: LayerMask::ALL,
+            },
+        );
         assert!(
             moved.translation[1] > -1.0 && moved.grounded,
             "fall should be arrested by the floor, dy = {}, grounded = {}",

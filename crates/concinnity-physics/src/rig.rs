@@ -12,13 +12,16 @@ use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
 
 use super::interp::PointInterp;
-use super::{BodyHandle, CharacterMoveInput, LayerMask, PhysicsWorld};
+use super::{BodyHandle, CharacterMoveInput, CharacterShape, LayerMask, PhysicsWorld};
 
 // Physics-side state for one rig.
 #[derive(Debug)]
 pub(crate) struct RigPhysics {
     pub target: SkinnedMeshHandle,
     pub handle: BodyHandle,
+    // The capsule the tick's move is resolved against, resized when the rig
+    // component's dimensions change.
+    shape: CharacterShape,
     // Current vertical velocity (world units/second).
     pub vy: f32,
     // Authoritative simulated capsule centre with its render blend snapshots.
@@ -60,6 +63,7 @@ pub(crate) fn init_rigs(
             RigPhysics {
                 target: rig.target,
                 handle: world.add_character(rig.half_height, rig.radius, center, mask),
+                shape: CharacterShape::capsule(rig.half_height, rig.radius),
                 vy: 0.0,
                 center: PointInterp::new(center),
                 written_pos: Some(rig.position),
@@ -145,15 +149,17 @@ pub(crate) fn tick_rigs(
             displacement[1] + rig_body.vy * dt,
             displacement[2],
         ];
-        let moved = world.move_character(&CharacterMoveInput {
-            half_height: rig.half_height,
-            radius: rig.radius,
-            center,
-            desired,
-            dt,
-            exclude: rig_body.handle,
-            mask,
-        });
+        rig_body.shape.resize(rig.half_height, rig.radius);
+        let moved = world.move_character(
+            &rig_body.shape,
+            &CharacterMoveInput {
+                center,
+                desired,
+                dt,
+                exclude: rig_body.handle,
+                mask,
+            },
+        );
         let new_center = add3(center, moved.translation);
         world.set_kinematic_translation(rig_body.handle, new_center);
         if moved.grounded && rig_body.vy < 0.0 {

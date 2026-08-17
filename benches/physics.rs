@@ -14,7 +14,8 @@
 
 use concinnity_bench::Bench;
 use concinnity_physics::{
-    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, PhysicsWorld,
+    BodyHandle, CharacterMoveInput, CharacterShape, ColliderShape, DynamicParams, LayerMask,
+    PhysicsWorld,
 };
 
 const TICK: f32 = 1.0 / 60.0;
@@ -179,16 +180,18 @@ fn main() {
         });
 
         let capsule = world.add_character(0.6, 0.3, [1.0, 1.1, 1.0], LayerMask::ALL);
+        let shape = CharacterShape::capsule(0.6, 0.3);
         bench.run("physics/character_move/1", 1, || {
-            let moved = world.move_character(&CharacterMoveInput {
-                half_height: 0.6,
-                radius: 0.3,
-                center: [1.0, 1.1, 1.0],
-                desired: [0.05, 0.0, 0.02],
-                dt: TICK,
-                exclude: capsule,
-                mask: LayerMask::ALL,
-            });
+            let moved = world.move_character(
+                &shape,
+                &CharacterMoveInput {
+                    center: [1.0, 1.1, 1.0],
+                    desired: [0.05, 0.0, 0.02],
+                    dt: TICK,
+                    exclude: capsule,
+                    mask: LayerMask::ALL,
+                },
+            );
             moved.grounded
         });
 
