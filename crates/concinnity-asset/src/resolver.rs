@@ -96,130 +96,75 @@ pub(crate) fn resolve_name(name: &str) -> Option<u32> {
     RESOLVER.resolve(name)
 }
 
-static TEXTURE_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
+// One slot / install / resolve triple per resource kind, each backed by the
+// current build's declaration-ordered handle map for that kind.
+macro_rules! handle_resolver {
+    (
+        $(#[$extra:meta])*
+        $slot:ident, $noun:literal, $set_fn:ident, $resolve_fn:ident $(,)?
+    ) => {
+        static $slot: HandleResolverSlot = HandleResolverSlot::new();
 
-/// Install the name -> texture-handle resolver. Called by concinnity-cook,
-/// backed by the current build's declaration-ordered texture handle map.
-/// Idempotent; the last writer wins.
-pub fn set_texture_handle_resolver(f: HandleResolveFn) {
-    TEXTURE_HANDLE_RESOLVER.set(f);
+        #[doc = concat!(
+            "Install the name -> ", $noun,
+            "-handle resolver. Called by concinnity-cook, backed by the current ",
+            "build's declaration-ordered ", $noun,
+            " handle map. Idempotent; the last writer wins."
+        )]
+        $(#[$extra])*
+        pub fn $set_fn(f: HandleResolveFn) {
+            $slot.set(f);
+        }
+
+        #[doc = concat!(
+            "Resolve a ", $noun,
+            " reference name to its dense handle value via the installed ",
+            "resolver. `None` means either no resolver is installed or the name ",
+            "is not a declared ", $noun,
+            "; the caller decides whether to fall back (a validation context) ",
+            "or to fail (a real build)."
+        )]
+        pub(crate) fn $resolve_fn(name: &str) -> Option<u32> {
+            $slot.resolve(name)
+        }
+    };
 }
 
-/// Resolve a texture reference name to its dense `TextureHandle` value via the
-/// installed resolver. `None` means either no resolver is installed or the name
-/// is not a declared texture; the caller decides whether to fall back (a
-/// validation context) or to fail (a real build).
-pub(crate) fn resolve_texture_handle(name: &str) -> Option<u32> {
-    TEXTURE_HANDLE_RESOLVER.resolve(name)
+handle_resolver! {
+    TEXTURE_HANDLE_RESOLVER, "texture",
+    set_texture_handle_resolver, resolve_texture_handle,
 }
-
-static AUDIO_CLIP_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> audio-clip-handle resolver. Called by concinnity-cook,
-/// backed by the current build's declaration-ordered audio-clip handle map.
-/// Idempotent; the last writer wins. Mirrors [`set_texture_handle_resolver`].
-pub fn set_audio_clip_handle_resolver(f: HandleResolveFn) {
-    AUDIO_CLIP_HANDLE_RESOLVER.set(f);
+handle_resolver! {
+    AUDIO_CLIP_HANDLE_RESOLVER, "audio-clip",
+    set_audio_clip_handle_resolver, resolve_audio_clip_handle,
 }
-
-/// Resolve an audio-clip reference name to its dense `AudioClipHandle` value via
-/// the installed resolver. `None` means either no resolver is installed or the
-/// name is not a declared audio clip; the caller decides whether to fall back
-/// (a validation context) or to fail (a real build).
-pub(crate) fn resolve_audio_clip_handle(name: &str) -> Option<u32> {
-    AUDIO_CLIP_HANDLE_RESOLVER.resolve(name)
+handle_resolver! {
+    FONT_HANDLE_RESOLVER, "font",
+    set_font_handle_resolver, resolve_font_handle,
 }
-
-static FONT_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> font-handle resolver. Called by concinnity-cook, backed by
-/// the current build's declaration-ordered font handle map. Idempotent; the last
-/// writer wins. Mirrors [`set_texture_handle_resolver`].
-pub fn set_font_handle_resolver(f: HandleResolveFn) {
-    FONT_HANDLE_RESOLVER.set(f);
+handle_resolver! {
+    /// The mesh-source handle space is shared across every geometry-producing
+    /// kind (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so one
+    /// resolver serves them all.
+    MESH_HANDLE_RESOLVER, "mesh",
+    set_mesh_handle_resolver, resolve_mesh_handle,
 }
-
-/// Resolve a font reference name to its dense `FontHandle` value via the installed
-/// resolver. `None` means either no resolver is installed or the name is not a
-/// declared font; the caller decides whether to fall back (a validation context)
-/// or to fail (a real build).
-pub(crate) fn resolve_font_handle(name: &str) -> Option<u32> {
-    FONT_HANDLE_RESOLVER.resolve(name)
+handle_resolver! {
+    MATERIAL_HANDLE_RESOLVER, "material",
+    set_material_handle_resolver, resolve_material_handle,
 }
-
-static MESH_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> mesh-handle resolver. Called by concinnity-cook, backed by
-/// the current build's mesh-source handle map. Idempotent; the last writer wins.
-/// Mirrors [`set_texture_handle_resolver`]. The mesh-source handle space is shared
-/// across every geometry-producing kind (Mesh, ProceduralMesh, VoxelChunk, and
-/// mesh-kind File), so one resolver serves them all.
-pub fn set_mesh_handle_resolver(f: HandleResolveFn) {
-    MESH_HANDLE_RESOLVER.set(f);
+handle_resolver! {
+    /// A SkinnedMesh stays an ECS component, but its authored references
+    /// (`Animation.target`, `AnimGraph.target`, `FollowController.target`)
+    /// resolve to its dense handle so they no longer carry an interned id.
+    SKINNED_MESH_HANDLE_RESOLVER, "skinned-mesh",
+    set_skinned_mesh_handle_resolver, resolve_skinned_mesh_handle,
 }
-
-/// Resolve a mesh reference name to its dense `MeshHandle` value via the installed
-/// resolver. `None` means either no resolver is installed or the name is not a
-/// declared mesh source; the caller decides whether to fall back (a validation
-/// context) or to fail (a real build).
-pub(crate) fn resolve_mesh_handle(name: &str) -> Option<u32> {
-    MESH_HANDLE_RESOLVER.resolve(name)
-}
-
-static MATERIAL_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> material-handle resolver. Called by concinnity-cook, backed
-/// by the current build's Material handle map. Idempotent; the last writer wins.
-/// Mirrors [`set_texture_handle_resolver`].
-pub fn set_material_handle_resolver(f: HandleResolveFn) {
-    MATERIAL_HANDLE_RESOLVER.set(f);
-}
-
-/// Resolve a material reference name to its dense `MaterialHandle` value via the
-/// installed resolver. `None` means either no resolver is installed or the name is
-/// not a declared material; the caller decides whether to fall back (a validation
-/// context) or to fail (a real build).
-pub(crate) fn resolve_material_handle(name: &str) -> Option<u32> {
-    MATERIAL_HANDLE_RESOLVER.resolve(name)
-}
-
-static SKINNED_MESH_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> skinned-mesh-handle resolver. Called by concinnity-cook,
-/// backed by the current build's SkinnedMesh handle map. Idempotent; the last
-/// writer wins. Mirrors [`set_texture_handle_resolver`]. A SkinnedMesh stays an
-/// ECS component, but its authored references (`Animation.target`,
-/// `AnimGraph.target`, `FollowController.target`) resolve to its dense handle so
-/// they no longer carry an interned id.
-pub fn set_skinned_mesh_handle_resolver(f: HandleResolveFn) {
-    SKINNED_MESH_HANDLE_RESOLVER.set(f);
-}
-
-/// Resolve a skinned-mesh reference name to its dense `SkinnedMeshHandle` value via
-/// the installed resolver. `None` means either no resolver is installed or the name
-/// is not a declared SkinnedMesh; the caller decides whether to fall back (a
-/// validation context) or to fail (a real build).
-pub(crate) fn resolve_skinned_mesh_handle(name: &str) -> Option<u32> {
-    SKINNED_MESH_HANDLE_RESOLVER.resolve(name)
-}
-
-static SHADER_HANDLE_RESOLVER: HandleResolverSlot = HandleResolverSlot::new();
-
-/// Install the name -> shader-handle resolver. Called by concinnity-cook,
-/// backed by the current build's declaration-ordered Shader handle map.
-/// Idempotent; the last writer wins. Mirrors [`set_texture_handle_resolver`].
-/// A Shader stays an ECS component, but a Material's authored `shader`
-/// reference resolves to its dense handle so the runtime never scans by name.
-pub fn set_shader_handle_resolver(f: HandleResolveFn) {
-    SHADER_HANDLE_RESOLVER.set(f);
-}
-
-/// Resolve a shader reference name to its dense `ShaderHandle` value via the
-/// installed resolver. `None` means either no resolver is installed or the name
-/// is not a declared Shader; the caller decides whether to fall back (a
-/// validation context) or to fail (a real build).
-pub(crate) fn resolve_shader_handle(name: &str) -> Option<u32> {
-    SHADER_HANDLE_RESOLVER.resolve(name)
+handle_resolver! {
+    /// A Shader stays an ECS component, but a Material's authored `shader`
+    /// reference resolves to its dense handle so the runtime never scans by name.
+    SHADER_HANDLE_RESOLVER, "shader",
+    set_shader_handle_resolver, resolve_shader_handle,
 }
 
 #[cfg(test)]

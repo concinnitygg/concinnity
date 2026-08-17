@@ -58,75 +58,135 @@ resource_handles! {
     ShaderHandle,
 }
 
-// Resolve a texture reference name to its handle value. A real build has the
-// declaration-ordered texture map installed, so this is the resource's handle.
-// Outside a build (single-asset validation, the editor's add form) the map is
-// absent; fall back to the name interner so the reference still parses to *a*
-// handle value -- one that is never used to index a texture pool in those
-// contexts. `None` only when neither resolver is installed at all.
-fn resolve_texture_ref(name: &str) -> Option<u32> {
-    resolve_texture_handle(name).or_else(|| resolve_name(name))
+// One reference-resolution seam and `deserialize_with` helper per resource
+// kind. A real build has the declaration-ordered handle map installed, so a
+// name resolves to the resource's handle. Outside a build (single-asset
+// validation, the editor's add form) the map is absent; fall back to the name
+// interner so the reference still parses to *a* handle value -- one that is
+// never used to index a resource table in those contexts. `None` only when
+// neither resolver is installed at all.
+macro_rules! handle_ref_de {
+    (
+        $(#[$extra:meta])*
+        $handle:ident, $article:literal, $noun:literal,
+        $resolve:ident, $ref_fn:ident, $opt_fn:ident $(,)?
+    ) => {
+        fn $ref_fn(name: &str) -> Option<u32> {
+            $resolve(name).or_else(|| resolve_name(name))
+        }
+
+        #[doc = concat!(
+            "`serde` `deserialize_with` helper for an optional ", $noun,
+            " reference field."
+        )]
+        ///
+        #[doc = concat!(
+            "Mirrors [`crate::de_opt_asset_ref`] but resolves to a [`",
+            stringify!($handle),
+            "`]: an integer is an already-resolved handle (the compiled-args / ",
+            "runtime form); a name string is resolved through the installed ",
+            $noun,
+            "-handle resolver; an empty string or null is `None`. Apply with ",
+            "`#[serde(default, deserialize_with = \"concinnity_asset::",
+            stringify!($opt_fn),
+            "\")]`."
+        )]
+        $(#[$extra])*
+        pub fn $opt_fn<'de, D>(d: D) -> Result<Option<$handle>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            // A non-self-describing format (postcard, the baked blob form)
+            // carries the already-resolved handle; names only appear in
+            // human-readable input.
+            if !d.is_human_readable() {
+                return Option::<$handle>::deserialize(d);
+            }
+
+            struct OptVisitor;
+
+            impl Visitor<'_> for OptVisitor {
+                type Value = Option<$handle>;
+
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str(concat!(
+                        $article, " ", $noun,
+                        " handle integer, reference name string, or null"
+                    ))
+                }
+
+                fn visit_unit<E: de::Error>(self) -> Result<Option<$handle>, E> {
+                    Ok(None)
+                }
+                fn visit_none<E: de::Error>(self) -> Result<Option<$handle>, E> {
+                    Ok(None)
+                }
+                fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<$handle>, E> {
+                    Ok(Some($handle(v as u32)))
+                }
+                fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<$handle>, E> {
+                    Ok(Some($handle(v as u32)))
+                }
+                fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<$handle>, E> {
+                    if v.is_empty() {
+                        return Ok(None);
+                    }
+                    $ref_fn(v).map(|h| Some($handle(h))).ok_or_else(|| {
+                        E::custom(format!(
+                            concat!(
+                                "no ", $noun,
+                                "-handle resolver installed to resolve reference {:?}"
+                            ),
+                            v
+                        ))
+                    })
+                }
+                fn visit_string<E: de::Error>(
+                    self,
+                    v: alloc::string::String,
+                ) -> Result<Option<$handle>, E> {
+                    self.visit_str(&v)
+                }
+            }
+
+            d.deserialize_any(OptVisitor)
+        }
+    };
 }
 
-/// `serde` `deserialize_with` helper for an optional texture reference field.
-///
-/// Mirrors [`crate::de_opt_asset_ref`] but resolves to a [`TextureHandle`]: an
-/// integer is an already-resolved handle (the compiled-args / runtime form); a
-/// name string is resolved through the installed texture-handle resolver; an
-/// empty string or null is `None`. Apply with `#[serde(default,
-/// deserialize_with = "concinnity_asset::de_opt_texture_handle")]`.
-pub fn de_opt_texture_handle<'de, D>(d: D) -> Result<Option<TextureHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    // A non-self-describing format (postcard, the baked blob form) carries the
-    // already-resolved handle; names only appear in human-readable input.
-    if !d.is_human_readable() {
-        return Option::<TextureHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<TextureHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a texture handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<TextureHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<TextureHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<TextureHandle>, E> {
-            Ok(Some(TextureHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<TextureHandle>, E> {
-            Ok(Some(TextureHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<TextureHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_texture_ref(v)
-                .map(|h| Some(TextureHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no texture-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<TextureHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
+handle_ref_de! {
+    TextureHandle, "a", "texture",
+    resolve_texture_handle, resolve_texture_ref, de_opt_texture_handle,
+}
+handle_ref_de! {
+    ShaderHandle, "a", "shader",
+    resolve_shader_handle, resolve_shader_ref, de_opt_shader_handle,
+}
+handle_ref_de! {
+    MaterialHandle, "a", "material",
+    resolve_material_handle, resolve_material_ref, de_opt_material_handle,
+}
+handle_ref_de! {
+    /// The handle addresses the shared mesh-source space (Mesh / ProceduralMesh /
+    /// VoxelChunk / mesh-kind File).
+    MeshHandle, "a", "mesh",
+    resolve_mesh_handle, resolve_mesh_ref, de_opt_mesh_handle,
+}
+handle_ref_de! {
+    /// Used by the SkinnedMesh correlation references (`Animation.target`,
+    /// `AnimGraph.target`, `FollowController.target`): a SkinnedMesh stays an ECS
+    /// component, but its authored references bake to its dense handle instead of
+    /// an interned id.
+    SkinnedMeshHandle, "a", "skinned-mesh",
+    resolve_skinned_mesh_handle, resolve_skinned_mesh_ref, de_opt_skinned_mesh_handle,
+}
+handle_ref_de! {
+    FontHandle, "a", "font",
+    resolve_font_handle, resolve_font_ref, de_opt_font_handle,
+}
+handle_ref_de! {
+    AudioClipHandle, "an", "audio-clip",
+    resolve_audio_clip_handle, resolve_audio_clip_ref, de_opt_audio_clip_handle,
 }
 
 /// `serde` `deserialize_with` helper for a required texture reference field.
@@ -172,405 +232,6 @@ where
     }
 
     d.deserialize_any(HandleVisitor)
-}
-
-// Resolve an audio-clip reference name to its handle. A real build has the
-// declaration-ordered audio-clip map installed; outside a build (single-asset
-// validation, the editor's add form) it falls back to the name interner so the
-// reference still parses to *a* handle value that is never used to index a clip
-// table there. Mirrors [`resolve_texture_ref`].
-fn resolve_audio_clip_ref(name: &str) -> Option<u32> {
-    resolve_audio_clip_handle(name).or_else(|| resolve_name(name))
-}
-
-// Resolve a font reference name to its handle, with the same build / fallback
-// behaviour as [`resolve_texture_ref`].
-fn resolve_font_ref(name: &str) -> Option<u32> {
-    resolve_font_handle(name).or_else(|| resolve_name(name))
-}
-
-// Resolve a mesh-source reference name to its handle, with the same build /
-// fallback behaviour as [`resolve_texture_ref`]. The mesh-source handle space is
-// shared across Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File, so a `.mesh`
-// name resolves the same way whichever kind declared it.
-fn resolve_mesh_ref(name: &str) -> Option<u32> {
-    resolve_mesh_handle(name).or_else(|| resolve_name(name))
-}
-
-// Resolve a material reference name to its handle, with the same build / fallback
-// behaviour as [`resolve_texture_ref`].
-fn resolve_material_ref(name: &str) -> Option<u32> {
-    resolve_material_handle(name).or_else(|| resolve_name(name))
-}
-
-// Resolve a skinned-mesh reference name to its handle, with the same build /
-// fallback behaviour as [`resolve_texture_ref`]. Used by the SkinnedMesh
-// correlation references (`Animation.target`, `AnimGraph.target`,
-// `FollowController.target`): a SkinnedMesh stays an ECS component, but its
-// authored references bake to its dense handle instead of an interned id.
-fn resolve_skinned_mesh_ref(name: &str) -> Option<u32> {
-    resolve_skinned_mesh_handle(name).or_else(|| resolve_name(name))
-}
-
-// Resolve a shader reference name to its handle, with the same build / fallback
-// behaviour as [`resolve_texture_ref`]. A Shader stays an ECS component, but a
-// Material's `shader` reference bakes to its dense handle so the renderer can
-// index its pipeline table directly.
-fn resolve_shader_ref(name: &str) -> Option<u32> {
-    resolve_shader_handle(name).or_else(|| resolve_name(name))
-}
-
-/// `serde` `deserialize_with` helper for an optional shader reference field.
-///
-/// The shader analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`ShaderHandle`]; a name string is resolved through the
-/// installed shader-handle resolver; an empty string or null is `None`. Apply
-/// with `#[serde(default, deserialize_with = "concinnity_asset::de_opt_shader_handle")]`.
-pub fn de_opt_shader_handle<'de, D>(d: D) -> Result<Option<ShaderHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<ShaderHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<ShaderHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a shader handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<ShaderHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<ShaderHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<ShaderHandle>, E> {
-            Ok(Some(ShaderHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<ShaderHandle>, E> {
-            Ok(Some(ShaderHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<ShaderHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_shader_ref(v)
-                .map(|h| Some(ShaderHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no shader-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<ShaderHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
-
-/// `serde` `deserialize_with` helper for an optional material reference field.
-///
-/// The material analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`MaterialHandle`]; a name string is resolved through the
-/// installed material-handle resolver; an empty string or null is `None`. Apply
-/// with `#[serde(default, deserialize_with = "concinnity_asset::de_opt_material_handle")]`.
-pub fn de_opt_material_handle<'de, D>(d: D) -> Result<Option<MaterialHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<MaterialHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<MaterialHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a material handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<MaterialHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<MaterialHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<MaterialHandle>, E> {
-            Ok(Some(MaterialHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<MaterialHandle>, E> {
-            Ok(Some(MaterialHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<MaterialHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_material_ref(v)
-                .map(|h| Some(MaterialHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no material-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<MaterialHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
-
-/// `serde` `deserialize_with` helper for an optional mesh reference field.
-///
-/// The mesh analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`MeshHandle`]; a name string is resolved through the
-/// installed mesh-handle resolver; an empty string or null is `None`. The handle
-/// addresses the shared mesh-source space (Mesh / ProceduralMesh / VoxelChunk /
-/// mesh-kind File). Apply with `#[serde(default, deserialize_with =
-/// "concinnity_asset::de_opt_mesh_handle")]`.
-pub fn de_opt_mesh_handle<'de, D>(d: D) -> Result<Option<MeshHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<MeshHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<MeshHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a mesh handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<MeshHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<MeshHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<MeshHandle>, E> {
-            Ok(Some(MeshHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<MeshHandle>, E> {
-            Ok(Some(MeshHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<MeshHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_mesh_ref(v)
-                .map(|h| Some(MeshHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no mesh-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<MeshHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
-
-/// `serde` `deserialize_with` helper for an optional skinned-mesh reference field.
-///
-/// The skinned-mesh analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`SkinnedMeshHandle`]; a name string is resolved through the
-/// installed skinned-mesh-handle resolver; an empty string or null is `None`. Used
-/// by the SkinnedMesh correlation references (`Animation.target`,
-/// `AnimGraph.target`, `FollowController.target`). Apply with `#[serde(default,
-/// deserialize_with = "concinnity_asset::de_opt_skinned_mesh_handle")]`.
-pub fn de_opt_skinned_mesh_handle<'de, D>(d: D) -> Result<Option<SkinnedMeshHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<SkinnedMeshHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<SkinnedMeshHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a skinned-mesh handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<SkinnedMeshHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<SkinnedMeshHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<SkinnedMeshHandle>, E> {
-            Ok(Some(SkinnedMeshHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<SkinnedMeshHandle>, E> {
-            Ok(Some(SkinnedMeshHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<SkinnedMeshHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_skinned_mesh_ref(v)
-                .map(|h| Some(SkinnedMeshHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no skinned-mesh-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<SkinnedMeshHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
-
-/// `serde` `deserialize_with` helper for an optional font reference field.
-///
-/// The font analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`FontHandle`]; a name string is resolved through the
-/// installed font-handle resolver; an empty string or null is `None`. Apply with
-/// `#[serde(default, deserialize_with = "concinnity_asset::de_opt_font_handle")]`.
-pub fn de_opt_font_handle<'de, D>(d: D) -> Result<Option<FontHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<FontHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<FontHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a font handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<FontHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<FontHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<FontHandle>, E> {
-            Ok(Some(FontHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<FontHandle>, E> {
-            Ok(Some(FontHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<FontHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_font_ref(v)
-                .map(|h| Some(FontHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no font-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<FontHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
-}
-
-/// `serde` `deserialize_with` helper for an optional audio-clip reference field.
-///
-/// The audio-clip analogue of [`de_opt_texture_handle`]: an integer is an
-/// already-resolved [`AudioClipHandle`]; a name string is resolved through the
-/// installed audio-clip-handle resolver; an empty string or null is `None`.
-/// Apply with `#[serde(default, deserialize_with =
-/// "concinnity_asset::de_opt_audio_clip_handle")]`.
-pub fn de_opt_audio_clip_handle<'de, D>(d: D) -> Result<Option<AudioClipHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Option::<AudioClipHandle>::deserialize(d);
-    }
-
-    struct OptVisitor;
-
-    impl Visitor<'_> for OptVisitor {
-        type Value = Option<AudioClipHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("an audio-clip handle integer, reference name string, or null")
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Option<AudioClipHandle>, E> {
-            Ok(None)
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<AudioClipHandle>, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<AudioClipHandle>, E> {
-            Ok(Some(AudioClipHandle(v as u32)))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<AudioClipHandle>, E> {
-            Ok(Some(AudioClipHandle(v as u32)))
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<AudioClipHandle>, E> {
-            if v.is_empty() {
-                return Ok(None);
-            }
-            resolve_audio_clip_ref(v)
-                .map(|h| Some(AudioClipHandle(h)))
-                .ok_or_else(|| {
-                    E::custom(format!(
-                        "no audio-clip-handle resolver installed to resolve reference {v:?}"
-                    ))
-                })
-        }
-        fn visit_string<E: de::Error>(
-            self,
-            v: alloc::string::String,
-        ) -> Result<Option<AudioClipHandle>, E> {
-            self.visit_str(&v)
-        }
-    }
-
-    d.deserialize_any(OptVisitor)
 }
 
 /// `serde` `deserialize_with` helper for a list of audio-clip reference fields.
