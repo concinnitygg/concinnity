@@ -22,7 +22,7 @@ use crate::metal::context::{
     BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT,
 };
 use crate::metal::cull::build_cull_pipeline;
-use crate::metal::pipeline::{load_library, ns_str, shader_library, stage_library};
+use crate::metal::pipeline::{load_library, ns_str, stage_library};
 
 pub(crate) struct MainPipelineBundle {
     pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
@@ -375,18 +375,19 @@ pub(crate) fn build_instanced_pipeline(
 }
 
 // Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
-// engine-internal `shadow.metal` source (entry `shadow_vertex_main`). Shared
-// by init (one-shot at startup) and the internal-shader hot-reload path
-// (`reload_shaders`, rebuild on `.metal` save) so the two stay consistent.
+// engine-internal single source (`shadow.slang`, entry `shadow_vertex_main`).
+// Shared by init (one-shot at startup) and the internal-shader hot-reload path
+// (`reload_shaders`) so the two stay consistent.
 pub(crate) fn build_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_lib = shader_library(device, hot_reload, "shadow.metal")?;
-    let shadow_fn = shadow_lib
-        .newFunctionWithName(&ns_str("shadow_vertex_main"))
-        .ok_or("shadow_vertex_main not found in shadow library")?;
+    let shadow_fn = super::super::slang_shaders::entry_function(
+        device,
+        &super::super::slang_shaders::SHADOW_VERT,
+        hot_reload,
+    )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();
     shadow_pipeline_desc.setVertexDescriptor(Some(vert_desc));
     shadow_pipeline_desc.setVertexFunction(Some(&shadow_fn));
@@ -410,10 +411,11 @@ pub(crate) fn build_shadow_bindless_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_lib = shader_library(device, hot_reload, "shadow.metal")?;
-    let shadow_fn = shadow_lib
-        .newFunctionWithName(&ns_str("shadow_vertex_bindless"))
-        .ok_or("shadow_vertex_bindless not found in shadow library")?;
+    let shadow_fn = super::super::slang_shaders::entry_function(
+        device,
+        &super::super::slang_shaders::SHADOW_VERT_BINDLESS,
+        hot_reload,
+    )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();
     shadow_pipeline_desc.setVertexDescriptor(Some(vert_desc));
     shadow_pipeline_desc.setVertexFunction(Some(&shadow_fn));

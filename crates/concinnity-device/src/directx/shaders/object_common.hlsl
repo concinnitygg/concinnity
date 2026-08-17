@@ -1,12 +1,10 @@
 // object_common.hlsl
 //
-// The bindless per-object record. The main pass, the G-buffer prepass, the
-// shadow pass and the cull kernel all stride the same per-frame
-// StructuredBuffer, so this declaration is shared rather than repeated: one
-// drifting copy would misindex every other consumer at once. Mirrors
-// `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (176 bytes)
-// alongside vulkan/shaders/object_common.glsl and
-// metal/shaders/object_common.msl.
+// The bindless per-object record, for the HLSL shaders that still stride the
+// per-frame StructuredBuffer: the cull kernel is the only one left, the rest
+// having moved to `shaders/object_common.slang`. Both copies mirror
+// `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (176 bytes) and
+// must agree, since the kernel writes the records the single-source passes read.
 //
 // The DX HLSL path has no include handler, so this file is substituted into the
 // consuming shader at its OBJECT_DATA marker (builtins::HlslProgram::source).

@@ -903,6 +903,34 @@ impl VkContext {
         // (a transfer write). A single TRANSFER_WRITE → SHADER_READ
         // barrier between the resets and the dispatch makes the writes
         // visible to the compute kernel.
+        //
+        // A counter is one buffer per emitter, not one per frame in flight, so
+        // the reset also has to be ordered against the previous frame's reset
+        // and dispatch: nothing else does, and the emitter would spawn against
+        // a budget from the wrong frame. DirectX gets the same dependency from
+        // its UNORDERED_ACCESS → COPY_DEST transition. Both prior writes need
+        // making available; the kernel's spawn claim also *reads* the counter,
+        // which the COMPUTE_SHADER source stage covers on its own.
+        //
+        // SAFETY: `cmd` is the frame's recording command buffer, inside a
+        // recording scope and outside a render pass, which is where
+        // `vkCmdPipelineBarrier` is legal; the barrier owns no resource handles
+        // (a global `VkMemoryBarrier`, no buffer or image references to
+        // outlive), and `from_ref` gives the one-element slice the count implies.
+        unsafe {
+            let mem_barrier = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                std::slice::from_ref(&mem_barrier),
+                &[],
+                &[],
+            );
+        }
         for (data, gpu_slot) in params_per_emitter
             .iter()
             .zip(self.particle_emitter_state.iter())

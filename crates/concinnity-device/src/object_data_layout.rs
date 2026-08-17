@@ -4,9 +4,9 @@
 // once per shading language (vulkan/shaders/object_common.glsl,
 // directx/shaders/object_common.hlsl, metal/shaders/object_common.msl) and each
 // fragment is spliced into its backend's passes at an `{OBJECT_DATA}` marker.
-// The single-source bindless main pass carries a fourth declaration inside
-// `shaders/main_bindless.slang`, which every backend now strides the same
-// buffer through, so it is checked alongside them.
+// `shaders/object_common.slang` is the fourth, spliced into every single-source
+// pass that strides the buffer on all three backends at once, so it is checked
+// alongside them.
 //
 // Only one backend compiles per build, so the fragments are checked here as
 // plain text rather than through any backend module: a macOS build still catches
@@ -18,6 +18,7 @@ use core::mem::{offset_of, size_of};
 const VULKAN_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/vulkan/shaders");
 const DIRECTX_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/directx/shaders");
 const METAL_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
+const SLANG_SHADERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shaders");
 
 // What a declared member contributes to the record's byte layout.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,8 +66,8 @@ const FRAGMENTS: &[Fragment] = &[
         vec3: "packed_float3",
     },
     Fragment {
-        label: "main_bindless.slang",
-        source: include_str!("shaders/main_bindless.slang"),
+        label: "object_common.slang",
+        source: include_str!("shaders/object_common.slang"),
         mat4: "float4x4",
         vec3: "float3",
     },
@@ -339,9 +340,15 @@ fn no_shader_redeclares_the_record() {
         "object_common.glsl",
         "object_common.hlsl",
         "object_common.msl",
+        "object_common.slang",
     ];
     let mut declarations = 0usize;
-    for dir in [VULKAN_SHADERS, DIRECTX_SHADERS, METAL_SHADERS] {
+    for dir in [
+        VULKAN_SHADERS,
+        DIRECTX_SHADERS,
+        METAL_SHADERS,
+        SLANG_SHADERS,
+    ] {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir}: {e}")) {
             let path = entry.expect("dir entry").path();
             let name = path
@@ -356,7 +363,7 @@ fn no_shader_redeclares_the_record() {
             }
             assert!(
                 fragments.contains(&name.as_str()),
-                "{name} declares its own GpuObjectData; splice {{OBJECT_DATA}} instead"
+                "{name} declares its own GpuObjectData; splice the shared fragment instead"
             );
             declarations += 1;
         }

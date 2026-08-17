@@ -98,7 +98,14 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::GraphDriven,
             ),
             ("hiz.rs", "cmd_pipeline_barrier", 1, Reason::IntraPass),
-            ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            // The sim is bundled inside the ParticlesDraw node, so its
+            // transfer -> compute -> vertex chain never crosses a node
+            // boundary. The third orders the spawn-counter reset against the
+            // previous frame's reset and dispatch: one buffer per emitter
+            // rather than one per frame in flight, so the same node's previous
+            // instance is what it waits on, and the graph models neither the
+            // buffer nor a cross-frame edge on it.
+            ("particle.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
             ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
             ("raytrace.rs", "cmd_pipeline_barrier", 6, Reason::OutOfFrame),

@@ -47,9 +47,9 @@ pub(super) fn ns_str(s: &str) -> Retained<NSString> {
 // `unknown_name_panics_even_with_hot_reload`.
 // The shared bindless per-object record, substituted into every pass that
 // strides the per-frame object buffer at its `{OBJECT_DATA}` marker. Sole MSL
-// declaration of `GpuObjectData`: the main pass, G-buffer prepass, shadow pass
-// and cull kernel all read the same buffer, so a per-shader copy is a silent
-// layout-drift hazard. `newLibraryWithSource` resolves no include paths, hence
+// declaration of `GpuObjectData`: the legacy per-draw main pass and the cull
+// kernel read the same buffer the single-source passes do, so a per-shader copy
+// is a silent layout-drift hazard. `newLibraryWithSource` resolves no include paths, hence
 // the marker; the build script's precompile substitutes the same fragment
 // before handing each shader to `xcrun metal`.
 const OBJECT_COMMON_MSL: &str = include_str!("shaders/object_common.msl");
@@ -78,7 +78,6 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         "cull.metal" => include_str!("shaders/cull.metal"),
         "decal.metal" => include_str!("shaders/decal.metal"),
         "fog.metal" => include_str!("shaders/fog.metal"),
-        "gbuffer_prepass.metal" => include_str!("shaders/gbuffer_prepass.metal"),
         "glass.metal" => include_str!("shaders/glass.metal"),
         "glass_mesh_rt.metal" => include_str!("shaders/glass_mesh_rt.metal"),
         "glass_rt.metal" => include_str!("shaders/glass_rt.metal"),
@@ -87,7 +86,6 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
         "particle.metal" => include_str!("shaders/particle.metal"),
         "rt_reflections.metal" => include_str!("shaders/rt_reflections.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
-        "shadow.metal" => include_str!("shaders/shadow.metal"),
         "text.metal" => include_str!("shaders/text.metal"),
         "water.metal" => include_str!("shaders/water.metal"),
         "water_rt.metal" => include_str!("shaders/water_rt.metal"),
@@ -350,12 +348,7 @@ mod shader_source_tests {
     // source while a shipped binary loads the build-time metallib.
     #[test]
     fn object_data_shaders_splice_the_shared_record() {
-        for name in [
-            "main.metal",
-            "shadow.metal",
-            "cull.metal",
-            "gbuffer_prepass.metal",
-        ] {
+        for name in ["main.metal", "cull.metal"] {
             for hot_reload in [false, true] {
                 let src = shader_source(hot_reload, name);
                 assert!(

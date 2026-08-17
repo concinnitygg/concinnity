@@ -17,8 +17,22 @@
 
 use std::borrow::Cow;
 
-const POST_COMMON_SLANG: &str = include_str!("shaders/post_common.slang");
-const POST_COMMON_MARKER: &str = "{POST_COMMON}";
+// The shared fragments, as (marker, file, embedded copy). `SLANG_SHADER_FRAGMENTS`
+// in the device build script is the build-time half of this table; the two must
+// agree or a build script and a renderer would key different text for the same
+// program.
+const FRAGMENTS: &[(&str, &str, &str)] = &[
+    (
+        "{POST_COMMON}",
+        "post_common.slang",
+        include_str!("shaders/post_common.slang"),
+    ),
+    (
+        "{OBJECT_COMMON}",
+        "object_common.slang",
+        include_str!("shaders/object_common.slang"),
+    ),
+];
 
 // The exact source text a program compiles. `file` names the `.slang` under
 // `src/shaders/`; `embedded` is its `include_str!` copy, used when hot-reload
@@ -30,15 +44,13 @@ pub(crate) fn assemble(
     embedded: &'static str,
     defines: &[(&str, &str)],
 ) -> String {
-    let base = read(hot_reload, file, embedded);
-    let spliced = if base.contains(POST_COMMON_MARKER) {
-        Cow::Owned(base.replace(
-            POST_COMMON_MARKER,
-            &read(hot_reload, "post_common.slang", POST_COMMON_SLANG),
-        ))
-    } else {
-        base
-    };
+    let mut spliced = read(hot_reload, file, embedded);
+    for (marker, fragment_file, fragment) in FRAGMENTS {
+        if spliced.contains(marker) {
+            let text = read(hot_reload, fragment_file, fragment);
+            spliced = Cow::Owned(spliced.replace(marker, &text));
+        }
+    }
     concinnity_slang::inject_defines(&spliced, defines)
 }
 
@@ -98,9 +110,30 @@ mod tests {
     #[test]
     fn the_post_common_marker_is_spliced_into_the_body() {
         let src = assemble(false, "x.slang", "A\n{POST_COMMON}\nB\n", &[]);
-        assert!(!src.contains(POST_COMMON_MARKER));
+        assert!(!src.contains("{POST_COMMON}"));
         assert!(src.contains("float2 combined_size("));
         assert!(src.starts_with("A\n") && src.ends_with("\nB\n"));
+    }
+
+    // The per-object record, the object-id reconstruction and the normal matrix
+    // all arrive from one fragment, so the three passes that stride the object
+    // buffer cannot drift apart in their declaration of it.
+    #[test]
+    fn the_object_common_marker_is_spliced_into_the_body() {
+        let src = assemble(false, "x.slang", "A\n{OBJECT_COMMON}\nB\n", &[]);
+        assert!(!src.contains("{OBJECT_COMMON}"));
+        assert!(src.contains("struct GpuObjectData"));
+        assert!(src.contains("uint object_instance_index("));
+        assert!(src.contains("float3x3 normal_matrix("));
+    }
+
+    // A body carrying both markers gets both, so the table is a loop rather
+    // than a single special case.
+    #[test]
+    fn every_marker_in_one_body_is_spliced() {
+        let src = assemble(false, "x.slang", "{POST_COMMON}\n{OBJECT_COMMON}\n", &[]);
+        assert!(src.contains("float2 combined_size("));
+        assert!(src.contains("struct GpuObjectData"));
     }
 
     // A shader with no marker keeps its text byte for byte, so the splice

@@ -23,12 +23,12 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::math::IDENTITY4;
 use crate::directx::pipeline::{
     main_input_layout, serialize_and_create_root_sig, skinned_input_layout,
 };
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     create_buffer, create_main_depth_texture, write_format_rtv, write_format_srv,
 };
@@ -77,20 +77,19 @@ fn compile_gbuffer_shaders(
     need_skinned: bool,
     hot_reload: bool,
 ) -> Result<GbufferShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(GbufferShaders {
-        vs_static: builtins::GBUFFER_PREPASS_VERT.compile(&ctx)?,
+        vs_static: slang_builtins::GBUFFER_PREPASS_VERT.compile(hot_reload)?,
         vs_instanced: if need_instanced {
-            builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(&ctx)?
+            slang_builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(hot_reload)?
         } else {
             Vec::new()
         },
         vs_skinned: if need_skinned {
-            builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?
+            slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(hot_reload)?
         } else {
             Vec::new()
         },
-        ps: builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?,
+        ps: slang_builtins::GBUFFER_PREPASS_FRAG.compile(hot_reload)?,
     })
 }
 
@@ -326,6 +325,10 @@ fn create_gbuffer_pso(
 // both slots (prev_pos == cur_pos), the skinned tail binds the current deformed
 // buffer to slot 0 and the previous-frame deformed buffer to slot 1. Tangent +
 // UV are unused (the pre-pass samples no textures), so they are omitted.
+//
+// The previous position carries its own semantic rather than POSITION1 because
+// slangc appends an index to whatever a semantic spells; see the declaration in
+// shaders/gbuffer_prepass.slang.
 fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     vec![
         D3D12_INPUT_ELEMENT_DESC {
@@ -356,8 +359,8 @@ fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
             InstanceDataStepRate: 0,
         },
         D3D12_INPUT_ELEMENT_DESC {
-            SemanticName: windows::core::s!("POSITION"),
-            SemanticIndex: 1,
+            SemanticName: windows::core::s!("PREVPOSITION"),
+            SemanticIndex: 0,
             Format: DXGI_FORMAT_R32G32B32_FLOAT,
             InputSlot: 1,
             AlignedByteOffset: 0,
@@ -447,9 +450,8 @@ pub(in crate::directx) fn build_gbuffer_bindless(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> Result<GbufferBindlessPipeline, String> {
-    let ctx = Ctx::plain(hot_reload);
-    let vs = builtins::GBUFFER_BINDLESS_VERT.compile(&ctx)?;
-    let ps = builtins::GBUFFER_BINDLESS_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::GBUFFER_BINDLESS_VERT.compile(hot_reload)?;
+    let ps = slang_builtins::GBUFFER_BINDLESS_FRAG.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_gbuffer_bindless_root_signature(device))?;
     let layout = gbuffer_bindless_input_layout();
     let pso = dump_on_err(
@@ -711,9 +713,8 @@ impl GbufferResources {
         hot_reload: bool,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> Result<(), String> {
-        let ctx = Ctx::plain(hot_reload);
-        let vs = builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?;
-        let ps = builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?;
+        let vs = slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(hot_reload)?;
+        let ps = slang_builtins::GBUFFER_PREPASS_FRAG.compile(hot_reload)?;
         let root_sig = match self.skinned_root_sig.as_ref() {
             Some(rs) => rs.clone(),
             None => dump_on_err(info_queue, create_gbuffer_skinned_root_signature(device))?,

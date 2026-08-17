@@ -17,6 +17,7 @@ use super::context::*;
 use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
 use super::math::*;
 use super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
+use super::slang_builtins;
 use super::texture::*;
 
 // Skinned pipeline builders
@@ -36,7 +37,7 @@ type SkinnedShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 fn compile_skinned_shaders(frag_bytes: &[u8], hot_reload: bool) -> Result<SkinnedShaders, String> {
     let ctx = Ctx::plain(hot_reload);
     let main_vs = builtins::SKINNED_VERT.compile(&ctx)?;
-    let shadow_vs = builtins::SKINNED_SHADOW_VERT.compile(&ctx)?;
+    let shadow_vs = slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)?;
     let frag_ps = if !frag_bytes.is_empty() {
         frag_bytes.to_vec()
     } else {

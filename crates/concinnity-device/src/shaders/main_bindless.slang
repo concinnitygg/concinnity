@@ -52,26 +52,7 @@ struct ViewUniforms
     float shade_mode; float _ep1;
 };
 
-struct GpuObjectData
-{
-    float4x4 model;
-    float3 tint;     float roughness;
-    float3 emissive; float metallic;
-    uint  albedo_index;
-    uint  normal_index;
-    float macro_variation;
-    float terrain_blend;
-    float3 bb_min;   float cull_distance;
-    float3 bb_max;   float secondary_blend_sharpness;
-    uint  albedo_secondary_index;
-    uint  normal_secondary_index;
-    uint  emissive_map_index;
-    uint  orm_map_index;
-    float alpha_cutoff;
-    float _pad0;
-    float _pad1;
-    float _pad2;
-};
+{OBJECT_COMMON}
 
 struct DirLight   { float4 dir_i; float4 col; };
 struct PointLight { float4 pos_r; float4 col_i; };
@@ -684,43 +665,6 @@ struct VertexOut
 
 // Inverse-transpose of the model's upper 3x3 via the adjugate, so normals stay
 // perpendicular under non-uniform scale.
-float3x3 normal_matrix(float4x4 model)
-{
-    // Slang subscripts a matrix by row, so these are the upper 3x3's rows. The
-    // cofactor matrix built from them is the inverse-transpose scaled by the
-    // determinant; the normalize() at every use site absorbs that scale.
-    float3 a0 = model[0].xyz;
-    float3 a1 = model[1].xyz;
-    float3 a2 = model[2].xyz;
-    float3 r0 = cross(a1, a2);
-    float3 r1 = cross(a2, a0);
-    float3 r2 = cross(a0, a1);
-    // mul(M, v) with these as rows applies the inverse-transpose to v.
-    return float3x3(r0, r1, r2);
-}
-
-#ifndef DXIL_ABI
-
-// The engine encodes the object id as the draw's first-instance value. The
-// targets disagree on what an instance-id builtin contains: SPIR-V's
-// InstanceIndex and Metal's instance_id include the base instance, while
-// SV_InstanceID is defined zero-based (Slang subtracts the base to honor
-// that). Reconstruct the object id explicitly from both builtins.
-uint object_instance_index(uint zero_based_iid, uint first_instance)
-{
-    __target_switch
-    {
-    case metal:
-        // Slang's Metal lowering passes instance_id through unsubtracted, and
-        // instance_id already includes base_instance.
-        return zero_based_iid;
-    default:
-        return zero_based_iid + first_instance;
-    }
-}
-
-#endif
-
 [shader("vertex")]
 VertexOut vertex_main_bindless(
     VertexIn v

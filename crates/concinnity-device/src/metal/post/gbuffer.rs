@@ -12,18 +12,17 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLClearColor, MTLCommandBuffer as _, MTLDevice as _, MTLLibrary as _, MTLLoadAction,
-    MTLPixelFormat, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction, MTLTexture,
-    MTLTextureDescriptor, MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat,
-    MTLVertexStepFunction,
+    MTLClearColor, MTLCommandBuffer as _, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
+    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
+    MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::gfx::mesh_payload::Vertex;
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::{ns_str, shader_library};
 use crate::metal::scoped_encoder::ScopedEncoder;
+use crate::metal::slang_shaders::{self, SlangLib};
 use crate::metal::uniforms::{GBufferView, SsrPrepassMat, VelocityModelUniforms};
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
@@ -98,25 +97,22 @@ pub(crate) fn create_gbuffer_targets(
 
 // Pipeline
 
-// Build one G-buffer pre-pass pipeline for the given vertex entry
-// (`gbuffer_prepass_vertex{,_instanced,_skinned}`). All three share
-// `gbuffer_prepass_fragment` and render to three single-sample MRT targets
+// Build one G-buffer pre-pass pipeline for the given single-source vertex
+// variant (`GBUFFER_PREPASS_VERT{,_INSTANCED,_SKINNED}`). All three share
+// `GBUFFER_PREPASS_FRAG` and render to three single-sample MRT targets
 // (`RGBA16Float` normal+depth, `R8Unorm` roughness, `RG16Float` velocity) plus
 // a `Depth32Float` z-buffer. `vert_desc` selects the static (56-byte) or
-// skinned (80-byte) vertex layout.
+// skinned (80-byte) vertex layout. Each entry compiles to its own metallib, so
+// the two stages come from separate libraries and pair by semantic.
 pub(crate) fn build_gbuffer_prepass_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    vertex_entry: &str,
+    vertex: &SlangLib,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
-    let vert_fn = library
-        .newFunctionWithName(&ns_str(vertex_entry))
-        .ok_or_else(|| format!("{} not found in G-buffer pre-pass metallib", vertex_entry))?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("gbuffer_prepass_fragment"))
-        .ok_or("gbuffer_prepass_fragment not found")?;
+    let vert_fn = slang_shaders::entry_function(device, vertex, hot_reload)?;
+    let frag_fn =
+        slang_shaders::entry_function(device, &slang_shaders::GBUFFER_PREPASS_FRAG, hot_reload)?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(vert_desc));
@@ -189,13 +185,16 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "gbuffer_prepass.metal")?;
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("gbuffer_prepass_vertex_bindless"))
-        .ok_or("gbuffer_prepass_vertex_bindless not found in G-buffer pre-pass metallib")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("gbuffer_prepass_fragment_bindless"))
-        .ok_or("gbuffer_prepass_fragment_bindless not found")?;
+    let vert_fn = slang_shaders::entry_function(
+        device,
+        &slang_shaders::GBUFFER_PREPASS_VERT_BINDLESS,
+        hot_reload,
+    )?;
+    let frag_fn = slang_shaders::entry_function(
+        device,
+        &slang_shaders::GBUFFER_PREPASS_FRAG_BINDLESS,
+        hot_reload,
+    )?;
 
     let vert_desc = gbuffer_bindless_vertex_descriptor();
     let desc = MTLRenderPipelineDescriptor::new();

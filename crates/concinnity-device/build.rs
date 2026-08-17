@@ -41,7 +41,10 @@ const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_comm
 // `crate::slang_source::assemble` splices when the renderer compiles one at
 // runtime. The two tables must agree: a mismatch would have the build script
 // and the renderer key different text for the same program.
-const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{POST_COMMON}", "post_common.slang")];
+const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[
+    ("{POST_COMMON}", "post_common.slang"),
+    ("{OBJECT_COMMON}", "object_common.slang"),
+];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
 // baked into the single-source shaders at build time. Must match
@@ -93,6 +96,105 @@ const DXIL_ABI_REGISTERS: &[(&str, &str)] = &[
     ("cube_sampler", "s2"),
 ];
 
+// One variant of the G-buffer pre-pass / shadow families and the registers its
+// DirectX root signature declares.
+struct GeometryAbi {
+    file: &'static str,
+    gate: &'static str,
+    entry: &'static str,
+    profile: &'static str,
+    registers: &'static [(&'static str, &'static str)],
+}
+
+// The G-buffer pre-pass and shadow root signatures, from
+// `src/directx/post/gbuffer.rs`, `init/pipelines.rs` and `resources.rs`. These
+// layouts are engine-internal rather than a world-shader contract, but they are
+// pinned for a sharper reason: the `.slang` files are shared with Metal and
+// Vulkan, whose hosts bind the same declarations at entirely different slots,
+// so an edit made on either of those platforms cannot see a DirectX root
+// signature at all. `dx_crosscheck.sh` runs this script's DirectX branch, which
+// is where such an edit gets caught.
+const SLANG_DXIL_GEOMETRY_ABI: &[GeometryAbi] = &[
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_STATIC",
+        entry: "gbuffer_prepass_vertex",
+        profile: "vs_6_0",
+        registers: &[("gb_view", "b0"), ("gb_model", "b1")],
+    },
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_INSTANCED",
+        entry: "gbuffer_prepass_vertex_instanced",
+        profile: "vs_6_0",
+        registers: &[("gb_view", "b0"), ("instances", "t0")],
+    },
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_SKINNED",
+        entry: "gbuffer_prepass_vertex_skinned",
+        profile: "vs_6_0",
+        registers: &[
+            ("gb_view", "b0"),
+            ("gb_model", "b1"),
+            ("cur_joints", "t0"),
+            ("prev_joints", "t1"),
+        ],
+    },
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_BINDLESS",
+        entry: "gbuffer_prepass_vertex_bindless",
+        profile: "vs_6_0",
+        registers: &[
+            ("objid_cb", "b0"),
+            ("gb_view", "b1"),
+            ("objects", "t0"),
+            ("prev_models", "t1"),
+        ],
+    },
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_FRAGMENT",
+        entry: "gbuffer_prepass_fragment",
+        profile: "ps_6_0",
+        registers: &[("gb_mat", "b0")],
+    },
+    GeometryAbi {
+        file: "gbuffer_prepass.slang",
+        gate: "GB_FRAGMENT_BINDLESS",
+        entry: "gbuffer_prepass_fragment_bindless",
+        profile: "ps_6_0",
+        registers: &[],
+    },
+    GeometryAbi {
+        file: "shadow.slang",
+        gate: "SHADOW_STATIC",
+        entry: "shadow_vertex_main",
+        profile: "vs_6_0",
+        registers: &[("push", "b0"), ("shadow_cb", "b1")],
+    },
+    GeometryAbi {
+        file: "shadow.slang",
+        gate: "SHADOW_SKINNED",
+        entry: "shadow_vertex_main_skinned",
+        profile: "vs_6_0",
+        registers: &[("push", "b0"), ("shadow_cb", "b1"), ("joints", "t0")],
+    },
+    GeometryAbi {
+        file: "shadow.slang",
+        gate: "SHADOW_BINDLESS",
+        entry: "shadow_vertex_bindless",
+        profile: "vs_6_0",
+        registers: &[
+            ("objid_cb", "b0"),
+            ("shadow_cb", "b1"),
+            ("push", "b2"),
+            ("objects", "t0"),
+        ],
+    },
+];
+
 // The single-source engine shaders the Metal backend precompiles to metallibs.
 // One spec per variant library; `name` is the renderer's lookup key.
 const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
@@ -125,6 +227,60 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         file: "hiz_build.slang",
         entries: &["hiz_downsample"],
         defines: &[("HIZ_DOWNSAMPLE", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_vert.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_vertex"],
+        defines: &[("GB_STATIC", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_vert_instanced.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_vertex_instanced"],
+        defines: &[("GB_INSTANCED", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_vert_skinned.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_vertex_skinned"],
+        defines: &[("GB_SKINNED", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_vert_bindless.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_vertex_bindless"],
+        defines: &[("GB_BINDLESS", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_frag.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_fragment"],
+        defines: &[("GB_FRAGMENT", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "gbuffer_prepass_frag_bindless.slang",
+        file: "gbuffer_prepass.slang",
+        entries: &["gbuffer_prepass_fragment_bindless"],
+        defines: &[("GB_FRAGMENT_BINDLESS", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "shadow_vert.slang",
+        file: "shadow.slang",
+        entries: &["shadow_vertex_main"],
+        defines: &[("SHADOW_STATIC", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "shadow_vert_skinned.slang",
+        file: "shadow.slang",
+        entries: &["shadow_vertex_main_skinned"],
+        defines: &[("SHADOW_SKINNED", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "shadow_vert_bindless.slang",
+        file: "shadow.slang",
+        entries: &["shadow_vertex_bindless"],
+        defines: &[("SHADOW_BINDLESS", "1"), ("METAL_BINDINGS", "1")],
     },
     SlangLibSpec {
         name: "fullscreen_vert.slang",
@@ -273,8 +429,7 @@ fn assert_slang_metal_abi(slang_dir: &std::path::Path) {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source = std::fs::read_to_string(slang_dir.join("main_bindless.slang"))
-        .expect("read main_bindless.slang");
+    let source = slang_source(slang_dir, "main_bindless.slang");
     let job = slang::SlangJob {
         source: &slang::inject_defines(&source, SLANG_MAIN_DEFINES),
         file_name: "main_bindless_abi_check.slang",
@@ -325,9 +480,10 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
     if slang::slangc_path().is_none() {
         return;
     }
-    let source = std::fs::read_to_string(slang_dir.join("main_bindless.slang"))
-        .expect("read main_bindless.slang");
-    let source = slang::inject_defines(&source, SLANG_DXIL_MAIN_DEFINES);
+    let source = slang::inject_defines(
+        &slang_source(slang_dir, "main_bindless.slang"),
+        SLANG_DXIL_MAIN_DEFINES,
+    );
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // The two stages compile separately and each drops the resources it does
     // not read, so a register only has to hold in the stage that declares it.
@@ -336,33 +492,95 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
         ("vertex_main_bindless", "vs_6_0"),
         ("fragment_main_bindless", "ps_6_0"),
     ] {
-        let job = slang::SlangJob {
-            source: &source,
-            file_name: "main_bindless_abi_check.slang",
-            entries: &[entry],
-            target: slang::SlangTarget::Hlsl(profile),
-        };
-        let hlsl = slang::compile(&job, &out_dir)
-            .unwrap_or_else(|e| panic!("slang DXIL ABI check ({entry}): {e}"));
-        emitted.push_str(&String::from_utf8_lossy(&hlsl));
+        emitted.push_str(&emit_dxil_hlsl(
+            &out_dir,
+            "main_bindless_abi_check.slang",
+            &source,
+            entry,
+            profile,
+        ));
     }
     for (param, register) in DXIL_ABI_REGISTERS {
-        // Emitted parameter names carry a `_<n>` suffix (e.g. `view_cb_0`).
-        let expected = format!("{param}_0 : register({register})");
-        // Resource arrays emit as `name_0[int(N)] : register(...)`.
-        let expected_array = format!("{param}_0[");
-        assert!(
-            emitted.contains(&expected)
-                || emitted
-                    .lines()
-                    .any(|l| l.contains(&expected_array)
-                        && l.contains(&format!("register({register})"))),
-            "main_bindless.slang DXIL ABI drifted: expected `{param}` at register({register}). \
-             The DirectX bindless binding layout is frozen (world Shader assets build PSOs \
+        assert_dxil_register(
+            &emitted,
+            param,
+            register,
+            "The DirectX bindless binding layout is frozen (world Shader assets build PSOs \
              against the same root signature); fix the .slang declarations or the root \
-             signature in src/directx/init/pipelines.rs before shipping."
+             signature in src/directx/init/pipelines.rs before shipping.",
         );
     }
+    assert_slang_dxil_geometry_abi(slang_dir, &out_dir);
+}
+
+// The same check over the G-buffer pre-pass and shadow families. Each variant
+// compiles alone, so a register only has to hold in the entry that declares it.
+fn assert_slang_dxil_geometry_abi(slang_dir: &std::path::Path, out_dir: &std::path::Path) {
+    for abi in SLANG_DXIL_GEOMETRY_ABI {
+        let source = slang::inject_defines(
+            &slang_source(slang_dir, abi.file),
+            &[(abi.gate, "1"), ("DXIL_ABI", "1")],
+        );
+        let emitted = emit_dxil_hlsl(out_dir, abi.file, &source, abi.entry, abi.profile);
+        for (param, register) in abi.registers {
+            assert_dxil_register(
+                &emitted,
+                param,
+                register,
+                "Fix the .slang declaration or the matching root signature under \
+                 src/directx before shipping.",
+            );
+        }
+    }
+}
+
+// One entry point's emitted HLSL, for reading register annotations back out.
+fn emit_dxil_hlsl(
+    out_dir: &std::path::Path,
+    file_name: &str,
+    source: &str,
+    entry: &str,
+    profile: &'static str,
+) -> String {
+    let job = slang::SlangJob {
+        source,
+        file_name,
+        entries: &[entry],
+        target: slang::SlangTarget::Hlsl(profile),
+    };
+    let hlsl = slang::compile(&job, out_dir)
+        .unwrap_or_else(|e| panic!("slang DXIL ABI check ({entry}): {e}"));
+    String::from_utf8_lossy(&hlsl).into_owned()
+}
+
+fn assert_dxil_register(emitted: &str, param: &str, register: &str, remedy: &str) {
+    // Emitted parameter names carry a `_<n>` suffix (e.g. `view_cb_0`).
+    let expected = format!("{param}_0 : register({register})");
+    // Resource arrays emit as `name_0[int(N)] : register(...)`.
+    let expected_array = format!("{param}_0[");
+    assert!(
+        emitted.contains(&expected)
+            || emitted.lines().any(
+                |l| l.contains(&expected_array) && l.contains(&format!("register({register})"))
+            ),
+        "slang DXIL ABI drifted: expected `{param}` at register({register}). {remedy}"
+    );
+}
+
+// One `.slang` file with its shared fragments spliced in, matching what
+// `crate::slang_source::assemble` produces at run time. The ABI checks compile
+// real source, so they need the same assembly the renderer gets.
+fn slang_source(slang_dir: &std::path::Path, file: &str) -> String {
+    let read = |name: &str| {
+        std::fs::read_to_string(slang_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"))
+    };
+    let mut source = read(file);
+    for (marker, fragment) in SLANG_SHADER_FRAGMENTS {
+        if source.contains(marker) {
+            source = source.replace(marker, &read(fragment));
+        }
+    }
+    source
 }
 
 // Expose the define values baked into the precompiled slang metallibs so a

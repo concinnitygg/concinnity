@@ -69,13 +69,13 @@ pub(in crate::vulkan) struct GbufferShaders {
 pub(in crate::vulkan) fn compile_gbuffer_shaders(
     hot_reload: bool,
 ) -> Result<GbufferShaders, String> {
-    use super::super::builtins;
+    use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(GbufferShaders {
-        prepass_vs: builtins::GBUFFER_PREPASS_VERT.compile(&ctx)?,
-        prepass_instanced_vs: builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(&ctx)?,
-        prepass_skinned_vs: builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?,
-        prepass_fs: builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?,
+        prepass_vs: slang_builtins::GBUFFER_PREPASS_VERT.compile(&ctx)?,
+        prepass_instanced_vs: slang_builtins::GBUFFER_PREPASS_VERT_INSTANCED.compile(&ctx)?,
+        prepass_skinned_vs: slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&ctx)?,
+        prepass_fs: slang_builtins::GBUFFER_PREPASS_FRAG.compile(&ctx)?,
     })
 }
 
@@ -466,8 +466,8 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     } = scene;
 
     let compile_ctx = builtins::Ctx::plain(hot_reload);
-    let vs = builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
-    let fs = builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
+    let vs = super::super::slang_builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
+    let fs = super::super::slang_builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
 
     // Set 0: GbView UBO (binding 0) + prev_model SSBO (binding 1), both VERTEX.
     let set_layout = create_descriptor_set_layout(
@@ -1153,8 +1153,10 @@ impl GbufferResources {
         .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?;
         use super::super::builtins;
         let compile_ctx = builtins::Ctx::plain(self.hot_reload);
-        let sk_vs = builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&compile_ctx)?;
-        let prepass_fs = builtins::GBUFFER_PREPASS_FRAG.compile(&compile_ctx)?;
+        let sk_vs =
+            super::super::slang_builtins::GBUFFER_PREPASS_VERT_SKINNED.compile(&compile_ctx)?;
+        let prepass_fs =
+            super::super::slang_builtins::GBUFFER_PREPASS_FRAG.compile(&compile_ctx)?;
         let (sbindings, sattrs) = skinned_vertex_input();
         let pso = create_prepass_pipeline(
             device,

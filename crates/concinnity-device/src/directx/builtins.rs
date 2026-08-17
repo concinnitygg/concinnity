@@ -189,15 +189,11 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
 // Embedded sources shared by several programs.
 const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
 const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
-const SHADOW_VERT_HLSL: &str = include_str!("shaders/shadow_vert.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
 const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
 const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
 const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
 const RT_REFLECTIONS_HLSL: &str = include_str!("shaders/rt_reflections.hlsl");
-const GBUFFER_PREPASS_FRAG_HLSL: &str = include_str!("shaders/gbuffer_prepass_frag.hlsl");
-const GBUFFER_PREPASS_SKINNED_VERT_HLSL: &str =
-    include_str!("shaders/gbuffer_prepass_skinned_vert.hlsl");
 
 // Declaration shorthand: FXC, single `main` entry, no assembly.
 const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static str) -> HlslProgram {
@@ -240,28 +236,9 @@ pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     assembly: PLAIN,
 };
 pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_HLSL, "ps_5_1");
-pub(super) static SHADOW_VERT: HlslProgram =
-    fxc_main("shadow_vert.hlsl", SHADOW_VERT_HLSL, "vs_5_1");
-
-pub(super) static SHADOW_BINDLESS_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "shadow_bindless_vert.hlsl",
-        include_str!("shaders/shadow_bindless_vert.hlsl"),
-        "vs_5_1",
-    )
-};
 pub(super) static SKINNED_VERT: HlslProgram = fxc_main(
     "skinned_vert.hlsl",
     include_str!("shaders/skinned_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static SKINNED_SHADOW_VERT: HlslProgram = fxc_main(
-    "skinned_shadow_vert.hlsl",
-    include_str!("shaders/skinned_shadow_vert.hlsl"),
     "vs_5_1",
 );
 
@@ -392,43 +369,6 @@ pub(super) static GLASS_FRAG: HlslProgram = HlslProgram {
     ..GLASS_DECL
 };
 
-pub(super) static GBUFFER_PREPASS_VERT: HlslProgram = fxc_main(
-    "gbuffer_prepass_vert.hlsl",
-    include_str!("shaders/gbuffer_prepass_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: HlslProgram = fxc_main(
-    "gbuffer_prepass_instanced_vert.hlsl",
-    include_str!("shaders/gbuffer_prepass_instanced_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static GBUFFER_PREPASS_VERT_SKINNED: HlslProgram = fxc_main(
-    "gbuffer_prepass_skinned_vert.hlsl",
-    GBUFFER_PREPASS_SKINNED_VERT_HLSL,
-    "vs_5_1",
-);
-pub(super) static GBUFFER_PREPASS_FRAG: HlslProgram = fxc_main(
-    "gbuffer_prepass_frag.hlsl",
-    GBUFFER_PREPASS_FRAG_HLSL,
-    "ps_5_1",
-);
-pub(super) static GBUFFER_BINDLESS_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "gbuffer_bindless_vert.hlsl",
-        include_str!("shaders/gbuffer_bindless_vert.hlsl"),
-        "vs_5_1",
-    )
-};
-pub(super) static GBUFFER_BINDLESS_FRAG: HlslProgram = fxc_main(
-    "gbuffer_bindless_frag.hlsl",
-    include_str!("shaders/gbuffer_bindless_frag.hlsl"),
-    "ps_5_1",
-);
-
 // SM 6.5 programs (DXC): hardware ray-traced reflections, RT glass, and the
 // RT skinned-vertex refit kernel.
 const RT_REFLECTIONS_DECL: HlslProgram = HlslProgram {
@@ -497,10 +437,7 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &MAIN_VERT,
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,
-    &SHADOW_VERT,
-    &SHADOW_BINDLESS_VERT,
     &SKINNED_VERT,
-    &SKINNED_SHADOW_VERT,
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
@@ -518,12 +455,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &PARTICLE_FRAG,
     &GLASS_VERT,
     &GLASS_FRAG,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
-    &GBUFFER_PREPASS_FRAG,
-    &GBUFFER_BINDLESS_VERT,
-    &GBUFFER_BINDLESS_FRAG,
     &RT_FULLSCREEN_VERT,
     &RT_REFLECTIONS_FRAG,
     &RT_REFLECTIONS_FRAG_TEXTURED,
@@ -625,36 +556,6 @@ mod tests {
             );
             spliced += usize::from(declares);
         }
-        assert_eq!(spliced, 5, "object-data program count changed");
-    }
-
-    // The sky shell's half-extent tracks the camera far plane, so its corners
-    // always fall outside it. Every vertex path that rasterises scene geometry
-    // must pin sky verts to the far plane or those corners clip and the clear
-    // colour shows through. Skinned and instanced paths are excluded: neither
-    // ever carries skybox geometry. The bindless main pass ships from
-    // `src/shaders/main_bindless.slang` and is locked in `slang_builtins`.
-    #[test]
-    fn scene_vertex_shaders_pin_sky_to_the_far_plane() {
-        const MUST_PIN: &[(&str, &str)] = &[
-            (
-                "gbuffer_prepass_vert.hlsl",
-                include_str!("shaders/gbuffer_prepass_vert.hlsl"),
-            ),
-            (
-                "gbuffer_bindless_vert.hlsl",
-                include_str!("shaders/gbuffer_bindless_vert.hlsl"),
-            ),
-        ];
-        for (name, src) in MUST_PIN {
-            assert!(
-                src.contains("v.color.b > 1.5"),
-                "{name} lost the skybox sentinel test"
-            );
-            assert!(
-                src.contains("o.sv_pos.z = o.sv_pos.w"),
-                "{name} lost the far-plane pin"
-            );
-        }
+        assert_eq!(spliced, 3, "object-data program count changed");
     }
 }

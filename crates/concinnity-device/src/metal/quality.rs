@@ -24,6 +24,7 @@ use super::raytrace::{
     RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
 };
 use super::resources::skinning::make_skinned_vertex_descriptor;
+use super::slang_shaders;
 
 impl MtlContext {
     // Turn display sync (vsync) on or off at runtime via the view's backing
@@ -186,7 +187,7 @@ impl MtlContext {
             match build_gbuffer_prepass_pipeline(
                 &self.device,
                 &make_skinned_vertex_descriptor(),
-                "gbuffer_prepass_vertex_skinned",
+                &slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
                 self.hot_reload,
             ) {
                 Ok(p) => gbuffer.skinned_pipeline = Some(p),

@@ -48,6 +48,8 @@ pub(crate) struct SlangProgram {
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
+const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
@@ -103,6 +105,83 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     entry: "hiz_downsample",
     label: "hiz_downsample.slang",
     gate: Some("HIZ_DOWNSAMPLE"),
+    sizes: Sizes::None,
+};
+
+// The G-buffer pre-pass and shadow families. Every entry is its own program so
+// it declares only the resources it binds; the `[[vk::binding]]` annotations
+// reproduce the descriptor sets the GLSL declared, so the SPIR-V is a drop-in
+// against the untouched pipeline layouts.
+pub(super) static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex",
+    label: "gbuffer_prepass_vert.slang",
+    gate: Some("GB_STATIC"),
+    sizes: Sizes::None,
+};
+pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_instanced",
+    label: "gbuffer_prepass_vert_instanced.slang",
+    gate: Some("GB_INSTANCED"),
+    sizes: Sizes::None,
+};
+pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_skinned",
+    label: "gbuffer_prepass_vert_skinned.slang",
+    gate: Some("GB_SKINNED"),
+    sizes: Sizes::None,
+};
+pub(super) static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_bindless",
+    label: "gbuffer_prepass_vert_bindless.slang",
+    gate: Some("GB_BINDLESS"),
+    sizes: Sizes::None,
+};
+pub(super) static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_fragment",
+    label: "gbuffer_prepass_frag.slang",
+    gate: Some("GB_FRAGMENT"),
+    sizes: Sizes::None,
+};
+pub(super) static GBUFFER_BINDLESS_FRAG: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_fragment_bindless",
+    label: "gbuffer_prepass_frag_bindless.slang",
+    gate: Some("GB_FRAGMENT_BINDLESS"),
+    sizes: Sizes::None,
+};
+pub(super) static SHADOW_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_main",
+    label: "shadow_vert.slang",
+    gate: Some("SHADOW_STATIC"),
+    sizes: Sizes::None,
+};
+pub(super) static SKINNED_SHADOW_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_main_skinned",
+    label: "shadow_vert_skinned.slang",
+    gate: Some("SHADOW_SKINNED"),
+    sizes: Sizes::None,
+};
+pub(super) static SHADOW_BINDLESS_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_bindless",
+    label: "shadow_vert_bindless.slang",
+    gate: Some("SHADOW_BINDLESS"),
     sizes: Sizes::None,
 };
 
@@ -223,6 +302,15 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_MSAA,
     &HIZ_INIT_SINGLE,
     &HIZ_DOWNSAMPLE,
+    &GBUFFER_PREPASS_VERT,
+    &GBUFFER_PREPASS_VERT_INSTANCED,
+    &GBUFFER_PREPASS_VERT_SKINNED,
+    &GBUFFER_BINDLESS_VERT,
+    &GBUFFER_PREPASS_FRAG,
+    &GBUFFER_BINDLESS_FRAG,
+    &SHADOW_VERT,
+    &SKINNED_SHADOW_VERT,
+    &SHADOW_BINDLESS_VERT,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,
@@ -330,11 +418,13 @@ mod tests {
     fn every_program_assembles_with_its_fragments_spliced() {
         for p in ALL {
             let src = p.source(&ctx(4, 4));
-            assert!(
-                !src.contains("{POST_COMMON}"),
-                "{}: unspliced fragment marker",
-                p.label
-            );
+            for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+                assert!(
+                    !src.contains(marker),
+                    "{}: unspliced fragment marker {marker}",
+                    p.label
+                );
+            }
         }
     }
 

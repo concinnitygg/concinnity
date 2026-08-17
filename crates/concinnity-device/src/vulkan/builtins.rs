@@ -257,35 +257,11 @@ pub(super) static MAIN_VERT_INSTANCED: GlslProgram = glsl(
     Vertex,
     "vert_instanced.glsl",
 );
-pub(super) static SHADOW_VERT: GlslProgram = glsl(
-    "shadow.vert",
-    include_str!("shaders/shadow.vert"),
-    Vertex,
-    "shadow_vert.glsl",
-);
-pub(super) static SHADOW_BINDLESS_VERT: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "shadow_bindless.vert",
-        include_str!("shaders/shadow_bindless.vert"),
-        Vertex,
-        "shadow_bindless.vert",
-    )
-};
 pub(super) static SKINNED_VERT: GlslProgram = glsl(
     "skinned.vert",
     include_str!("shaders/skinned.vert"),
     Vertex,
     "skinned_vert.glsl",
-);
-pub(super) static SKINNED_SHADOW_VERT: GlslProgram = glsl(
-    "skinned_shadow.vert",
-    include_str!("shaders/skinned_shadow.vert"),
-    Vertex,
-    "skinned_shadow_vert.glsl",
 );
 
 pub(super) static CULL: GlslProgram = GlslProgram {
@@ -333,48 +309,6 @@ pub(super) static TEXT_FRAG: GlslProgram = glsl(
     include_str!("shaders/text.frag"),
     Fragment,
     "text_frag.glsl",
-);
-pub(super) static GBUFFER_PREPASS_VERT: GlslProgram = glsl(
-    "gbuffer_prepass.vert",
-    include_str!("shaders/gbuffer_prepass.vert"),
-    Vertex,
-    "gbuffer_prepass.vert",
-);
-pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: GlslProgram = glsl(
-    "gbuffer_prepass_instanced.vert",
-    include_str!("shaders/gbuffer_prepass_instanced.vert"),
-    Vertex,
-    "gbuffer_prepass_instanced.vert",
-);
-pub(super) static GBUFFER_PREPASS_VERT_SKINNED: GlslProgram = glsl(
-    "gbuffer_prepass_skinned.vert",
-    include_str!("shaders/gbuffer_prepass_skinned.vert"),
-    Vertex,
-    "gbuffer_prepass_skinned.vert",
-);
-pub(super) static GBUFFER_PREPASS_FRAG: GlslProgram = glsl(
-    "gbuffer_prepass.frag",
-    include_str!("shaders/gbuffer_prepass.frag"),
-    Fragment,
-    "gbuffer_prepass.frag",
-);
-pub(super) static GBUFFER_BINDLESS_VERT: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        object_data: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "gbuffer_bindless.vert",
-        include_str!("shaders/gbuffer_bindless.vert"),
-        Vertex,
-        "gbuffer_bindless.vert",
-    )
-};
-pub(super) static GBUFFER_BINDLESS_FRAG: GlslProgram = glsl(
-    "gbuffer_bindless.frag",
-    include_str!("shaders/gbuffer_bindless.frag"),
-    Fragment,
-    "gbuffer_bindless.frag",
 );
 
 pub(super) static PARTICLE_SIMULATE: GlslProgram = glsl(
@@ -592,21 +526,12 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &MAIN_VERT,
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,
-    &SHADOW_VERT,
-    &SHADOW_BINDLESS_VERT,
     &SKINNED_VERT,
-    &SKINNED_SHADOW_VERT,
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
     &TEXT_VERT,
     &TEXT_FRAG,
-    &GBUFFER_PREPASS_VERT,
-    &GBUFFER_PREPASS_VERT_INSTANCED,
-    &GBUFFER_PREPASS_VERT_SKINNED,
-    &GBUFFER_PREPASS_FRAG,
-    &GBUFFER_BINDLESS_VERT,
-    &GBUFFER_BINDLESS_FRAG,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
@@ -769,7 +694,7 @@ mod tests {
             );
             spliced += usize::from(declares);
         }
-        assert_eq!(spliced, 5, "object-data program count changed");
+        assert_eq!(spliced, 3, "object-data program count changed");
     }
 
     // Every probe program sizes its cube array from the context, so the GLSL

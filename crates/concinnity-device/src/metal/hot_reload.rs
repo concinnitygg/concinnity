@@ -40,7 +40,7 @@ use super::post::{
 use super::resources::skinning::{
     build_skinned_main_pipeline, build_skinned_shadow_pipeline, make_skinned_vertex_descriptor,
 };
-use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::slang_shaders::{self, SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -291,14 +291,19 @@ impl MtlContext {
         );
         let gbuffer_prepass = rebuild_if_live!(
             self.gbuffer.prepass_pipeline.is_some(),
-            build_gbuffer_prepass_pipeline(device, &static_vdesc, "gbuffer_prepass_vertex", hr)
+            build_gbuffer_prepass_pipeline(
+                device,
+                &static_vdesc,
+                &slang_shaders::GBUFFER_PREPASS_VERT,
+                hr
+            )
         );
         let gbuffer_instanced = rebuild_if_live!(
             self.gbuffer.instanced_pipeline.is_some(),
             build_gbuffer_prepass_pipeline(
                 device,
                 &static_vdesc,
-                "gbuffer_prepass_vertex_instanced",
+                &slang_shaders::GBUFFER_PREPASS_VERT_INSTANCED,
                 hr,
             )
         );
@@ -354,7 +359,7 @@ impl MtlContext {
             build_gbuffer_prepass_pipeline(
                 device,
                 skinned_vdesc.as_ref().expect("skinned vdesc just built"),
-                "gbuffer_prepass_vertex_skinned",
+                &slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
                 hr,
             )
         );

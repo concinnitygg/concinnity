@@ -16,11 +16,11 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::MTLLibrary;
+use objc2_metal::{MTLDevice, MTLFunction, MTLLibrary};
 
 use concinnity_slang as slang;
 
-use super::pipeline::load_library;
+use super::pipeline::{load_library, ns_str};
 
 // The Metal texture-pool capacity and probe-array length the build script
 // baked into the precompiled metallibs. Locked to the crate's own constants
@@ -49,6 +49,8 @@ const MAIN_DEFINES: &[(&str, &str)] = &[
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
+const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
@@ -96,6 +98,84 @@ pub(super) static HIZ_DOWNSAMPLE: SlangLib = SlangLib {
     embedded: HIZ_BUILD_SLANG,
     entries: &["hiz_downsample"],
     defines: &[("HIZ_DOWNSAMPLE", "1")],
+};
+
+// The G-buffer pre-pass and shadow families. Every entry compiles on its own so
+// it declares only the resources it binds, and `METAL_BINDINGS` selects the
+// constant shape this host writes (see the file headers).
+const GB_STATIC: &[(&str, &str)] = &[("GB_STATIC", "1"), ("METAL_BINDINGS", "1")];
+const GB_INSTANCED: &[(&str, &str)] = &[("GB_INSTANCED", "1"), ("METAL_BINDINGS", "1")];
+const GB_SKINNED: &[(&str, &str)] = &[("GB_SKINNED", "1"), ("METAL_BINDINGS", "1")];
+const GB_BINDLESS: &[(&str, &str)] = &[("GB_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
+const GB_FRAGMENT: &[(&str, &str)] = &[("GB_FRAGMENT", "1"), ("METAL_BINDINGS", "1")];
+const GB_FRAGMENT_BINDLESS: &[(&str, &str)] =
+    &[("GB_FRAGMENT_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
+const SHADOW_STATIC: &[(&str, &str)] = &[("SHADOW_STATIC", "1"), ("METAL_BINDINGS", "1")];
+const SHADOW_SKINNED: &[(&str, &str)] = &[("SHADOW_SKINNED", "1"), ("METAL_BINDINGS", "1")];
+const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("METAL_BINDINGS", "1")];
+
+pub(super) static GBUFFER_PREPASS_VERT: SlangLib = SlangLib {
+    name: "gbuffer_prepass_vert.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_vertex"],
+    defines: GB_STATIC,
+};
+pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangLib = SlangLib {
+    name: "gbuffer_prepass_vert_instanced.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_vertex_instanced"],
+    defines: GB_INSTANCED,
+};
+pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangLib = SlangLib {
+    name: "gbuffer_prepass_vert_skinned.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_vertex_skinned"],
+    defines: GB_SKINNED,
+};
+pub(super) static GBUFFER_PREPASS_VERT_BINDLESS: SlangLib = SlangLib {
+    name: "gbuffer_prepass_vert_bindless.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_vertex_bindless"],
+    defines: GB_BINDLESS,
+};
+pub(super) static GBUFFER_PREPASS_FRAG: SlangLib = SlangLib {
+    name: "gbuffer_prepass_frag.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_fragment"],
+    defines: GB_FRAGMENT,
+};
+pub(super) static GBUFFER_PREPASS_FRAG_BINDLESS: SlangLib = SlangLib {
+    name: "gbuffer_prepass_frag_bindless.slang",
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entries: &["gbuffer_prepass_fragment_bindless"],
+    defines: GB_FRAGMENT_BINDLESS,
+};
+pub(super) static SHADOW_VERT: SlangLib = SlangLib {
+    name: "shadow_vert.slang",
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entries: &["shadow_vertex_main"],
+    defines: SHADOW_STATIC,
+};
+pub(super) static SHADOW_VERT_SKINNED: SlangLib = SlangLib {
+    name: "shadow_vert_skinned.slang",
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entries: &["shadow_vertex_main_skinned"],
+    defines: SHADOW_SKINNED,
+};
+pub(super) static SHADOW_VERT_BINDLESS: SlangLib = SlangLib {
+    name: "shadow_vert_bindless.slang",
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entries: &["shadow_vertex_bindless"],
+    defines: SHADOW_BINDLESS,
 };
 
 // The fullscreen-triangle vertex stage every ported post pass pairs with; one
@@ -200,6 +280,15 @@ pub(super) static ALL: &[&SlangLib] = &[
     &LIGHT_CULL,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &GBUFFER_PREPASS_VERT,
+    &GBUFFER_PREPASS_VERT_INSTANCED,
+    &GBUFFER_PREPASS_VERT_SKINNED,
+    &GBUFFER_PREPASS_VERT_BINDLESS,
+    &GBUFFER_PREPASS_FRAG,
+    &GBUFFER_PREPASS_FRAG_BINDLESS,
+    &SHADOW_VERT,
+    &SHADOW_VERT_SKINNED,
+    &SHADOW_VERT_BINDLESS,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,
@@ -257,6 +346,21 @@ impl SlangLib {
     }
 }
 
+// A single-entry variant's function, ready for a pipeline descriptor. Every
+// variant compiles on its own, so a two-stage pipeline takes its vertex and its
+// fragment from separate libraries and the two pair by semantic.
+pub(super) fn entry_function(
+    device: &ProtocolObject<dyn MTLDevice>,
+    lib: &SlangLib,
+    hot_reload: bool,
+) -> Result<Retained<ProtocolObject<dyn MTLFunction>>, String> {
+    let library = lib.library(device, hot_reload)?;
+    let entry = lib.entries[0];
+    library
+        .newFunctionWithName(&ns_str(entry))
+        .ok_or_else(|| format!("{entry} not found in {}", lib.name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,11 +395,13 @@ mod tests {
             for hot_reload in [false, true] {
                 let src = lib.source(hot_reload);
                 assert!(!src.trim().is_empty(), "{}: empty source", lib.name);
-                assert!(
-                    !src.contains("{POST_COMMON}"),
-                    "{}: unspliced fragment marker",
-                    lib.name
-                );
+                for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+                    assert!(
+                        !src.contains(marker),
+                        "{}: unspliced fragment marker {marker}",
+                        lib.name
+                    );
+                }
                 for (k, v) in lib.defines {
                     assert!(
                         src.starts_with('#') && src.contains(&format!("#define {k} {v}\n")),

@@ -138,7 +138,7 @@ pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> Result<Vec<u8>, St
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
 pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::SHADOW_BINDLESS_VERT.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::SHADOW_BINDLESS_VERT.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Inject a `#define` line immediately after the `#version` directive.
@@ -356,7 +356,7 @@ pub(super) fn compile_skinned_shaders(
 ) -> Result<SkinnedShaderSpirv, String> {
     let ctx = builtins::Ctx::plain(hot_reload);
     let main_vs = builtins::SKINNED_VERT.compile(&ctx)?;
-    let shadow_vs = builtins::SKINNED_SHADOW_VERT.compile(&ctx)?;
+    let shadow_vs = super::slang_builtins::SKINNED_SHADOW_VERT.compile(&ctx)?;
     let frag = if is_spirv(frag_bytes) {
         frag_bytes.to_vec()
     } else {
@@ -376,7 +376,7 @@ pub(super) fn resolve_shadow_shader(
     let spv = if is_spirv(shadow_bytes) {
         shadow_bytes.to_vec()
     } else {
-        builtins::SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))?
+        super::slang_builtins::SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))?
     };
     Ok(Some(spv))
 }

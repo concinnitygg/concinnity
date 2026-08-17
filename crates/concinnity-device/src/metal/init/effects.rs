@@ -37,7 +37,7 @@ use crate::metal::post::{
     create_gbuffer_targets, create_ssao_targets, create_ssgi_targets, create_ssr_targets,
     create_taa_targets,
 };
-use crate::metal::slang_shaders::{SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::slang_shaders::{self, SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
 use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
@@ -330,7 +330,7 @@ pub(crate) fn build_quality_effects(
             Some(build_gbuffer_prepass_pipeline(
                 device,
                 vert_desc,
-                "gbuffer_prepass_vertex_instanced",
+                &slang_shaders::GBUFFER_PREPASS_VERT_INSTANCED,
                 hot_reload,
             )?)
         } else {
@@ -341,7 +341,7 @@ pub(crate) fn build_quality_effects(
             Some(build_gbuffer_prepass_pipeline(
                 device,
                 vert_desc,
-                "gbuffer_prepass_vertex",
+                &slang_shaders::GBUFFER_PREPASS_VERT,
                 hot_reload,
             )?),
             inst,

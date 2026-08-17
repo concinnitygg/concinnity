@@ -14,6 +14,14 @@
 // compute kernels need no ABI block: slangc assigns b0/t0/u0 from declaration
 // order, which is what their root signatures already bind.
 //
+// The G-buffer pre-pass and shadow families take the same `DXIL_ABI` block for
+// a weaker reason: nothing outside the engine binds them, but their root
+// signatures hand the same declarations entirely different slots than the Metal
+// and Vulkan hosts do, so the shared source cannot carry one set of registers
+// for all three. `assert_slang_dxil_abi` in build.rs locks every one of them,
+// which is what a macOS edit to the shared file runs into under
+// `dx_crosscheck.sh`.
+//
 // The fullscreen post passes need no ABI block either, and for a stronger
 // reason than the compute kernels: nothing outside the engine binds them at
 // all. slangc splits each top-level `Sampler2D` into a `Texture2D` + a
@@ -51,6 +59,8 @@ pub(crate) struct SlangProgram {
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
+const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
 const TAA_SLANG: &str = include_str!("../shaders/taa.slang");
 const BLOOM_SLANG: &str = include_str!("../shaders/bloom.slang");
@@ -122,6 +132,93 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     profile: "cs_6_0",
     label: "hiz_downsample.slang",
     defines: &[("HIZ_DOWNSAMPLE", "1")],
+};
+
+// The G-buffer pre-pass and shadow families. Every entry is its own program so
+// each variant declares exactly the resources its root signature binds; the
+// `DXIL_ABI` gate pins those registers to the signatures in `post/gbuffer.rs`,
+// `init/pipelines.rs` and `resources.rs`.
+const GB_STATIC: &[(&str, &str)] = &[("GB_STATIC", "1"), ("DXIL_ABI", "1")];
+const GB_INSTANCED: &[(&str, &str)] = &[("GB_INSTANCED", "1"), ("DXIL_ABI", "1")];
+const GB_SKINNED: &[(&str, &str)] = &[("GB_SKINNED", "1"), ("DXIL_ABI", "1")];
+const GB_BINDLESS: &[(&str, &str)] = &[("GB_BINDLESS", "1"), ("DXIL_ABI", "1")];
+const GB_FRAGMENT: &[(&str, &str)] = &[("GB_FRAGMENT", "1"), ("DXIL_ABI", "1")];
+const GB_FRAGMENT_BINDLESS: &[(&str, &str)] = &[("GB_FRAGMENT_BINDLESS", "1"), ("DXIL_ABI", "1")];
+const SHADOW_STATIC: &[(&str, &str)] = &[("SHADOW_STATIC", "1"), ("DXIL_ABI", "1")];
+const SHADOW_SKINNED: &[(&str, &str)] = &[("SHADOW_SKINNED", "1"), ("DXIL_ABI", "1")];
+const SHADOW_BINDLESS: &[(&str, &str)] = &[("SHADOW_BINDLESS", "1"), ("DXIL_ABI", "1")];
+
+pub(super) static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex",
+    profile: "vs_6_0",
+    label: "gbuffer_prepass_vert.slang",
+    defines: GB_STATIC,
+};
+pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_instanced",
+    profile: "vs_6_0",
+    label: "gbuffer_prepass_vert_instanced.slang",
+    defines: GB_INSTANCED,
+};
+pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_skinned",
+    profile: "vs_6_0",
+    label: "gbuffer_prepass_vert_skinned.slang",
+    defines: GB_SKINNED,
+};
+pub(super) static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_vertex_bindless",
+    profile: "vs_6_0",
+    label: "gbuffer_prepass_vert_bindless.slang",
+    defines: GB_BINDLESS,
+};
+pub(super) static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_fragment",
+    profile: "ps_6_0",
+    label: "gbuffer_prepass_frag.slang",
+    defines: GB_FRAGMENT,
+};
+pub(super) static GBUFFER_BINDLESS_FRAG: SlangProgram = SlangProgram {
+    file: "gbuffer_prepass.slang",
+    embedded: GBUFFER_PREPASS_SLANG,
+    entry: "gbuffer_prepass_fragment_bindless",
+    profile: "ps_6_0",
+    label: "gbuffer_prepass_frag_bindless.slang",
+    defines: GB_FRAGMENT_BINDLESS,
+};
+pub(super) static SHADOW_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_main",
+    profile: "vs_6_0",
+    label: "shadow_vert.slang",
+    defines: SHADOW_STATIC,
+};
+pub(super) static SKINNED_SHADOW_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_main_skinned",
+    profile: "vs_6_0",
+    label: "shadow_vert_skinned.slang",
+    defines: SHADOW_SKINNED,
+};
+pub(super) static SHADOW_BINDLESS_VERT: SlangProgram = SlangProgram {
+    file: "shadow.slang",
+    embedded: SHADOW_SLANG,
+    entry: "shadow_vertex_bindless",
+    profile: "vs_6_0",
+    label: "shadow_vert_bindless.slang",
+    defines: SHADOW_BINDLESS,
 };
 
 // The fullscreen-triangle vertex stage every post pass pairs with; one module
@@ -241,6 +338,15 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &HIZ_INIT_SINGLE,
     &HIZ_INIT_MSAA,
     &HIZ_DOWNSAMPLE,
+    &GBUFFER_PREPASS_VERT,
+    &GBUFFER_PREPASS_VERT_INSTANCED,
+    &GBUFFER_PREPASS_VERT_SKINNED,
+    &GBUFFER_BINDLESS_VERT,
+    &GBUFFER_PREPASS_FRAG,
+    &GBUFFER_BINDLESS_FRAG,
+    &SHADOW_VERT,
+    &SKINNED_SHADOW_VERT,
+    &SHADOW_BINDLESS_VERT,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,
@@ -340,12 +446,28 @@ mod tests {
     #[test]
     fn every_program_assembles_with_its_fragments_spliced() {
         for p in ALL {
-            assert!(
-                !p.source(false).contains("{POST_COMMON}"),
-                "{}: unspliced fragment marker",
-                p.label
-            );
+            let src = p.source(false);
+            for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+                assert!(
+                    !src.contains(marker),
+                    "{}: unspliced fragment marker {marker}",
+                    p.label
+                );
+            }
         }
+    }
+
+    // The pre-pass rasterises the same visible set the main pass does, sky
+    // shell included, and the shell's corners fall outside the far plane, so
+    // an unpinned sky vert clips and the G-buffer loses coverage the main pass
+    // has. Two entries can carry skybox geometry -- the per-draw static one and
+    // the GPU-driven one -- and both must call the pin. The instanced and
+    // skinned entries are excluded: neither ever carries skybox geometry.
+    #[test]
+    fn the_prepass_pins_sky_to_the_far_plane() {
+        assert!(GBUFFER_PREPASS_SLANG.contains("color.b > 1.5"));
+        assert!(GBUFFER_PREPASS_SLANG.contains("position.z = position.w"));
+        assert_eq!(GBUFFER_PREPASS_SLANG.matches("gb_sky_pin(").count(), 3);
     }
 
     // Two programs collide when they would compile identical source with the

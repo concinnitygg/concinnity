@@ -17,7 +17,7 @@ use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::SkinnedDrawObject;
 use crate::metal::context::{HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region};
 use crate::metal::math::IDENTITY4;
-use crate::metal::pipeline::{ns_str, shader_library, stage_library};
+use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
 
 // All skinned-mesh rendering state grouped into one feature unit: the main +
@@ -157,7 +157,7 @@ pub(crate) fn build_skinned_main_pipeline(
 }
 
 // Build the skinned shadow pipeline: depth-only, no fragment function, no
-// MSAA, compiled from the engine-internal `shadow.metal` source (entry
+// MSAA, compiled from the engine-internal single source (`shadow.slang`, entry
 // `shadow_vertex_main_skinned`). Mirrors
 // [`crate::metal::init::pipelines::build_shadow_pipeline`] but on the 80-byte
 // skinned vertex layout. Shared by [`MtlContext::upload_skinned`] and the
@@ -167,10 +167,11 @@ pub(crate) fn build_skinned_shadow_pipeline(
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let shadow_library = shader_library(device, hot_reload, "shadow.metal")?;
-    let shadow_fn = shadow_library
-        .newFunctionWithName(&ns_str("shadow_vertex_main_skinned"))
-        .ok_or("shadow_vertex_main_skinned not found in shadow library")?;
+    let shadow_fn = crate::metal::slang_shaders::entry_function(
+        device,
+        &crate::metal::slang_shaders::SHADOW_VERT_SKINNED,
+        hot_reload,
+    )?;
     let sdesc = MTLRenderPipelineDescriptor::new();
     sdesc.setVertexDescriptor(Some(vdesc));
     sdesc.setVertexFunction(Some(&shadow_fn));
@@ -564,7 +565,7 @@ impl MtlContext {
             self.gbuffer.skinned_pipeline = Some(build_gbuffer_prepass_pipeline(
                 &self.device,
                 &vdesc,
-                "gbuffer_prepass_vertex_skinned",
+                &crate::metal::slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
                 self.hot_reload,
             )?);
         }

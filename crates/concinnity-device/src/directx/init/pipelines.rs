@@ -69,12 +69,13 @@ pub(super) fn compile_all_shaders(
     };
     // The shadow vertex shader is engine-internal: a real DXBC override (>4
     // bytes) is used verbatim, otherwise (empty / stub) the baked
-    // `builtins::SHADOW_VERT` is compiled. Whether the shadow pass runs is gated
-    // by `effective_shadow_size` at the call site, not by an empty override here.
+    // `slang_builtins::SHADOW_VERT` is compiled. Whether the shadow pass runs is
+    // gated by `effective_shadow_size` at the call site, not by an empty
+    // override here.
     let shadow_vs = if shadow_bytes.len() > 4 {
         Some(shadow_bytes.to_vec())
     } else {
-        Some(builtins::SHADOW_VERT.compile(&ctx)?)
+        Some(slang_builtins::SHADOW_VERT.compile(hot_reload)?)
     };
     let main_vs_instanced = if !vert_instanced_bytes.is_empty() {
         Some(vert_instanced_bytes.to_vec())
@@ -110,7 +111,7 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 // alongside the bindless main pass (same built-in-shader gate); a depth-only
 // PSO with no pixel shader consumes it.
 pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::SHADOW_BINDLESS_VERT.compile(&Ctx::plain(hot_reload))
+    slang_builtins::SHADOW_BINDLESS_VERT.compile(hot_reload)
 }
 
 // Root signature builders
