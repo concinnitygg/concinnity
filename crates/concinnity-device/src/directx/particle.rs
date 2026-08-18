@@ -28,6 +28,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
 };
@@ -55,7 +56,7 @@ pub(in crate::directx) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> Result<ParticleShaders, String> {
     let ctx = Ctx::plain(hot_reload);
-    let cs = builtins::PARTICLE_SIMULATE.compile(&ctx)?;
+    let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
     let vs = builtins::PARTICLE_VERT.compile(&ctx)?;
     let ps = builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, ps))

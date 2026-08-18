@@ -835,9 +835,8 @@ pub struct FogParams {
 // bind it.
 //
 // Bound at the fog fragment shader + the froxel kernel. Layout must stay in
-// sync with `FogFroxelParams` in `metal/shaders/fog.metal`,
-// `directx/shaders/fog_froxel.hlsl`, and `vulkan/shaders/fog_froxel.comp`.
-// 96 bytes.
+// sync with `FogFroxelParams` in `shaders/fog.slang`, the single source both
+// halves compile from on every backend. 96 bytes.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct FogFroxelParams {
@@ -2332,9 +2331,11 @@ mod tests {
     #[test]
     fn particle_params_layout_matches_msl() {
         // `ParticleParams` rides at compute buffer(2) and vertex buffer(1) of
-        // the Metal particle passes; the MSL struct in
-        // `metal/shaders/particle.metal` reads three packed_float3 + scalar
-        // pairs, two float4 colour tints, then a scalar tail.
+        // the Metal particle passes. The single-source simulation kernel
+        // (`shaders/particle_simulate.slang`) spells the three (vec3, scalar)
+        // pairs as float4, since MSL sizes a constant-buffer float3 at 16
+        // bytes; the still-per-backend render pair reads them as packed_float3
+        // + scalar. Byte-identical either way, which is what these offsets pin.
         assert_eq!(size_of::<ParticleParams>(), 112);
         assert_eq!(offset_of!(ParticleParams, position), 0);
         assert_eq!(offset_of!(ParticleParams, spread_cos), 12);
@@ -2358,10 +2359,11 @@ mod tests {
 
     #[test]
     fn fog_params_layout_matches_msl() {
-        // `FogParams` rides at fragment buffer(0) of the volumetric-fog
-        // ray-march; the MSL struct in `metal/shaders/fog.metal` reads it as
-        // float4x4 + float4 + 3×(packed_float3 + pad) + 6 scalars + a float2 +
-        // a scalar + padding. The offsets below pin every field.
+        // `FogParams` rides at fragment buffer(0) of the volumetric-fog pass
+        // and at the froxel kernel's buffer(0). The single source
+        // (`shaders/fog.slang`) reads it as float4x4 + float4 + 3 float4 + 6
+        // scalars + a float2 + a scalar + padding: the three (vec3, pad) pairs
+        // are float4 because MSL sizes a constant-buffer float3 at 16 bytes.
         assert_eq!(size_of::<FogParams>(), 176);
         assert_eq!(offset_of!(FogParams, inv_vp), 0);
         assert_eq!(offset_of!(FogParams, color), 64);
@@ -2384,14 +2386,14 @@ mod tests {
 
     #[test]
     fn fog_froxel_params_layout_matches_msl() {
-        // `FogFroxelParams` rides alongside `FogParams` for the Metal froxel
-        // volume path. Pin every field offset so the MSL `FogFroxelParams`
-        // struct in `metal/shaders/fog.metal` stays in sync.
+        // `FogFroxelParams` rides alongside `FogParams` in both halves of the
+        // fog family. Pin every field offset so the `FogFroxelParams` struct in
+        // `shaders/fog.slang` stays in sync.
         assert_eq!(size_of::<FogFroxelParams>(), 96);
         assert_eq!(offset_of!(FogFroxelParams, view), 0);
         assert_eq!(offset_of!(FogFroxelParams, froxel_dims), 64);
-        // _pad_align at 76 so MSL `uint3 froxel_dims` (16-byte slot) lines
-        // up with `z_near` at 80 on both sides.
+        // _pad_align at 76 so the shader's `uint4 froxel_dims` (a 16-byte
+        // slot either way) lines up with `z_near` at 80 on both sides.
         assert_eq!(offset_of!(FogFroxelParams, z_near), 80);
         assert_eq!(offset_of!(FogFroxelParams, z_far), 84);
         assert_eq!(size_of::<FogFroxelParams>() % 16, 0);

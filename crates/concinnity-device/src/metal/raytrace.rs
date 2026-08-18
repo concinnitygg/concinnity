@@ -1683,6 +1683,11 @@ fn models_dirty(
 // Build the compute pipeline that deforms skinned vertices for ray tracing
 // (`rt_skin.metal`). Compiled only when RT reflections are on and the GPU
 // supports ray tracing, alongside the reflection pipelines.
+//
+// Still hand-written per backend: see "rt_skin did not port" in
+// private/docs/shader-single-source.md. This host binds the morph weights as
+// read-only inline bytes, and slangc has no way to spell the `constant`
+// address space for a variable-length buffer.
 pub(crate) fn build_rt_skin_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,

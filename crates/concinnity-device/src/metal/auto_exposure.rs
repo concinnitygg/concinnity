@@ -18,7 +18,7 @@ use objc2_metal::{
 };
 
 use super::context::*;
-use super::pipeline::{ns_str, shader_library};
+use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
@@ -211,19 +211,21 @@ pub(super) struct AutoExposurePipelines {
     pub average: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
 }
 
-// Build the auto-exposure compute pipelines. Compiles `auto_exposure.metal`
-// once and pulls both kernel entry points from it. Returned only when the
-// world's `PostProcessConfig` opts into auto-exposure; otherwise the histogram
-// pass is skipped entirely.
+// Build the auto-exposure compute pipelines from the single-source
+// `auto_exposure.slang`. Each kernel compiles as its own variant so it declares
+// only the resources it binds. Returned only when the world's
+// `PostProcessConfig` opts into auto-exposure; otherwise the histogram pass is
+// skipped entirely.
 pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<AutoExposurePipelines, String> {
-    let library = shader_library(device, hot_reload, "auto_exposure.metal")?;
-    let build_fn = library
+    let build_lib = super::slang_shaders::AUTO_EXPOSURE_BUILD.library(device, hot_reload)?;
+    let average_lib = super::slang_shaders::AUTO_EXPOSURE_AVERAGE.library(device, hot_reload)?;
+    let build_fn = build_lib
         .newFunctionWithName(&ns_str("histogram_build"))
         .ok_or("histogram_build not found in auto_exposure library")?;
-    let average_fn = library
+    let average_fn = average_lib
         .newFunctionWithName(&ns_str("histogram_average"))
         .ok_or("histogram_average not found in auto_exposure library")?;
     let build = device

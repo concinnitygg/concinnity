@@ -27,8 +27,8 @@ pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = super::builtins::Ctx::plain(hot_reload);
-    let build_cs = super::builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
-    let average_cs = super::builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
+    let build_cs = super::slang_builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
+    let average_cs = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
     Ok((build_cs, average_cs))
 }
 

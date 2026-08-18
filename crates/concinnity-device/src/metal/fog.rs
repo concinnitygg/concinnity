@@ -28,9 +28,12 @@ use crate::gfx::render_types::{FogFroxelParams, FogParams};
 use crate::gfx::volumetric_fog::FogSettings;
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_library};
-use super::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
+use super::pipeline::ns_str;
+use super::post::fullscreen::{
+    FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
+};
 use super::scoped_encoder::ScopedEncoder;
+use super::slang_shaders::{FOG_FRAG, FOG_FROXEL};
 
 // All volumetric-fog state grouped into one feature unit: the resolved
 // tunables, the fullscreen ray-march pipeline, and the froxel-volume compute
@@ -118,11 +121,16 @@ impl MtlContext {
                 std::mem::size_of::<FogFroxelParams>(),
                 1,
             );
-            // Sample the single-sample `depth_resolve` (post-
+            // Read the single-sample `depth_resolve` (post-
             // Main depth + any raymarched surface depth) so fog
-            // attenuates raymarched surfaces by their true distance.
+            // attenuates raymarched surfaces by their true distance. It is
+            // fetched by pixel coordinate and never sampled, so it takes no
+            // sampler slot; the volume is trilinearly filtered and takes
+            // sampler(0). `post_sampler` is the linear clamp-to-edge state the
+            // shader used to declare inline as a constexpr sampler.
             enc.setFragmentTexture_atIndex(Some(self.hdr_targets.depth_resolve.as_ref()), 0);
             enc.setFragmentTexture_atIndex(Some(volume.as_ref()), 1);
+            set_fragment_sampler_range(&enc, &self.post_sampler, 0, 1);
             // Fullscreen triangle: 3 vertices, no vertex buffer.
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
@@ -184,6 +192,11 @@ impl MtlContext {
             );
             enc.setTexture_atIndex(Some(self.shadow_map.as_ref()), 0);
             enc.setTexture_atIndex(Some(volume.as_ref()), 1);
+            // The per-slab CSM tap's comparison sampler, which the shader used
+            // to declare inline as a constexpr sampler. `shadow_sampler` is the
+            // same linear / clamp-to-edge / less-equal state the main pass taps
+            // the cascades with.
+            enc.setSamplerState_atIndex(Some(self.shadow_sampler.as_ref()), 0);
 
             // One thread per (x, y) tile; the kernel walks Z internally.
             // Threadgroup of 8x8x1 keeps occupancy high without thrashing
@@ -205,35 +218,33 @@ impl MtlContext {
 }
 
 // Build the volumetric-fog pipeline: a fullscreen triangle that samples the
-// main pass's MSAA depth attachment, ray-marches the view ray through a lit
-// homogeneous medium with exponential height falloff and a Henyey-Greenstein
-// phase function, and composites the result over the resolved HDR target
-// with a standard `over` alpha blend.
+// scene depth, maps each pixel into the froxel volume the compute kernel
+// filled, and composites the result over the resolved HDR target with a
+// standard `over` alpha blend. Takes the shared `fullscreen_vertex`, which is
+// what settles the triangle winding the hand-written Metal vertex wound the
+// other way from every other backend.
 pub(super) fn build_fog_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "fog.metal")?;
     // `(scattered, 1 - T)` over `scene` -> `scene * T + scattered`.
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "fog_vertex",
-        "fog_fragment",
+        &FOG_FRAG,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::PremultipliedOver,
+        hot_reload,
     )
 }
 
-// Build the volumetric-fog froxel-volume compute pipeline. Mirrors
-// `build_fog_pipeline`'s shader-source pickup (hot-reload-aware) but
-// produces an `MTLComputePipelineState` from the `fog_froxel_kernel`
-// function in the same source file.
+// Build the volumetric-fog froxel-volume compute pipeline from the same
+// single-source file the fragment above compiles: the two halves share
+// `FogParams` and `FogFroxelParams`, so they move as one unit.
 pub(super) fn build_fog_froxel_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "fog.metal")?;
+    let library = FOG_FROXEL.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("fog_froxel_kernel"))
         .ok_or("fog_froxel_kernel not found")?;

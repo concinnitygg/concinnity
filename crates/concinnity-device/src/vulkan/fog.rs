@@ -2,7 +2,7 @@
 //
 // Volumetric fog for the Vulkan backend. Frostbite-style froxel volume:
 //
-//   * The `fog_froxel.comp` compute pass (`encode_fog_froxel`) populates a
+//   * The `fog_froxel_kernel` compute pass (`encode_fog_froxel`) populates a
 //     screen-aligned `(80 x 45 x 64)` 3D `RGBA16F` volume of
 //     `(scattered_rgb, 1 - T)` across the view frustum. One thread per
 //     (x, y) tile; each thread walks Z front-to-back, accumulating the
@@ -735,15 +735,15 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::builtins::FOG_VERT.compile(&ctx)?;
-    let frag = super::builtins::FOG_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::FOG_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
 fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    super::builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn fog_params_ubo_size_matches_glsl() {
-        // The fog.vert/frag + fog_froxel.comp FogBlock std140 layout is 176 B.
+        // Both halves of fog.slang read the same 176 B std140 FogBlock.
         assert_eq!(size_of::<FogParams>(), 176);
     }
 

@@ -59,6 +59,9 @@ const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
 const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
 const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
 const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
+const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
+const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
+const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
 
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
 // probe count the main pass does.
@@ -272,6 +275,46 @@ pub(super) static REFLECTION_COMPOSITE: SlangLib = SlangLib {
     defines: &[("REFLECTION_COMPOSITE", "1")],
 };
 
+// The compute kernels and the fog family. `METAL_BINDINGS` carries the buffer
+// index this host writes the params to, where Vulkan and DirectX both take them
+// as a push / root constant. The fog fragment always reads the resolved
+// single-sample depth here, so it compiles with `USE_MSAA 0`.
+pub(super) static FOG_FROXEL: SlangLib = SlangLib {
+    name: "fog_froxel.slang",
+    file: "fog.slang",
+    embedded: FOG_SLANG,
+    entries: &["fog_froxel_kernel"],
+    defines: &[("FOG_FROXEL", "1")],
+};
+pub(super) static FOG_FRAG: SlangLib = SlangLib {
+    name: "fog_frag.slang",
+    file: "fog.slang",
+    embedded: FOG_SLANG,
+    entries: &["fog_fragment"],
+    defines: &[("USE_MSAA", "0")],
+};
+pub(super) static AUTO_EXPOSURE_BUILD: SlangLib = SlangLib {
+    name: "auto_exposure_build.slang",
+    file: "auto_exposure.slang",
+    embedded: AUTO_EXPOSURE_SLANG,
+    entries: &["histogram_build"],
+    defines: &[("AE_BUILD", "1"), ("METAL_BINDINGS", "1")],
+};
+pub(super) static AUTO_EXPOSURE_AVERAGE: SlangLib = SlangLib {
+    name: "auto_exposure_average.slang",
+    file: "auto_exposure.slang",
+    embedded: AUTO_EXPOSURE_SLANG,
+    entries: &["histogram_average"],
+    defines: &[("AE_AVERAGE", "1"), ("METAL_BINDINGS", "1")],
+};
+pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
+    name: "particle_simulate.slang",
+    file: "particle_simulate.slang",
+    embedded: PARTICLE_SIMULATE_SLANG,
+    entries: &["particle_simulate"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+
 // Every registered variant, for the coverage test in `metallib.rs`.
 #[cfg(test)]
 pub(super) static ALL: &[&SlangLib] = &[
@@ -302,6 +345,11 @@ pub(super) static ALL: &[&SlangLib] = &[
     &SSGI_COMPOSITE,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
+    &FOG_FROXEL,
+    &FOG_FRAG,
+    &AUTO_EXPOSURE_BUILD,
+    &AUTO_EXPOSURE_AVERAGE,
+    &PARTICLE_SIMULATE,
 ];
 
 impl SlangLib {

@@ -24,9 +24,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, create_buffer};
 use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use crate::gfx::render_types::{FogFroxelParams, FogParams};
@@ -39,18 +39,18 @@ pub(in crate::directx) fn compile_fog_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx {
-        hot_reload,
-        msaa: msaa_samples > 1,
+    let vs = slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
+    let ps = if msaa_samples > 1 {
+        slang_builtins::FOG_FRAG_MSAA.compile(hot_reload)?
+    } else {
+        slang_builtins::FOG_FRAG.compile(hot_reload)?
     };
-    let vs = builtins::FOG_VERT.compile(&ctx)?;
-    let ps = builtins::FOG_FRAG.compile(&ctx)?;
     Ok((vs, ps))
 }
 
 // Compile the froxel-volume compute kernel.
 pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    builtins::FOG_FROXEL.compile(&Ctx::plain(hot_reload))
+    slang_builtins::FOG_FROXEL.compile(hot_reload)
 }
 
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX

@@ -197,22 +197,32 @@ pub(crate) fn precompile(
     }
 
     // The single-source programs precompile through the same cache under their
-    // own compiler id, so a bundle is warm for them too.
+    // own compiler id, so a bundle is warm for them too. A program whose source
+    // reads the main pass's sample count gets both variants, for the same
+    // reason the GLSL loop above enumerates them: which one a device runs is a
+    // property of its MSAA mode, not of the bundle.
     for program in super::slang_builtins::ALL {
-        let ctx = Ctx {
-            hot_reload: false,
-            msaa: false,
-            pool_size,
-            probe_count: super::probe_uniforms::MAX_PROBES,
+        let msaa_variants: &[bool] = if program.msaa {
+            &[false, true]
+        } else {
+            &[false]
         };
-        let source = program.source(&ctx);
-        let key = program.cache_key(&source);
-        report.record(
-            program.label,
-            crate::shader_cache::ensure_in(out_dir, &key, || {
-                super::slang_builtins::compile_uncached(program, &source)
-            }),
-        );
+        for &msaa in msaa_variants {
+            let ctx = Ctx {
+                hot_reload: false,
+                msaa,
+                pool_size,
+                probe_count: super::probe_uniforms::MAX_PROBES,
+            };
+            let source = program.source(&ctx);
+            let key = program.cache_key(&source);
+            report.record(
+                program.label,
+                crate::shader_cache::ensure_in(out_dir, &key, || {
+                    super::slang_builtins::compile_uncached(program, &source)
+                }),
+            );
+        }
     }
 }
 
@@ -311,12 +321,6 @@ pub(super) static TEXT_FRAG: GlslProgram = glsl(
     "text_frag.glsl",
 );
 
-pub(super) static PARTICLE_SIMULATE: GlslProgram = glsl(
-    "particle_simulate.comp",
-    include_str!("shaders/particle_simulate.comp"),
-    Compute,
-    "particle_simulate.comp",
-);
 pub(super) static PARTICLE_VERT: GlslProgram = glsl(
     "particle.vert",
     include_str!("shaders/particle.vert"),
@@ -328,44 +332,6 @@ pub(super) static PARTICLE_FRAG: GlslProgram = glsl(
     include_str!("shaders/particle.frag"),
     Fragment,
     "particle.frag",
-);
-
-pub(super) static AUTO_EXPOSURE_BUILD: GlslProgram = glsl(
-    "auto_exposure_build.comp",
-    include_str!("shaders/auto_exposure_build.comp"),
-    Compute,
-    "auto_exposure_build.comp",
-);
-pub(super) static AUTO_EXPOSURE_AVERAGE: GlslProgram = glsl(
-    "auto_exposure_average.comp",
-    include_str!("shaders/auto_exposure_average.comp"),
-    Compute,
-    "auto_exposure_average.comp",
-);
-
-pub(super) static FOG_VERT: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "fog.vert",
-        include_str!("shaders/fog.vert"),
-        Vertex,
-        "fog.vert",
-    )
-};
-pub(super) static FOG_FRAG: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "fog.frag",
-        include_str!("shaders/fog.frag"),
-        Fragment,
-        "fog.frag",
-    )
-};
-pub(super) static FOG_FROXEL: GlslProgram = glsl(
-    "fog_froxel.comp",
-    include_str!("shaders/fog_froxel.comp"),
-    Compute,
-    "fog_froxel.comp",
 );
 
 pub(super) static DECAL_VERT: GlslProgram = GlslProgram {
@@ -496,15 +462,6 @@ pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: GlslProgram = GlslProgram {
         "rt_reflections_textured.frag",
     )
 };
-pub(super) static RT_SKIN: GlslProgram = GlslProgram {
-    rt: true,
-    ..glsl(
-        "rt_skin.comp",
-        include_str!("shaders/rt_skin.comp"),
-        Compute,
-        "rt_skin.comp",
-    )
-};
 
 // The SdfVolume proxy vertex shaders are pure engine text (only the fragment
 // side embeds user source), so they are enumerable.
@@ -522,7 +479,17 @@ pub(super) static RAYMARCH_SHADOW_PROXY_VERT: GlslProgram = glsl(
 );
 
 // Every declared program, iterated by the export-time precompile.
+pub(super) static RT_SKIN: GlslProgram = GlslProgram {
+    file: "rt_skin.comp",
+    embedded: include_str!("shaders/rt_skin.comp"),
+    kind: shaderc::ShaderKind::Compute,
+    label: "rt_skin.comp",
+    rt: false,
+    assembly: PLAIN,
+};
+
 pub(crate) static ALL: &[&GlslProgram] = &[
+    &RT_SKIN,
     &MAIN_VERT,
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,
@@ -532,14 +499,8 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &CULL_SHADOW,
     &TEXT_VERT,
     &TEXT_FRAG,
-    &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
-    &AUTO_EXPOSURE_BUILD,
-    &AUTO_EXPOSURE_AVERAGE,
-    &FOG_VERT,
-    &FOG_FRAG,
-    &FOG_FROXEL,
     &DECAL_VERT,
     &DECAL_FRAG,
     &LINE_VERT,
@@ -552,7 +513,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &RT_FULLSCREEN_VERT,
     &RT_REFLECTIONS_FRAG,
     &RT_REFLECTIONS_FRAG_TEXTURED,
-    &RT_SKIN,
     &RAYMARCH_PROXY_VERT,
     &RAYMARCH_SHADOW_PROXY_VERT,
 ];
@@ -637,7 +597,7 @@ mod tests {
             pool_size: 3,
             probe_count: 3,
         };
-        let src = FOG_VERT.source(&ctx);
+        let src = GLASS_RT_FRAG.source(&ctx);
         let mut lines = src.lines();
         assert!(lines.next().unwrap().starts_with("#version"));
         assert_eq!(lines.next().unwrap(), "#define USE_MSAA 1");
@@ -722,7 +682,6 @@ mod tests {
 
     #[test]
     fn msaa_programs_enumerate_both_variants() {
-        assert_eq!(FOG_VERT.assembly.msaa_variants(), &[false, true]);
         assert_eq!(GLASS_RT_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(CULL_PHASE2.assembly.msaa_variants(), &[false]);
         assert_eq!(RT_REFLECTIONS_FRAG.assembly.msaa_variants(), &[false]);

@@ -59,6 +59,9 @@ pub(crate) struct SlangProgram {
 const MAIN_BINDLESS_SLANG: &str = include_str!("../shaders/main_bindless.slang");
 const LIGHT_CULL_SLANG: &str = include_str!("../shaders/light_cull.slang");
 const HIZ_BUILD_SLANG: &str = include_str!("../shaders/hiz_build.slang");
+const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
+const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
+const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
 const GBUFFER_PREPASS_SLANG: &str = include_str!("../shaders/gbuffer_prepass.slang");
 const SHADOW_SLANG: &str = include_str!("../shaders/shadow.slang");
 const FULLSCREEN_SLANG: &str = include_str!("../shaders/fullscreen.slang");
@@ -221,6 +224,78 @@ pub(super) static SHADOW_BINDLESS_VERT: SlangProgram = SlangProgram {
     defines: SHADOW_BINDLESS,
 };
 
+// The fog family, auto-exposure and the particle simulation kernel. None takes
+// an ABI block: slangc assigns b/t/u/s from declaration order here, which is
+// exactly what the root signatures in `fog.rs`, `auto_exposure.rs` and
+// `particle.rs` already bind. The fog fragment's vertex half is
+// `FULLSCREEN_VERT` below -- the last per-family fullscreen vertex to retire.
+//
+// Two DirectX-only gates ride these. `DXIL_SPLIT` declares the cascade array as
+// a texture plus a comparison sampler rather than the combined
+// `Sampler2DArray` the other two backends bind, because `SampleCmp` on a
+// combined type mis-lowers on DXIL -- the same split `main_bindless.slang`
+// carries for the same reason. `DXIL_STAGE_PACKING` makes the fog fragment
+// declare the fullscreen varying it never reads, because D3D links the two
+// stages by semantic *and* register and fog is the one post fragment that takes
+// no varying; see the declaration in `fog.slang`.
+const FOG_FROXEL_DEFINES: &[(&str, &str)] = &[("FOG_FROXEL", "1"), ("DXIL_SPLIT", "1")];
+
+pub(super) static FOG_FROXEL: SlangProgram = SlangProgram {
+    file: "fog.slang",
+    embedded: FOG_SLANG,
+    entry: "fog_froxel_kernel",
+    profile: "cs_6_0",
+    label: "fog_froxel.slang",
+    defines: FOG_FROXEL_DEFINES,
+};
+
+// The fog fragment declares its depth source by the main pass's sample count,
+// which is a host difference rather than a target one, so it takes two
+// programs the way the Hi-Z init pair does: the caller picks by MSAA state and
+// the export-time precompile leaves a bundle warm for either.
+pub(super) static FOG_FRAG: SlangProgram = SlangProgram {
+    file: "fog.slang",
+    embedded: FOG_SLANG,
+    entry: "fog_fragment",
+    profile: "ps_6_0",
+    label: "fog_frag.slang",
+    defines: &[("USE_MSAA", "0"), ("DXIL_STAGE_PACKING", "1")],
+};
+pub(super) static FOG_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "fog.slang",
+    embedded: FOG_SLANG,
+    entry: "fog_fragment",
+    profile: "ps_6_0",
+    label: "fog_frag_msaa.slang",
+    defines: &[("USE_MSAA", "1"), ("DXIL_STAGE_PACKING", "1")],
+};
+
+pub(super) static AUTO_EXPOSURE_BUILD: SlangProgram = SlangProgram {
+    file: "auto_exposure.slang",
+    embedded: AUTO_EXPOSURE_SLANG,
+    entry: "histogram_build",
+    profile: "cs_6_0",
+    label: "auto_exposure_build.slang",
+    defines: &[("AE_BUILD", "1")],
+};
+pub(super) static AUTO_EXPOSURE_AVERAGE: SlangProgram = SlangProgram {
+    file: "auto_exposure.slang",
+    embedded: AUTO_EXPOSURE_SLANG,
+    entry: "histogram_average",
+    profile: "cs_6_0",
+    label: "auto_exposure_average.slang",
+    defines: &[("AE_AVERAGE", "1")],
+};
+
+pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
+    file: "particle_simulate.slang",
+    embedded: PARTICLE_SIMULATE_SLANG,
+    entry: "particle_simulate",
+    profile: "cs_6_0",
+    label: "particle_simulate.slang",
+    defines: &[],
+};
+
 // The fullscreen-triangle vertex stage every post pass pairs with; one module
 // serves them all, retiring the four per-family `*_vert.hlsl` copies.
 pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
@@ -347,6 +422,12 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &SHADOW_VERT,
     &SKINNED_SHADOW_VERT,
     &SHADOW_BINDLESS_VERT,
+    &FOG_FROXEL,
+    &FOG_FRAG,
+    &FOG_FRAG_MSAA,
+    &AUTO_EXPOSURE_BUILD,
+    &AUTO_EXPOSURE_AVERAGE,
+    &PARTICLE_SIMULATE,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,

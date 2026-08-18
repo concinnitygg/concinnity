@@ -74,10 +74,8 @@ fn object_common(hot_reload: bool) -> std::borrow::Cow<'static, str> {
 
 pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
     let embedded: &'static str = match name {
-        "auto_exposure.metal" => include_str!("shaders/auto_exposure.metal"),
         "cull.metal" => include_str!("shaders/cull.metal"),
         "decal.metal" => include_str!("shaders/decal.metal"),
-        "fog.metal" => include_str!("shaders/fog.metal"),
         "glass.metal" => include_str!("shaders/glass.metal"),
         "glass_mesh_rt.metal" => include_str!("shaders/glass_mesh_rt.metal"),
         "glass_rt.metal" => include_str!("shaders/glass_rt.metal"),

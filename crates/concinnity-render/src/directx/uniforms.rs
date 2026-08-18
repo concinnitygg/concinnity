@@ -130,8 +130,8 @@ pub struct GlassParamsGpu {
     pub planar: f32,
 }
 
-// One particle slot in the simulation pool (particle_simulate.hlsl `Particle`,
-// 32 bytes: `float3 + float` twice).
+// One particle slot in the simulation pool (`Particle` in
+// shaders/particle_simulate.slang, 32 bytes: `float3 + float` twice).
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct GpuParticle {
@@ -319,8 +319,8 @@ mod tests {
         assert_eq!(offset_of!(GlassParamsGpu, planar), 60);
     }
 
-    // Mirrors the `Particle` struct in particle_simulate.hlsl: float3 + float,
-    // twice = 32 bytes, layout 0/12/16/28.
+    // Mirrors the `Particle` struct in shaders/particle_simulate.slang:
+    // float3 + float, twice = 32 bytes, layout 0/12/16/28.
     #[test]
     fn gpu_particle_layout_matches_hlsl() {
         assert_eq!(size_of::<GpuParticle>(), 32);

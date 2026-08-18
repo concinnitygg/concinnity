@@ -339,8 +339,11 @@ pub(super) fn build_particle_pipelines(
 ) -> Result<ParticlePipelines, String> {
     let library = shader_library(device, hot_reload, "particle.metal")?;
 
-    // Compute kernel.
-    let sim_fn = library
+    // Compute kernel, from the single-source `particle_simulate.slang`. The
+    // render pair below is raster and still per-backend, which is why
+    // `ParticleParams` is declared in both places for now.
+    let sim_lib = super::slang_shaders::PARTICLE_SIMULATE.library(device, hot_reload)?;
+    let sim_fn = sim_lib
         .newFunctionWithName(&ns_str("particle_simulate"))
         .ok_or("particle_simulate not found")?;
     let simulate = device

@@ -360,6 +360,36 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         entries: &["reflection_composite_fragment"],
         defines: &[("REFLECTION_COMPOSITE", "1")],
     },
+    SlangLibSpec {
+        name: "fog_froxel.slang",
+        file: "fog.slang",
+        entries: &["fog_froxel_kernel"],
+        defines: &[("FOG_FROXEL", "1")],
+    },
+    SlangLibSpec {
+        name: "fog_frag.slang",
+        file: "fog.slang",
+        entries: &["fog_fragment"],
+        defines: &[("USE_MSAA", "0")],
+    },
+    SlangLibSpec {
+        name: "auto_exposure_build.slang",
+        file: "auto_exposure.slang",
+        entries: &["histogram_build"],
+        defines: &[("AE_BUILD", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "auto_exposure_average.slang",
+        file: "auto_exposure.slang",
+        entries: &["histogram_average"],
+        defines: &[("AE_AVERAGE", "1"), ("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "particle_simulate.slang",
+        file: "particle_simulate.slang",
+        entries: &["particle_simulate"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
 ];
 
 // The modules that decide how a shader artifact is produced: the cache itself

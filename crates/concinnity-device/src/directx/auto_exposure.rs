@@ -14,9 +14,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier, uav_barrier};
 
 // Compile the auto-exposure `build` + `average` compute kernels. Used at
@@ -24,14 +24,14 @@ use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barri
 pub(in crate::directx) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx::plain(hot_reload);
-    let build_cs = builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
-    let average_cs = builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
+    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
+    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
 }
 
 // DWORD count of the `AutoExposureParams` root-constant block. Must match the
-// `cbuffer AutoExposureParams` declaration in `shaders/auto_exposure.hlsl`.
+// `AutoExposureParams` declaration in `shaders/auto_exposure.slang`, which
+// reaches DXIL as a `b0` cbuffer through its push-constant declaration.
 const AUTO_EXPOSURE_PARAMS_DWORDS: u32 = 4;
 
 // Inputs to the auto-exposure compute kernels (root constants at b0).

@@ -55,7 +55,7 @@ pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> Result<ParticleShaderSpirv, String> {
     let ctx = super::builtins::Ctx::plain(hot_reload);
-    let cs = super::builtins::PARTICLE_SIMULATE.compile(&ctx)?;
+    let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
     let vs = super::builtins::PARTICLE_VERT.compile(&ctx)?;
     let fs = super::builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, fs))
@@ -107,7 +107,7 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
 // either at init (when the world declares ≥1 emitter) or on the first
 // runtime `add_emitter`.
 pub(in crate::vulkan) struct ParticleResources {
-    // Compute pass: particle_simulate.comp.
+    // Compute pass: particle_simulate.slang.
     pub(in crate::vulkan) compute_pipeline: vk::Pipeline,
     pub(in crate::vulkan) compute_pipeline_layout: vk::PipelineLayout,
     // set 0: (pool SSBO, counter SSBO) per emitter.

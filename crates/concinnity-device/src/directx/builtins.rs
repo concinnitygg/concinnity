@@ -190,7 +190,6 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
 const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
 const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
-const AUTO_EXPOSURE_HLSL: &str = include_str!("shaders/auto_exposure.hlsl");
 const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
 const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
 const RT_REFLECTIONS_HLSL: &str = include_str!("shaders/rt_reflections.hlsl");
@@ -257,43 +256,6 @@ pub(super) static CULL: HlslProgram = fxc_cull("main");
 pub(super) static CULL_PHASE2: HlslProgram = fxc_cull("main_phase2");
 pub(super) static CULL_SHADOW: HlslProgram = fxc_cull("main_shadow");
 
-pub(super) static AUTO_EXPOSURE_BUILD: HlslProgram = HlslProgram {
-    entry: "build",
-    ..fxc_main("auto_exposure.hlsl", AUTO_EXPOSURE_HLSL, "cs_5_1")
-};
-pub(super) static AUTO_EXPOSURE_AVERAGE: HlslProgram = HlslProgram {
-    entry: "average",
-    ..fxc_main("auto_exposure.hlsl", AUTO_EXPOSURE_HLSL, "cs_5_1")
-};
-
-pub(super) static FOG_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "fog_vert.hlsl",
-        include_str!("shaders/fog_vert.hlsl"),
-        "vs_5_1",
-    )
-};
-pub(super) static FOG_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "fog_frag.hlsl",
-        include_str!("shaders/fog_frag.hlsl"),
-        "ps_5_1",
-    )
-};
-pub(super) static FOG_FROXEL: HlslProgram = fxc_main(
-    "fog_froxel.hlsl",
-    include_str!("shaders/fog_froxel.hlsl"),
-    "cs_5_1",
-);
-
 pub(super) static DECAL_VERT: HlslProgram = HlslProgram {
     assembly: Assembly {
         msaa: true,
@@ -334,11 +296,6 @@ pub(super) static LINE_FRAG: HlslProgram = HlslProgram {
     )
 };
 
-pub(super) static PARTICLE_SIMULATE: HlslProgram = fxc_main(
-    "particle_simulate.hlsl",
-    include_str!("shaders/particle_simulate.hlsl"),
-    "cs_5_1",
-);
 pub(super) static PARTICLE_VERT: HlslProgram = fxc_main(
     "particle_vert.hlsl",
     include_str!("shaders/particle_vert.hlsl"),
@@ -441,16 +398,10 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
-    &AUTO_EXPOSURE_BUILD,
-    &AUTO_EXPOSURE_AVERAGE,
-    &FOG_VERT,
-    &FOG_FRAG,
-    &FOG_FROXEL,
     &DECAL_VERT,
     &DECAL_FRAG,
     &LINE_VERT,
     &LINE_FRAG,
-    &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
     &GLASS_VERT,
@@ -491,7 +442,6 @@ mod tests {
 
     #[test]
     fn msaa_assemblies_enumerate_both_variants() {
-        assert_eq!(FOG_VERT.assembly.msaa_variants(), &[false, true]);
         assert_eq!(GLASS_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(GLASS_RT_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(TEXT_VERT.assembly.msaa_variants(), &[false]);
@@ -506,9 +456,6 @@ mod tests {
             hot_reload: false,
             msaa: true,
         };
-        let fog = FOG_VERT.source(&ctx);
-        assert!(fog.starts_with("#define USE_MSAA 1\n"));
-
         let glass = GLASS_FRAG.source(&ctx);
         assert!(glass.starts_with("#define USE_MSAA 1\n"));
         assert!(glass.ends_with(GLASS_HLSL));
