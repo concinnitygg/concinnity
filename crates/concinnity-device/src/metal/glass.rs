@@ -5,7 +5,7 @@
 // [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
 // it back-to-front against water + other panels and draws it; the fragment
 // shader refracts the pre-transparent scene snapshot, tints it, and adds a
-// Fresnel rim (see shaders/glass.metal).
+// Fresnel rim (see shaders/glass.slang).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -23,6 +23,7 @@ use crate::gfx::mesh_payload::Vertex;
 
 use super::context::MtlContext;
 use super::pipeline::{ns_str, shader_library};
+use super::slang_shaders;
 use super::transparent::{TransparentDraw, bytes_of};
 use super::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 
@@ -60,11 +61,9 @@ fn glass_params_from(panel: &GlassPanel) -> GlassParams {
         opacity: panel.opacity,
         refraction_strength: panel.refraction_strength,
         fresnel_power: panel.fresnel_power,
-        // Patched per-frame in `collect_glass_transparent_draws`.
-        prefilter_mip_count: 0.0,
-        // Off by default; `collect_glass_transparent_draws` sets `planar.x = 1`
-        // when the planar pass ran this frame and the pane has a slot.
-        planar: [0.0, 0.0, 0.0, 0.0],
+        // Off by default; `collect_glass_transparent_draws` sets it when the
+        // planar pass ran this frame and the pane has a slot.
+        planar: 0.0,
     }
 }
 
@@ -126,32 +125,19 @@ pub(super) fn build_glass_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_from(
-        device,
-        hot_reload,
-        "glass.metal",
-        "glass_vertex",
-        "glass_fragment",
-    )
+    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG)
 }
 
 // Build the ray-traced glass pipeline: the same vertex layout + blend, but the
-// `glass_fragment_rt` fragment (glass_rt.metal) traces a sharp reflection ray
-// against the scene acceleration structure instead of sampling a probe cube.
-// Compiled only on RT-capable devices (the shader uses `metal_raytracing`);
-// selected per-frame only while `self.rt.accel` is live, the probe pipeline
-// otherwise.
+// `glass_rt_fragment` variant traces a sharp reflection ray against the scene
+// acceleration structure instead of sampling a probe cube. Built only on
+// RT-capable devices (its metallib carries a real ray query); selected
+// per-frame only while `self.rt.accel` is live, the probe pipeline otherwise.
 pub(super) fn build_glass_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_from(
-        device,
-        hot_reload,
-        "glass_rt.metal",
-        "glass_vertex",
-        "glass_fragment_rt",
-    )
+    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG_RT)
 }
 
 // Build the ray-traced transparent glass MESH pipeline (`glass_mesh_rt.metal`):
@@ -187,26 +173,33 @@ pub(super) fn build_glass_mesh_pipeline_rt_textured(
     )
 }
 
-// Build the textured ray-traced glass pipeline: the same trace as
-// `glass_fragment_rt`, but the reflected hit's albedo / normal / emissive are
-// sampled from the bindless texture pool (buffer 10) instead of a flat
-// per-object tint. Selected over the flat variant only in a bindless world.
+// Build the textured ray-traced glass pipeline: the same trace as the flat RT
+// variant, but the reflected hit's albedo / normal / emissive are sampled from
+// the bindless texture pool (buffer 10) instead of a flat per-object tint.
+// Selected over the flat variant only in a bindless world.
 pub(super) fn build_glass_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_glass_pipeline_from(
-        device,
-        hot_reload,
-        "glass_rt.metal",
-        "glass_vertex",
-        "glass_fragment_rt_textured",
-    )
+    build_glass_pipeline_slang(device, hot_reload, &slang_shaders::GLASS_FRAG_RT_TEXTURED)
 }
 
-// Shared glass pipeline builder: both variants use the identical `glass_vertex`
-// + vertex descriptor + blend state and differ only in their shader source file
-// and fragment entry point.
+// The pane pipelines, whose stages come from the single-source `glass.slang`.
+// Each fragment variant declares only the resources it binds, so each is its own
+// metallib while the vertex is compiled once for all of them.
+fn build_glass_pipeline_slang(
+    device: &ProtocolObject<dyn MTLDevice>,
+    hot_reload: bool,
+    fragment: &slang_shaders::SlangLib,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+    let vert_fn = slang_shaders::entry_function(device, &slang_shaders::GLASS_VERT, hot_reload)?;
+    let frag_fn = slang_shaders::entry_function(device, fragment, hot_reload)?;
+    build_glass_pipeline_stages(device, &vert_fn, &frag_fn)
+}
+
+// The glass MESH pipelines, still hand-written MSL: they have no Vulkan or
+// DirectX counterpart, so there is no second copy for a single source to
+// converge.
 fn build_glass_pipeline_from(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -222,7 +215,17 @@ fn build_glass_pipeline_from(
     let frag_fn = library
         .newFunctionWithName(&ns_str(fragment_entry))
         .ok_or_else(|| format!("{} not found", fragment_entry))?;
+    build_glass_pipeline_stages(device, &vert_fn, &frag_fn)
+}
 
+// Shared descriptor for every transparent-pane pipeline: the standard
+// 5-attribute vertex layout at buffer(1) and straight-alpha blending into the
+// RGBA16Float scene target, with no depth attachment.
+fn build_glass_pipeline_stages(
+    device: &ProtocolObject<dyn MTLDevice>,
+    vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+    frag_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     let vert_desc = MTLVertexDescriptor::new();
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
@@ -257,8 +260,8 @@ fn build_glass_pipeline_from(
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
+    desc.setVertexFunction(Some(vert_fn));
+    desc.setFragmentFunction(Some(frag_fn));
     desc.setRasterSampleCount(1);
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
@@ -310,18 +313,16 @@ impl MtlContext {
                 None => return,
             },
         };
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
         for panel in &self.glass_panels {
             if !panel.visible {
                 continue;
             }
-            // Patch the live prefilter mip count (0 = no env map -> white rim);
-            // the reflection-probe cubes + set are bound globally by
-            // `encode_transparent`.
+            // The live prefilter mip count (0 = no env map -> white rim) rides
+            // the shared view; the reflection-probe cubes + set are bound
+            // globally by `encode_transparent`.
             let mut params = panel.params;
-            params.prefilter_mip_count = prefilter_mip_count;
             let mut fragment_textures = vec![
                 (0, self.hdr_targets.transparent_scene_copy.clone()),
                 (1, self.hdr_targets.depth_resolve.clone()),
@@ -335,7 +336,7 @@ impl MtlContext {
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
-                params.planar = [1.0, 0.0, 0.0, 0.0];
+                params.planar = 1.0;
                 fragment_textures.push((11, targets.resolve.clone()));
             }
             let c = panel.centre;

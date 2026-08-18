@@ -76,13 +76,10 @@ pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'s
     let embedded: &'static str = match name {
         "cull.metal" => include_str!("shaders/cull.metal"),
         "decal.metal" => include_str!("shaders/decal.metal"),
-        "glass.metal" => include_str!("shaders/glass.metal"),
         "glass_mesh_rt.metal" => include_str!("shaders/glass_mesh_rt.metal"),
-        "glass_rt.metal" => include_str!("shaders/glass_rt.metal"),
         "line.metal" => include_str!("shaders/line.metal"),
         "main.metal" => include_str!("shaders/main.metal"),
         "particle.metal" => include_str!("shaders/particle.metal"),
-        "rt_reflections.metal" => include_str!("shaders/rt_reflections.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
         "text.metal" => include_str!("shaders/text.metal"),
         "water.metal" => include_str!("shaders/water.metal"),
@@ -260,32 +257,6 @@ mod shader_source_tests {
         let s = shader_source(false, "text.metal");
         assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
         assert!(s.contains("text_fragment_main"));
-    }
-
-    #[test]
-    fn reflection_shaders_lock_shared_roughness_cut() {
-        // The remaining hand-written reflection shader declares the roughness
-        // cut as a literal (it is precompiled at build, so no runtime injection
-        // is possible); this lock pins the declaration to the Rust source of
-        // truth, same as the existing main.metal REFL_RESOLVE_CUT lock. The SSR
-        // resolve and the reflection composite now ship from `.slang`, locked
-        // by `reflection_roughness_cut_matches_canonical` in slang_shaders.rs.
-        let expected = format!(
-            "constant float REFLECTION_ROUGHNESS_CUT = {:?};",
-            crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
-        );
-        let src = shader_source(false, "rt_reflections.metal");
-        assert!(
-            src.contains(&expected),
-            "rt_reflections.metal: REFLECTION_ROUGHNESS_CUT declaration drifted from \
-             concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
-        );
-        // The old per-shader literal was `*_ROUGH_CUT = 0.<n>`; the shared name
-        // is `*_ROUGHNESS_CUT`, which does not contain that substring.
-        assert!(
-            !src.contains("ROUGH_CUT = 0."),
-            "rt_reflections.metal: still declares a local roughness-cut literal"
-        );
     }
 
     #[test]

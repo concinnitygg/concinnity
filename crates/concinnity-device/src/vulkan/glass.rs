@@ -5,10 +5,11 @@
 // drawn in the `PassId::Transparent` slot after SSR resolve and before TAA. The
 // pass snapshots the pre-transparent scene, sorts the panels back-to-front by
 // camera distance, and draws each one; the fragment shader refracts the
-// snapshot, tints it, and adds a Fresnel rim (see shaders/glass.frag).
+// snapshot, tints it, and adds a Fresnel rim (see shaders/glass.slang, the
+// single source all three backends compile).
 //
-// GLSL/Vulkan port of `src/directx/glass.rs`: same uniform layouts, same
-// back-to-front ordering, same manual depth-occlusion test. The pass writes
+// Same uniform layouts, back-to-front ordering and manual depth-occlusion test
+// as the DirectX and Metal hosts. The pass writes
 // into the post-SSR scene image (the same image the post stack samples:
 // `SsrResources::output` when SSR is on, else `hdr_resolve_images[frame]`),
 // alpha-blending over it; downstream TAA / bloom / composite pick the
@@ -122,14 +123,14 @@ fn compile_glass_shaders(
         pool_size: 0,
         probe_count: probe_cube_count as usize,
     };
-    let vert = super::builtins::GLASS_VERT.compile(&ctx)?;
-    let frag = super::builtins::GLASS_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::GLASS_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 // SPIR-V blobs for the ray-traced glass pipelines: the shared vertex stage (the
-// same `glass.vert` the base pass uses, recompiled under the ray-query target),
-// the flat fragment, and the textured fragment (`None` when the bindless pool is
+// same one the base pass uses -- the trace is entirely in the fragment), the
+// flat fragment, and the textured fragment (`None` when the bindless pool is
 // absent). Mirrors `post::rt_reflections::RtShaders`.
 struct GlassRtShaders {
     vs: Vec<u8>,
@@ -137,12 +138,10 @@ struct GlassRtShaders {
     textured_fs: Option<Vec<u8>>,
 }
 
-// Compile the glass vertex shader + the ray-traced glass fragment (flat, plus the
-// textured variant when `pool_size > 0`). The fragment injects the shared probe
-// sampling ({PROBE_DESC_SET} = 2, the global set) and the bindless pool size, the
-// same substitutions `compile_glass_shaders` + `compile_rt_shaders` make. Ray
-// query needs the SPIR-V-1.4 / Vulkan-1.2 target, so everything routes through
-// `compile_glsl_rt`.
+// Compile the glass vertex shader + the ray-traced glass fragment (flat, plus
+// the textured variant when `pool_size > 0`). slangc emits `SPV_KHR_ray_query`
+// for the traversal, which the device already advertises wherever these
+// pipelines are built.
 fn compile_glass_rt_shaders(
     hot_reload: bool,
     msaa: bool,
@@ -157,10 +156,10 @@ fn compile_glass_rt_shaders(
         pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::builtins::GLASS_RT_VERT.compile(&ctx)?;
-    let flat_fs = super::builtins::GLASS_RT_FRAG.compile(&ctx)?;
+    let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
+    let flat_fs = super::slang_builtins::GLASS_FRAG_RT.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        Some(super::builtins::GLASS_RT_FRAG_TEXTURED.compile(&ctx)?)
+        Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?)
     } else {
         None
     };
@@ -1870,9 +1869,9 @@ mod tests {
     }
 
     // Compile the ray-traced glass shaders (both MSAA variants, both flat +
-    // textured) so a GLSL regression in glass_rt.frag (the `GL_EXT_ray_query`
-    // trace + the probe `{PROBE_COMMON}` injection + the `RT_TEXTURED` split) fails
-    // the suite without a GPU. Mirrors `rt_reflections_shaders_compile`. The
+    // textured) so a regression in glass.slang's `GLASS_RT` arm (the shared
+    // `{RT_TRACE}` traversal + the probe `{PROBE_COMMON}` injection + the
+    // `RT_TEXTURED` split) fails the suite without a GPU. Mirrors `rt_reflections_shaders_compile`. The
     // CPU<->GPU `RtParams` / `RtGeomEntry` layouts are guarded by the
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]

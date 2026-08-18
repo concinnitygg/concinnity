@@ -43,30 +43,29 @@ pub(in crate::vulkan) struct RtShaders {
     pub textured_fs: Option<Vec<u8>>,
 }
 
-// Compile the RT fullscreen vertex shader + the flat fragment shader, plus the
-// textured fragment shader when `pool_size > 0` (the bindless pool is live). Ray
-// query needs the SPIR-V-1.4 / Vulkan-1.2 target, so everything routes through
-// `compile_glsl_rt`.
+// Compile the shared fullscreen vertex stage + the flat fragment, plus the
+// textured fragment when `pool_size > 0` (the bindless pool is live). slangc
+// emits `SPV_KHR_ray_query` for the traversal, which the device already
+// advertises wherever this pass is built.
 pub(in crate::vulkan) fn compile_rt_shaders(
     hot_reload: bool,
     pool_size: usize,
     probe_cube_count: u32,
 ) -> Result<RtShaders, String> {
-    use super::super::builtins;
-    // The fragment's probe sampling ({PROBE_DESC_SET} = 1, the global set the
-    // probe set/cubes ride, sized by that set layout's binding-8 descriptor
-    // count) and the bindless pool size are substituted by the builtins
-    // assembly; the pool declaration needs at least one slot.
+    use super::super::{builtins, slang_builtins};
+    // The probe array length comes from the global set layout's binding-8
+    // descriptor count; the pool declaration needs at least one slot even where
+    // the textured variant is skipped.
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
         pool_size: pool_size.max(1),
         probe_count: probe_cube_count as usize,
     };
-    let vs = builtins::RT_FULLSCREEN_VERT.compile(&ctx)?;
-    let flat_fs = builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
+    let flat_fs = slang_builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        Some(builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?)
+        Some(slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?)
     } else {
         None
     };

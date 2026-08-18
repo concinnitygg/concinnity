@@ -14,8 +14,7 @@
 // enumerated ahead of a world; they compile at init through the same cache.
 
 use super::pipeline::{
-    OBJECT_COMMON_GLSL, PROBE_COMMON_GLSL, compile_glsl, compile_glsl_rt, inject_define,
-    shader_source,
+    OBJECT_COMMON_GLSL, compile_glsl, compile_glsl_rt, inject_define, shader_source,
 };
 
 // Size of the bindless texture pool for a world with `texture_count` entries
@@ -35,9 +34,6 @@ pub(crate) struct Assembly {
     pub msaa: bool,
     // Inject a fixed define line (kernel variants such as CULL_PHASE2).
     pub define: Option<&'static str>,
-    // Substitute `{PROBE_COMMON}` / `{MAX_PROBES}` / `{PROBE_DESC_SET}`, with
-    // this descriptor-set index string.
-    pub probe_desc_set: Option<&'static str>,
     // Substitute `{POOL_SIZE}` from `Ctx::pool_size`.
     pub pool_size: bool,
     // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
@@ -47,7 +43,6 @@ pub(crate) struct Assembly {
 const PLAIN: Assembly = Assembly {
     msaa: false,
     define: None,
-    probe_desc_set: None,
     pool_size: false,
     object_data: false,
 };
@@ -112,19 +107,6 @@ impl GlslProgram {
         }
         if let Some(define) = self.assembly.define {
             src = inject_define(&src, define);
-        }
-        if let Some(set) = self.assembly.probe_desc_set {
-            debug_assert!(
-                ctx.probe_count > 0,
-                "{}: probe program assembled with no probe count",
-                self.label
-            );
-            let probe_common =
-                shader_source(ctx.hot_reload, "probe_common.glsl", PROBE_COMMON_GLSL);
-            src = src
-                .replace("{PROBE_COMMON}", &probe_common)
-                .replace("{MAX_PROBES}", &ctx.probe_count.to_string())
-                .replace("{PROBE_DESC_SET}", set);
         }
         if self.assembly.pool_size {
             src = src.replace("{POOL_SIZE}", &ctx.pool_size.to_string());
@@ -247,7 +229,6 @@ use shaderc::ShaderKind::{Compute, Fragment, Vertex};
 
 // Embedded sources shared by several programs.
 const CULL_COMPUTE_GLSL: &str = include_str!("shaders/cull.comp");
-const GLASS_VERT_GLSL: &str = include_str!("shaders/glass.vert");
 
 pub(super) static MAIN_VERT: GlslProgram = glsl(
     "main.vert",
@@ -369,99 +350,7 @@ pub(super) static LINE_FRAG: GlslProgram = GlslProgram {
     )
 };
 
-pub(super) static GLASS_VERT: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl("glass.vert", GLASS_VERT_GLSL, Vertex, "glass.vert")
-};
-pub(super) static GLASS_FRAG: GlslProgram = GlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        probe_desc_set: Some("2"),
-        ..PLAIN
-    },
-    ..glsl(
-        "glass.frag",
-        include_str!("shaders/glass.frag"),
-        Fragment,
-        "glass.frag",
-    )
-};
-
 // Ray-query (Vulkan 1.2 / SPIR-V 1.4) programs.
-pub(super) static GLASS_RT_VERT: GlslProgram = GlslProgram {
-    rt: true,
-    assembly: MSAA,
-    ..glsl("glass.vert", GLASS_VERT_GLSL, Vertex, "glass.vert")
-};
-pub(super) static GLASS_RT_FRAG: GlslProgram = GlslProgram {
-    rt: true,
-    assembly: Assembly {
-        msaa: true,
-        probe_desc_set: Some("2"),
-        pool_size: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "glass_rt.frag",
-        include_str!("shaders/glass_rt.frag"),
-        Fragment,
-        "glass_rt.frag",
-    )
-};
-pub(super) static GLASS_RT_FRAG_TEXTURED: GlslProgram = GlslProgram {
-    rt: true,
-    assembly: Assembly {
-        msaa: true,
-        define: Some("#define RT_TEXTURED 1\n"),
-        probe_desc_set: Some("2"),
-        pool_size: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "glass_rt.frag",
-        include_str!("shaders/glass_rt.frag"),
-        Fragment,
-        "glass_rt_textured.frag",
-    )
-};
-pub(super) static RT_FULLSCREEN_VERT: GlslProgram = GlslProgram {
-    rt: true,
-    ..glsl(
-        "rt_reflections.vert",
-        include_str!("shaders/rt_reflections.vert"),
-        Vertex,
-        "rt_reflections.vert",
-    )
-};
-pub(super) static RT_REFLECTIONS_FRAG: GlslProgram = GlslProgram {
-    rt: true,
-    assembly: Assembly {
-        probe_desc_set: Some("1"),
-        pool_size: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "rt_reflections.frag",
-        include_str!("shaders/rt_reflections.frag"),
-        Fragment,
-        "rt_reflections.frag",
-    )
-};
-pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: GlslProgram = GlslProgram {
-    rt: true,
-    assembly: Assembly {
-        define: Some("#define RT_TEXTURED 1\n"),
-        probe_desc_set: Some("1"),
-        pool_size: true,
-        ..PLAIN
-    },
-    ..glsl(
-        "rt_reflections.frag",
-        include_str!("shaders/rt_reflections.frag"),
-        Fragment,
-        "rt_reflections_textured.frag",
-    )
-};
 
 // The SdfVolume proxy vertex shaders are pure engine text (only the fragment
 // side embeds user source), so they are enumerable.
@@ -505,14 +394,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &DECAL_FRAG,
     &LINE_VERT,
     &LINE_FRAG,
-    &GLASS_VERT,
-    &GLASS_FRAG,
-    &GLASS_RT_VERT,
-    &GLASS_RT_FRAG,
-    &GLASS_RT_FRAG_TEXTURED,
-    &RT_FULLSCREEN_VERT,
-    &RT_REFLECTIONS_FRAG,
-    &RT_REFLECTIONS_FRAG_TEXTURED,
     &RAYMARCH_PROXY_VERT,
     &RAYMARCH_SHADOW_PROXY_VERT,
 ];
@@ -597,18 +478,17 @@ mod tests {
             pool_size: 3,
             probe_count: 3,
         };
-        let src = GLASS_RT_FRAG.source(&ctx);
+        let src = DECAL_FRAG.source(&ctx);
         let mut lines = src.lines();
         assert!(lines.next().unwrap().starts_with("#version"));
         assert_eq!(lines.next().unwrap(), "#define USE_MSAA 1");
 
         // A fixed define lands closer to #version than the MSAA define,
         // matching the historical assembly order.
-        let src = GLASS_RT_FRAG_TEXTURED.source(&ctx);
+        let src = CULL_PHASE2.source(&ctx);
         let mut lines = src.lines();
         assert!(lines.next().unwrap().starts_with("#version"));
-        assert_eq!(lines.next().unwrap(), "#define RT_TEXTURED 1");
-        assert_eq!(lines.next().unwrap(), "#define USE_MSAA 1");
+        assert_eq!(lines.next().unwrap(), "#define CULL_PHASE2 1");
     }
 
     #[test]
@@ -657,33 +537,9 @@ mod tests {
         assert_eq!(spliced, 3, "object-data program count changed");
     }
 
-    // Every probe program sizes its cube array from the context, so the GLSL
-    // array length tracks whatever descriptor count the global set layout was
-    // built with instead of a compile-time constant the device may not afford.
-    #[test]
-    fn probe_programs_size_their_cube_array_from_the_context() {
-        for probe_count in [1usize, 7, super::super::probe_uniforms::MAX_PROBES] {
-            let ctx = Ctx {
-                hot_reload: false,
-                msaa: false,
-                pool_size: 4,
-                probe_count,
-            };
-            for p in ALL.iter().filter(|p| p.assembly.probe_desc_set.is_some()) {
-                let src = p.source(&ctx);
-                assert!(
-                    src.contains(&format!("probe_cubes[{probe_count}]")),
-                    "{} did not size its cube array at {probe_count}",
-                    p.label
-                );
-            }
-        }
-    }
-
     #[test]
     fn msaa_programs_enumerate_both_variants() {
-        assert_eq!(GLASS_RT_FRAG.assembly.msaa_variants(), &[false, true]);
+        assert_eq!(DECAL_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(CULL_PHASE2.assembly.msaa_variants(), &[false]);
-        assert_eq!(RT_REFLECTIONS_FRAG.assembly.msaa_variants(), &[false]);
     }
 }

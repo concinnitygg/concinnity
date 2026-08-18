@@ -143,7 +143,21 @@ pub(super) fn upload_buffer(
     data: &[u8],
     usage_state: D3D12_RESOURCE_STATES,
 ) -> Result<PooledBuffer, String> {
-    let size = data.len().max(4) as u64;
+    upload_buffer_padded(alloc, data, data.len() as u64, usage_state)
+}
+
+// As `upload_buffer`, with the destination grown to `size` bytes when that is
+// larger than the data. For a buffer a shader addresses in wider units than the
+// data's own element type, so its last load reaches past the data's end: the
+// skinned u16 index buffer, which the ray-traced hit path reads as packed u32
+// words. The pad is zeroed rather than left as whatever the upload heap held.
+pub(super) fn upload_buffer_padded(
+    alloc: &DeviceAllocator,
+    data: &[u8],
+    size: u64,
+    usage_state: D3D12_RESOURCE_STATES,
+) -> Result<PooledBuffer, String> {
+    let size = size.max(data.len() as u64).max(4);
 
     let upload = create_buffer(
         alloc,
@@ -155,8 +169,16 @@ pub(super) fn upload_buffer(
     // Map and copy.
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     unsafe { upload.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("upload map: {e}"))?;
+    // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte
+    // upload buffer, `data` is a distinct live allocation of `data.len()` bytes,
+    // and `data.len() <= size` holds by the clamp above, so both the copy and
+    // the pad write stay inside the mapping.
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
+        let pad = size as usize - data.len();
+        if pad > 0 {
+            std::ptr::write_bytes((ptr as *mut u8).add(data.len()), 0, pad);
+        }
         upload.Unmap(0, None);
     }
 

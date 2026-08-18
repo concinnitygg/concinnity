@@ -710,7 +710,7 @@ impl MtlContext {
                         self.hdr_targets.height as f32,
                     ],
                     time: params.elapsed,
-                    _pad: 0.0,
+                    prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
                 };
                 // Planar reflection: when RT is off and the world has flat
                 // reflectors (water surfaces / glass panes), re-render the scene

@@ -72,6 +72,8 @@ const SSAO_SLANG: &str = include_str!("../shaders/ssao.slang");
 const SSR_SLANG: &str = include_str!("../shaders/ssr.slang");
 const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
 const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
+const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
+const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
 
 // The bindless main pair's variant defines. `MAX_PROBES` sizes the probe cube
 // array the root signature's descriptor table covers; `probe_cube_count_matches`
@@ -403,9 +405,124 @@ pub(super) static REFLECTION_COMPOSITE: SlangProgram = SlangProgram {
     defines: &[("REFLECTION_COMPOSITE", "1")],
 };
 
+// The ray-traced reflection resolve and the glass family. Both take the
+// `DXIL_ABI` block for the reason the pre-pass family does: their root
+// signatures in `post/rt_reflections.rs` and `glass.rs` hand the same
+// declarations entirely different slots than the Metal and Vulkan hosts do, and
+// `assert_slang_dxil_abi` in build.rs locks every one of them. No `POOL_SIZE`:
+// the DXIL pool is an unbounded array, as it is for the bindless main pass.
+//
+// The three ray-query entries are `*_6_5`, above the 6.0 floor the rest of the
+// single-source shaders compile at: `RayQuery` is an SM 6.5 construct. Nothing
+// else here needs it, so the glass vertex and the base fragment stay at 6.0.
+//
+// `USE_MSAA` is a host difference rather than a target one -- the glass fragment
+// declares its depth source by the main pass's sample count -- so each glass
+// fragment comes as a pair the way the fog fragment does, and the caller picks
+// by MSAA state. The vertex stage reads no depth and takes neither.
+pub(super) static RT_REFLECTIONS_FRAG: SlangProgram = SlangProgram {
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entry: "rt_reflections_fragment",
+    profile: "ps_6_5",
+    label: "rt_reflections.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
+};
+pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entry: "rt_reflections_fragment",
+    profile: "ps_6_5",
+    label: "rt_reflections_textured.slang",
+    defines: &[("DXIL_ABI", "1"), ("RT_TEXTURED", "1"), ("MAX_PROBES", "8")],
+};
+
+// One vertex stage for both glass pipelines: the base pass and the ray-traced
+// one differ only in where the reflection comes from, and both root signatures
+// put the transparent view CBV at b0.
+pub(super) static GLASS_VERT: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_vertex",
+    profile: "vs_6_0",
+    label: "glass_vert.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8")],
+};
+pub(super) static GLASS_FRAG: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_fragment",
+    profile: "ps_6_0",
+    label: "glass_frag.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")],
+};
+pub(super) static GLASS_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_fragment",
+    profile: "ps_6_0",
+    label: "glass_frag_msaa.slang",
+    defines: &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "1")],
+};
+pub(super) static GLASS_RT_FRAG: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_frag_rt.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+pub(super) static GLASS_RT_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_frag_rt_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+pub(super) static GLASS_RT_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_frag_rt_textured.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+pub(super) static GLASS_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    profile: "ps_6_5",
+    label: "glass_frag_rt_textured_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
-// init variants are enumerated: which one a device runs depends on its MSAA
-// mode, and a bundle should be warm for either.
+// init variants are enumerated, and both MSAA halves of every fragment that has
+// them: which one a device runs depends on its MSAA mode, and a bundle should
+// be warm for either.
 pub(crate) static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
@@ -441,6 +558,15 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &SSGI_COMPOSITE,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
+    &RT_REFLECTIONS_FRAG,
+    &RT_REFLECTIONS_FRAG_TEXTURED,
+    &GLASS_VERT,
+    &GLASS_FRAG,
+    &GLASS_FRAG_MSAA,
+    &GLASS_RT_FRAG,
+    &GLASS_RT_FRAG_MSAA,
+    &GLASS_RT_FRAG_TEXTURED,
+    &GLASS_RT_FRAG_TEXTURED_MSAA,
 ];
 
 impl SlangProgram {
@@ -528,7 +654,14 @@ mod tests {
     fn every_program_assembles_with_its_fragments_spliced() {
         for p in ALL {
             let src = p.source(false);
-            for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+            for marker in [
+                "{POST_COMMON}",
+                "{OBJECT_COMMON}",
+                "{PROBE_TYPES}",
+                "{PROBE_COMMON}",
+                "{RT_TYPES}",
+                "{RT_TRACE}",
+            ] {
                 assert!(
                     !src.contains(marker),
                     "{}: unspliced fragment marker {marker}",
@@ -578,17 +711,22 @@ mod tests {
     }
 
     // Every probe cube array must be exactly as long as the descriptor table
-    // its root signature binds, or a probe sample reads past it.
+    // its root signature binds, or a probe sample reads past it. Scanned over
+    // the whole table rather than a listed few, so a new program that bakes the
+    // count in cannot bake in the wrong one.
     #[test]
     fn probe_cube_count_matches_the_host_constant() {
         let want = crate::directx::probe_uniforms::MAX_PROBES.to_string();
-        for defines in [MAIN_DEFINES, SSR_DEFINES] {
-            let value = defines
-                .iter()
-                .find(|(k, _)| *k == "MAX_PROBES")
-                .map(|(_, v)| *v);
-            assert_eq!(value, Some(want.as_str()));
+        let mut sized = 0usize;
+        for p in ALL {
+            for (key, value) in p.defines {
+                if *key == "MAX_PROBES" {
+                    assert_eq!(*value, want.as_str(), "{}", p.label);
+                    sized += 1;
+                }
+            }
         }
+        assert!(sized > 0, "no program bakes MAX_PROBES in");
     }
 
     // The reflection-cut constant in every single-source fragment that gates on
@@ -606,6 +744,7 @@ mod tests {
             ("main_bindless.slang", MAIN_BINDLESS_SLANG),
             ("ssr.slang", SSR_SLANG),
             ("reflection.slang", REFLECTION_SLANG),
+            ("rt_reflections.slang", RT_REFLECTIONS_SLANG),
         ] {
             assert!(
                 src.contains(&expected),

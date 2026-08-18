@@ -23,13 +23,6 @@ use super::builtins;
 //    MaterialUniforms uses vec3 tint/emissive which in std430 have alignment 16;
 //    the Rust struct places them at offsets 16 and 32 (both 16-byte aligned) ✓.
 
-// Shared reflection-probe sampling (box-parallax partition-of-unity blend),
-// substituted into probe-consuming fragment shaders at their `{PROBE_COMMON}`
-// marker (shaderc has no #include). `{MAX_PROBES}` inside it is replaced with
-// the bind count so the GLSL array sizes stay locked to
-// `probe_uniforms::MAX_PROBES`. Applied by `builtins::GlslProgram::source`.
-pub(in crate::vulkan) const PROBE_COMMON_GLSL: &str = include_str!("shaders/probe_common.glsl");
-
 // The shared bindless per-object record, substituted into every pass that
 // strides the per-frame object SSBO at its `{OBJECT_DATA}` marker. Sole GLSL
 // declaration of `GpuObjectData`: the main pass, G-buffer prepass, shadow pass

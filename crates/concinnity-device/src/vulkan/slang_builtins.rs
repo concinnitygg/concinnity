@@ -39,8 +39,10 @@ pub(crate) struct SlangProgram {
     pub entry: &'static str,
     // Diagnostic label (compile errors + cache miss logs + export report).
     pub label: &'static str,
-    // Fixed variant gate (e.g. HIZ_INIT_MSAA), injected as `#define <gate> 1`.
-    pub gate: Option<&'static str>,
+    // Fixed variant gates (e.g. HIZ_INIT_MSAA), each injected as
+    // `#define <gate> 1`. More than one where a variant is the intersection of
+    // two, like the textured ray-traced glass fragment.
+    pub gates: &'static [&'static str],
     // Runtime capacities injected from the context.
     pub sizes: Sizes,
     // Inject `#define USE_MSAA {0|1}` from `Ctx::msaa`. A HOST difference
@@ -65,13 +67,15 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
+const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
 
 pub(super) static MAIN_BINDLESS_VERT: SlangProgram = SlangProgram {
     file: "main_bindless.slang",
     embedded: MAIN_BINDLESS_SLANG,
     entry: "vertex_main_bindless",
     label: "vert_bindless.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::PoolAndProbes,
     msaa: false,
 };
@@ -80,7 +84,7 @@ pub(super) static MAIN_BINDLESS_FRAG: SlangProgram = SlangProgram {
     embedded: MAIN_BINDLESS_SLANG,
     entry: "fragment_main_bindless",
     label: "frag_bindless.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::PoolAndProbes,
     msaa: false,
 };
@@ -89,7 +93,7 @@ pub(super) static LIGHT_CULL: SlangProgram = SlangProgram {
     embedded: LIGHT_CULL_SLANG,
     entry: "light_cull_kernel",
     label: "light_cull.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -98,7 +102,7 @@ pub(super) static HIZ_INIT_MSAA: SlangProgram = SlangProgram {
     embedded: HIZ_BUILD_SLANG,
     entry: "hiz_init_msaa",
     label: "hiz_init_msaa.slang",
-    gate: Some("HIZ_INIT_MSAA"),
+    gates: &["HIZ_INIT_MSAA"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -107,7 +111,7 @@ pub(super) static HIZ_INIT_SINGLE: SlangProgram = SlangProgram {
     embedded: HIZ_BUILD_SLANG,
     entry: "hiz_init_single",
     label: "hiz_init_single.slang",
-    gate: Some("HIZ_INIT_SINGLE"),
+    gates: &["HIZ_INIT_SINGLE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -116,7 +120,7 @@ pub(super) static HIZ_DOWNSAMPLE: SlangProgram = SlangProgram {
     embedded: HIZ_BUILD_SLANG,
     entry: "hiz_downsample",
     label: "hiz_downsample.slang",
-    gate: Some("HIZ_DOWNSAMPLE"),
+    gates: &["HIZ_DOWNSAMPLE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -130,7 +134,7 @@ pub(super) static GBUFFER_PREPASS_VERT: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_vertex",
     label: "gbuffer_prepass_vert.slang",
-    gate: Some("GB_STATIC"),
+    gates: &["GB_STATIC"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -139,7 +143,7 @@ pub(super) static GBUFFER_PREPASS_VERT_INSTANCED: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_vertex_instanced",
     label: "gbuffer_prepass_vert_instanced.slang",
-    gate: Some("GB_INSTANCED"),
+    gates: &["GB_INSTANCED"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -148,7 +152,7 @@ pub(super) static GBUFFER_PREPASS_VERT_SKINNED: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_vertex_skinned",
     label: "gbuffer_prepass_vert_skinned.slang",
-    gate: Some("GB_SKINNED"),
+    gates: &["GB_SKINNED"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -157,7 +161,7 @@ pub(super) static GBUFFER_BINDLESS_VERT: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_vertex_bindless",
     label: "gbuffer_prepass_vert_bindless.slang",
-    gate: Some("GB_BINDLESS"),
+    gates: &["GB_BINDLESS"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -166,7 +170,7 @@ pub(super) static GBUFFER_PREPASS_FRAG: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_fragment",
     label: "gbuffer_prepass_frag.slang",
-    gate: Some("GB_FRAGMENT"),
+    gates: &["GB_FRAGMENT"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -175,7 +179,7 @@ pub(super) static GBUFFER_BINDLESS_FRAG: SlangProgram = SlangProgram {
     embedded: GBUFFER_PREPASS_SLANG,
     entry: "gbuffer_prepass_fragment_bindless",
     label: "gbuffer_prepass_frag_bindless.slang",
-    gate: Some("GB_FRAGMENT_BINDLESS"),
+    gates: &["GB_FRAGMENT_BINDLESS"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -184,7 +188,7 @@ pub(super) static SHADOW_VERT: SlangProgram = SlangProgram {
     embedded: SHADOW_SLANG,
     entry: "shadow_vertex_main",
     label: "shadow_vert.slang",
-    gate: Some("SHADOW_STATIC"),
+    gates: &["SHADOW_STATIC"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -193,7 +197,7 @@ pub(super) static SKINNED_SHADOW_VERT: SlangProgram = SlangProgram {
     embedded: SHADOW_SLANG,
     entry: "shadow_vertex_main_skinned",
     label: "shadow_vert_skinned.slang",
-    gate: Some("SHADOW_SKINNED"),
+    gates: &["SHADOW_SKINNED"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -202,7 +206,7 @@ pub(super) static SHADOW_BINDLESS_VERT: SlangProgram = SlangProgram {
     embedded: SHADOW_SLANG,
     entry: "shadow_vertex_bindless",
     label: "shadow_vert_bindless.slang",
-    gate: Some("SHADOW_BINDLESS"),
+    gates: &["SHADOW_BINDLESS"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -214,7 +218,7 @@ pub(super) static FULLSCREEN_VERT: SlangProgram = SlangProgram {
     embedded: FULLSCREEN_SLANG,
     entry: "fullscreen_vertex",
     label: "fullscreen_vert.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -223,7 +227,7 @@ pub(super) static TAA_FRAG: SlangProgram = SlangProgram {
     embedded: TAA_SLANG,
     entry: "taa_fragment_main",
     label: "taa_frag.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -232,7 +236,7 @@ pub(super) static BLOOM_PREFILTER: SlangProgram = SlangProgram {
     embedded: BLOOM_SLANG,
     entry: "bloom_prefilter_fragment",
     label: "bloom_prefilter.slang",
-    gate: Some("BLOOM_PREFILTER"),
+    gates: &["BLOOM_PREFILTER"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -241,7 +245,7 @@ pub(super) static BLOOM_DOWNSAMPLE: SlangProgram = SlangProgram {
     embedded: BLOOM_SLANG,
     entry: "bloom_downsample_fragment",
     label: "bloom_downsample.slang",
-    gate: Some("BLOOM_DOWNSAMPLE"),
+    gates: &["BLOOM_DOWNSAMPLE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -250,7 +254,7 @@ pub(super) static BLOOM_UPSAMPLE: SlangProgram = SlangProgram {
     embedded: BLOOM_SLANG,
     entry: "bloom_upsample_fragment",
     label: "bloom_upsample.slang",
-    gate: Some("BLOOM_UPSAMPLE"),
+    gates: &["BLOOM_UPSAMPLE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -259,7 +263,7 @@ pub(super) static COMPOSITE_FRAG: SlangProgram = SlangProgram {
     embedded: COMPOSITE_SLANG,
     entry: "composite_fragment",
     label: "composite_frag.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -268,7 +272,7 @@ pub(super) static SSAO_KERNEL: SlangProgram = SlangProgram {
     embedded: SSAO_SLANG,
     entry: "ssao_kernel_fragment",
     label: "ssao_kernel.slang",
-    gate: Some("SSAO_KERNEL"),
+    gates: &["SSAO_KERNEL"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -277,7 +281,7 @@ pub(super) static SSAO_BLUR: SlangProgram = SlangProgram {
     embedded: SSAO_SLANG,
     entry: "ssao_blur_fragment",
     label: "ssao_blur.slang",
-    gate: Some("SSAO_BLUR"),
+    gates: &["SSAO_BLUR"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -286,7 +290,7 @@ pub(super) static SSR_RESOLVE: SlangProgram = SlangProgram {
     embedded: SSR_SLANG,
     entry: "ssr_resolve_fragment",
     label: "ssr_resolve.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::Probes,
     msaa: false,
 };
@@ -295,7 +299,7 @@ pub(super) static SSGI_GATHER: SlangProgram = SlangProgram {
     embedded: SSGI_SLANG,
     entry: "ssgi_gather_fragment",
     label: "ssgi_gather.slang",
-    gate: Some("SSGI_GATHER"),
+    gates: &["SSGI_GATHER"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -304,7 +308,7 @@ pub(super) static SSGI_COMPOSITE: SlangProgram = SlangProgram {
     embedded: SSGI_SLANG,
     entry: "ssgi_composite_fragment",
     label: "ssgi_composite.slang",
-    gate: Some("SSGI_COMPOSITE"),
+    gates: &["SSGI_COMPOSITE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -313,7 +317,7 @@ pub(super) static REFLECTION_BLUR: SlangProgram = SlangProgram {
     embedded: REFLECTION_SLANG,
     entry: "reflection_blur_fragment",
     label: "reflection_blur.slang",
-    gate: Some("REFLECTION_BLUR"),
+    gates: &["REFLECTION_BLUR"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -322,7 +326,7 @@ pub(super) static REFLECTION_COMPOSITE: SlangProgram = SlangProgram {
     embedded: REFLECTION_SLANG,
     entry: "reflection_composite_fragment",
     label: "reflection_composite.slang",
-    gate: Some("REFLECTION_COMPOSITE"),
+    gates: &["REFLECTION_COMPOSITE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -334,7 +338,7 @@ pub(super) static FOG_FROXEL: SlangProgram = SlangProgram {
     embedded: FOG_SLANG,
     entry: "fog_froxel_kernel",
     label: "fog_froxel.slang",
-    gate: Some("FOG_FROXEL"),
+    gates: &["FOG_FROXEL"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -343,7 +347,7 @@ pub(super) static FOG_FRAG: SlangProgram = SlangProgram {
     embedded: FOG_SLANG,
     entry: "fog_fragment",
     label: "fog_frag.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: true,
 };
@@ -352,7 +356,7 @@ pub(super) static AUTO_EXPOSURE_BUILD: SlangProgram = SlangProgram {
     embedded: AUTO_EXPOSURE_SLANG,
     entry: "histogram_build",
     label: "auto_exposure_build.slang",
-    gate: Some("AE_BUILD"),
+    gates: &["AE_BUILD"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -361,7 +365,7 @@ pub(super) static AUTO_EXPOSURE_AVERAGE: SlangProgram = SlangProgram {
     embedded: AUTO_EXPOSURE_SLANG,
     entry: "histogram_average",
     label: "auto_exposure_average.slang",
-    gate: Some("AE_AVERAGE"),
+    gates: &["AE_AVERAGE"],
     sizes: Sizes::None,
     msaa: false,
 };
@@ -370,13 +374,72 @@ pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
     embedded: PARTICLE_SIMULATE_SLANG,
     entry: "particle_simulate",
     label: "particle_simulate.slang",
-    gate: None,
+    gates: &[],
     sizes: Sizes::None,
     msaa: false,
 };
 
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated: which one a device runs depends on its MSAA
+// The ray-traced families, compiled only where `VK_KHR_ray_query` is present:
+// slangc emits `SPV_KHR_ray_query` (SPIR-V 1.5), so these need the Vulkan 1.2
+// device the extension already implies. The flat variants declare no bindless
+// pool at all, which is what keeps a non-bindless world from binding one.
+pub(super) static RT_REFLECTIONS_FRAG: SlangProgram = SlangProgram {
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entry: "rt_reflections_fragment",
+    label: "rt_reflections.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: false,
+};
+pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entry: "rt_reflections_fragment",
+    label: "rt_reflections_textured.slang",
+    gates: &["RT_TEXTURED"],
+    sizes: Sizes::PoolAndProbes,
+    msaa: false,
+};
+pub(super) static GLASS_VERT: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_vertex",
+    label: "glass_vert.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static GLASS_FRAG: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_fragment",
+    label: "glass_frag.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static GLASS_FRAG_RT: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    label: "glass_frag_rt.slang",
+    gates: &["GLASS_RT"],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+pub(super) static GLASS_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entry: "glass_rt_fragment",
+    label: "glass_frag_rt_textured.slang",
+    gates: &["GLASS_RT", "RT_TEXTURED"],
+    sizes: Sizes::PoolAndProbes,
+    msaa: true,
+};
+
 // mode, and a bundle should be warm for either.
 pub(crate) static ALL: &[&SlangProgram] = &[
     &MAIN_BINDLESS_VERT,
@@ -412,6 +475,12 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
+    &RT_REFLECTIONS_FRAG,
+    &RT_REFLECTIONS_FRAG_TEXTURED,
+    &GLASS_VERT,
+    &GLASS_FRAG,
+    &GLASS_FRAG_RT,
+    &GLASS_FRAG_RT_TEXTURED,
 ];
 
 impl SlangProgram {
@@ -419,10 +488,7 @@ impl SlangProgram {
     pub fn source(&self, ctx: &Ctx) -> String {
         let pool = ctx.pool_size.to_string();
         let probes = ctx.probe_count.to_string();
-        let mut defines: Vec<(&str, &str)> = Vec::new();
-        if let Some(gate) = self.gate {
-            defines.push((gate, "1"));
-        }
+        let mut defines: Vec<(&str, &str)> = self.gates.iter().map(|g| (*g, "1")).collect();
         if self.msaa {
             defines.push(("USE_MSAA", if ctx.msaa { "1" } else { "0" }));
         }
@@ -509,7 +575,14 @@ mod tests {
     fn every_program_assembles_with_its_fragments_spliced() {
         for p in ALL {
             let src = p.source(&ctx(4, 4));
-            for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+            for marker in [
+                "{POST_COMMON}",
+                "{OBJECT_COMMON}",
+                "{PROBE_TYPES}",
+                "{PROBE_COMMON}",
+                "{RT_TYPES}",
+                "{RT_TRACE}",
+            ] {
                 assert!(
                     !src.contains(marker),
                     "{}: unspliced fragment marker {marker}",

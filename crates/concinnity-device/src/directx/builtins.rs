@@ -3,8 +3,8 @@
 // The declarative table of every built-in HLSL program the DirectX backend
 // compiles at runtime. Each program is declared exactly once: its source file,
 // entry point, target profile, compiler, and how the compile source is
-// assembled from the file (defines, prelude, probe_common / object_common
-// injection). Renderer init and hot-reload compile through
+// assembled from the file (the MSAA define, the object_common injection).
+// Renderer init and hot-reload compile through
 // `HlslProgram::compile`, and the
 // export-time precompile iterates `ALL` to populate a bundle's shader cache
 // from the very same declarations, so the two can never drift.
@@ -19,22 +19,12 @@ use std::borrow::Cow;
 
 use super::pipeline::{reflection_cut_prelude, shader_source};
 
-// Shared reflection-probe sampling (box-parallax partition-of-unity blend),
-// prepended to every shader that samples the probe cube array.
-const PROBE_COMMON_HLSL: &str = include_str!("shaders/probe_common.hlsl");
-
 // The shared bindless per-object record, substituted into every pass that
 // strides the per-frame object StructuredBuffer at its `{OBJECT_DATA}` marker.
 // Sole HLSL declaration of `GpuObjectData`: the main pass, G-buffer prepass,
 // shadow pass and cull kernel all read the same buffer, so a per-shader copy is
 // a silent layout-drift hazard.
 const OBJECT_COMMON_HLSL: &str = include_str!("shaders/object_common.hlsl");
-
-// Remap probe_common's register bindings for passes whose root signature
-// places the probe cube array / sampler elsewhere than the forward pass.
-const RT_PROBE_DEFINES: &str =
-    "#define PROBE_CUBES_REGISTER t10\n#define PROBE_SAMPLER_REGISTER s3\n";
-const GLASS_RT_PROBE_DEFINES: &str = "#define PROBE_CUBES_REGISTER t20\n";
 
 pub(crate) enum Compiler {
     // FXC (`D3DCompile`), shader model 5.1.
@@ -44,19 +34,13 @@ pub(crate) enum Compiler {
 }
 
 // How a program's compile source is assembled from its shader file. Prefixes
-// are prepended in the order below; `probe_common` slots in front of the body
-// with a separating newline. The body's markers are substituted afterwards.
+// are prepended in the order below; the body's markers are substituted
+// afterwards.
 pub(crate) struct Assembly {
     // Prepend `#define USE_MSAA {0|1}` from `Ctx::msaa`.
     pub msaa: bool,
     // Prepend the reflection roughness-cut prelude (see `reflection_cut_prelude`).
     pub cut: bool,
-    // Prepend probe_common.hlsl.
-    pub probe: bool,
-    // Register remap defines emitted ahead of probe_common, for passes whose
-    // root signature places the cube array / sampler elsewhere than the forward
-    // pass. Empty keeps probe_common's defaults.
-    pub probe_registers: &'static str,
     // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
     pub object_data: bool,
 }
@@ -64,8 +48,6 @@ pub(crate) struct Assembly {
 const PLAIN: Assembly = Assembly {
     msaa: false,
     cut: false,
-    probe: false,
-    probe_registers: "",
     object_data: false,
 };
 
@@ -116,15 +98,6 @@ impl HlslProgram {
         }
         if assembly.msaa {
             src.push_str(msaa_define(ctx.msaa));
-        }
-        if assembly.probe {
-            src.push_str(assembly.probe_registers);
-            src.push_str(&shader_source(
-                ctx.hot_reload,
-                "probe_common.hlsl",
-                PROBE_COMMON_HLSL,
-            ));
-            src.push('\n');
         }
         src.push_str(&self.body(ctx.hot_reload));
         if assembly.object_data {
@@ -190,9 +163,6 @@ pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompi
 const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
 const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
-const GLASS_HLSL: &str = include_str!("shaders/glass.hlsl");
-const GLASS_RT_HLSL: &str = include_str!("shaders/glass_rt.hlsl");
-const RT_REFLECTIONS_HLSL: &str = include_str!("shaders/rt_reflections.hlsl");
 
 // Declaration shorthand: FXC, single `main` entry, no assembly.
 const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static str) -> HlslProgram {
@@ -307,77 +277,8 @@ pub(super) static PARTICLE_FRAG: HlslProgram = fxc_main(
     "ps_5_1",
 );
 
-const GLASS_DECL: HlslProgram = HlslProgram {
-    file: "glass.hlsl",
-    embedded: GLASS_HLSL,
-    entry: "vs_main",
-    target: "vs_5_1",
-    compiler: Compiler::Fxc,
-    assembly: Assembly {
-        msaa: true,
-        probe: true,
-        ..PLAIN
-    },
-};
-pub(super) static GLASS_VERT: HlslProgram = GLASS_DECL;
-pub(super) static GLASS_FRAG: HlslProgram = HlslProgram {
-    entry: "ps_main",
-    target: "ps_5_1",
-    ..GLASS_DECL
-};
-
-// SM 6.5 programs (DXC): hardware ray-traced reflections, RT glass, and the
-// RT skinned-vertex refit kernel.
-const RT_REFLECTIONS_DECL: HlslProgram = HlslProgram {
-    file: "rt_reflections.hlsl",
-    embedded: RT_REFLECTIONS_HLSL,
-    entry: "rt_fullscreen_vert",
-    target: "vs_6_5",
-    compiler: Compiler::Dxc,
-    assembly: Assembly {
-        cut: true,
-        probe: true,
-        probe_registers: RT_PROBE_DEFINES,
-        ..PLAIN
-    },
-};
-pub(super) static RT_FULLSCREEN_VERT: HlslProgram = RT_REFLECTIONS_DECL;
-pub(super) static RT_REFLECTIONS_FRAG: HlslProgram = HlslProgram {
-    entry: "rt_reflections_frag",
-    target: "ps_6_5",
-    ..RT_REFLECTIONS_DECL
-};
-pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: HlslProgram = HlslProgram {
-    entry: "rt_reflections_frag_textured",
-    target: "ps_6_5",
-    ..RT_REFLECTIONS_DECL
-};
-
-const GLASS_RT_DECL: HlslProgram = HlslProgram {
-    file: "glass_rt.hlsl",
-    embedded: GLASS_RT_HLSL,
-    entry: "vs_main",
-    target: "vs_6_5",
-    compiler: Compiler::Dxc,
-    assembly: Assembly {
-        msaa: true,
-        probe: true,
-        probe_registers: GLASS_RT_PROBE_DEFINES,
-        ..PLAIN
-    },
-};
-pub(super) static GLASS_RT_VERT: HlslProgram = GLASS_RT_DECL;
-pub(super) static GLASS_RT_FRAG: HlslProgram = HlslProgram {
-    entry: "ps_main_rt",
-    target: "ps_6_5",
-    ..GLASS_RT_DECL
-};
-pub(super) static GLASS_RT_FRAG_TEXTURED: HlslProgram = HlslProgram {
-    entry: "ps_main_rt_textured",
-    target: "ps_6_5",
-    ..GLASS_RT_DECL
-};
-
+// The one SM 6.5 program left on this table (DXC): the RT skinned-vertex refit
+// kernel. Its ray-traced siblings are single-source now.
 pub(super) static RT_SKIN: HlslProgram = HlslProgram {
     file: "rt_skin.hlsl",
     embedded: include_str!("shaders/rt_skin.hlsl"),
@@ -404,14 +305,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &LINE_FRAG,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
-    &GLASS_VERT,
-    &GLASS_FRAG,
-    &RT_FULLSCREEN_VERT,
-    &RT_REFLECTIONS_FRAG,
-    &RT_REFLECTIONS_FRAG_TEXTURED,
-    &GLASS_RT_VERT,
-    &GLASS_RT_FRAG,
-    &GLASS_RT_FRAG_TEXTURED,
     &RT_SKIN,
 ];
 
@@ -442,29 +335,22 @@ mod tests {
 
     #[test]
     fn msaa_assemblies_enumerate_both_variants() {
-        assert_eq!(GLASS_FRAG.assembly.msaa_variants(), &[false, true]);
-        assert_eq!(GLASS_RT_FRAG.assembly.msaa_variants(), &[false, true]);
+        assert_eq!(DECAL_FRAG.assembly.msaa_variants(), &[false, true]);
+        assert_eq!(LINE_FRAG.assembly.msaa_variants(), &[false, true]);
         assert_eq!(TEXT_VERT.assembly.msaa_variants(), &[false]);
-        assert_eq!(RT_REFLECTIONS_FRAG.assembly.msaa_variants(), &[false]);
     }
 
-    // The assembled text must match the shapes the pass code historically
-    // built by hand: define first, then the optional preludes, then the body.
+    // The assembled text must match the shape the pass code historically built
+    // by hand: the define first, then the body.
     #[test]
     fn assembly_orders_prefixes_before_the_body() {
         let ctx = Ctx {
             hot_reload: false,
             msaa: true,
         };
-        let glass = GLASS_FRAG.source(&ctx);
-        assert!(glass.starts_with("#define USE_MSAA 1\n"));
-        assert!(glass.ends_with(GLASS_HLSL));
-        assert!(glass.contains(PROBE_COMMON_HLSL));
-
-        let rt = RT_REFLECTIONS_FRAG.source(&Ctx::plain(false));
-        assert!(rt.starts_with("static const float REFLECTION_ROUGHNESS_CUT"));
-        assert!(rt.contains("#define PROBE_CUBES_REGISTER t10"));
-        assert!(rt.ends_with(RT_REFLECTIONS_HLSL));
+        let decal = DECAL_FRAG.source(&ctx);
+        assert!(decal.starts_with("#define USE_MSAA 1\n"));
+        assert!(decal.ends_with(DECAL_FRAG.embedded));
     }
 
     // Every program's assembled source must embed its body, so a shader edit is

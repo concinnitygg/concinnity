@@ -21,6 +21,10 @@ use std::borrow::Cow;
 // in the device build script is the build-time half of this table; the two must
 // agree or a build script and a renderer would key different text for the same
 // program.
+//
+// Two of them come in pairs, because a shader's resource bindings sit between
+// the halves: PROBE_TYPES / RT_TYPES declare the records a binding names, and
+// PROBE_COMMON / RT_TRACE the code that reads the bound resources.
 const FRAGMENTS: &[(&str, &str, &str)] = &[
     (
         "{POST_COMMON}",
@@ -31,6 +35,26 @@ const FRAGMENTS: &[(&str, &str, &str)] = &[
         "{OBJECT_COMMON}",
         "object_common.slang",
         include_str!("shaders/object_common.slang"),
+    ),
+    (
+        "{PROBE_TYPES}",
+        "probe_types.slang",
+        include_str!("shaders/probe_types.slang"),
+    ),
+    (
+        "{PROBE_COMMON}",
+        "probe_common.slang",
+        include_str!("shaders/probe_common.slang"),
+    ),
+    (
+        "{RT_TYPES}",
+        "rt_types.slang",
+        include_str!("shaders/rt_types.slang"),
+    ),
+    (
+        "{RT_TRACE}",
+        "rt_trace.slang",
+        include_str!("shaders/rt_trace.slang"),
     ),
 ];
 
@@ -134,6 +158,29 @@ mod tests {
         let src = assemble(false, "x.slang", "{POST_COMMON}\n{OBJECT_COMMON}\n", &[]);
         assert!(src.contains("float2 combined_size("));
         assert!(src.contains("struct GpuObjectData"));
+    }
+
+    // The probe and ray-tracing fragments each splice in two halves, and the
+    // order matters: the record declarations have to precede the helpers that
+    // read them, because a shader puts its resource bindings between the two.
+    #[test]
+    fn the_paired_fragments_splice_records_before_helpers() {
+        let src = assemble(
+            false,
+            "x.slang",
+            "{PROBE_TYPES}\n{PROBE_COMMON}\n{RT_TYPES}\n{RT_TRACE}\n",
+            &[],
+        );
+        for marker in [
+            "{PROBE_TYPES}",
+            "{PROBE_COMMON}",
+            "{RT_TYPES}",
+            "{RT_TRACE}",
+        ] {
+            assert!(!src.contains(marker), "unspliced {marker}");
+        }
+        assert!(src.find("struct ProbeSet") < src.find("float3 probe_set_specular("));
+        assert!(src.find("struct RtGeomEntry") < src.find("bool rt_trace_reflection("));
     }
 
     // A shader with no marker keeps its text byte for byte, so the splice

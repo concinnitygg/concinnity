@@ -302,7 +302,11 @@ pub struct TransparentView {
     pub viewport: [f32; 2],
     // Wall-clock seconds since startup, fed to the Gerstner sum.
     pub time: f32,
-    pub _pad: f32,
+    // Mip count of the bound IBL prefilter cube; 0 signals "no environment map",
+    // where the glass reflection falls back to a white rim. Per-frame state, so
+    // it rides the shared view rather than a per-draw params block (which is
+    // what Vulkan and DirectX have always done).
+    pub prefilter_mip_count: f32,
 }
 
 // One Gerstner wave coefficient set, packed for MSL float4 alignment.
@@ -358,7 +362,7 @@ pub struct WaterParams {
 // Per-panel tunables for a `GlassPanel`, uploaded once per panel per frame at
 // vertex + fragment buffer(6). Vec3-ish fields are `[f32; 4]` so the layout is
 // byte-identical to MSL `float4`. Matches `GlassParams` in
-// `shaders/glass.metal`. 64 bytes.
+// `shaders/glass.slang`. 64 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GlassParams {
@@ -374,17 +378,12 @@ pub struct GlassParams {
     pub refraction_strength: f32,
     // Schlick-Fresnel exponent for the grazing-angle rim.
     pub fresnel_power: f32,
-    // Mip count of the bound IBL prefilter cube; 0 signals "no environment map"
-    // so the shader falls back to a white rim. Patched per-frame in
-    // `collect_glass_transparent_draws` (the asset carries no env state).
-    pub prefilter_mip_count: f32,
-    // Planar reflection control: `[strength, _, _, _]`. `strength > 0.5` selects
-    // the sharp planar reflection (the scene re-rendered mirrored across this
-    // pane's plane, sampled projectively at screen UV) over the probe / sky cube.
-    // A float4 so the trailing struct stays 16-byte aligned. 0 when planar is off
+    // Planar reflection strength: `> 0.5` selects the sharp planar reflection
+    // (the scene re-rendered mirrored across this pane's plane, sampled
+    // projectively at screen UV) over the probe / sky cube. 0 when planar is off
     // (RT on, no planar slot, or the plane overflowed the budget), keeping the
-    // probe/sky path. Patched per-frame in `collect_glass_transparent_draws`.
-    pub planar: [f32; 4],
+    // probe / sky path. Patched per-frame in `collect_glass_transparent_draws`.
+    pub planar: f32,
 }
 
 // Per-draw tunables for a transparent glass MESH (an imported `Material` with
@@ -696,16 +695,16 @@ mod tests {
 
     #[test]
     fn transparent_view_layout_matches_msl() {
-        // MSL `TransparentView` in glass.metal (and `WaterView` in water.metal,
+        // `TransparentView` in glass.slang (and its MSL copy in water.metal,
         // an identical layout): two float4x4, a float4 camera_pos, float2
-        // viewport, time + pad.
+        // viewport, time + prefilter_mip_count.
         assert_eq!(size_of::<TransparentView>(), 160);
         assert_eq!(offset_of!(TransparentView, vp), 0);
         assert_eq!(offset_of!(TransparentView, inv_vp), 64);
         assert_eq!(offset_of!(TransparentView, camera_pos), 128);
         assert_eq!(offset_of!(TransparentView, viewport), 144);
         assert_eq!(offset_of!(TransparentView, time), 152);
-        assert_eq!(offset_of!(TransparentView, _pad), 156);
+        assert_eq!(offset_of!(TransparentView, prefilter_mip_count), 156);
     }
 
     #[test]
@@ -740,18 +739,17 @@ mod tests {
 
     #[test]
     fn glass_params_layout_matches_msl() {
-        // MSL `GlassParams` in glass.metal: three float4, then four scalars
-        // (opacity, refraction_strength, fresnel_power, prefilter_mip_count), then
-        // a trailing float4 planar control.
-        assert_eq!(size_of::<GlassParams>(), 80);
+        // `GlassParams` in glass.slang: three float4, then four scalars
+        // (opacity, refraction_strength, fresnel_power, planar). The same 64-byte
+        // block the Vulkan and DirectX hosts have always bound.
+        assert_eq!(size_of::<GlassParams>(), 64);
         assert_eq!(offset_of!(GlassParams, centre), 0);
         assert_eq!(offset_of!(GlassParams, normal), 16);
         assert_eq!(offset_of!(GlassParams, tint), 32);
         assert_eq!(offset_of!(GlassParams, opacity), 48);
         assert_eq!(offset_of!(GlassParams, refraction_strength), 52);
         assert_eq!(offset_of!(GlassParams, fresnel_power), 56);
-        assert_eq!(offset_of!(GlassParams, prefilter_mip_count), 60);
-        assert_eq!(offset_of!(GlassParams, planar), 64);
+        assert_eq!(offset_of!(GlassParams, planar), 60);
         assert_eq!(size_of::<GlassParams>() % 16, 0);
     }
 

@@ -1209,6 +1209,51 @@ fn max_frames_stops_the_run() {
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
 }
 
+// The pipelined cap counts frames handed to the render half, not feedback
+// drained back from it. The drain is a non-blocking `try_recv`, so a
+// feedback-driven count lags by however many frames the render half has not
+// reported yet, and a capped run renders `max` or `max + 1` frames depending on
+// which side wins the race -- which on a temporal world is a different image.
+// The render half here never answers, so a lagging count would never reach the
+// cap at all.
+#[test]
+fn pipelined_max_frames_counts_frames_sent() {
+    let (_state, hooks) = recording_hooks();
+    let mut b = WorldBuilder::new();
+    b.push(Window::default());
+    b.push(GraphicsConfig {
+        max_frames: Some(3),
+        ..Default::default()
+    });
+    b.push_shaders();
+    b.push(Camera3D::bake(Default::default()));
+    b.push_textured_quad(MESH, TEX, MAT, PROP);
+    let mut world = b.build();
+    let mut gs = init_graphics(&mut world, hooks);
+
+    let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
+    let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
+    world
+        .ctx()
+        .insert_resource(crate::ecs::PipelinedFrames(Some(
+            crate::ecs::PipelineChannels {
+                snapshot_tx,
+                feedback_rx,
+            },
+        )));
+    // Stand in for the render half: receive every snapshot (the send is a
+    // rendezvous, so an unread channel would deadlock the step) and report
+    // nothing back.
+    let drain = std::thread::spawn(move || snapshot_rx.into_iter().count());
+
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
+
+    world.ctx().remove_resource::<crate::ecs::PipelinedFrames>();
+    assert_eq!(drain.join().expect("drain thread"), 3);
+}
+
 #[test]
 fn spawn_request_clones_template_draw_slot() {
     let (state, hooks) = recording_hooks();

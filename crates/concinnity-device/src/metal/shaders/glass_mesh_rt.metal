@@ -5,9 +5,9 @@ using namespace metal::raytracing;
 
 // --- Transparent glass MESH pass, ray-traced reflection variant ---
 //
-// The sibling of glass_rt.metal for IMPORTED transparent meshes (a `Material`
+// The sibling of glass.slang's RT fragment for IMPORTED transparent meshes (a `Material`
 // with `transparent: true` on an RT-capable device), not the flat pre-baked
-// `GlassPanel` quad. Two differences from glass_rt.metal:
+// `GlassPanel` quad. Two differences from that fragment:
 //   - The geometry is LOCAL-space, so the vertex shader applies the per-draw
 //     model matrix (from GlassMeshParams) to position + normal and outputs both
 //     interpolated, instead of a pre-transformed world-space quad.
@@ -17,7 +17,7 @@ using namespace metal::raytracing;
 // Everything else -- refraction of the pre-transparent scene snapshot, the
 // per-pixel reflection ray traced against the scene BVH, hit shading + sun
 // shadow, the probe/sky miss fallback, and the Schlick Fresnel blend -- is
-// identical to glass_rt.metal. Shares the transparent pass's RT argument layout
+// identical to it. Shares the transparent pass's RT argument layout
 // (RtParams @0, scene verts @1, indices @2, geom @3, TLAS @4, view @5, params
 // @6, ProbeSet @7, skinned @8/9, bindless pool @10). The mesh is excluded from
 // the BLAS (glass does not reflect glass -- accepted V1), so the trace never
@@ -29,7 +29,9 @@ struct TransparentView {
     float4   camera_pos;  // world-space camera, .w unused
     float2   viewport;    // attachment dimensions in pixels
     float    time;        // seconds since startup
-    float    _pad;
+    // Mips in the sky prefilter cube; these shaders take their own copy from
+    // their params block, so the field is here only to match the CPU struct.
+    float    prefilter_mip_count;
 };
 
 // Matches metal::uniforms::GlassMeshParams (96 bytes). `model` is first so its
@@ -44,7 +46,7 @@ struct GlassMeshParams {
 };
 
 // RT tunables + camera + sun, bound at buffer(0). Layout matches
-// render_types::RtParams (shared with rt_reflections.metal / glass_rt.metal).
+// render_types::RtParams (shared with rt_types.slang).
 struct RtParams {
     float    intensity;
     float    max_distance;
@@ -230,7 +232,7 @@ vertex GlassMeshVtxOut glass_mesh_vertex(
 
 // Shared refraction + reflection-blend tail. `normal` is the view-facing surface
 // normal; `reflection` is the traced (or miss-fallback) radiance. Identical math
-// to glass_rt.metal so a mesh and a pane read the same at equal inputs.
+// to glass.slang so a mesh and a pane read the same at equal inputs.
 static float4 glass_mesh_shade(
     GlassMeshVtxOut                   in,
     constant TransparentView         &v,

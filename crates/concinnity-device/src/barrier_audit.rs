@@ -122,7 +122,13 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
-            ("planar.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            // One orders each plane's mirror render behind the previous
+            // render's attachment writes, which the shared main render pass
+            // declares `UNDEFINED` and so transitions without a dependency;
+            // the other makes the finished targets visible to the glass
+            // sample. Neither the targets nor the shared mirror depth is a
+            // graph resource.
+            ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
             // The refraction snapshot: both passes copy the scene image into a
             // private snapshot and sample that, because a fragment cannot read
             // the attachment it is blending into. The pair opens the copy and

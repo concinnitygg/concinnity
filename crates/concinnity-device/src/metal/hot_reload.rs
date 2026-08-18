@@ -335,11 +335,19 @@ impl MtlContext {
         );
         let rt_reflections = rebuild_if_live!(
             self.rt.pipeline.is_some(),
-            build_rt_reflection_pipeline(device, "rt_reflections_fragment", hr)
+            build_rt_reflection_pipeline(
+                device,
+                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG,
+                hr
+            )
         );
         let rt_reflections_textured = rebuild_if_live!(
             self.rt.pipeline_textured.is_some(),
-            build_rt_reflection_pipeline(device, "rt_reflections_fragment_textured", hr)
+            build_rt_reflection_pipeline(
+                device,
+                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
+                hr
+            )
         );
 
         // Skinned pre-pass variants compile from the same on-disk shader

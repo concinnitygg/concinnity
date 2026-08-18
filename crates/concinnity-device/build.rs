@@ -44,6 +44,10 @@ const METAL_SHADER_FRAGMENTS: &[(&str, &str)] = &[("{OBJECT_DATA}", "object_comm
 const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[
     ("{POST_COMMON}", "post_common.slang"),
     ("{OBJECT_COMMON}", "object_common.slang"),
+    ("{PROBE_TYPES}", "probe_types.slang"),
+    ("{PROBE_COMMON}", "probe_common.slang"),
+    ("{RT_TYPES}", "rt_types.slang"),
+    ("{RT_TRACE}", "rt_trace.slang"),
 ];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
@@ -96,42 +100,43 @@ const DXIL_ABI_REGISTERS: &[(&str, &str)] = &[
     ("cube_sampler", "s2"),
 ];
 
-// One variant of the G-buffer pre-pass / shadow families and the registers its
-// DirectX root signature declares.
-struct GeometryAbi {
+// One shader variant and the registers its DirectX root signature declares.
+struct DxilAbi {
     file: &'static str,
-    gate: &'static str,
+    // Variant gates, injected as `#define <gate> 1` alongside DXIL_ABI.
+    gates: &'static [&'static str],
     entry: &'static str,
     profile: &'static str,
     registers: &'static [(&'static str, &'static str)],
 }
 
-// The G-buffer pre-pass and shadow root signatures, from
-// `src/directx/post/gbuffer.rs`, `init/pipelines.rs` and `resources.rs`. These
+// The G-buffer pre-pass, shadow, ray-traced reflection and glass root
+// signatures, from `src/directx/post/gbuffer.rs`, `post/rt_reflections.rs`,
+// `glass.rs`, `init/pipelines.rs` and `resources.rs`. These
 // layouts are engine-internal rather than a world-shader contract, but they are
 // pinned for a sharper reason: the `.slang` files are shared with Metal and
 // Vulkan, whose hosts bind the same declarations at entirely different slots,
 // so an edit made on either of those platforms cannot see a DirectX root
 // signature at all. `dx_crosscheck.sh` runs this script's DirectX branch, which
 // is where such an edit gets caught.
-const SLANG_DXIL_GEOMETRY_ABI: &[GeometryAbi] = &[
-    GeometryAbi {
+const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_STATIC",
+        gates: &["GB_STATIC"],
         entry: "gbuffer_prepass_vertex",
         profile: "vs_6_0",
         registers: &[("gb_view", "b0"), ("gb_model", "b1")],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_INSTANCED",
+        gates: &["GB_INSTANCED"],
         entry: "gbuffer_prepass_vertex_instanced",
         profile: "vs_6_0",
         registers: &[("gb_view", "b0"), ("instances", "t0")],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_SKINNED",
+        gates: &["GB_SKINNED"],
         entry: "gbuffer_prepass_vertex_skinned",
         profile: "vs_6_0",
         registers: &[
@@ -141,9 +146,9 @@ const SLANG_DXIL_GEOMETRY_ABI: &[GeometryAbi] = &[
             ("prev_joints", "t1"),
         ],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_BINDLESS",
+        gates: &["GB_BINDLESS"],
         entry: "gbuffer_prepass_vertex_bindless",
         profile: "vs_6_0",
         registers: &[
@@ -153,37 +158,37 @@ const SLANG_DXIL_GEOMETRY_ABI: &[GeometryAbi] = &[
             ("prev_models", "t1"),
         ],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_FRAGMENT",
+        gates: &["GB_FRAGMENT"],
         entry: "gbuffer_prepass_fragment",
         profile: "ps_6_0",
         registers: &[("gb_mat", "b0")],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "gbuffer_prepass.slang",
-        gate: "GB_FRAGMENT_BINDLESS",
+        gates: &["GB_FRAGMENT_BINDLESS"],
         entry: "gbuffer_prepass_fragment_bindless",
         profile: "ps_6_0",
         registers: &[],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "shadow.slang",
-        gate: "SHADOW_STATIC",
+        gates: &["SHADOW_STATIC"],
         entry: "shadow_vertex_main",
         profile: "vs_6_0",
         registers: &[("push", "b0"), ("shadow_cb", "b1")],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "shadow.slang",
-        gate: "SHADOW_SKINNED",
+        gates: &["SHADOW_SKINNED"],
         entry: "shadow_vertex_main_skinned",
         profile: "vs_6_0",
         registers: &[("push", "b0"), ("shadow_cb", "b1"), ("joints", "t0")],
     },
-    GeometryAbi {
+    DxilAbi {
         file: "shadow.slang",
-        gate: "SHADOW_BINDLESS",
+        gates: &["SHADOW_BINDLESS"],
         entry: "shadow_vertex_bindless",
         profile: "vs_6_0",
         registers: &[
@@ -193,7 +198,113 @@ const SLANG_DXIL_GEOMETRY_ABI: &[GeometryAbi] = &[
             ("objects", "t0"),
         ],
     },
+    // Ray query needs shader model 6.5, above the 6.0 floor the rest of the
+    // single-source shaders compile at.
+    DxilAbi {
+        file: "rt_reflections.slang",
+        gates: &[],
+        entry: "rt_reflections_fragment",
+        profile: "ps_6_5",
+        registers: RT_REFLECTIONS_REGISTERS,
+    },
+    DxilAbi {
+        file: "rt_reflections.slang",
+        gates: &["RT_TEXTURED"],
+        entry: "rt_reflections_fragment",
+        profile: "ps_6_5",
+        registers: RT_REFLECTIONS_TEXTURED_REGISTERS,
+    },
+    DxilAbi {
+        file: "glass.slang",
+        gates: &[],
+        entry: "glass_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0")],
+    },
+    DxilAbi {
+        file: "glass.slang",
+        gates: &[],
+        entry: "glass_fragment",
+        profile: "ps_6_0",
+        registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
+        file: "glass.slang",
+        gates: &["GLASS_RT"],
+        entry: "glass_rt_fragment",
+        profile: "ps_6_5",
+        registers: GLASS_RT_REGISTERS,
+    },
+    DxilAbi {
+        file: "glass.slang",
+        gates: &["GLASS_RT", "RT_TEXTURED"],
+        entry: "glass_rt_fragment",
+        profile: "ps_6_5",
+        registers: GLASS_RT_TEXTURED_REGISTERS,
+    },
 ];
+
+// The ray-traced reflection resolve's root signature, from
+// `src/directx/post/rt_reflections.rs`. The probe cube array is remapped clear
+// of the screen-space SRVs, which is what the hand-written HLSL used its
+// PROBE_CUBES_REGISTER define for.
+const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
+    ("rt_params", "b0"),
+    ("probe_set", "b4"),
+    ("scene_tlas", "t0"),
+    ("verts", "t1"),
+    ("indices", "t2"),
+    ("geom", "t3"),
+    ("scene_tex", "t4"),
+    ("gbuffer", "t5"),
+    ("rough_tex", "t6"),
+    ("prefilter", "t7"),
+    ("sverts", "t8"),
+    ("sidx", "t9"),
+    ("probe_cubes", "t10"),
+    ("screen_sampler", "s0"),
+    ("cube_sampler", "s1"),
+    ("probe_cube_sampler", "s3"),
+];
+
+const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] =
+    &[("tex_pool", "t0, space1"), ("pool_sampler", "s2")];
+
+// The glass root signatures, from `src/directx/glass.rs`. The base pass leaves
+// the probe cubes at their default t7; the RT variant moves them to t20 because
+// the array spans MAX_PROBES registers and the trace's SRVs sit at t4..t10.
+const GLASS_REGISTERS: &[(&str, &str)] = &[
+    ("view", "b0"),
+    ("params", "b1"),
+    ("probe_set", "b4"),
+    ("scene_color", "t0"),
+    ("scene_depth", "t1"),
+    ("prefilter_cube", "t2"),
+    ("planar_reflection", "t3"),
+    ("probe_cubes", "t7"),
+    ("post_samp", "s0"),
+    ("cube_sampler", "s2"),
+];
+
+const GLASS_RT_REGISTERS: &[(&str, &str)] = &[
+    ("view", "b0"),
+    ("params", "b1"),
+    ("rt_params", "b5"),
+    ("probe_set", "b4"),
+    ("scene_color", "t0"),
+    ("scene_depth", "t1"),
+    ("prefilter_cube", "t2"),
+    ("scene_tlas", "t4"),
+    ("verts", "t5"),
+    ("indices", "t6"),
+    ("sverts", "t8"),
+    ("sidx", "t9"),
+    ("geom", "t10"),
+    ("probe_cubes", "t20"),
+];
+
+const GLASS_RT_TEXTURED_REGISTERS: &[(&str, &str)] =
+    &[("tex_pool", "t0, space1"), ("pool_sampler", "s1")];
 
 // The single-source engine shaders the Metal backend precompiles to metallibs.
 // One spec per variant library; `name` is the renderer's lookup key.
@@ -390,6 +501,62 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         entries: &["particle_simulate"],
         defines: &[("METAL_BINDINGS", "1")],
     },
+    SlangLibSpec {
+        name: "rt_reflections_frag.slang",
+        file: "rt_reflections.slang",
+        entries: &["rt_reflections_fragment"],
+        defines: SLANG_RT_DEFINES,
+    },
+    SlangLibSpec {
+        name: "rt_reflections_frag_textured.slang",
+        file: "rt_reflections.slang",
+        entries: &["rt_reflections_fragment"],
+        defines: SLANG_RT_TEXTURED_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_vert.slang",
+        file: "glass.slang",
+        entries: &["glass_vertex"],
+        defines: SLANG_GLASS_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_frag.slang",
+        file: "glass.slang",
+        entries: &["glass_fragment"],
+        defines: SLANG_GLASS_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_frag_rt.slang",
+        file: "glass.slang",
+        entries: &["glass_rt_fragment"],
+        defines: SLANG_GLASS_RT_DEFINES,
+    },
+    SlangLibSpec {
+        name: "glass_frag_rt_textured.slang",
+        file: "glass.slang",
+        entries: &["glass_rt_fragment"],
+        defines: SLANG_GLASS_RT_TEXTURED_DEFINES,
+    },
+];
+
+// The ray-traced families. Both bake the Metal binding layout in; the textured
+// variants additionally read the bindless pool, so they take its capacity.
+const SLANG_RT_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const SLANG_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+const SLANG_GLASS_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const SLANG_GLASS_RT_DEFINES: &[(&str, &str)] =
+    &[("METAL_ABI", "1"), ("GLASS_RT", "1"), ("MAX_PROBES", "8")];
+const SLANG_GLASS_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("GLASS_RT", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
 ];
 
 // The modules that decide how a shader artifact is produced: the cache itself
@@ -540,17 +707,16 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
              signature in src/directx/init/pipelines.rs before shipping.",
         );
     }
-    assert_slang_dxil_geometry_abi(slang_dir, &out_dir);
+    assert_slang_dxil_entry_abi(slang_dir, &out_dir);
 }
 
-// The same check over the G-buffer pre-pass and shadow families. Each variant
-// compiles alone, so a register only has to hold in the entry that declares it.
-fn assert_slang_dxil_geometry_abi(slang_dir: &std::path::Path, out_dir: &std::path::Path) {
-    for abi in SLANG_DXIL_GEOMETRY_ABI {
-        let source = slang::inject_defines(
-            &slang_source(slang_dir, abi.file),
-            &[(abi.gate, "1"), ("DXIL_ABI", "1")],
-        );
+// The same check over every other single-source family. Each variant compiles
+// alone, so a register only has to hold in the entry that declares it.
+fn assert_slang_dxil_entry_abi(slang_dir: &std::path::Path, out_dir: &std::path::Path) {
+    for abi in SLANG_DXIL_ENTRY_ABI {
+        let mut defines: Vec<(&str, &str)> = vec![("DXIL_ABI", "1")];
+        defines.extend(abi.gates.iter().map(|gate| (*gate, "1")));
+        let source = slang::inject_defines(&slang_source(slang_dir, abi.file), &defines);
         let emitted = emit_dxil_hlsl(out_dir, abi.file, &source, abi.entry, abi.profile);
         for (param, register) in abi.registers {
             assert_dxil_register(

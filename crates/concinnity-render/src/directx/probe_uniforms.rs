@@ -50,7 +50,8 @@ impl ProbeUniforms {
 }
 
 // Maximum reflection probes a frame can bind. The HLSL `MAX_PROBES` constant
-// (probe_common.hlsl) and the probe cube array must match this.
+// (`{PROBE_COMMON}` in probe_common.slang) and the probe cube array must match
+// this.
 pub const MAX_PROBES: usize = 8;
 
 // Auto-seed must never request more probes than a frame can bind, or

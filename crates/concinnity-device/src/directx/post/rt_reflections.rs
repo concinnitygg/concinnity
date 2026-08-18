@@ -11,9 +11,10 @@
 // It occupies the `SsrResolve` slot in the frame graph (reads `hdr_resolve`,
 // writes its own output target) and is mutually exclusive with SSR resolve.
 // Like SSGI it relies on the SSR pre-pass G-buffer, so the pre-pass is forced on
-// whenever RT reflections are enabled. The `RayQuery` shader needs shader model
-// 6.5, so it compiles through DXC (`crate::directx::dxc`), not FXC. Mirrors
-// src/metal/post/rt_reflections.rs.
+// whenever RT reflections are enabled. The shader is the shared
+// `shaders/rt_reflections.slang`, compiled to a shader-model 6.5 DXIL container
+// (the floor for the inline ray query) through `slang_builtins`; the Metal and
+// Vulkan hosts bind the same source at their own slots.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -23,9 +24,9 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_rt_target, transition_barrier, write_format_rtv,
     write_format_srv,
@@ -43,15 +44,17 @@ struct RtShaders {
     textured_ps: Vec<u8>,
 }
 
-// Compile the RT-reflection vertex shader + both fragment entry points through
-// DXC (SM 6.5). Returns an `Err` (which the caller turns into an SSR fallback)
-// when DXC is unavailable or the shader fails to compile.
+// Compile both fragment entry points from the single source (SM 6.5, for the
+// inline ray query) and pair them with the shared fullscreen vertex stage: its
+// `__target_switch` already carries the one divergence the pass's own vertex
+// shader existed for, the DirectX/Metal UV flip. Returns an `Err` (which the
+// caller turns into an SSR fallback) when slangc is unavailable or the shader
+// fails to compile.
 fn compile_rt_shaders(hot_reload: bool) -> Result<RtShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     Ok(RtShaders {
-        vs: builtins::RT_FULLSCREEN_VERT.compile(&ctx)?,
-        flat_ps: builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?,
-        textured_ps: builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG.compile(hot_reload)?,
+        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?,
     })
 }
 
@@ -83,9 +86,10 @@ fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature
         RegisterSpace: 1,         // space1
         OffsetInDescriptorsFromTableStart: 0,
     };
-    // The reflection-probe cube array at t10..t10+MAX_PROBES, space0 (t7 is the
-    // prefilter cube; remapped via PROBE_CUBES_REGISTER). Unbaked slots hold the sky
-    // prefilter cube, so a sample at any index is valid; the miss fallback box-projects
+    // The reflection-probe cube array at t10..t10+MAX_PROBES, space0: the array
+    // spans MAX_PROBES registers, so it starts clear of the trace's own SRVs
+    // rather than at the forward pass's t7. Unbaked slots hold the sky prefilter
+    // cube, so a sample at any index is valid; the miss fallback box-projects
     // these when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -164,9 +168,9 @@ fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature
         ShaderRegister: 2, // s2
         ..linear_clamp(2)
     };
-    // s3: cube mip-linear clamp for the reflection-probe cube array (probe_common.hlsl
-    // `cube_sampler`, remapped via PROBE_SAMPLER_REGISTER), matching the s1 prefilter
-    // sampler.
+    // s3: cube mip-linear clamp for the reflection-probe cube array, matching the
+    // s1 prefilter sampler. The array rides split from its sampler here because
+    // D3D12 binds a shader sampler array only through a descriptor table.
     let samplers = [linear_clamp(0), linear_clamp(1), repeat, linear_clamp(3)];
 
     let desc = D3D12_ROOT_SIGNATURE_DESC {
@@ -549,8 +553,8 @@ impl DxContext {
             // geometry, so the binding is always live.
             cmd.SetGraphicsRootShaderResourceView(10, accel.deformed_verts_gva());
             cmd.SetGraphicsRootShaderResourceView(11, accel.skinned_index_gva());
-            // Reflection-probe miss fallback (probe_common.hlsl): the cube array table
-            // at t10 + the per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
+            // Reflection-probe miss fallback: the cube array table at t10 + the
+            // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
             // so a probe-less world is byte-identical to before.
             cmd.SetGraphicsRootDescriptorTable(12, self.probe_cube_table_gpu());
             cmd.SetGraphicsRootConstantBufferView(

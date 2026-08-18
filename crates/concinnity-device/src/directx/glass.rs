@@ -5,10 +5,12 @@
 // drawn in the PassId::Transparent slot after SSR resolve and before TAA. The
 // pass snapshots the pre-transparent scene, sorts the panels back-to-front by
 // camera distance, and draws each one; the fragment shader refracts the
-// snapshot, tints it, and adds a Fresnel rim (see shaders/glass.hlsl).
+// snapshot, tints it, and adds a Fresnel rim. The shaders are the shared
+// `shaders/glass.slang`, compiled through `slang_builtins`; the ray-traced
+// fragment needs shader model 6.5 for its inline ray query, the base pair 6.0.
 //
-// Mirrors src/metal/glass.rs. Water is a separate (Metal-only) producer and is
-// not ported here; the transparent slot on DX is glass-only.
+// Water is a separate (Metal-only) producer and is not ported here; the
+// transparent slot on DX is glass-only.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -17,9 +19,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::assets::GlassPanel;
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
+use crate::directx::slang_builtins;
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_hdr_resolve_target, transition_barrier, upload_buffer,
 };
@@ -145,19 +147,21 @@ fn ordered_visible(centres: &[[f32; 3]], visible: &[bool], cam: [f32; 3]) -> Vec
         .collect()
 }
 
-// Compile the glass vertex + fragment shaders; the MSAA define keeps the
-// depth SRV declaration in sync with the resource's sample count. Used at
+// Compile the glass vertex + fragment shaders. The fragment comes in an MSAA
+// pair, which keeps its depth SRV declaration in sync with the resource's
+// sample count; the vertex reads no depth and serves both pipelines. Used at
 // init and by shader hot-reload.
 pub(in crate::directx) fn compile_glass_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx {
-        hot_reload,
-        msaa: msaa_samples > 1,
+    let frag = if msaa_samples > 1 {
+        &slang_builtins::GLASS_FRAG_MSAA
+    } else {
+        &slang_builtins::GLASS_FRAG
     };
-    let vs = builtins::GLASS_VERT.compile(&ctx)?;
-    let ps = builtins::GLASS_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::GLASS_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -174,7 +178,8 @@ pub(in crate::directx) fn rebuild_glass_pso(
     dump_on_err(info_queue, create_glass_pso(device, root_sig, &vs, &ps))
 }
 
-// Root-signature layout (binds 1:1 with the HLSL register declarations):
+// Root-signature layout (binds 1:1 with the `DXIL_ABI` declarations in
+// glass.slang):
 //   [0] root CBV b0   TransparentView (per-frame)
 //   [1] root CBV b1   GlassParams     (per-panel)
 //   [2] table  t0     scene-copy SRV  (Texture2D<float4>)
@@ -207,7 +212,7 @@ fn create_glass_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // t7..t7+MAX_PROBES: the reflection-probe cube array (probe_common.hlsl). Unbaked
+    // t7..t7+MAX_PROBES: the reflection-probe cube array. Unbaked
     // slots hold the sky prefilter, so a sample at any index is valid; box-projected
     // when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
@@ -290,7 +295,7 @@ fn create_glass_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [6] Root CBV: ProbeSet at b4 (probe_common.hlsl `cbuffer ProbeBlock`)
+        // [6] Root CBV: ProbeSet at b4
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -314,7 +319,7 @@ fn create_glass_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
         },
     ];
     // s0: linear-clamp for the scene snapshot / depth. s2: cube mip-linear clamp for
-    // the prefilter + probe cube array (probe_common.hlsl `cube_sampler`).
+    // the prefilter + probe cube array.
     let samp = D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -430,24 +435,33 @@ struct GlassRtShaders {
     textured_ps: Vec<u8>,
 }
 
-// Compile the RT glass vertex + flat + textured fragment shaders through DXC
-// (SM 6.5, for inline RayQuery). The probe helpers concatenate ahead with the
-// cube array remapped to t20 (the RT geometry SRVs claim t4..t10). Returns an
+// Compile the flat + textured ray-traced fragments (SM 6.5, for the inline ray
+// query) and pair them with the same vertex stage the base pass uses: both root
+// signatures put the transparent view CBV at b0. The shared source remaps its
+// probe cube array to t20, since the RT geometry SRVs claim t4..t10. Returns an
 // `Err` (which the caller turns into a None RT pipeline + the base path) when
-// DXC is unavailable or the shader fails to compile. Mirrors `compile_rt_shaders`.
+// slangc is unavailable or the shader fails to compile.
 fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<GlassRtShaders, String> {
-    let ctx = Ctx {
-        hot_reload,
-        msaa: msaa_samples > 1,
+    let msaa = msaa_samples > 1;
+    let flat = if msaa {
+        &slang_builtins::GLASS_RT_FRAG_MSAA
+    } else {
+        &slang_builtins::GLASS_RT_FRAG
+    };
+    let textured = if msaa {
+        &slang_builtins::GLASS_RT_FRAG_TEXTURED_MSAA
+    } else {
+        &slang_builtins::GLASS_RT_FRAG_TEXTURED
     };
     Ok(GlassRtShaders {
-        vs: builtins::GLASS_RT_VERT.compile(&ctx)?,
-        flat_ps: builtins::GLASS_RT_FRAG.compile(&ctx)?,
-        textured_ps: builtins::GLASS_RT_FRAG_TEXTURED.compile(&ctx)?,
+        vs: slang_builtins::GLASS_VERT.compile(hot_reload)?,
+        flat_ps: flat.compile(hot_reload)?,
+        textured_ps: textured.compile(hot_reload)?,
     })
 }
 
-// Root signature for the RT glass PSOs (binds 1:1 with glass_rt.hlsl):
+// Root signature for the RT glass PSOs (binds 1:1 with glass.slang's `DXIL_ABI`
+// declarations under GLASS_RT):
 //   [0]  root CBV b0   TransparentView (per-frame, vertex + pixel)
 //   [1]  root CBV b1   GlassParams     (per-panel)
 //   [2]  table  t0     scene-copy SRV
@@ -1128,33 +1142,45 @@ mod tests {
     // The `TransparentViewGpu` / `GlassParamsGpu` layout tests live with the
     // structs in `concinnity_render::directx::uniforms`.
 
-    // The glass shader is concatenated from probe_common.hlsl + glass.hlsl and
-    // compiled at runtime (FXC vs/ps_5_1). Compile it offline (both MSAA variants)
-    // so a HLSL syntax / register error in the reflection-probe sampling fails a
-    // test instead of only surfacing as an init failure on the GPU host.
+    // The glass shaders compile at runtime from the shared single source, so a
+    // syntax or register error in either MSAA variant would otherwise surface
+    // only as an init failure on a GPU host. slangc resolves from PATH and may
+    // be absent, in which case the runtime path reports its own error and this
+    // skips rather than failing.
     #[test]
     fn glass_shaders_compile() {
-        super::compile_glass_shaders(1, false).expect("glass shaders (no MSAA) must compile");
-        super::compile_glass_shaders(4, false).expect("glass shaders (MSAA) must compile");
+        for msaa in [1u32, 4] {
+            match super::compile_glass_shaders(msaa, false) {
+                Ok(_) => {}
+                Err(e) if slangc_unavailable(&e) => {
+                    eprintln!("skipping glass compile test (msaa={msaa}): {e}");
+                    return;
+                }
+                Err(e) => panic!("glass shaders (msaa={msaa}) must compile: {e}"),
+            }
+        }
     }
 
-    // The RT glass shader (probe_common + glass_rt.hlsl) compiles through DXC
-    // (SM 6.5). DXC is best-effort/env-gated (bundled next to the .exe), so a
-    // host without `dxcompiler.dll` skips rather than fails; a genuine HLSL
-    // error (register collision, syntax) still fails the test. Both MSAA variants
-    // and all three entry points are exercised by `compile_glass_rt_shaders`.
+    // The same for the ray-traced pair, which additionally exercises the shared
+    // traversal fragment and the shader model 6.5 the ray query needs. Both MSAA
+    // variants and both hit-shading variants go through
+    // `compile_glass_rt_shaders`.
     #[test]
     fn glass_rt_shaders_compile() {
         for msaa in [1u32, 4] {
             match super::compile_glass_rt_shaders(msaa, false) {
                 Ok(_) => {}
-                Err(e) if e.contains("dxcompiler.dll") || e.contains("DXC not bundled") => {
-                    eprintln!("skipping glass_rt compile test (msaa={msaa}): DXC unavailable: {e}");
+                Err(e) if slangc_unavailable(&e) => {
+                    eprintln!("skipping glass_rt compile test (msaa={msaa}): {e}");
                     return;
                 }
                 Err(e) => panic!("glass_rt shaders (msaa={msaa}) must compile: {e}"),
             }
         }
+    }
+
+    fn slangc_unavailable(err: &str) -> bool {
+        err.contains("slangc")
     }
 
     #[test]

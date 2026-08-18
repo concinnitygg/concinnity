@@ -1444,8 +1444,15 @@ impl DxContext {
         // these shared resources is needed.
         let skinned_vertex_buffer =
             upload_buffer(&self.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
-        let skinned_index_buffer =
-            upload_buffer(&self.alloc, idx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
+        // The allocation is rounded up to whole u32 words: the ray-traced hit
+        // path reads this buffer as packed words, so its load for the final
+        // index of an odd-length list reaches past the indices themselves.
+        let skinned_index_buffer = upload_buffer_padded(
+            &self.alloc,
+            idx_bytes,
+            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+        )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: unsafe { skinned_vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vtx_bytes.len() as u32,

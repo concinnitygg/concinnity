@@ -457,8 +457,9 @@ impl VkContext {
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
+        // Whole u32 words for the index buffer; see `upload_skinned`.
         let new_ibuf = self.alloc.create_buffer(
-            new_i_bytes,
+            crate::gfx::rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

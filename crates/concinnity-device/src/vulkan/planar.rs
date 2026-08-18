@@ -933,6 +933,44 @@ impl VkContext {
             // geometry behind the reflector.
             let frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
             self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
+            // Order the previous mirror render's attachment writes before this one's
+            // layout transition. `main_render_pass` declares both attachments
+            // `initial_layout = UNDEFINED`, so every `vkCmdBeginRenderPass` here
+            // write-after-writes the last render that touched them: the depth is
+            // shared by every plane, and each plane's colour target is the one its
+            // own render wrote last frame. The render pass's external dependency
+            // declares an empty src access mask -- an execution dependency with no
+            // availability operation -- so nothing else covers it. Needed on the
+            // first plane too, where the prior write is the previous frame's submit;
+            // the single graphics queue's submission order carries it across.
+            let attachment_waw = vk::MemoryBarrier::default()
+                .src_access_mask(
+                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                )
+                .dst_access_mask(
+                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                );
+            // SAFETY: `cmd` is the frame's recording command buffer, inside a
+            // recording scope and outside a render pass, which is where
+            // `vkCmdPipelineBarrier` is legal; the barrier owns no resource
+            // handles (a global `VkMemoryBarrier`, no buffer or image references
+            // to outlive), and `from_ref` gives the one-element slice the count
+            // implies.
+            unsafe {
+                self.device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                    vk::DependencyFlags::empty(),
+                    std::slice::from_ref(&attachment_waw),
+                    &[],
+                    &[],
+                );
+            }
             self.encode_main_into_face(
                 cmd,
                 set.framebuffers[slot],

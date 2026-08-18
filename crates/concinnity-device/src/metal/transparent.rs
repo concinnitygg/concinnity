@@ -76,6 +76,14 @@ pub(in crate::metal) fn bytes_of<T: bytemuck::NoUninit>(value: &T) -> Vec<u8> {
     bytemuck::bytes_of(value).to_vec()
 }
 
+// Fragment sampler indices past the transparent pass's cube-sampler run, which
+// slangc assigns to `glass.slang`'s two remaining combined declarations: the
+// planar resolve (declared after the probe array) and, on the textured RT
+// variant, the bindless pool. Pinned here because the emitted MSL is what
+// numbers them.
+const GLASS_PLANAR_SAMPLER_INDEX: usize = 10;
+const GLASS_POOL_SAMPLER_INDEX: usize = 11;
+
 impl MtlContext {
     // Encode the transparent pass: snapshot the scene for refraction, then
     // draw every contributed translucent surface back-to-front into
@@ -161,7 +169,33 @@ impl MtlContext {
             for i in 0..super::uniforms::MAX_PROBES {
                 enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 3 + i);
             }
-            enc.setFragmentSamplerState_atIndex(Some(self.cube_sampler.as_ref()), 1);
+            // The cube sampler covers the prefilter cube and every probe cube.
+            // The single-source glass fragment declares those as combined
+            // texture-samplers, which slangc lowers to one sampler per texture
+            // (prefilter at 1, the probe array at 2..1+MAX_PROBES); the
+            // hand-written water and glass-mesh shaders read the same cube
+            // sampler at 1, so one contiguous run serves both.
+            super::post::fullscreen::set_fragment_sampler_range(
+                &enc,
+                self.cube_sampler.as_ref(),
+                1,
+                1 + super::uniforms::MAX_PROBES,
+            );
+            // The planar resolve at texture(11) takes the post sampler at the
+            // slot after the probe run, and the bindless pool the RT variants
+            // read takes the repeat-address sampler after that.
+            super::post::fullscreen::set_fragment_sampler_range(
+                &enc,
+                &self.post_sampler,
+                GLASS_PLANAR_SAMPLER_INDEX,
+                1,
+            );
+            super::post::fullscreen::set_fragment_sampler_range(
+                &enc,
+                self.sampler.as_ref(),
+                GLASS_POOL_SAMPLER_INDEX,
+                1,
+            );
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.probe_set).cast(),
                 std::mem::size_of::<super::uniforms::ProbeSet>(),
@@ -169,7 +203,7 @@ impl MtlContext {
             );
             // A planar reflection resolve at texture(11), the default for every
             // transparent draw so the slot is always bound (validation-safe) even
-            // for slotless / probe-path draws. water.metal + glass.metal sample it
+            // for slotless / probe-path draws. water.metal + glass.slang sample it
             // when their `planar.x` flag is set; a planar draw overrides this with
             // ITS plane's resolve per-draw (see the collect paths). The first
             // slot's resolve is a valid stand-in for draws that do not sample it.

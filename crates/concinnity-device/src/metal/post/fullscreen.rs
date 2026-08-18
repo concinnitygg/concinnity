@@ -40,34 +40,8 @@ pub(crate) enum FullscreenBlend {
     PremultipliedOver,
 }
 
-// Build a render pipeline state for a fullscreen-triangle post pass: the two
-// named functions from `library`, a single colour attachment at `format` with
-// the requested `blend`, single-sample, no vertex descriptor, no depth. The
-// pipeline-create error is tagged with `fragment_name` so a failure points at
-// the exact entry point.
-pub(crate) fn build_fullscreen_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    library: &ProtocolObject<dyn objc2_metal::MTLLibrary>,
-    vertex_name: &str,
-    fragment_name: &str,
-    format: MTLPixelFormat,
-    blend: FullscreenBlend,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_fullscreen_pipeline_split(
-        device,
-        FullscreenStages {
-            vertex_library: library,
-            vertex_name,
-            fragment_library: library,
-            fragment_name,
-        },
-        format,
-        blend,
-    )
-}
-
-// The two stages of a fullscreen pass, each with the library it comes from.
-// The single-source passes take their vertex from one shared `fullscreen.slang`
+// The two stages of a fullscreen pass, each with the library it comes from. The
+// single-source passes take their vertex from one shared `fullscreen.slang`
 // library and their fragment from the effect's own, so the pair cannot be named
 // by one library plus two function names.
 pub(crate) struct FullscreenStages<'a> {
@@ -77,7 +51,11 @@ pub(crate) struct FullscreenStages<'a> {
     pub fragment_name: &'a str,
 }
 
-// `build_fullscreen_pipeline` with the stages drawn from separate libraries.
+// Build a render pipeline state for a fullscreen-triangle post pass: the two
+// named functions from their libraries, a single colour attachment at `format`
+// with the requested `blend`, single-sample, no vertex descriptor, no depth. The
+// pipeline-create error is tagged with the fragment name so a failure points at
+// the exact entry point.
 pub(crate) fn build_fullscreen_pipeline_split(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     stages: FullscreenStages,

@@ -64,7 +64,11 @@ pub fn run_pipelined(mut app: App, screenshot: Option<&str>) {
         })
         .expect("failed to spawn the sim thread");
 
-    let device_lost = render_half(backend.as_mut(), snapshot_rx, &feedback_tx, &shutdown);
+    let rendered = render_half(backend.as_mut(), snapshot_rx, &feedback_tx, &shutdown);
+    // What the run actually drew, which `--frames N` only requested: a pixel A/B
+    // of a temporal world is a comparison of the frame it stopped on, so the
+    // capture harness reads this back and refuses a run that stopped elsewhere.
+    tracing::info!("pipeline: {} frame(s) submitted", rendered.submitted);
     // Whatever ended the render half, make the stop mutual: the sim exits at
     // its next token check, and its blocked send (if any) already errored
     // when the receiver dropped at the end of render_half.
@@ -78,7 +82,7 @@ pub fn run_pipelined(mut app: App, screenshot: Option<&str>) {
     // The submit stop paths that can wait already did; a sim-initiated stop
     // leaves in-flight frames to drain here. Never after a device loss: that
     // queue can no longer signal.
-    if !device_lost {
+    if !rendered.device_lost {
         backend.wait_idle();
         if let Some(path) = screenshot {
             match backend.screenshot(path) {
@@ -92,26 +96,28 @@ pub fn run_pipelined(mut app: App, screenshot: Option<&str>) {
 // Consume snapshots until a stop or the sim side closes the channel: replay
 // the ops and submit each frame, sample input right after the draw (whose
 // event pump produced it), and send the feedback. Returns whether the stop
-// was a device loss.
+// was a device loss, and how many frames reached the backend.
 fn render_half(
     backend: &mut dyn RenderBackend,
     snapshot_rx: Receiver<RenderSnapshot>,
     feedback_tx: &Sender<FrameFeedback>,
     shutdown: &ShutdownToken,
-) -> bool {
+) -> RenderHalfOutcome {
     let mut policy = FramePolicy::default();
+    let mut submitted = 0u64;
     loop {
         if shutdown.is_cancelled() {
-            return false;
+            return RenderHalfOutcome::stopped(submitted);
         }
         let mut snapshot = match wait_for_snapshot(&snapshot_rx) {
             SnapshotWait::Snapshot(snapshot) => *snapshot,
             #[cfg(target_os = "macos")]
             SnapshotWait::Empty => continue,
-            SnapshotWait::Closed => return false,
+            SnapshotWait::Closed => return RenderHalfOutcome::stopped(submitted),
         };
 
         let mut outcome = submit(&mut policy, &mut snapshot, backend);
+        submitted += 1;
         outcome.replay.memory_pressure |= outcome.memory_pressure;
         let stop = outcome.result != StepResult::Continue;
         let feedback = FrameFeedback {
@@ -124,7 +130,28 @@ fn render_half(
         // A send failure means the sim already stopped; nothing left to tell.
         let _ = feedback_tx.send(feedback);
         if stop {
-            return outcome.device_lost;
+            return RenderHalfOutcome {
+                device_lost: outcome.device_lost,
+                submitted,
+            };
+        }
+    }
+}
+
+// What the render half did, read by the caller after the loop ends.
+struct RenderHalfOutcome {
+    // The stop was a device loss: nothing may wait on that queue on the way out.
+    device_lost: bool,
+    // Frames handed to the backend, which the frame cap makes exact.
+    submitted: u64,
+}
+
+impl RenderHalfOutcome {
+    // Ended by a shutdown or a closed channel rather than by a failed frame.
+    fn stopped(submitted: u64) -> Self {
+        Self {
+            device_lost: false,
+            submitted,
         }
     }
 }

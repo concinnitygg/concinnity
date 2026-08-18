@@ -15,7 +15,7 @@ using namespace metal::raytracing;
 //
 // Lives in its own file (not an `#ifdef` in water.metal) so the always-built
 // water pipeline never sees the raytracing header. Shares the transparent pass's
-// argument layout with glass_rt.metal so the RT inputs `encode_transparent` binds
+// argument layout with glass.slang so the RT inputs `encode_transparent` binds
 // once are valid for both: RT params @buffer(0), scene verts @buffer(1), indices
 // @buffer(2), geom table @buffer(3), TLAS @buffer(4), skinned deformed-vertex /
 // u16 index buffers @buffer(8..9), bindless pool @buffer(10) (textured variant).
@@ -29,7 +29,7 @@ using namespace metal::raytracing;
 // that misses falls back to the same probe set / sky prefilter / sky gradient
 // water.metal uses, at water's roughness-selected mip. The trace is inlined into
 // each fragment (not a helper) so the acceleration structure stays a direct
-// fragment argument, mirroring glass_rt.metal / rt_reflections.metal.
+// fragment argument, mirroring glass.slang / rt_reflections.slang.
 
 constant uint MAX_WATER_WAVES = 4;
 
@@ -46,7 +46,9 @@ struct WaterView {
     float4   camera_pos;  // world-space camera, .w unused
     float2   viewport;    // attachment dimensions in pixels
     float    time;        // seconds since startup
-    float    _pad;
+    // Mips in the sky prefilter cube; these shaders take their own copy from
+    // their params block, so the field is here only to match the CPU struct.
+    float    prefilter_mip_count;
 };
 
 struct WaterParams {
@@ -68,7 +70,7 @@ struct WaterParams {
 };
 
 // RT tunables + camera + sun, bound at buffer(0). Layout matches
-// render_types::RtParams (shared with rt_reflections.metal / glass_rt.metal);
+// render_types::RtParams (shared with rt_types.slang);
 // water uses `max_distance`, `sun_dir`, `sun_color`, and `prefilter_mip_count`
 // (the ray origin is the water surface point, so `cam_pos` / `inv_view` are
 // unused here).
@@ -91,7 +93,7 @@ struct RtParams {
 // 128-byte `#[repr(C)]` render_types::RtGeomEntry. `tint` / `emissive` are
 // `packed_float3` (12 bytes, 4-byte aligned), NOT `float3` (which would be
 // 16-aligned and shift every later field, faulting the trace) - identical to
-// rt_reflections.metal / glass_rt.metal.
+// rt_trace.slang.
 struct RtGeomEntry {
     uint     index_offset;
     uint     base_vertex;
@@ -136,7 +138,7 @@ static float3 decode_normal_map(float2 encoded) {
 // The bindless texture pool, bound at buffer(10) by the textured water RT
 // variant (buffer(7) is the ProbeSet, where the main pass keeps its pool, so the
 // pool moves to a free slot here). Identical layout to main.metal /
-// rt_reflections.metal `BindlessTextures`; only `tex_pool` is read here.
+// rt_reflections.slang's texture pool; only `tex_pool` is read here.
 constant constexpr uint BINDLESS_TEXTURE_COUNT = 96; // must match main.metal
 
 struct BindlessTextures {
@@ -149,7 +151,7 @@ struct BindlessTextures {
 
 // Reflection-probe set + box-projected sampling, used as the ray-miss fallback
 // (a reflection ray that leaves the scene reflects the local probe, not black).
-// Identical to water.metal / rt_reflections.metal.
+// Identical to water.metal / rt_trace.slang.
 constant constexpr uint  MAX_PROBES         = 8u;
 constant constexpr float PROBE_BLEND_MARGIN = 0.2;
 

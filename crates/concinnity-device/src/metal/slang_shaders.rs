@@ -62,6 +62,8 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
+const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
 
 // The SSR resolve reads the reflection-probe array, so it bakes in the same
 // probe count the main pass does.
@@ -315,6 +317,72 @@ pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
     defines: &[("METAL_BINDINGS", "1")],
 };
 
+// The ray-traced families. Only ever loaded on a device that supports ray
+// tracing: the trace is compiled in, and the hosts build these pipelines only
+// once an acceleration structure exists. The textured variants read the
+// bindless pool, so they bake its capacity in; the flat ones do not declare it
+// at all, which keeps the pool's Metal buffer slot free in a non-bindless world.
+const RT_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+const GLASS_DEFINES: &[(&str, &str)] = &[("METAL_ABI", "1"), ("MAX_PROBES", "8")];
+const GLASS_RT_DEFINES: &[(&str, &str)] =
+    &[("METAL_ABI", "1"), ("GLASS_RT", "1"), ("MAX_PROBES", "8")];
+const GLASS_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
+    ("METAL_ABI", "1"),
+    ("GLASS_RT", "1"),
+    ("RT_TEXTURED", "1"),
+    ("POOL_SIZE", "1024"),
+    ("MAX_PROBES", "8"),
+];
+
+pub(super) static RT_REFLECTIONS_FRAG: SlangLib = SlangLib {
+    name: "rt_reflections_frag.slang",
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entries: &["rt_reflections_fragment"],
+    defines: RT_DEFINES,
+};
+pub(super) static RT_REFLECTIONS_FRAG_TEXTURED: SlangLib = SlangLib {
+    name: "rt_reflections_frag_textured.slang",
+    file: "rt_reflections.slang",
+    embedded: RT_REFLECTIONS_SLANG,
+    entries: &["rt_reflections_fragment"],
+    defines: RT_TEXTURED_DEFINES,
+};
+pub(super) static GLASS_VERT: SlangLib = SlangLib {
+    name: "glass_vert.slang",
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entries: &["glass_vertex"],
+    defines: GLASS_DEFINES,
+};
+pub(super) static GLASS_FRAG: SlangLib = SlangLib {
+    name: "glass_frag.slang",
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entries: &["glass_fragment"],
+    defines: GLASS_DEFINES,
+};
+pub(super) static GLASS_FRAG_RT: SlangLib = SlangLib {
+    name: "glass_frag_rt.slang",
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entries: &["glass_rt_fragment"],
+    defines: GLASS_RT_DEFINES,
+};
+pub(super) static GLASS_FRAG_RT_TEXTURED: SlangLib = SlangLib {
+    name: "glass_frag_rt_textured.slang",
+    file: "glass.slang",
+    embedded: GLASS_SLANG,
+    entries: &["glass_rt_fragment"],
+    defines: GLASS_RT_TEXTURED_DEFINES,
+};
+
 // Every registered variant, for the coverage test in `metallib.rs`.
 #[cfg(test)]
 pub(super) static ALL: &[&SlangLib] = &[
@@ -350,6 +418,12 @@ pub(super) static ALL: &[&SlangLib] = &[
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
+    &RT_REFLECTIONS_FRAG,
+    &RT_REFLECTIONS_FRAG_TEXTURED,
+    &GLASS_VERT,
+    &GLASS_FRAG,
+    &GLASS_FRAG_RT,
+    &GLASS_FRAG_RT_TEXTURED,
 ];
 
 impl SlangLib {
@@ -426,6 +500,16 @@ mod tests {
         assert_eq!(SLANG_METAL_MAX_PROBES, super::super::uniforms::MAX_PROBES);
         let want_pool = SLANG_METAL_POOL_SIZE.to_string();
         let want_probes = SLANG_METAL_MAX_PROBES.to_string();
+        for lib in ALL {
+            let value = |key: &str| lib.defines.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+            if let Some(pool) = value("POOL_SIZE") {
+                assert_eq!(pool, want_pool.as_str(), "{}", lib.name);
+            }
+            if let Some(probes) = value("MAX_PROBES") {
+                assert_eq!(probes, want_probes.as_str(), "{}", lib.name);
+            }
+        }
+        // The pair that pins the generated constants themselves.
         for lib in [&MAIN_BINDLESS_VERT, &MAIN_BINDLESS_FRAG] {
             let value = |key: &str| lib.defines.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
             assert_eq!(value("POOL_SIZE"), Some(want_pool.as_str()));
@@ -475,6 +559,7 @@ mod tests {
             ("main_bindless.slang", MAIN_BINDLESS_SLANG),
             ("ssr.slang", SSR_SLANG),
             ("reflection.slang", REFLECTION_SLANG),
+            ("rt_reflections.slang", RT_REFLECTIONS_SLANG),
         ] {
             assert!(
                 src.contains(&expected),

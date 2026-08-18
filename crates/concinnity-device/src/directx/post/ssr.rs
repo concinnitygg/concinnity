@@ -642,7 +642,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
             cmd.SetGraphicsRootDescriptorTable(2, self.gbuffer.normal_depth_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(3, self.gbuffer.roughness_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(4, self.ctx.prefilter_cube_srv_gpu());
-            // Reflection-probe miss fallback (probe_common.hlsl): the cube array table
+            // Reflection-probe miss fallback: the cube array table
             // at t7 + the per-frame ProbeSet CBV at b4. count == 0 keeps the exact sky
             // path, so a probe-less world is byte-identical to before.
             cmd.SetGraphicsRootDescriptorTable(5, self.ctx.probe_cube_table_gpu());

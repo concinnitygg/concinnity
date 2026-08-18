@@ -598,6 +598,8 @@ impl DxContext {
         // the rebuilt contents in a single one-shot submit.
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        // Whole u32 words for the index buffer; see `upload_skinned`.
+        let ibuf_bytes = crate::gfx::rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = create_buffer(
             &self.alloc,
             new_v_bytes,
@@ -606,7 +608,7 @@ impl DxContext {
         )?;
         let new_ibuf = create_buffer(
             &self.alloc,
-            new_i_bytes,
+            ibuf_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
@@ -618,7 +620,7 @@ impl DxContext {
         )?;
         let i_upload = create_buffer(
             &self.alloc,
-            new_i_bytes,
+            ibuf_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;

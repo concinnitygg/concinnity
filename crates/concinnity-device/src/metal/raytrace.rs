@@ -856,11 +856,17 @@ pub(crate) fn build_rt_accel(
         .newBufferWithLength_options(deformed_bytes, MTLResourceOptions::StorageModeShared)
         .ok_or("failed to allocate RT deformed-vertex buffer")?;
     // The shared u16 skinned index buffer the kernel + skinned BLAS address; a
-    // dummy when there is no skinned geometry.
+    // dummy when there is no skinned geometry. The dummy is one u32 rather than
+    // one u16 because the trace reads the buffer as packed u32 words (two
+    // indices each) -- Metal API validation rejects a 2-byte buffer bound to a
+    // 4-byte element type, even where the branch that reads it never runs.
     let skinned_indices: Retained<ProtocolObject<dyn MTLBuffer>> = match &skinned {
         Some(s) if !skinned_objects.is_empty() => s.index_buffer.clone(),
         _ => device
-            .newBufferWithLength_options(2, MTLResourceOptions::StorageModePrivate)
+            .newBufferWithLength_options(
+                std::mem::size_of::<u32>(),
+                MTLResourceOptions::StorageModePrivate,
+            )
             .ok_or("failed to allocate RT skinned-index dummy buffer")?,
     };
 

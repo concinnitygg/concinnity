@@ -410,12 +410,12 @@ pub(crate) fn build_quality_effects(
         (
             Some(build_rt_reflection_pipeline(
                 device,
-                "rt_reflections_fragment",
+                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG,
                 hot_reload,
             )?),
             Some(build_rt_reflection_pipeline(
                 device,
-                "rt_reflections_fragment_textured",
+                &crate::metal::slang_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
                 hot_reload,
             )?),
         )

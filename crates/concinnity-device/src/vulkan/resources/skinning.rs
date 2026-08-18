@@ -130,8 +130,11 @@ impl VkContext {
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
+        // Whole u32 words: the ray-traced hit path binds this as a storage
+        // buffer of packed index words, and its descriptor takes the buffer's
+        // whole size, so a range short of a word makes that load out of range.
         let skinned_ibuf = self.alloc.create_buffer(
-            idx_bytes.len() as u64,
+            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

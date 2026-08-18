@@ -36,7 +36,7 @@ const THICKNESS_SCALE: f32 = 2.5;
 // no screen-space / ray-traced reflection. One value drives four shaders that
 // must agree for the reflection pipeline to be self-consistent:
 //   - the SSR resolve gate           (ssr.metal)
-//   - the RT-reflection resolve gate (rt_reflections.metal)
+//   - the RT-reflection resolve gate (rt_reflections.slang)
 //   - the roughness blur ramp        (reflection_composite.metal)
 //   - the forward double-count fade  (REFL_RESOLVE_CUT in main.metal)
 // All four shaders are compiled offline, so each declares the literal itself

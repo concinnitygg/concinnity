@@ -21,31 +21,37 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::pipeline::shader_library;
-use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
+use crate::metal::post::fullscreen::{
+    FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
+};
 use crate::metal::scoped_encoder::ScopedEncoder;
+use crate::metal::slang_shaders::SlangLib;
 
-// Build one RT-reflection pipeline for the given fragment entry: a
-// fullscreen-triangle pass that traces a reflection ray and composites it over
-// the scene, writing a single-sample `RGBA16Float` target (the same
-// `ssr_targets.output` SSR resolve would write). Two entries exist:
-// `rt_reflections_fragment` (flat tint) and `rt_reflections_fragment_textured`
-// (samples the bindless albedo pool). Compiled only when RT reflections are
-// enabled and the GPU supports ray tracing (the shader uses `metal_raytracing`,
-// so it must not be compiled on a non-RT device).
+// Fragment sampler index the textured variant reads the bindless pool through.
+// slangc splits the combined screen sources into texture + sampler pairs at
+// 0..3 and reserves 4..3+MAX_PROBES for the probe cube array, so the pool's own
+// sampler lands past both runs; the emitted `[[sampler(12)]]` is what pins it.
+const RT_POOL_SAMPLER_INDEX: usize = 12;
+
+// Build one RT-reflection pipeline from the given single-source variant: a
+// fullscreen-triangle pass that traces a reflection ray and writes reflected
+// radiance + composite weight into a single-sample `RGBA16Float` target (the
+// same `ssr_targets.output` SSR resolve would write). Two variants exist:
+// `RT_REFLECTIONS_FRAG` (flat tint) and `RT_REFLECTIONS_FRAG_TEXTURED` (samples
+// the bindless albedo pool). Built only when RT reflections are enabled and the
+// GPU supports ray tracing: the metallib carries a real ray query, which a
+// non-RT device cannot load.
 pub(crate) fn build_rt_reflection_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment_entry: &str,
+    fragment: &SlangLib,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "rt_reflections.metal")?;
-    build_fullscreen_pipeline(
+    build_slang_fullscreen_pipeline(
         device,
-        &library,
-        "rt_fullscreen_vertex",
-        fragment_entry,
+        fragment,
         MTLPixelFormat::RGBA16Float,
         FullscreenBlend::Replace,
+        hot_reload,
     )
 }
 
@@ -125,8 +131,19 @@ impl MtlContext {
             for i in 0..crate::metal::uniforms::MAX_PROBES {
                 enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 4 + i);
             }
-            enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
-            enc.setFragmentSamplerState_atIndex(Some(self.cube_sampler.as_ref()), 1);
+            // The screen sources take the post sampler at 0..2; the prefilter
+            // cube and every probe cube take the cube sampler at 3..4+MAX_PROBES,
+            // one per texture slangc split the combined declarations into. The
+            // textured variant reads the bindless pool through the repeat-address
+            // pool sampler, which lands past the probe run.
+            set_fragment_sampler_range(&enc, &self.post_sampler, 0, 3);
+            set_fragment_sampler_range(
+                &enc,
+                self.cube_sampler.as_ref(),
+                3,
+                1 + crate::metal::uniforms::MAX_PROBES,
+            );
+            set_fragment_sampler_range(&enc, self.sampler.as_ref(), RT_POOL_SAMPLER_INDEX, 1);
             // buffer(0) params; buffers 1..3 the shared geometry the kernel
             // fetches the hit triangle from; the TLAS at buffer(4).
             enc.setFragmentBytes_length_atIndex(

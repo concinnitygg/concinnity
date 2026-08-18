@@ -20,6 +20,34 @@ use crate::metal::math::IDENTITY4;
 use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
 
+// Upload a u16 skinned index slice, with the allocation rounded up to a whole
+// number of 4-byte words by `skinned_index_buffer_bytes` (which carries the
+// reason, and which the DirectX and Vulkan hosts size the same buffer with).
+fn upload_skinned_index_buffer(
+    device: &ProtocolObject<dyn MTLDevice>,
+    indices: &[u16],
+    label: &str,
+) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
+    let bytes = std::mem::size_of_val(indices);
+    let buffer = device
+        .newBufferWithLength_options(
+            crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()),
+            MTLResourceOptions::StorageModeShared,
+        )
+        .ok_or_else(|| format!("{label}: failed to create skinned index buffer"))?;
+    // SAFETY: the buffer was just allocated at least `bytes` long with shared
+    // storage, so `contents()` is a valid CPU-visible mapping of that range, and
+    // the source slice is a distinct live allocation of exactly `bytes`.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            indices.as_ptr().cast::<u8>(),
+            buffer.contents().as_ptr().cast::<u8>(),
+            bytes,
+        );
+    }
+    Ok(buffer)
+}
+
 // All skinned-mesh rendering state grouped into one feature unit: the main +
 // shadow pipelines, the shared skinned vertex / index buffers, the per-mesh
 // draw objects, and the current + previous joint-palette matrices. All
@@ -392,18 +420,8 @@ impl MtlContext {
                 )
                 .ok_or("rebuild_skinned_geometry: failed to create new vertex buffer")?
         };
-        let new_index_buffer = unsafe {
-            let i_bytes = std::mem::size_of_val(new_indices.as_slice());
-            let ptr = std::ptr::NonNull::new(new_indices.as_ptr() as *mut _)
-                .ok_or("rebuild_skinned_geometry: index slice pointer is null")?;
-            self.device
-                .newBufferWithBytes_length_options(
-                    ptr,
-                    i_bytes,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("rebuild_skinned_geometry: failed to create new index buffer")?
-        };
+        let new_index_buffer =
+            upload_skinned_index_buffer(&self.device, &new_indices, "rebuild_skinned_geometry")?;
 
         // Apply the new per-slot layout.
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
@@ -581,17 +599,8 @@ impl MtlContext {
                 )
                 .ok_or("failed to create skinned vertex buffer")?
         };
-        let skinned_index_buffer = unsafe {
-            let ptr = std::ptr::NonNull::new(indices.as_ptr() as *mut _)
-                .ok_or("skinned index slice is empty")?;
-            self.device
-                .newBufferWithBytes_length_options(
-                    ptr,
-                    std::mem::size_of_val(indices),
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or("failed to create skinned index buffer")?
-        };
+        let skinned_index_buffer =
+            upload_skinned_index_buffer(&self.device, indices, "upload_skinned")?;
 
         // Seed each object's joint matrices to identity (bind pose) so the
         // mesh renders undeformed until the first `update_skinned_pose`. The

@@ -439,8 +439,8 @@ fn create_main_bindless_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // [10] table: the reflection-probe cube array at t7..t7+MAX_PROBES (probe_common.hlsl
-    // `TextureCube probe_cubes[MAX_PROBES] : register(t7)`). Unbaked slots hold the sky
+    // [10] table: the reflection-probe cube array at t7..t7+MAX_PROBES
+    // (`TextureCube probe_cubes[MAX_PROBES] : register(t7)`). Unbaked slots hold the sky
     // prefilter cube, so a sample at any index is always valid.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,

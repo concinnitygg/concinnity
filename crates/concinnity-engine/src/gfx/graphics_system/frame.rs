@@ -157,11 +157,17 @@ impl GraphicsSystem {
         if pipe.snapshot_tx.send(snapshot).is_err() {
             return StepResult::Stop;
         }
+        // The rendezvous send completed, so the render half has this snapshot
+        // and submits it unconditionally: count the frame here, once per world
+        // step, the way the serial path and StreamingSystem's clock do. Counting
+        // drained feedback instead would tie the count to a non-blocking
+        // `try_recv`, and a frame-capped run would render `max` or `max + 1`
+        // frames depending on which side won the race.
+        self.frame_count += 1;
 
         let mut stop = false;
         while let Ok(feedback) = pipe.feedback_rx.try_recv() {
             stop |= feedback.stop;
-            self.frame_count += 1;
             deposit_input(ctx, feedback.input);
             if feedback.replay.memory_pressure {
                 publish_memory_pressure(ctx, self.frame_count);

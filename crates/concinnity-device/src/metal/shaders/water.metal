@@ -37,7 +37,9 @@ struct WaterView {
     float4   camera_pos;  // world-space camera, .w unused
     float2   viewport;    // attachment dimensions in pixels
     float    time;        // seconds since startup
-    float    _pad;
+    // Mips in the sky prefilter cube; these shaders take their own copy from
+    // their params block, so the field is here only to match the CPU struct.
+    float    prefilter_mip_count;
 };
 
 struct WaterParams {
@@ -161,7 +163,7 @@ static float view_linear_depth(float ndc_x, float ndc_y, float depth01,
 }
 
 // Reflection-probe set, bound at buffer(7) + texture(3..3+MAX_PROBES). Mirrors
-// `ProbeSet` / `ProbeUniforms` in main.metal / rt_reflections.metal (and
+// `ProbeSet` / `ProbeUniforms` in main.metal / probe_types.slang (and
 // metal::uniforms). Lets water sample the LOCAL box-projected scene capture (a
 // pond reflects nearby geometry, not just the sky) - the same source the
 // forward IBL specular term and the RT-miss fallback use. `count` is 0 in
@@ -191,7 +193,7 @@ static_assert(sizeof(ProbeSet) == 400,
 // Box-parallax sample of one probe cube: intersect the world-space reflection
 // ray with the probe's influence box and re-anchor the sample at that hit
 // relative to the capture point, so a static cube tracks the camera. Mirrors
-// main.metal / rt_reflections.metal `sample_probe_radiance`.
+// main.metal / probe_common.slang `sample_probe_radiance`.
 static float3 sample_probe_radiance(
     texturecube<float>      probe_cube,
     constant ProbeUniforms &probe,
@@ -219,7 +221,7 @@ static float3 sample_probe_radiance(
 // every probe whose influence box covers `world_pos` (partition of unity) and
 // returns the weight-normalised sum of their box-projected samples; falls back
 // to the nearest probe by capture distance where no box covers. Mirrors
-// main.metal / rt_reflections.metal `probe_set_specular`.
+// main.metal / probe_common.slang `probe_set_specular`.
 static float3 probe_set_specular(
     constant ProbeSet                    &set,
     array<texturecube<float>, MAX_PROBES> probes,

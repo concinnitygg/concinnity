@@ -38,24 +38,7 @@ struct SsrParams
     float4x4 inv_view;
 };
 
-struct ProbeUniforms
-{
-    float4 box_min;   // xyz = influence-box min, w = enabled
-    float4 box_max;   // xyz = influence-box max
-    float4 probe_pos; // xyz = capture position
-};
-
-// Mirror of `metal::uniforms::ProbeSet` / the forward global set's ProbeBlock:
-// `count` is padded with THREE scalar uints rather than a uint3, which would be
-// 16-byte aligned and push `probes` to offset 32.
-struct ProbeSet
-{
-    uint count;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
-    ProbeUniforms probes[MAX_PROBES];
-};
+{PROBE_TYPES}
 
 // The push constant leads so it lands on Metal's buffer(0), where every post
 // pass puts its params and where the host writes it.
@@ -71,6 +54,7 @@ ConstantBuffer<SsrParams> params;
 // per-probe parallax boxes + cube array: a screen-space ray that escapes the
 // frame falls back to the local probe capture instead of the foreign sky cube.
 [[vk::binding(7, 1)]] ConstantBuffer<ProbeSet> probe_set;
+#define PROBE_SET probe_set
 
 // The probe cube array, in whichever form its host can bind.
 //
@@ -110,7 +94,6 @@ static const float REFLECTION_ROUGHNESS_CUT = 0.6;
 static const float SSR_F0        = 0.04;
 // UV margin over which a hit near the screen border fades out.
 static const float SSR_EDGE_FADE = 0.12;
-static const float PROBE_BLEND_MARGIN = 0.2;
 
 // Rebuild a view-space position from a UV and its linear (view-space) depth.
 // The inverse of ssr_project; matches ssao_view_pos in the SSAO kernel.
@@ -128,70 +111,7 @@ float2 ssr_project(float3 q, float tan_y, float aspect)
     return float2(ndc.x * 0.5 + 0.5, 1.0 - (ndc.y * 0.5 + 0.5));
 }
 
-// Box-parallax sample of probe cube `i`: intersect the world-space reflection
-// ray with the probe's influence box and re-anchor the sample at that hit
-// relative to the capture point, so a static cube tracks the camera. Falls back
-// to the raw ray when the probe has no baked box (box_min.w <= 0.5) or the box
-// does not lie ahead of the ray. `lod` rides as the sample bias, the same
-// semantics the prefilter-cube tap uses.
-float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 r_dir, float lod)
-{
-    float3 sample_dir = r_dir;
-    if (probe.box_min.w > 0.5)
-    {
-        float3 inv_r = 1.0 / r_dir;
-        float3 t_max = (probe.box_max.xyz - world_pos) * inv_r;
-        float3 t_min = (probe.box_min.xyz - world_pos) * inv_r;
-        float3 t_far = max(t_max, t_min);
-        float dist = min(min(t_far.x, t_far.y), t_far.z);
-        if (dist > 0.0)
-        {
-            float3 hit = world_pos + r_dir * dist;
-            sample_dir = hit - probe.probe_pos.xyz;
-        }
-    }
-    return probe_cube_sample_bias(i, sample_dir, lod);
-}
-
-// Probe radiance for `world_pos` along world-space ray `r_dir`, blended across
-// every probe covering the point (partition of unity). Each probe gets a
-// smoothstep weight from its signed box distance (1 deep inside, 0.5 on the
-// surface, 0 a margin outside); the result is the weight-normalised sum of each
-// probe's box-projected sample. Where no box covers, falls back to the nearest
-// probe by capture distance.
-float3 probe_set_specular(float3 world_pos, float3 r_dir, float lod)
-{
-    float3 acc = float3(0.0);
-    float wsum = 0.0;
-    float near_d = 1e30;
-    uint near_i = 0u;
-    for (uint i = 0u; i < probe_set.count; i++)
-    {
-        float3 c = 0.5 * (probe_set.probes[i].box_min.xyz + probe_set.probes[i].box_max.xyz);
-        float3 he = 0.5 * (probe_set.probes[i].box_max.xyz - probe_set.probes[i].box_min.xyz);
-        // Signed distance to the box surface: positive inside, negative outside.
-        float3 q = abs(world_pos - c) - he;
-        float sd = -(length(max(q, float3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0));
-        float margin = max(PROBE_BLEND_MARGIN * min(he.x, min(he.y, he.z)), 1e-4);
-        float w = smoothstep(-margin, margin, sd);
-        if (w > 0.0)
-        {
-            acc += w * sample_probe_radiance(i, probe_set.probes[i], world_pos, r_dir, lod);
-            wsum += w;
-        }
-        float d = distance(world_pos, probe_set.probes[i].probe_pos.xyz);
-        if (d < near_d)
-        {
-            near_d = d;
-            near_i = i;
-        }
-    }
-    if (wsum > 0.0)
-    {
-        return acc / wsum;
-    }
-    return sample_probe_radiance(near_i, probe_set.probes[near_i], world_pos, r_dir, lod);
-}
+{PROBE_COMMON}
 
 [shader("fragment")]
 float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target

@@ -724,7 +724,7 @@ pub struct RtParams {
 // triangle's indices in the shared index buffer, transform its local-space
 // vertices into world space for the geometric normal, and pick a base albedo to
 // shade the hit with. `#[repr(C)]`, 128 bytes: the layout must stay in sync
-// with the `RtGeomEntry` struct in the RT kernel (`rt_reflections.metal`), where
+// with the `RtGeomEntry` struct in the shared RT records (`rt_types.slang`), where
 // `tint` and `emissive` are `packed_float3` so the field offsets match; a plain
 // `float3` there would stride the buffer differently and fault the trace. The
 // `_pad` tail rounds the struct to 128 bytes so its array stride is a multiple
@@ -1643,7 +1643,7 @@ mod tests {
 
     #[test]
     fn rt_geom_entry_layout_matches_msl() {
-        // The MSL `RtGeomEntry` in rt_reflections.metal must match this exactly,
+        // The `RtGeomEntry` in rt_types.slang must match this exactly,
         // which requires `tint` and `emissive` to be `packed_float3` there (NOT
         // `float3`). A `float3` would 16-byte-align `tint`, pushing `roughness`
         // to 32 and `model` to 64. `model` at offset 48 is already 16-aligned, so
@@ -1925,7 +1925,7 @@ mod tests {
 
     #[test]
     fn rt_params_layout_matches_msl() {
-        // MSL `RtParams` in rt_reflections.metal: eight scalars, three float4s,
+        // `RtParams` in rt_types.slang: eight scalars, three float4s,
         // then a float4x4. Every float4/float4x4 lands at a 16-aligned offset.
         assert_eq!(size_of::<RtParams>(), 144);
         assert_eq!(offset_of!(RtParams, intensity), 0);
