@@ -16,7 +16,7 @@ use super::math::{mat4_mul, perspective};
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in concinnity-render; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::vulkan) use crate::vulkan::uniforms::ViewUniforms;
+pub(in crate::vulkan) use concinnity_render::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence, drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different
@@ -645,7 +645,7 @@ impl VkContext {
         // Update view UBO for this frame.
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view_mat: self.view_matrix,
+            view: self.view_matrix,
             elapsed,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
             // composite owns the scene image this frame (the composite is present
@@ -655,12 +655,10 @@ impl VkContext {
             } else {
                 0.0
             },
-            cam_x: cam_pos[0],
-            cam_y: cam_pos[1],
-            cam_z: cam_pos[2],
+            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _ep1: 0.0,
+            _end_pad: 0.0,
         };
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -675,9 +673,9 @@ impl VkContext {
         // path. Uploaded every frame so a later install is picked up immediately.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.probe_set as *const super::probe_uniforms::ProbeSet as *const u8,
+                &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
                 self.uniforms.probe_set_ubo_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<super::probe_uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
             );
         }
 

@@ -233,7 +233,7 @@ pub fn next_bake_action(
 
 // Largest number of probes auto-seed places. Bounds the bake cost + probe-cube
 // memory for an un-authored world. Must not exceed the renderer's per-frame probe
-// bind limit (`metal::uniforms::MAX_PROBES`); asserted by
+// bind limit (`crate::uniforms::MAX_PROBES`); asserted by
 // `auto_seed_budget_fits_max_probes` in the metal uniforms tests.
 pub const AUTO_SEED_BUDGET: usize = 8;
 

@@ -73,7 +73,8 @@ const RAYMARCH_VOLUMETRIC_TEMPLATE_HLSL: &str =
 // concinnity-render; re-export them so
 // `crate::directx::raymarch::{RaymarchView,RaymarchVolumeUniforms}` are unchanged
 // for the encode + `volume_uniforms_from` paths.
-pub(in crate::directx) use crate::directx::uniforms::{RaymarchView, RaymarchVolumeUniforms};
+pub(in crate::directx) use crate::directx::uniforms::RaymarchView;
+pub(in crate::directx) use crate::directx::uniforms::RaymarchVolumeUniforms;
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {

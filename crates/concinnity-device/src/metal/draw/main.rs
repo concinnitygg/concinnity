@@ -39,7 +39,8 @@ use objc2_metal::{
 use crate::gfx::render_types::ShadowUniforms;
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::uniforms::{ModelUniforms, ViewUniforms};
+use crate::metal::uniforms::ModelUniforms;
+use concinnity_render::uniforms::ViewUniforms;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
 // `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
@@ -679,7 +680,7 @@ impl MtlContext {
             // buffer instead, ICB-incompatible discrete binds being the reason).
             // probe_cube_or_sky returns the sky prefilter for unbaked slots, so all
             // MAX_PROBES are always valid. Skybox + diffuse keep texture 3/4.
-            for i in 0..crate::metal::uniforms::MAX_PROBES {
+            for i in 0..concinnity_render::uniforms::MAX_PROBES {
                 enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 6 + i);
             }
             // Reflection-probe set (count + per-probe parallax boxes) at fragment
@@ -687,7 +688,7 @@ impl MtlContext {
             // until a bake; the shader weights every box covering the surface.
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.probe_set).cast(),
-                std::mem::size_of::<crate::metal::uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                 6,
             );
         }

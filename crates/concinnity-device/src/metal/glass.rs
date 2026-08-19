@@ -25,7 +25,9 @@ use super::context::MtlContext;
 use super::pipeline::{ns_str, shader_library};
 use super::slang_shaders;
 use super::transparent::{TransparentDraw, bytes_of};
-use super::uniforms::{GlassMeshParams, GlassParams, TransparentView};
+use super::uniforms::GlassMeshParams;
+use concinnity_render::uniforms::GlassParams;
+use concinnity_render::uniforms::TransparentView;
 
 // Refraction offset + Fresnel falloff for a transparent glass MESH. A `Material`
 // carries no glass-specific tunables (unlike a `GlassPanel`), so these match the

@@ -24,8 +24,9 @@ use objc2_metal::{
 use super::context::MtlContext;
 
 use super::scoped_encoder::ScopedEncoder;
-use super::uniforms::{DecalParams, DecalView};
 use crate::gfx::decal::DecalRecord;
+use concinnity_render::uniforms::DecalParams;
+use concinnity_render::uniforms::DecalView;
 
 // All projected-decal state grouped into one feature unit: the decal records
 // (with their tombstone free-list), the pipeline, the shared unit-cube

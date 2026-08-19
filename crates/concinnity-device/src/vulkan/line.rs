@@ -33,7 +33,7 @@ const MIN_VERTEX_CAPACITY: u64 = 64 * 1024;
 
 // `LineView` is a GPU-free layout struct that lives in concinnity-render;
 // re-export it so `crate::vulkan::line::LineView` is the local path.
-pub(in crate::vulkan) use crate::vulkan::uniforms::LineView;
+pub(in crate::vulkan) use concinnity_render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the

@@ -98,7 +98,7 @@ fn create_ssr_resolve_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
     // valid; the miss fallback box-projects these when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: crate::directx::probe_uniforms::MAX_PROBES as u32,
+        NumDescriptors: concinnity_render::uniforms::MAX_PROBES as u32,
         BaseShaderRegister: PROBE_CUBE_REGISTER,
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,

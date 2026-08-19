@@ -170,10 +170,42 @@ fn parse_version(version: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-// Compile `job` under `work_dir` (created if needed; source and artifact files
-// are cleaned up afterwards). The invocation is fixed apart from the job
-// fields: `-matrix-layout-column-major` is mandatory because Slang defaults to
-// row-major and every CPU-uploaded matrix would read transposed without it.
+// Compile `job` under `work_dir`, returning the artifact bytes.
+pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
+    let produced = run(job, work_dir, false)?;
+    if produced.artifact.is_empty() {
+        return Err(format!(
+            "slang: {} compiled to an empty artifact",
+            job.file_name
+        ));
+    }
+    Ok(produced.artifact)
+}
+
+// The layout slangc gives `job`'s declarations, as its `-reflection-json`
+// emits it. The invocation is the one `compile` uses, so the offsets reported
+// are the ones the shipped artifact carries -- and they are per target: MSL
+// sizes a constant-buffer `float3` at 16 bytes where SPIR-V and DXIL pack a
+// scalar after it, and SPIR-V rounds an array element stride up to 16 where
+// neither of the others does. A caller comparing a `#[repr(C)]` mirror has to
+// ask each target separately.
+pub fn reflect(job: &SlangJob<'_>, work_dir: &Path) -> Result<String, String> {
+    let produced = run(job, work_dir, true)?;
+    produced
+        .reflection
+        .ok_or_else(|| format!("slang: {} emitted no reflection JSON", job.file_name))
+}
+
+// What one slangc run produced.
+struct Produced {
+    artifact: Vec<u8>,
+    reflection: Option<String>,
+}
+
+// One slangc run under `work_dir` (created if needed; source and outputs are
+// cleaned up afterwards). `-matrix-layout-column-major` is mandatory because
+// Slang defaults to row-major and every CPU-uploaded matrix would read
+// transposed without it.
 //
 // Each invocation gets its own subdirectory: two compiles of the same
 // `file_name` can run at once (one shared source serves several programs -- the
@@ -182,7 +214,7 @@ fn parse_version(version: &str) -> Option<(u32, u32)> {
 // only slangc's diagnostics and the `#line` directives of the text targets;
 // neither the metallib nor the SPIR-V embeds it, so per-invocation naming costs
 // no artifact determinism.
-pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
+fn run(job: &SlangJob<'_>, work_dir: &Path, reflection: bool) -> Result<Produced, String> {
     let slangc = match resolved() {
         Ok(found) => found.path.as_path(),
         Err(message) => return Err(message.clone()),
@@ -192,6 +224,7 @@ pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("slang: create {}: {e}", scratch.display()))?;
     let src_path = scratch.join(job.file_name);
     let out_path = src_path.with_extension(job.target.extension());
+    let refl_path = src_path.with_extension("reflection.json");
     std::fs::write(&src_path, job.source)
         .map_err(|e| format!("slang: write {}: {e}", src_path.display()))?;
 
@@ -200,22 +233,14 @@ pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
         .args(command_args(job))
         .arg("-o")
         .arg(&out_path);
+    if reflection {
+        cmd.arg("-reflection-json").arg(&refl_path);
+    }
     let output = cmd
         .output()
         .map_err(|e| format!("slang: failed to launch slangc: {e}"))?;
     let result = if output.status.success() {
-        std::fs::read(&out_path)
-            .map_err(|e| format!("slang: read {}: {e}", out_path.display()))
-            .and_then(|bytes| {
-                if bytes.is_empty() {
-                    Err(format!(
-                        "slang: {} compiled to an empty artifact",
-                        job.file_name
-                    ))
-                } else {
-                    Ok(bytes)
-                }
-            })
+        read_produced(&out_path, reflection.then_some(refl_path.as_path()))
     } else {
         Err(format!(
             "slang: {} failed:\n{}{}",
@@ -226,8 +251,26 @@ pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     };
     let _ = std::fs::remove_file(&src_path);
     let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_file(&refl_path);
     let _ = std::fs::remove_dir(&scratch);
     result
+}
+
+// The files a successful run left behind.
+fn read_produced(out_path: &Path, refl_path: Option<&Path>) -> Result<Produced, String> {
+    let artifact =
+        std::fs::read(out_path).map_err(|e| format!("slang: read {}: {e}", out_path.display()))?;
+    let reflection = match refl_path {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| format!("slang: read {}: {e}", path.display()))?,
+        ),
+        None => None,
+    };
+    Ok(Produced {
+        artifact,
+        reflection,
+    })
 }
 
 // A scratch directory name no concurrent compile can share: the process id
@@ -427,6 +470,43 @@ mod tests {
         let bytes = compile(&job, &dir).expect("trivial slang compile");
         // SPIR-V magic.
         assert_eq!(&bytes[0..4], &0x0723_0203u32.to_le_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Reflection is the layout oracle the shader-struct checks read, so it has
+    // to carry names, offsets and sizes -- and report them per target, since
+    // MSL sizes a constant-buffer `float3` at 16 bytes where SPIR-V packs a
+    // scalar after it.
+    #[test]
+    fn reflection_reports_constant_buffer_offsets_per_target() {
+        if slangc_path().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("cn_slang_refl_{}", std::process::id()));
+        let source = "struct Hazard { float3 a; float b; };\n\
+                      ConstantBuffer<Hazard> h;\n\
+                      RWStructuredBuffer<float> o;\n\
+                      [shader(\"compute\")] [numthreads(1,1,1)]\n\
+                      void k(uint3 t : SV_DispatchThreadID) { o[t.x] = h.a.x + h.b; }\n";
+        let for_target = |target| {
+            reflect(
+                &SlangJob {
+                    source,
+                    file_name: "hazard.slang",
+                    entries: &["k"],
+                    target,
+                },
+                &dir,
+            )
+            .expect("reflection compile")
+        };
+        let msl = for_target(SlangTarget::Metal);
+        let spirv = for_target(SlangTarget::Spirv);
+        assert!(msl.contains("\"name\": \"Hazard\""), "{msl}");
+        // A float3 followed by a scalar is the divergence the engine's packed
+        // types and pad fields exist to avoid: 16 + 4 on Metal, 12 + 4 elsewhere.
+        assert!(msl.contains("\"offset\": 16, \"size\": 4"), "{msl}");
+        assert!(spirv.contains("\"offset\": 12, \"size\": 4"), "{spirv}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

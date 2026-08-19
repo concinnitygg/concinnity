@@ -27,7 +27,8 @@ use ash::{Device, vk};
 
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
-use crate::vulkan::uniforms::{GpuParticle, ParticleView};
+use concinnity_render::uniforms::GpuParticle;
+use concinnity_render::uniforms::ParticleView;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};

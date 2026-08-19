@@ -210,7 +210,7 @@ impl MtlContext {
                 // specular term uses). `probe_cube_or_sky` returns the sky for
                 // unbaked slots, so binding all MAX_PROBES is always valid; the
                 // ProbeSet's `count` gates whether the shader samples them.
-                for i in 0..crate::metal::uniforms::MAX_PROBES {
+                for i in 0..concinnity_render::uniforms::MAX_PROBES {
                     enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 4 + i);
                 }
                 // The screen sources take the post sampler at 0..2; the
@@ -222,7 +222,7 @@ impl MtlContext {
                     enc,
                     self.cube_sampler.as_ref(),
                     3,
-                    1 + crate::metal::uniforms::MAX_PROBES,
+                    1 + concinnity_render::uniforms::MAX_PROBES,
                 );
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(ssr_params).cast(),
@@ -233,7 +233,7 @@ impl MtlContext {
                 // buffer(1); count == 0 keeps the sky fallback above.
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(&self.probe_set).cast(),
-                    std::mem::size_of::<crate::metal::uniforms::ProbeSet>(),
+                    std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                     1,
                 );
             },

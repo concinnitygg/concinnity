@@ -47,9 +47,9 @@ use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
 // count toward coverage. Re-exported at `pub(in crate::metal)` (as before) so the
 // graph executor, shadow pass, and this file keep their existing paths.
-pub(in crate::metal) use crate::metal::uniforms::{
-    RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
-};
+pub(in crate::metal) use crate::metal::uniforms::RaymarchShadowCascade;
+pub(in crate::metal) use crate::metal::uniforms::RaymarchView;
+pub(in crate::metal) use crate::metal::uniforms::RaymarchVolumeUniforms;
 
 // Engine-shipped header / template prepended + appended around each
 // user shader. The helpers carry the IQ primitive library + the cone-

@@ -783,7 +783,7 @@ impl DxContext {
         // `probe_install`). The forward shader only samples a slot when
         // `ProbeSet.count` covers it, but the descriptor table must still be valid.
         let probe_sky_mips = env_map.prefilter_mip_count.max(1);
-        for k in 0..crate::directx::probe_uniforms::MAX_PROBES {
+        for k in 0..concinnity_render::uniforms::MAX_PROBES {
             crate::directx::texture::write_cube_srv_mips(
                 &device,
                 &env_map.prefilter.resource,
@@ -797,7 +797,7 @@ impl DxContext {
         // the asynchronous capture binds so a probe face samples the sky, not other
         // probes (and never reads the live ring while `record_frame` rewrites it).
         let probe_set_size =
-            align256(std::mem::size_of::<crate::directx::probe_uniforms::ProbeSet>() as u64);
+            align256(std::mem::size_of::<concinnity_render::uniforms::ProbeSet>() as u64);
         let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
@@ -811,12 +811,12 @@ impl DxContext {
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map probe set cbv: {e}"))?;
             // Initialise to the empty set (count 0) until the first frame writes it.
-            let empty = crate::directx::probe_uniforms::ProbeSet::EMPTY;
+            let empty = concinnity_render::uniforms::ProbeSet::EMPTY;
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &empty as *const crate::directx::probe_uniforms::ProbeSet as *const u8,
+                    &empty as *const concinnity_render::uniforms::ProbeSet as *const u8,
                     ptr as *mut u8,
-                    std::mem::size_of::<crate::directx::probe_uniforms::ProbeSet>(),
+                    std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                 );
             }
             probe_set_cbv_ptrs.push(ptr as *mut u8);
@@ -832,12 +832,12 @@ impl DxContext {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map probe empty cbv: {e}"))?;
-            let empty = crate::directx::probe_uniforms::ProbeSet::EMPTY;
+            let empty = concinnity_render::uniforms::ProbeSet::EMPTY;
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &empty as *const crate::directx::probe_uniforms::ProbeSet as *const u8,
+                    &empty as *const concinnity_render::uniforms::ProbeSet as *const u8,
                     ptr as *mut u8,
-                    std::mem::size_of::<crate::directx::probe_uniforms::ProbeSet>(),
+                    std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                 );
                 buf.Unmap(0, None);
             }
@@ -2457,7 +2457,7 @@ impl DxContext {
             // placements (declared or auto-seeded). See [`super::context`].
             probe_placements: Vec::new(),
             probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
-            probe_set: super::probe_uniforms::ProbeSet::EMPTY,
+            probe_set: concinnity_render::uniforms::ProbeSet::EMPTY,
             probe_rendering: None,
             probe_converting: None,
             probe_maps: Vec::new(),

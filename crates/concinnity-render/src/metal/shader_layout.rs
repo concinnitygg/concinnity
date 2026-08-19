@@ -23,7 +23,8 @@ use crate::render_types::{
     ShadowUniforms, SpotShadowData,
 };
 
-use super::uniforms::{ModelUniforms, ViewUniforms};
+use super::uniforms::ModelUniforms;
+use crate::uniforms::ViewUniforms;
 
 // One field the engine guarantees at a fixed byte offset inside an
 // engine-provided buffer struct.

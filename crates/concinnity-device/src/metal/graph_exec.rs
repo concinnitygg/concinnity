@@ -75,7 +75,9 @@ use crate::gfx::render_types::{
 
 use super::context::MtlContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
-use super::uniforms::{GBufferView, TaaUniforms, VelocityUniforms};
+use super::uniforms::VelocityUniforms;
+use concinnity_render::uniforms::GBufferView;
+use concinnity_render::uniforms::TaaParams;
 
 // Per-frame params the executor threads into each pass's `encode_*`
 // method. The set is the union of what every currently-migrated pass
@@ -151,7 +153,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub prev_skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // TAA-resolve pass uniforms. `Some` only when the `TaaResolve` pass
     // is in the graph this frame (matches `FrameGraphInputs::taa_enabled`).
-    pub taa_uniforms: Option<&'a TaaUniforms>,
+    pub taa_uniforms: Option<&'a TaaParams>,
     // Pre-TAA scene texture that `TaaResolve` reads (the SSR resolve
     // output when SSR is on, otherwise the raw `hdr_resolve`). `Some`
     // only when the `TaaResolve` pass is in the graph this frame.
@@ -701,7 +703,7 @@ impl MtlContext {
                     "graph executor: Transparent pass requires scene_pre_taa but none was supplied",
                 )?;
                 let inv_vp = params.inv_vp;
-                let view = super::uniforms::TransparentView {
+                let view = concinnity_render::uniforms::TransparentView {
                     vp: params.vp,
                     inv_vp,
                     camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],

@@ -20,8 +20,8 @@ use objc2_metal::{
 use super::context::*;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
-use super::uniforms::*;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_render::uniforms::*;
 
 // All auto-exposure (EV adaptation) state grouped into one feature unit: the
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the

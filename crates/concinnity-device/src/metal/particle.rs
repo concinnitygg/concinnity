@@ -38,7 +38,8 @@ use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
-use super::uniforms::{GpuParticle, ParticleView};
+use concinnity_render::uniforms::GpuParticle;
+use concinnity_render::uniforms::ParticleView;
 
 // Per-emitter persistent GPU state. The pool buffer lives in shared storage
 // so the CPU can zero-init it once; the atomic counter buffer is rewritten

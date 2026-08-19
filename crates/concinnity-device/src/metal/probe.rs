@@ -157,7 +157,7 @@ impl MtlContext {
         &mut self,
         declared: &[reflection_probe::ProbePlacement],
     ) {
-        use super::uniforms::MAX_PROBES;
+        use concinnity_render::uniforms::MAX_PROBES;
         let mut placements: Vec<reflection_probe::ProbePlacement> = if declared.is_empty() {
             match self.scene_world_bounds() {
                 Some((mn, mx)) => {
@@ -186,7 +186,7 @@ impl MtlContext {
         }
         self.probe_placements = placements;
         self.probe_maps.clear();
-        self.probe_set = super::uniforms::ProbeSet::EMPTY;
+        self.probe_set = concinnity_render::uniforms::ProbeSet::EMPTY;
         self.probe_bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe_placements.len());
         // Park the rendering capture's GPU resources instead of dropping them: its
         // command buffers may still be reading the reserved-slot buffers + resolve
@@ -632,7 +632,7 @@ impl MtlContext {
         let textures = self.build_probe_textures(bytes)?;
         debug_assert_eq!(index, self.probe_maps.len());
         self.probe_maps.push(textures);
-        self.probe_set.probes[index] = super::uniforms::ProbeUniforms {
+        self.probe_set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],

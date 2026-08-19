@@ -34,11 +34,12 @@ use crate::gfx::rt_reflections::RtParamsInputs;
 // RT-reflection resolve.
 const RT_PARAMS_UBO_SIZE: u64 = 144;
 
-// `TransparentViewGpu` (per-frame transparent view cbuffer) and `GlassParamsGpu`
+// `TransparentView` (per-frame transparent view cbuffer) and `GlassParams`
 // (per-panel cbuffer) are GPU-free layout structs that live in concinnity-render;
-// re-export them so `crate::directx::glass::{TransparentViewGpu,GlassParamsGpu}`
+// re-export them so `crate::directx::glass::{TransparentView,GlassParams}`
 // are unchanged for the encode + `glass_params_from` paths.
-pub(in crate::directx) use crate::directx::uniforms::{GlassParamsGpu, TransparentViewGpu};
+pub(in crate::directx) use concinnity_render::uniforms::GlassParams;
+pub(in crate::directx) use concinnity_render::uniforms::TransparentView;
 
 // Per-panel GPU state: the static world-space quad VB + IB plus the per-panel
 // uniform CBV. The quad is pre-transformed at build time and the params never
@@ -107,11 +108,11 @@ pub(in crate::directx) struct GlassResources {
 unsafe impl Send for GlassResources {}
 unsafe impl Sync for GlassResources {}
 
-// Build the per-panel `GlassParamsGpu` from an authored panel. Pure; unit
+// Build the per-panel `GlassParams` from an authored panel. Pure; unit
 // tested. Mirrors `metal::glass::glass_params_from`.
-fn glass_params_from(panel: &GlassPanel) -> GlassParamsGpu {
+fn glass_params_from(panel: &GlassPanel) -> GlassParams {
     let n = panel.normal; // already unit-length from GlassPanel::from_args
-    GlassParamsGpu {
+    GlassParams {
         centre: [panel.centre[0], panel.centre[1], panel.centre[2], 0.0],
         normal: [n[0], n[1], n[2], 0.0],
         tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
@@ -217,7 +218,7 @@ fn create_glass_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
     // when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: crate::directx::probe_uniforms::MAX_PROBES as u32,
+        NumDescriptors: concinnity_render::uniforms::MAX_PROBES as u32,
         BaseShaderRegister: 7, // t7..
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
@@ -489,7 +490,7 @@ fn create_glass_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
     let scene_range = table_range(0, 0, 1); // t0
     let depth_range = table_range(1, 0, 1); // t1
     let prefilter_range = table_range(2, 0, 1); // t2
-    let probe_cube_range = table_range(20, 0, crate::directx::probe_uniforms::MAX_PROBES as u32);
+    let probe_cube_range = table_range(20, 0, concinnity_render::uniforms::MAX_PROBES as u32);
     let pool_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: u32::MAX, // unbounded bindless pool
@@ -783,7 +784,7 @@ impl GlassResources {
             // the sharp mirror render only when it was assigned a planar slot.
             let mut params = glass_params_from(panel);
             params.planar = if planar_slot.is_some() { 1.0 } else { 0.0 };
-            let cb_size = align256(std::mem::size_of::<GlassParamsGpu>() as u64);
+            let cb_size = align256(std::mem::size_of::<GlassParams>() as u64);
             let params_cbuffer = create_buffer(
                 alloc,
                 cb_size,
@@ -795,9 +796,9 @@ impl GlassResources {
                 .map_err(|e| format!("map glass params cb: {e}"))?;
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &params as *const GlassParamsGpu as *const u8,
+                    &params as *const GlassParams as *const u8,
                     p as *mut u8,
-                    std::mem::size_of::<GlassParamsGpu>(),
+                    std::mem::size_of::<GlassParams>(),
                 );
                 // Persistently mapped, never unmap.
             }
@@ -818,7 +819,7 @@ impl GlassResources {
         }
 
         // Per-frame view UBO ring.
-        let view_size = align256(std::mem::size_of::<TransparentViewGpu>() as u64);
+        let view_size = align256(std::mem::size_of::<TransparentView>() as u64);
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
@@ -896,7 +897,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        view: &TransparentViewGpu,
+        view: &TransparentView,
         // Projection inputs for the per-pixel RT reflection trace's RtParams (the
         // same values the RT-reflection resolve uses); only consumed on the RT path.
         fov_y_radians: f32,
@@ -917,9 +918,9 @@ impl DxContext {
         // Upload this frame's view UBO.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const TransparentViewGpu as *const u8,
+                view as *const TransparentView as *const u8,
                 glass.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<TransparentViewGpu>(),
+                std::mem::size_of::<TransparentView>(),
             );
         }
         let view_gva = unsafe { glass.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
@@ -1139,7 +1140,7 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    // The `TransparentViewGpu` / `GlassParamsGpu` layout tests live with the
+    // The `TransparentView` / `GlassParams` layout tests live with the
     // structs in `concinnity_render::directx::uniforms`.
 
     // The glass shaders compile at runtime from the shared single source, so a

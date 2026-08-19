@@ -78,7 +78,8 @@ const CUBE_INDICES: [u16; 36] = [
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
 // structs that live in concinnity-render; re-export them so
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
-pub(in crate::directx) use crate::directx::uniforms::{DecalParams, DecalView};
+pub(in crate::directx) use concinnity_render::uniforms::DecalParams;
+pub(in crate::directx) use concinnity_render::uniforms::DecalView;
 
 // Root-signature layout (binds 1:1 with the `decal.slang` declarations, whose
 // registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
@@ -555,9 +556,9 @@ impl DxContext {
                 inv_model: d.inv_model,
                 tint: d.tint,
                 fade_pow: 2.0,
-                _p0: 0.0,
-                _p1: 0.0,
-                _p2: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             };
             // Upload into this frame's per-decal slot.
             let dst = unsafe {

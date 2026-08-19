@@ -1252,7 +1252,7 @@ impl MtlContext {
             probe_maps: Vec::new(),
             // Empty until `set_reflection_probes` supplies placements.
             probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
-            probe_set: crate::metal::uniforms::ProbeSet::EMPTY,
+            probe_set: concinnity_render::uniforms::ProbeSet::EMPTY,
             probe_rendering: None,
             probe_converting: None,
             probe_retire_pool: super::transient::RetirePool::new(),

@@ -160,7 +160,8 @@ impl DxContext {
     // reflections without authoring. Resets the staggered bake; capped at
     // `MAX_PROBES`.
     pub(super) fn set_reflection_probes(&mut self, declared: &[reflection_probe::ProbePlacement]) {
-        use super::probe_uniforms::{MAX_PROBES, ProbeSet};
+        use concinnity_render::uniforms::MAX_PROBES;
+        use concinnity_render::uniforms::ProbeSet;
         let mut placements: Vec<reflection_probe::ProbePlacement> = if declared.is_empty() {
             match self.scene_world_bounds() {
                 Some((mn, mx)) => {
@@ -441,18 +442,16 @@ impl DxContext {
             let view_mat = reflection_probe::face_view_matrix(eye, face);
             let view = super::draw::ViewUniforms {
                 vp,
-                view_mat,
+                view: view_mat,
                 elapsed: 0.0,
                 // No reflection resolve runs over the probe cube, so the forward
                 // probe specular is the only reflection source here; keep it.
                 reflections_enabled: 0.0,
-                cam_x: eye[0],
-                cam_y: eye[1],
-                cam_z: eye[2],
+                cam_pos: [eye[0], eye[1], eye[2]],
                 prefilter_mip_count,
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _ep1: 0.0,
+                _end_pad: 0.0,
             };
             let cbv = create_buffer(
                 alloc,
@@ -815,7 +814,7 @@ impl DxContext {
             prefilter,
             mip_count,
         });
-        self.probe_set.probes[index] = super::probe_uniforms::ProbeUniforms {
+        self.probe_set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],

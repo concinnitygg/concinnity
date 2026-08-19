@@ -764,7 +764,7 @@ mod tests {
     #[test]
     fn ssr_shaders_compile() {
         // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+        for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
             let shaders = super::compile_ssr_shaders(false, probes).expect("ssr shaders compile");
             assert!(super::is_spirv(&shaders.fullscreen_vs));
             assert!(super::is_spirv(&shaders.resolve_fs));

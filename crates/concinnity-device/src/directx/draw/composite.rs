@@ -15,19 +15,11 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 
 use crate::directx::context::DxContext;
+use concinnity_core::gfx::render_types::TextUniforms;
+
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
 use crate::directx::pipeline::COMPOSITE_ROOT_CONSTANTS;
 use crate::directx::texture::transition_barrier;
-
-// Root constants for the text pass (16 bytes = 4 DWORDs): window dimensions.
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct TextPush {
-    win_width: f32,
-    win_height: f32,
-    _pad0: f32,
-    _pad1: f32,
-}
 
 // Per-invocation binding context for the composite pass. The back-buffer is a
 // cheap COM-refcount clone so `Args` carries no borrow (the trait's associated
@@ -143,11 +135,11 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         if self.descriptors.text_atlas_srv_gpus.is_empty() {
             return false;
         }
-        let text_push = TextPush {
+        // Root constants for the text pass (16 bytes = 4 DWORDs).
+        let text_push = TextUniforms {
             win_width: args.width as f32,
             win_height: args.height as f32,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            _pad: [0.0; 2],
         };
         unsafe {
             cmd.SetPipelineState(text_pso);
@@ -159,7 +151,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             cmd.SetGraphicsRoot32BitConstants(
                 0,
                 4,
-                &text_push as *const TextPush as *const std::ffi::c_void,
+                &text_push as *const TextUniforms as *const std::ffi::c_void,
                 0,
             );
             cmd.SetGraphicsRootDescriptorTable(2, self.descriptors.text_sampler_gpu);

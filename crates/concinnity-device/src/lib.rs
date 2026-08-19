@@ -82,6 +82,12 @@ pub mod precompile;
 #[cfg(test)]
 mod object_data_layout;
 
+// Reflection-driven layout guard for the `#[repr(C)]` structs the CPU uploads
+// into the single-source `.slang` shaders: the expected offsets come from
+// slangc, per target, rather than from a hand-written number.
+#[cfg(test)]
+mod shader_layout;
+
 // Ownership guard for the explicit backends' resource barriers. Test-only and
 // backend-agnostic for the same reason as the fragment guard above: the call
 // sites are counted as text, so one build audits both explicit backends.

@@ -33,7 +33,7 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::scoped_encoder::ScopedEncoder;
-use super::uniforms::TransparentView;
+use concinnity_render::uniforms::TransparentView;
 
 // One translucent draw recorded for the transparent pass. Self-contained
 // except for the shared [`TransparentView`], which `encode_transparent` binds
@@ -166,7 +166,7 @@ impl MtlContext {
         // per-draw bindings below never touch these slots, so the state persists.
         unsafe {
             enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 2);
-            for i in 0..super::uniforms::MAX_PROBES {
+            for i in 0..concinnity_render::uniforms::MAX_PROBES {
                 enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 3 + i);
             }
             // The cube sampler covers the prefilter cube and every probe cube.
@@ -179,7 +179,7 @@ impl MtlContext {
                 &enc,
                 self.cube_sampler.as_ref(),
                 1,
-                1 + super::uniforms::MAX_PROBES,
+                1 + concinnity_render::uniforms::MAX_PROBES,
             );
             // The planar resolve at texture(11) takes the post sampler at the
             // slot after the probe run, and the bindless pool the RT variants
@@ -198,7 +198,7 @@ impl MtlContext {
             );
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.probe_set).cast(),
-                std::mem::size_of::<super::uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                 7,
             );
             // A planar reflection resolve at texture(11), the default for every

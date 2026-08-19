@@ -65,7 +65,8 @@ pub(in crate::vulkan) struct GlassRtDynamic {
 // glass UBO) are GPU-free layout structs that live in concinnity-render;
 // re-export them so `crate::vulkan::glass::{TransparentView,GlassParams}` are
 // unchanged for the encode + `glass_params_from` paths.
-pub(in crate::vulkan) use crate::vulkan::uniforms::{GlassParams, TransparentView};
+pub(in crate::vulkan) use concinnity_render::uniforms::GlassParams;
+pub(in crate::vulkan) use concinnity_render::uniforms::TransparentView;
 
 // Build the per-panel `GlassParams` from an authored panel. `planar` is 1.0 when
 // the pane has a planar reflection slot, else 0.0. Pure; unit tested. Mirrors
@@ -1862,7 +1863,7 @@ mod tests {
     #[test]
     fn glass_shaders_compile() {
         // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, crate::vulkan::probe_uniforms::MAX_PROBES as u32] {
+        for probes in [1, concinnity_render::uniforms::MAX_PROBES as u32] {
             super::compile_glass_shaders(false, true, probes).expect("glass compiles (msaa)");
             super::compile_glass_shaders(false, false, probes).expect("glass compiles (no msaa)");
         }

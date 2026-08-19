@@ -830,7 +830,7 @@ mod tests {
     // count in cannot bake in the wrong one.
     #[test]
     fn probe_cube_count_matches_the_host_constant() {
-        let want = crate::directx::probe_uniforms::MAX_PROBES.to_string();
+        let want = concinnity_render::uniforms::MAX_PROBES.to_string();
         let mut sized = 0usize;
         for p in ALL {
             for (key, value) in p.defines {

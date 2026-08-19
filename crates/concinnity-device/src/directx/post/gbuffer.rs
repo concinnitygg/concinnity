@@ -55,11 +55,12 @@ pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0,
 // (four float4x4 = 256 B). Matches the `GbView` cbuffer in every pre-pass VS.
 const GBUFFER_VIEW_UBO_SIZE: u64 = 256;
 
-// `GbViewUniforms` (the `GbView` cbuffer) and `GbModelPush` (the per-draw model
+// `GBufferView` (the `GbView` cbuffer) and `GBufferModel` (the per-draw model
 // root constants) are GPU-free layout structs that live in concinnity-render;
-// re-export them so `crate::directx::post::gbuffer::{GbViewUniforms,GbModelPush}`
+// re-export them so `crate::directx::post::gbuffer::{GBufferView,GBufferModel}`
 // are unchanged.
-pub(in crate::directx) use crate::directx::uniforms::{GbModelPush, GbViewUniforms};
+pub(in crate::directx) use concinnity_render::uniforms::GBufferModel;
+pub(in crate::directx) use concinnity_render::uniforms::GBufferView;
 
 // Shader compilation
 
@@ -897,7 +898,7 @@ impl DxContext {
         } else {
             cur_vp
         };
-        let view_uni = GbViewUniforms {
+        let view_uni = GBufferView {
             jittered_vp,
             cur_vp,
             prev_vp,
@@ -905,9 +906,9 @@ impl DxContext {
         };
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const GbViewUniforms as *const u8,
+                &view_uni as *const GBufferView as *const u8,
                 gb.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<GbViewUniforms>(),
+                std::mem::size_of::<GBufferView>(),
             );
         }
         let view_gva = unsafe { gb.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
@@ -1022,7 +1023,7 @@ impl DxContext {
                 } else {
                     obj.model
                 };
-                let push = GbModelPush {
+                let push = GBufferModel {
                     cur_model: obj.model,
                     prev_model,
                 };
@@ -1031,7 +1032,7 @@ impl DxContext {
                     cmd.SetGraphicsRoot32BitConstants(
                         1,
                         32,
-                        &push as *const GbModelPush as *const std::ffi::c_void,
+                        &push as *const GBufferModel as *const std::ffi::c_void,
                         0,
                     );
                     cmd.SetGraphicsRoot32BitConstants(
@@ -1115,7 +1116,7 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(0, view_gva);
             }
             self.draw_skinned_objects(cam_pos, |obj, i, index_offset, index_count| {
-                let push = GbModelPush {
+                let push = GBufferModel {
                     cur_model: obj.model,
                     prev_model: obj.model,
                 };
@@ -1131,7 +1132,7 @@ impl DxContext {
                     cmd.SetGraphicsRoot32BitConstants(
                         1,
                         32,
-                        &push as *const GbModelPush as *const std::ffi::c_void,
+                        &push as *const GBufferModel as *const std::ffi::c_void,
                         0,
                     );
                     cmd.SetGraphicsRootShaderResourceView(2, self.skinned_joint_gva(frame_idx, i));
@@ -1330,7 +1331,7 @@ impl DxContext {
             } else {
                 obj.model
             };
-            let push = GbModelPush {
+            let push = GBufferModel {
                 cur_model: obj.model,
                 prev_model,
             };
@@ -1339,7 +1340,7 @@ impl DxContext {
                 cmd.SetGraphicsRoot32BitConstants(
                     1,
                     32,
-                    &push as *const GbModelPush as *const std::ffi::c_void,
+                    &push as *const GBufferModel as *const std::ffi::c_void,
                     0,
                 );
                 cmd.SetGraphicsRoot32BitConstants(2, 4, mat.as_ptr() as *const std::ffi::c_void, 0);
@@ -1438,12 +1439,12 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    // The `GbViewUniforms` / `GbModelPush` layout tests live with the structs in
-    // `concinnity_render::directx::uniforms`. `GbViewUniforms` fitting the
+    // The `GBufferView` / `GBufferModel` layout tests live with the structs in
+    // `concinnity_render::directx::uniforms`. `GBufferView` fitting the
     // 256-aligned UBO allocation is checked here, where `align256` +
     // `GBUFFER_VIEW_UBO_SIZE` live.
     #[test]
     fn gb_view_uniforms_fits_ubo_allocation() {
-        assert!(std::mem::size_of::<GbViewUniforms>() as u64 <= align256(GBUFFER_VIEW_UBO_SIZE));
+        assert!(std::mem::size_of::<GBufferView>() as u64 <= align256(GBUFFER_VIEW_UBO_SIZE));
     }
 }

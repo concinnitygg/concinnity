@@ -9,7 +9,7 @@ use ash::{Device, vk};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::vulkan::allocator::DeviceAllocator;
-use crate::vulkan::uniforms::TaaPush;
+use concinnity_render::uniforms::TaaParams;
 
 use super::super::context::*;
 use super::super::pipeline::*;
@@ -440,7 +440,7 @@ impl FullscreenPass for TaaResolvePass<'_> {
         let device = &self.ctx.device;
         // History is invalid on the first frame; the scene then passes straight
         // through.
-        let push = TaaPush {
+        let push = TaaParams {
             history_valid: if self.taa.taa_frame > 0 { 1.0 } else { 0.0 },
         };
         unsafe {
@@ -459,8 +459,8 @@ impl FullscreenPass for TaaResolvePass<'_> {
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
-                    &push as *const TaaPush as *const u8,
-                    std::mem::size_of::<TaaPush>(),
+                    &push as *const TaaParams as *const u8,
+                    std::mem::size_of::<TaaParams>(),
                 ),
             );
             device.cmd_draw(cmd, 3, 1, 0, 0);

@@ -443,7 +443,7 @@ fn create_main_bindless_root_signature(
     // prefilter cube, so a sample at any index is always valid.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: crate::directx::probe_uniforms::MAX_PROBES as u32,
+        NumDescriptors: concinnity_render::uniforms::MAX_PROBES as u32,
         BaseShaderRegister: 7, // t7..
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
@@ -454,7 +454,7 @@ fn create_main_bindless_root_signature(
     let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
-        BaseShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 1, // t16
+        BaseShaderRegister: 7 + concinnity_render::uniforms::MAX_PROBES as u32 + 1, // t16
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -462,7 +462,7 @@ fn create_main_bindless_root_signature(
     let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 2,
-        BaseShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 3, // t18..t19
+        BaseShaderRegister: 7 + concinnity_render::uniforms::MAX_PROBES as u32 + 3, // t18..t19
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -642,7 +642,7 @@ fn create_main_bindless_root_signature(
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32, // t15
+                    ShaderRegister: 7 + concinnity_render::uniforms::MAX_PROBES as u32, // t15
                     RegisterSpace: 0,
                 },
             },
@@ -664,7 +664,7 @@ fn create_main_bindless_root_signature(
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7 + crate::directx::probe_uniforms::MAX_PROBES as u32 + 2, // t17,
+                    ShaderRegister: 7 + concinnity_render::uniforms::MAX_PROBES as u32 + 2, // t17,
                     RegisterSpace: 0,
                 },
             },

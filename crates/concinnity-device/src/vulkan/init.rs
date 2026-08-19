@@ -975,7 +975,8 @@ impl VkContext {
         // Per-frame `ProbeSet` UBO ring (global set 0 binding 7): the
         // reflection-probe count + per-probe parallax boxes. Persistently mapped;
         // `record_frame` writes `self.probe_set` here each frame.
-        let probe_set_ubo_size = std::mem::size_of::<super::probe_uniforms::ProbeSet>() as u64;
+        let probe_set_ubo_size =
+            std::mem::size_of::<concinnity_render::uniforms::ProbeSet>() as u64;
         let mut probe_set_ubo_buffers = Vec::with_capacity(frames);
         for _ in 0..frames {
             probe_set_ubo_buffers.push(alloc.create_buffer(
@@ -1156,10 +1157,10 @@ impl VkContext {
             max_per_stage_samplers,
             global_update_after_bind,
         );
-        if (probe_cube_count as usize) < super::probe_uniforms::MAX_PROBES {
+        if (probe_cube_count as usize) < concinnity_render::uniforms::MAX_PROBES {
             tracing::info!(
                 "reflection probes: device sampler headroom binds {probe_cube_count} of {}",
-                super::probe_uniforms::MAX_PROBES
+                concinnity_render::uniforms::MAX_PROBES
             );
         }
         // Global set (set 0): view UBO, light UBO, shadow UBO, shadow array
@@ -4024,7 +4025,7 @@ impl VkContext {
             cube_sampler,
             env_map,
             probe_placements: Vec::new(),
-            probe_set: super::probe_uniforms::ProbeSet::EMPTY,
+            probe_set: concinnity_render::uniforms::ProbeSet::EMPTY,
             probe_maps: Vec::new(),
             probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
             probe_rendering: None,

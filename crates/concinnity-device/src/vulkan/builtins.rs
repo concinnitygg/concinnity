@@ -130,7 +130,7 @@ pub(crate) fn precompile(
             hot_reload: false,
             msaa: false,
             pool_size,
-            probe_count: super::probe_uniforms::MAX_PROBES,
+            probe_count: concinnity_render::uniforms::MAX_PROBES,
         };
         let source = program.source(&ctx);
         let key = if program.rt {
@@ -167,7 +167,7 @@ pub(crate) fn precompile(
                 hot_reload: false,
                 msaa,
                 pool_size,
-                probe_count: super::probe_uniforms::MAX_PROBES,
+                probe_count: concinnity_render::uniforms::MAX_PROBES,
             };
             let source = program.source(&ctx);
             let key = program.cache_key(&source);

@@ -345,7 +345,7 @@ pub struct MtlContext {
     pub(super) probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
     // Per-probe influence boxes + count, pushed to the fragment shader at
     // buffer(6). `EMPTY` until a bake. See metal/probe.rs.
-    pub(super) probe_set: super::uniforms::ProbeSet,
+    pub(super) probe_set: concinnity_render::uniforms::ProbeSet,
     // The probe currently rendering its six cube faces on the GPU (one at a time;
     // owns the reserved-ring-slot buffers + capture targets). The render thread never
     // blocks: the faces are submitted without `waitUntilCompleted` and a completion

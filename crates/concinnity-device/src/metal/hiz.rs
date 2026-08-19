@@ -45,7 +45,7 @@ use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) push struct; lives in concinnity-render so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
-use super::uniforms::HizParams;
+use concinnity_render::uniforms::HizParams;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
 // DirectX `[numthreads(8, 8, 1)]`).

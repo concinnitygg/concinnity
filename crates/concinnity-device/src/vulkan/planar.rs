@@ -368,7 +368,7 @@ impl PlanarReflectionSet {
         lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
     ) -> Result<Self, String> {
-        use super::probe_uniforms::ProbeSet;
+        use concinnity_render::uniforms::ProbeSet;
 
         let PlanarGlobalSet {
             layout: global_set_layout,
@@ -904,19 +904,17 @@ impl VkContext {
             );
             let view = ViewUniforms {
                 vp: m.view_proj,
-                view_mat: m.view,
+                view: m.view,
                 elapsed,
                 // No reflection composite runs over the mirror render, so the
                 // forward probe specular is its only reflection source; the EMPTY
                 // ProbeSet then leaves it on the sky path.
                 reflections_enabled: 0.0,
-                cam_x: m.eye[0],
-                cam_y: m.eye[1],
-                cam_z: m.eye[2],
+                cam_pos: [m.eye[0], m.eye[1], m.eye[2]],
                 prefilter_mip_count,
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _ep1: 0.0,
+                _end_pad: 0.0,
             };
             let ring = slot * set.frames + frame_idx;
             unsafe {

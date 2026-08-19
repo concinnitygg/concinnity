@@ -40,7 +40,10 @@ use crate::gfx::mesh_payload::Vertex;
 use super::context::MtlContext;
 use super::pipeline::{ns_str, shader_library};
 use super::transparent::{TransparentDraw, bytes_of};
-use super::uniforms::{TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu};
+use super::uniforms::WATER_MAX_WAVES;
+use super::uniforms::WaterParams;
+use super::uniforms::WaterWaveGpu;
+use concinnity_render::uniforms::TransparentView;
 
 // Per-surface GPU state: a static tessellated grid VB + IB.
 pub(in crate::metal) struct WaterSurfaceRecord {

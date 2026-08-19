@@ -1226,7 +1226,7 @@ pub struct DxContext {
     // / RT shaders. `EMPTY` until a bake installs a cube; distinct from `env_map`
     // so the skybox + diffuse irradiance keep the sky.
     #[allow(dead_code)] // bound to the forward shader (next slice)
-    pub(super) probe_set: super::probe_uniforms::ProbeSet,
+    pub(super) probe_set: concinnity_render::uniforms::ProbeSet,
     // The probe whose six cube faces are currently rendering on the GPU (one at a
     // time, spread one face per frame). Owns the reserved-ring-slot capture
     // resources until its faces are read back. See [`super::probe`].

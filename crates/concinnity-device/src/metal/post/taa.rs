@@ -20,7 +20,7 @@ use crate::metal::post::fullscreen::{
     set_fragment_sampler_range,
 };
 use crate::metal::slang_shaders::TAA_FRAG;
-use crate::metal::uniforms::TaaUniforms;
+use concinnity_render::uniforms::TaaParams;
 
 // All temporal-anti-aliasing state grouped into one feature unit: the on/off
 // toggle, the resolve pipeline, the two ping-pong history buffers, and the
@@ -108,7 +108,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_taa(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        taa_uniforms: &TaaUniforms,
+        taa_uniforms: &TaaParams,
         scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
     ) -> Result<u32, String> {
         let pipeline = self
@@ -140,7 +140,7 @@ impl MtlContext {
                     enc.setFragmentTexture_atIndex(Some(history.as_ref()), 2);
                     enc.setFragmentBytes_length_atIndex(
                         std::ptr::NonNull::from(taa_uniforms).cast(),
-                        std::mem::size_of::<TaaUniforms>(),
+                        std::mem::size_of::<TaaParams>(),
                         0,
                     );
                 }

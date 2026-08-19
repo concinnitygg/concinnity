@@ -846,9 +846,9 @@ impl DxContext {
     fn build_transparent_view(
         &self,
         params: &GraphFrameParams<'_>,
-    ) -> super::glass::TransparentViewGpu {
+    ) -> super::glass::TransparentView {
         let inv_vp = super::math::mat4_inverse(params.vp_mat);
-        super::glass::TransparentViewGpu {
+        super::glass::TransparentView {
             vp: params.vp_mat,
             inv_vp,
             camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],

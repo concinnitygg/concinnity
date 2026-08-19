@@ -31,7 +31,7 @@ mod text_upload;
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
 // that lives in concinnity-render; re-export it so
 // `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::directx) use crate::directx::uniforms::ViewUniforms;
+pub(in crate::directx) use concinnity_render::uniforms::ViewUniforms;
 
 // One term of the Halton low-discrepancy sequence; drives the sub-pixel
 // projection jitter so successive TAA frames sample slightly different
@@ -152,9 +152,9 @@ impl DxContext {
         // frame) so this write never races a prior frame's in-flight GPU read.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.probe_set as *const super::probe_uniforms::ProbeSet as *const u8,
+                &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
                 self.probe_set_cbv_ptrs[frame_idx],
-                std::mem::size_of::<super::probe_uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
             );
         }
 
@@ -391,15 +391,13 @@ impl DxContext {
             };
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view_mat: self.view_matrix,
+            view: self.view_matrix,
             elapsed,
             reflections_enabled,
-            cam_x: cam_pos[0],
-            cam_y: cam_pos[1],
-            cam_z: cam_pos[2],
+            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _ep1: 0.0,
+            _end_pad: 0.0,
         };
         unsafe {
             std::ptr::copy_nonoverlapping(

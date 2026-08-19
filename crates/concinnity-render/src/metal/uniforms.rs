@@ -1,103 +1,17 @@
 // src/metal/uniforms.rs
 //
-// repr(C) uniform structs shared by the Metal frame encoder and its passes.
-// Each layout must match the corresponding struct in the MSL shader sources.
-
-// Per-frame view-projection uniforms pushed at buffer(0) once per frame.
-// Shared across all draw calls in a frame. `view` is the standalone view
-// matrix used by the vertex shader to compute view-space depth for cascade
-// selection in the fragment shader.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ViewUniforms {
-    // Combined view-projection matrix (column-major).
-    pub vp: [[f32; 4]; 4],
-    // Camera view matrix (column-major). Used to compute view-space depth
-    // in the vertex shader for shadow cascade selection.
-    pub view: [[f32; 4]; 4],
-    // Elapsed seconds, available to shaders for animation.
-    pub elapsed: f32,
-    // 1.0 when a screen-space / ray-traced reflection resolve composites this
-    // frame, else 0.0. The forward fragment shader uses it to yield the sharp
-    // specular for glossy surfaces to that resolve (whose miss-fallback samples
-    // the same probe set), so a glossy surface does not show both the
-    // parallax-approximate forward probe reflection and the exact resolved one.
-    pub reflections_enabled: f32,
-    // World-space camera position (packed_float3 in shader, alignment 4).
-    pub cam_pos: [f32; 3],
-    // Number of mip levels in the bound IBL prefilter cubemap. 0 means
-    // "no EnvironmentMap bound": the fragment shader uses this as the IBL
-    // enable flag and falls back to a flat ambient placeholder.
-    pub prefilter_mip_count: f32,
-    // 1.0 while the unlit view mode is active: shade_surface returns the base
-    // color before lighting. Occupies what was pad space, so the offsets in
-    // the user-shader binding contract are unchanged.
-    pub shade_mode: f32,
-    // End-padding: MSL rounds struct size up to a multiple of float4x4's 16-byte
-    // alignment, so we round explicitly to satisfy Metal validation.
-    pub _end_pad: f32,
-}
-
-// Reflection-probe parallax box, pushed to the fragment shader at buffer(6).
-// The specular IBL term box-projects the reflection vector against
-// [box_min, box_max] (the probe's influence volume) and re-anchors the cube
-// sample at the box hit relative to `probe_pos` (the capture point), so a static
-// captured cube tracks a moving first-person camera. Three float4s keep every
-// field 16-byte aligned, matching MSL's `float4` layout. `box_min.w` is the
-// enabled flag: 0 disables parallax (and signals no baked probe), so the shader
-// samples the raw reflection vector.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ProbeUniforms {
-    // xyz = influence-box min; w = enabled (1.0 = parallax on, 0.0 = off).
-    pub box_min: [f32; 4],
-    // xyz = influence-box max; w unused.
-    pub box_max: [f32; 4],
-    // xyz = probe capture position; w unused.
-    pub probe_pos: [f32; 4],
-}
-
-impl ProbeUniforms {
-    // The "no probe" value: parallax disabled, so the shader samples the raw
-    // reflection vector (which, with `probe_cube` aliasing the sky until a bake,
-    // reproduces the pre-probe reflection exactly).
-    pub const DISABLED: ProbeUniforms = ProbeUniforms {
-        box_min: [0.0; 4],
-        box_max: [0.0; 4],
-        probe_pos: [0.0; 4],
-    };
-}
-
-// Maximum reflection probes a frame can bind. The shader's `MAX_PROBES` constant
-// (main.metal) and the `BindlessTextures.probes` cube array must match this.
-pub const MAX_PROBES: usize = 8;
-
-// Auto-seed must never request more probes than a frame can bind, or
-// `set_reflection_probes` would truncate and silently drop placements. Checked at
-// compile time.
-const _: () = assert!(crate::reflection_probe::AUTO_SEED_BUDGET <= MAX_PROBES);
-
-// The full set of reflection probes, pushed to the fragment shader at buffer(6).
-// `count` is how many of `probes` are live; the fragment shader blends every
-// probe whose influence box covers the surface (a partition-of-unity weight by
-// signed box distance), falling back to the nearest when the surface is outside
-// all boxes, and samples those slices of the `BindlessTextures.probes` cube
-// array. Slices beyond `count` hold the sky fallback cube + a `DISABLED` box.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ProbeSet {
-    pub count: u32,
-    pub _pad: [u32; 3],
-    pub probes: [ProbeUniforms; MAX_PROBES],
-}
-
-impl ProbeSet {
-    pub const EMPTY: ProbeSet = ProbeSet {
-        count: 0,
-        _pad: [0; 3],
-        probes: [ProbeUniforms::DISABLED; MAX_PROBES],
-    };
-}
+// repr(C) uniform structs only the Metal frame encoder and its passes bind.
+// Each layout must match the corresponding struct in an `.metal` shader under
+// `metal/shaders/`.
+//
+// Blocks whose shader counterpart is a single-source `.slang` declaration are
+// declared once for every backend in `crate::uniforms`; what is left here is
+// what only this backend binds. Their layouts are checked by `shader_layout` in
+// concinnity-device, which reads the expected offsets out of slangc's
+// reflection per target. The hand-written asserts below are for the families
+// whose shaders are still per backend -- the cull kernel, the skinning and
+// morph kernels, the raymarch SDF templates, the legacy per-draw main and
+// velocity passes, and Metal's water / glass_mesh_rt.
 
 // Per-draw-call model matrix pushed at buffer(2) before each draw.
 #[derive(Copy, Clone)]
@@ -161,15 +75,6 @@ pub struct CullUniforms {
     pub _pad_skin: u32,
 }
 
-// Uniforms pushed to the TAA resolve fragment shader at buffer(0). Layout must
-// match `TaaParams` in `shaders/taa.slang`. 4 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct TaaUniforms {
-    // 0 on the first frame / after a resize, 1.0 otherwise.
-    pub history_valid: f32,
-}
-
 // Per-frame uniforms for the TAA velocity pre-pass at buffer(0). Layout must
 // match `VelUniforms` in `pipeline.rs`'s velocity MSL.
 #[derive(Copy, Clone)]
@@ -183,130 +88,6 @@ pub struct VelocityUniforms {
     pub cur_vp: [[f32; 4]; 4],
     // Un-jittered previous-frame view-projection.
     pub prev_vp: [[f32; 4]; 4],
-}
-
-// Per-object model matrices for the velocity / G-buffer pre-pass at buffer(2).
-// Layout must match `VelModel` (velocity MSL) and `GbModel`
-// (`shaders/gbuffer_prepass.metal`). For a static or skinned object with no
-// motion the caller sets `prev == cur`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct VelocityModelUniforms {
-    pub cur_model: [[f32; 4]; 4],
-    pub prev_model: [[f32; 4]; 4],
-}
-
-// Per-frame view inputs to the unified G-buffer pre-pass at buffer(0). The
-// jittered current VP drives the rasterised position (matching the main pass);
-// `view` takes the normal + position into view space (where SSR/SSAO/SSGI/RT
-// work); the un-jittered cur/prev VPs derive a jitter-free motion vector.
-// Layout must match `GBufferView` in `shaders/gbuffer_prepass.metal`. 256 bytes
-// (four float4x4, all naturally 16-aligned, no padding).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct GBufferView {
-    pub jittered_vp: [[f32; 4]; 4],
-    pub cur_vp: [[f32; 4]; 4],
-    pub prev_vp: [[f32; 4]; 4],
-    pub view: [[f32; 4]; 4],
-}
-
-// Inputs to the auto-exposure compute kernels at buffer(1) (build) and
-// buffer(2) (average). Layout must match the `AutoExposureParams` struct in
-// `shaders/auto_exposure.metal`. 16 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct AutoExposureParams {
-    // Lowest log2(luminance) the histogram covers.
-    pub lum_log2_min: f32,
-    // Width of the log2(luminance) span the histogram covers (max - min).
-    pub lum_log2_range: f32,
-    // `HISTOGRAM_BINS / lum_log2_range`. The build kernel multiplies the
-    // centred log-luminance by this to derive a bin index.
-    pub lum_to_bin_scale: f32,
-    pub _pad: f32,
-}
-
-// Per-frame view inputs to the projected-decal pass. Layout must match the
-// `DecalView` struct in `shaders/decal.slang`. 144 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct DecalView {
-    // View-projection matrix used by the main pass (jittered when TAA is on).
-    pub vp: [[f32; 4]; 4],
-    // Inverse of `vp`. The fragment shader uses it to reconstruct world space
-    // from the MSAA depth attachment at each pixel.
-    pub inv_vp: [[f32; 4]; 4],
-    // HDR target dimensions in pixels: drives the screen→NDC conversion.
-    pub viewport: [f32; 2],
-    pub _pad: [f32; 2],
-}
-
-// Per-frame view inputs to the line pass. Layout must match the
-// `LineView` struct in `shaders/line.slang`. 80 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct LineView {
-    // View-projection matrix used by the main pass (jittered when TAA is on),
-    // so a line lands on the same pixel the geometry it sits on did.
-    pub vp: [[f32; 4]; 4],
-    // Alpha multiplier applied where a line falls behind scene geometry.
-    pub occluded_alpha: f32,
-    pub _pad: [f32; 3],
-}
-
-// Per-decal uniforms pushed before each draw. Layout must match the
-// `DecalParams` struct in `shaders/decal.slang`. 160 bytes (two
-// float4x4s + a float4 tint + four scalars).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct DecalParams {
-    pub model: [[f32; 4]; 4],
-    pub inv_model: [[f32; 4]; 4],
-    pub tint: [f32; 4],
-    pub fade_pow: f32,
-    pub _pad0: f32,
-    pub _pad1: f32,
-    pub _pad2: f32,
-}
-
-// Per-frame view inputs to the particle render pass. Layout must match the
-// `ParticleView` struct in `shaders/particle.slang`. 96 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ParticleView {
-    // View-projection matrix used by the main pass.
-    pub vp: [[f32; 4]; 4],
-    // World-space camera right vector: drives the first billboard axis.
-    // Packed as `packed_float3` in MSL, so the trailing float of the float4
-    // is unused padding.
-    pub cam_right: [f32; 3],
-    pub _pad0: f32,
-    // World-space camera up vector: drives the second billboard axis.
-    pub cam_up: [f32; 3],
-    pub _pad1: f32,
-}
-
-// Per-frame view inputs shared by every draw in the transparent pass (water,
-// glass, ...). Bound once at vertex + fragment buffer(5). Layout matches the
-// `TransparentView` MSL struct in the transparent shaders. 160 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct TransparentView {
-    pub vp: [[f32; 4]; 4],
-    pub inv_vp: [[f32; 4]; 4],
-    // World-space camera position (xyz). `.w` is ignored by the shader.
-    pub camera_pos: [f32; 4],
-    // Render-target width / height in pixels: the shader uses this to
-    // turn its fragment position into a normalised screen UV.
-    pub viewport: [f32; 2],
-    // Wall-clock seconds since startup, fed to the Gerstner sum.
-    pub time: f32,
-    // Mip count of the bound IBL prefilter cube; 0 signals "no environment map",
-    // where the glass reflection falls back to a white rim. Per-frame state, so
-    // it rides the shared view rather than a per-draw params block (which is
-    // what Vulkan and DirectX have always done).
-    pub prefilter_mip_count: f32,
 }
 
 // One Gerstner wave coefficient set, packed for MSL float4 alignment.
@@ -359,33 +140,6 @@ pub struct WaterParams {
     pub planar: [f32; 4],
 }
 
-// Per-panel tunables for a `GlassPanel`, uploaded once per panel per frame at
-// vertex + fragment buffer(6). Vec3-ish fields are `[f32; 4]` so the layout is
-// byte-identical to MSL `float4`. Matches `GlassParams` in
-// `shaders/glass.slang`. 64 bytes.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct GlassParams {
-    // `[x, y, z, _]`: world-space panel centre.
-    pub centre: [f32; 4],
-    // `[nx, ny, nz, _]`: unit panel normal (facing direction).
-    pub normal: [f32; 4],
-    // `[r, g, b, _]`: colour multiplied into the refracted scene.
-    pub tint: [f32; 4],
-    // Base alpha at normal incidence.
-    pub opacity: f32,
-    // Screen-space refraction offset strength.
-    pub refraction_strength: f32,
-    // Schlick-Fresnel exponent for the grazing-angle rim.
-    pub fresnel_power: f32,
-    // Planar reflection strength: `> 0.5` selects the sharp planar reflection
-    // (the scene re-rendered mirrored across this pane's plane, sampled
-    // projectively at screen UV) over the probe / sky cube. 0 when planar is off
-    // (RT on, no planar slot, or the plane overflowed the budget), keeping the
-    // probe / sky path. Patched per-frame in `collect_glass_transparent_draws`.
-    pub planar: f32,
-}
-
 // Per-draw tunables for a transparent glass MESH (an imported `Material` with
 // `transparent: true` on an RT-capable device), uploaded at vertex + fragment
 // buffer(6). Unlike `GlassParams` (a pre-baked world-space pane), a mesh is
@@ -408,28 +162,6 @@ pub struct GlassMeshParams {
     pub fresnel_power: f32,
     // Mip count of the bound IBL prefilter cube (ray-miss fallback); 0 = none.
     pub prefilter_mip_count: f32,
-}
-
-// Per-dispatch params pushed inline at the Hi-Z build kernels' buffer(0). Must
-// match the `HizParams` struct in `shaders/hiz_build.metal`. 16 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct HizParams {
-    pub dst_width: u32,
-    pub dst_height: u32,
-    pub src_mip: u32,
-    pub sample_count: u32,
-}
-
-// One particle slot on the GPU. Layout must match the `Particle` MSL struct in
-// `shaders/particle_types.slang` (32 bytes per slot: two float3 + float pairs).
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct GpuParticle {
-    pub position: [f32; 3],
-    pub age: f32,
-    pub velocity: [f32; 3],
-    pub lifetime: f32,
 }
 
 // Per-frame view inputs the raymarch pass binds at buffer(0). Layout matches
@@ -524,64 +256,6 @@ mod tests {
     use std::mem::{offset_of, size_of};
 
     #[test]
-    fn view_uniforms_layout_matches_msl() {
-        // MSL `ViewUniforms` in main.metal: two float4x4, elapsed +
-        // reflections_enabled scalars, packed_float3 cam_pos +
-        // prefilter_mip_count + shade_mode. MSL rounds the struct up to a
-        // float4x4 multiple (160): `_end_pad` matches.
-        assert_eq!(size_of::<ViewUniforms>(), 160);
-        assert_eq!(offset_of!(ViewUniforms, vp), 0);
-        assert_eq!(offset_of!(ViewUniforms, view), 64);
-        assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
-        assert_eq!(offset_of!(ViewUniforms, reflections_enabled), 132);
-        assert_eq!(offset_of!(ViewUniforms, cam_pos), 136);
-        assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
-        assert_eq!(offset_of!(ViewUniforms, _end_pad), 156);
-        assert_eq!(size_of::<ViewUniforms>() % 16, 0);
-    }
-
-    #[test]
-    fn probe_uniforms_layout_matches_msl() {
-        // MSL `ProbeUniforms` in main.metal: three float4 (16-aligned each).
-        assert_eq!(size_of::<ProbeUniforms>(), 48);
-        assert_eq!(offset_of!(ProbeUniforms, box_min), 0);
-        assert_eq!(offset_of!(ProbeUniforms, box_max), 16);
-        assert_eq!(offset_of!(ProbeUniforms, probe_pos), 32);
-        assert_eq!(size_of::<ProbeUniforms>() % 16, 0);
-    }
-
-    #[test]
-    fn probe_set_layout_matches_msl() {
-        // MSL `ProbeSet { uint count; uint _pad0; uint _pad1; uint _pad2;
-        // ProbeUniforms probes[MAX_PROBES]; }` -- three SCALAR uints, so the header
-        // is 16 bytes and `probes` lands at offset 16 (struct 400). A `uint3 _pad`
-        // would be 16-byte aligned and push `probes` to offset 32 (struct 416),
-        // silently shifting every probe by one float4; the shaders carry a
-        // `static_assert(sizeof(ProbeSet) == 400)` so that can't recur.
-        assert_eq!(size_of::<ProbeSet>(), 16 + 48 * MAX_PROBES);
-        assert_eq!(offset_of!(ProbeSet, count), 0);
-        assert_eq!(offset_of!(ProbeSet, probes), 16);
-        assert_eq!(size_of::<ProbeSet>() % 16, 0);
-    }
-
-    #[test]
-    fn model_uniforms_layout_matches_msl() {
-        // MSL `ModelUniforms` in main.metal / shadow.metal: one float4x4.
-        assert_eq!(size_of::<ModelUniforms>(), 64);
-        assert_eq!(offset_of!(ModelUniforms, model), 0);
-    }
-
-    #[test]
-    fn ssr_prepass_mat_layout_matches_msl() {
-        // MSL `PpMat` in ssr_prepass.metal: a roughness float padded to 16
-        // bytes with plain floats (a float3 would bloat it to 32).
-        assert_eq!(size_of::<SsrPrepassMat>(), 16);
-        assert_eq!(offset_of!(SsrPrepassMat, roughness), 0);
-        assert_eq!(offset_of!(SsrPrepassMat, _pad), 4);
-    }
-
-    #[test]
     fn cull_uniforms_layout_matches_msl() {
         // MSL `CullUniforms` in cull.metal: float4 planes[6], packed_float3
         // cam_pos + object_count, then a float4x4 at the 16-aligned offset 112,
@@ -602,109 +276,12 @@ mod tests {
     }
 
     #[test]
-    fn taa_uniforms_layout_matches_slang() {
-        // `TaaParams` in shaders/taa.slang: one float.
-        assert_eq!(size_of::<TaaUniforms>(), 4);
-        assert_eq!(offset_of!(TaaUniforms, history_valid), 0);
-    }
-
-    #[test]
     fn velocity_uniforms_layout_matches_msl() {
         // MSL `VelUniforms` in velocity.metal: three float4x4.
         assert_eq!(size_of::<VelocityUniforms>(), 192);
         assert_eq!(offset_of!(VelocityUniforms, jittered_vp), 0);
         assert_eq!(offset_of!(VelocityUniforms, cur_vp), 64);
         assert_eq!(offset_of!(VelocityUniforms, prev_vp), 128);
-    }
-
-    #[test]
-    fn velocity_model_uniforms_layout_matches_msl() {
-        // MSL `VelModel` in velocity.metal / `GbModel` in gbuffer_prepass.metal:
-        // two float4x4.
-        assert_eq!(size_of::<VelocityModelUniforms>(), 128);
-        assert_eq!(offset_of!(VelocityModelUniforms, cur_model), 0);
-        assert_eq!(offset_of!(VelocityModelUniforms, prev_model), 64);
-    }
-
-    #[test]
-    fn gbuffer_view_layout_matches_msl() {
-        // MSL `GBufferView` in gbuffer_prepass.metal: four float4x4, all
-        // naturally 16-aligned, so the 256-byte layout matches with no padding.
-        assert_eq!(size_of::<GBufferView>(), 256);
-        assert_eq!(offset_of!(GBufferView, jittered_vp), 0);
-        assert_eq!(offset_of!(GBufferView, cur_vp), 64);
-        assert_eq!(offset_of!(GBufferView, prev_vp), 128);
-        assert_eq!(offset_of!(GBufferView, view), 192);
-        assert_eq!(size_of::<GBufferView>() % 16, 0);
-    }
-
-    #[test]
-    fn auto_exposure_params_layout_matches_msl() {
-        // MSL `AutoExposureParams` in auto_exposure.metal: four floats.
-        assert_eq!(size_of::<AutoExposureParams>(), 16);
-        assert_eq!(offset_of!(AutoExposureParams, lum_log2_min), 0);
-        assert_eq!(offset_of!(AutoExposureParams, lum_log2_range), 4);
-        assert_eq!(offset_of!(AutoExposureParams, lum_to_bin_scale), 8);
-        assert_eq!(offset_of!(AutoExposureParams, _pad), 12);
-    }
-
-    #[test]
-    fn decal_view_layout_matches_msl() {
-        // `DecalView` in decal.slang: two float4x4, a float2 + pad.
-        assert_eq!(size_of::<DecalView>(), 144);
-        assert_eq!(offset_of!(DecalView, vp), 0);
-        assert_eq!(offset_of!(DecalView, inv_vp), 64);
-        assert_eq!(offset_of!(DecalView, viewport), 128);
-        assert_eq!(offset_of!(DecalView, _pad), 136);
-    }
-
-    #[test]
-    fn decal_params_layout_matches_msl() {
-        // `DecalParams` in decal.slang: two float4x4, a float4 tint, then
-        // four scalars.
-        assert_eq!(size_of::<DecalParams>(), 160);
-        assert_eq!(offset_of!(DecalParams, model), 0);
-        assert_eq!(offset_of!(DecalParams, inv_model), 64);
-        assert_eq!(offset_of!(DecalParams, tint), 128);
-        assert_eq!(offset_of!(DecalParams, fade_pow), 144);
-        assert_eq!(offset_of!(DecalParams, _pad0), 148);
-        assert_eq!(offset_of!(DecalParams, _pad1), 152);
-        assert_eq!(offset_of!(DecalParams, _pad2), 156);
-    }
-
-    #[test]
-    fn line_view_layout_matches_msl() {
-        // `LineView` in line.slang: a float4x4 then four floats.
-        assert_eq!(size_of::<LineView>(), 80);
-        assert_eq!(offset_of!(LineView, vp), 0);
-        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
-        assert_eq!(offset_of!(LineView, _pad), 68);
-    }
-
-    #[test]
-    fn particle_view_layout_matches_msl() {
-        // `ParticleView` in particle.slang: float4x4 vp, two
-        // packed_float3 + pad billboard axes.
-        assert_eq!(size_of::<ParticleView>(), 96);
-        assert_eq!(offset_of!(ParticleView, vp), 0);
-        assert_eq!(offset_of!(ParticleView, cam_right), 64);
-        assert_eq!(offset_of!(ParticleView, _pad0), 76);
-        assert_eq!(offset_of!(ParticleView, cam_up), 80);
-        assert_eq!(offset_of!(ParticleView, _pad1), 92);
-    }
-
-    #[test]
-    fn transparent_view_layout_matches_msl() {
-        // `TransparentView` in glass.slang (and its MSL copy in water.metal,
-        // an identical layout): two float4x4, a float4 camera_pos, float2
-        // viewport, time + prefilter_mip_count.
-        assert_eq!(size_of::<TransparentView>(), 160);
-        assert_eq!(offset_of!(TransparentView, vp), 0);
-        assert_eq!(offset_of!(TransparentView, inv_vp), 64);
-        assert_eq!(offset_of!(TransparentView, camera_pos), 128);
-        assert_eq!(offset_of!(TransparentView, viewport), 144);
-        assert_eq!(offset_of!(TransparentView, time), 152);
-        assert_eq!(offset_of!(TransparentView, prefilter_mip_count), 156);
     }
 
     #[test]
@@ -738,22 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn glass_params_layout_matches_msl() {
-        // `GlassParams` in glass.slang: three float4, then four scalars
-        // (opacity, refraction_strength, fresnel_power, planar). The same 64-byte
-        // block the Vulkan and DirectX hosts have always bound.
-        assert_eq!(size_of::<GlassParams>(), 64);
-        assert_eq!(offset_of!(GlassParams, centre), 0);
-        assert_eq!(offset_of!(GlassParams, normal), 16);
-        assert_eq!(offset_of!(GlassParams, tint), 32);
-        assert_eq!(offset_of!(GlassParams, opacity), 48);
-        assert_eq!(offset_of!(GlassParams, refraction_strength), 52);
-        assert_eq!(offset_of!(GlassParams, fresnel_power), 56);
-        assert_eq!(offset_of!(GlassParams, planar), 60);
-        assert_eq!(size_of::<GlassParams>() % 16, 0);
-    }
-
-    #[test]
     fn glass_mesh_params_layout_matches_msl() {
         // MSL `GlassMeshParams` in glass_mesh_rt.metal: a float4x4 model, a float4
         // tint, then four scalars. model is first, so its 16-byte GPU alignment is
@@ -766,27 +327,6 @@ mod tests {
         assert_eq!(offset_of!(GlassMeshParams, fresnel_power), 88);
         assert_eq!(offset_of!(GlassMeshParams, prefilter_mip_count), 92);
         assert_eq!(size_of::<GlassMeshParams>() % 16, 0);
-    }
-
-    #[test]
-    fn hiz_params_layout_matches_msl() {
-        // MSL `HizParams` in hiz_build.metal: four tightly packed uints.
-        assert_eq!(size_of::<HizParams>(), 16);
-        assert_eq!(offset_of!(HizParams, dst_width), 0);
-        assert_eq!(offset_of!(HizParams, dst_height), 4);
-        assert_eq!(offset_of!(HizParams, src_mip), 8);
-        assert_eq!(offset_of!(HizParams, sample_count), 12);
-    }
-
-    #[test]
-    fn gpu_particle_layout_matches_msl() {
-        // Mirrors the `Particle` struct in `shaders/particle_types.slang`:
-        // packed_float3 + float, twice = 32 bytes, layout 0/12/16/28.
-        assert_eq!(size_of::<GpuParticle>(), 32);
-        assert_eq!(offset_of!(GpuParticle, position), 0);
-        assert_eq!(offset_of!(GpuParticle, age), 12);
-        assert_eq!(offset_of!(GpuParticle, velocity), 16);
-        assert_eq!(offset_of!(GpuParticle, lifetime), 28);
     }
 
     #[test]

@@ -419,18 +419,16 @@ impl DxContext {
             );
             let view = ViewUniforms {
                 vp: m.view_proj,
-                view_mat: m.view,
+                view: m.view,
                 elapsed: params.elapsed,
                 // No reflection resolve runs over the planar mirror render, so
                 // the forward probe specular is its only reflection source.
                 reflections_enabled: 0.0,
-                cam_x: m.eye[0],
-                cam_y: m.eye[1],
-                cam_z: m.eye[2],
+                cam_pos: [m.eye[0], m.eye[1], m.eye[2]],
                 prefilter_mip_count,
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _ep1: 0.0,
+                _end_pad: 0.0,
             };
             let ring = slot * FRAMES + params.frame_idx;
             // SAFETY: `ring < planes.len() * FRAMES`; the CBV is 256 bytes and

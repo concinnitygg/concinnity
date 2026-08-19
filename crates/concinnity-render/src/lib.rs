@@ -67,6 +67,11 @@ pub mod sprite;
 pub mod streaming;
 pub mod text;
 pub mod transparent;
+
+// The `#[repr(C)]` blocks the CPU uploads into the single-source `.slang`
+// shaders, declared once for every backend (see `uniforms/mod.rs`).
+pub mod uniforms;
+
 pub mod volumetric_fog;
 
 // GPU-free host-side layout contract for the Metal backend's shader structs

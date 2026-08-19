@@ -572,7 +572,10 @@ mod tests {
             SLANG_METAL_POOL_SIZE,
             super::super::context::BINDLESS_TEXTURE_COUNT
         );
-        assert_eq!(SLANG_METAL_MAX_PROBES, super::super::uniforms::MAX_PROBES);
+        assert_eq!(
+            SLANG_METAL_MAX_PROBES,
+            concinnity_render::uniforms::MAX_PROBES
+        );
         let want_pool = SLANG_METAL_POOL_SIZE.to_string();
         let want_probes = SLANG_METAL_MAX_PROBES.to_string();
         for lib in ALL {

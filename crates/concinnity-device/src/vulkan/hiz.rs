@@ -56,7 +56,8 @@ const HIZ_TILE: u32 = 8;
 // std140 UBO) are GPU-free layout structs that live in concinnity-render;
 // re-export them so `crate::vulkan::hiz::{HizParams,CullHizParams}` are
 // unchanged for the passes that fill them.
-pub(in crate::vulkan) use crate::vulkan::uniforms::{CullHizParams, HizParams};
+pub(in crate::vulkan) use crate::vulkan::uniforms::CullHizParams;
+use concinnity_render::uniforms::HizParams;
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-of-
 // two sources end exactly at 1x1; non-power-of-two sources stop one mip short

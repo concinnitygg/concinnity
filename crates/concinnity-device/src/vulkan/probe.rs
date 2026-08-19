@@ -30,7 +30,6 @@ use super::cull::CullParams;
 use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
 use super::draw::ViewUniforms;
 use super::hiz::CullHizParams;
-use super::probe_uniforms::{MAX_PROBES, ProbeSet, ProbeUniforms};
 use super::resources::alloc_descriptor_sets;
 use super::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, upload_probe_prefilter_cube,
@@ -38,6 +37,9 @@ use super::texture::{
 use crate::gfx::frustum::Frustum;
 use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase, ProbePlacement};
+use concinnity_render::uniforms::MAX_PROBES;
+use concinnity_render::uniforms::ProbeSet;
+use concinnity_render::uniforms::ProbeUniforms;
 
 // Captured cube-face resolution (mip 0 of the prefilter chain). Matches the
 // `EnvironmentMap` asset default + the DirectX / Metal `PROBE_FACE_SIZE`.
@@ -360,16 +362,14 @@ impl VkContext {
             let view_mat = reflection_probe::face_view_matrix(eye, face);
             let view = ViewUniforms {
                 vp,
-                view_mat,
+                view: view_mat,
                 elapsed: 0.0,
                 reflections_enabled: 0.0,
-                cam_x: eye[0],
-                cam_y: eye[1],
-                cam_z: eye[2],
+                cam_pos: [eye[0], eye[1], eye[2]],
                 prefilter_mip_count,
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _ep1: 0.0,
+                _end_pad: 0.0,
             };
             // SAFETY: each view UBO was sized for one ViewUniforms.
             unsafe {

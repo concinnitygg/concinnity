@@ -3,6 +3,12 @@
 // Canonical vertex type and the binary serialisation format shared between
 // the build step (build_mesh.rs writes) and GraphicsSystem (reads).
 //
+// The layout asserts below stay hand-written. A vertex payload reaches a shader
+// through a vertex descriptor or a raw pointer, never as a declared buffer
+// block, so slangc's reflection reports it as an attribute index with no byte
+// offset -- the reflection-driven check in concinnity-device's `shader_layout`
+// has nothing to compare against here.
+//
 // Format (little-endian):
 //   u32  vertex_count
 //   vertex_count * 56 bytes   float3 pos + float3 normal + float3 tangent + float3 color + float2 uv (14 x f32)

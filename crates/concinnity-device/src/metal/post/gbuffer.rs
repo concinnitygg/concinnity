@@ -23,7 +23,9 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::metal::context::MtlContext;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders::{self, SlangLib};
-use crate::metal::uniforms::{GBufferView, SsrPrepassMat, VelocityModelUniforms};
+use crate::metal::uniforms::SsrPrepassMat;
+use concinnity_render::uniforms::GBufferModel;
+use concinnity_render::uniforms::GBufferView;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
 // targets (normal+depth / roughness / velocity / sampleable depth) plus the
@@ -373,7 +375,7 @@ impl MtlContext {
         // Static geometry: model (cur + prev for motion) at vertex(2), roughness
         // at fragment(0). prev_model collapses to cur when velocity is inactive.
         let mut draws = self.draw_static_objects(&enc, visible, cam_pos, |enc, obj, idx| {
-            let model = VelocityModelUniforms {
+            let model = GBufferModel {
                 cur_model: obj.model,
                 prev_model: if velocity_active {
                     self.prev_draw_models[idx]
@@ -388,7 +390,7 @@ impl MtlContext {
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model).cast(),
-                    std::mem::size_of::<VelocityModelUniforms>(),
+                    std::mem::size_of::<GBufferModel>(),
                     2,
                 );
                 enc.setFragmentBytes_length_atIndex(
@@ -436,7 +438,7 @@ impl MtlContext {
                 enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
             }
             draws += self.draw_skinned_objects(&enc, sib, cam_pos, |enc, obj, i| {
-                let model = VelocityModelUniforms {
+                let model = GBufferModel {
                     cur_model: obj.model,
                     prev_model: obj.model,
                 };
@@ -448,7 +450,7 @@ impl MtlContext {
                 unsafe {
                     enc.setVertexBytes_length_atIndex(
                         std::ptr::NonNull::from(&model).cast(),
-                        std::mem::size_of::<VelocityModelUniforms>(),
+                        std::mem::size_of::<GBufferModel>(),
                         2,
                     );
                     enc.setFragmentBytes_length_atIndex(

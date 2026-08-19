@@ -128,7 +128,7 @@ impl MtlContext {
             // the foreign sky HDR (the source the forward IBL specular term uses).
             // probe_cube_or_sky returns the sky for unbaked slots, so binding all
             // MAX_PROBES is always valid; the ProbeSet's count gates use.
-            for i in 0..crate::metal::uniforms::MAX_PROBES {
+            for i in 0..concinnity_render::uniforms::MAX_PROBES {
                 enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 4 + i);
             }
             // The screen sources take the post sampler at 0..2; the prefilter
@@ -141,7 +141,7 @@ impl MtlContext {
                 &enc,
                 self.cube_sampler.as_ref(),
                 3,
-                1 + crate::metal::uniforms::MAX_PROBES,
+                1 + concinnity_render::uniforms::MAX_PROBES,
             );
             set_fragment_sampler_range(&enc, self.sampler.as_ref(), RT_POOL_SAMPLER_INDEX, 1);
             // buffer(0) params; buffers 1..3 the shared geometry the kernel
@@ -167,7 +167,7 @@ impl MtlContext {
             // texture pool, bound only on the textured path below.)
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&self.probe_set).cast(),
-                std::mem::size_of::<crate::metal::uniforms::ProbeSet>(),
+                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
                 8,
             );
             // Textured path: bind the bindless albedo pool at buffer(7) (the

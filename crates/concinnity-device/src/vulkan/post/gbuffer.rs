@@ -24,7 +24,9 @@
 
 use ash::{Device, vk};
 
-use crate::vulkan::uniforms::{GBUFFER_PREPASS_PUSH_BYTES, GbModelPush, GbViewUniforms};
+use crate::vulkan::uniforms::GBUFFER_PREPASS_PUSH_BYTES;
+use crate::vulkan::uniforms::GbModelPush;
+use concinnity_render::uniforms::GBufferView;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -50,7 +52,7 @@ pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R1
 // (four std140 mat4 = 256 B). Matches the `GbView` UBO in every pre-pass VS.
 pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
 
-// `GbViewUniforms` (the std140 `GbView` UBO) and `GbModelPush` (the pre-pass
+// `GBufferView` (the std140 `GbView` UBO) and `GbModelPush` (the pre-pass
 // push constant), plus its `GBUFFER_PREPASS_PUSH_BYTES` size, are GPU-free
 // layout structs that live in concinnity-render (imported above).
 
@@ -1271,17 +1273,17 @@ impl VkContext {
         } else {
             cur_vp
         };
-        let view_uni = GbViewUniforms {
+        let view_uni = GBufferView {
             jittered_vp,
             cur_vp,
             prev_vp,
-            view_mat: self.view_matrix,
+            view: self.view_matrix,
         };
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const GbViewUniforms as *const u8,
+                &view_uni as *const GBufferView as *const u8,
                 gb.view_ubo_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<GbViewUniforms>(),
+                std::mem::size_of::<GBufferView>(),
             );
         }
 
@@ -1915,13 +1917,13 @@ impl VkContext {
 mod tests {
     use super::*;
 
-    // The `GbViewUniforms` / `GbModelPush` layout tests live with the structs in
-    // `concinnity_render::vulkan::uniforms`. `GbViewUniforms` fitting the
+    // The `GBufferView` / `GbModelPush` layout tests live with the structs in
+    // `concinnity_render::vulkan::uniforms`. `GBufferView` fitting the
     // `GBUFFER_VIEW_UBO_SIZE` allocation is checked here, where the size const
     // (typed `vk::DeviceSize`) lives.
     #[test]
     fn gb_view_uniforms_fits_ubo_allocation() {
-        assert!(std::mem::size_of::<GbViewUniforms>() as u64 <= GBUFFER_VIEW_UBO_SIZE);
+        assert!(std::mem::size_of::<GBufferView>() as u64 <= GBUFFER_VIEW_UBO_SIZE);
     }
 
     // Every G-buffer pre-pass GLSL (static + instanced + skinned vertex shaders

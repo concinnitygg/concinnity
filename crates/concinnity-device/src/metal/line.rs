@@ -81,7 +81,7 @@ impl MtlContext {
         if vertices.is_empty() {
             return Ok(0);
         }
-        let view = super::uniforms::LineView {
+        let view = concinnity_render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
             _pad: [0.0; 3],
@@ -117,12 +117,12 @@ impl MtlContext {
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<super::uniforms::LineView>(),
+                std::mem::size_of::<concinnity_render::uniforms::LineView>(),
                 0,
             );
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<super::uniforms::LineView>(),
+                std::mem::size_of::<concinnity_render::uniforms::LineView>(),
                 0,
             );
             enc.setVertexBuffer_offset_atIndex(Some(&vbuf), 0, VERTEX_BUFFER_INDEX);

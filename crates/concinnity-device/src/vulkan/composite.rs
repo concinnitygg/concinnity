@@ -14,7 +14,7 @@
 use ash::vk;
 
 use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
-use crate::vulkan::uniforms::TextPush;
+use concinnity_core::gfx::render_types::TextUniforms;
 
 use super::context::VkContext;
 
@@ -161,11 +161,10 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             None => vk::Rect2D::default().extent(extent),
         };
 
-        let text_push = TextPush {
+        let text_push = TextUniforms {
             win_width: ui.0,
             win_height: ui.1,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            _pad: [0.0; 2],
         };
         let atlas_idx = call
             .atlas_slot
@@ -218,8 +217,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 std::slice::from_raw_parts(
-                    &text_push as *const TextPush as *const u8,
-                    std::mem::size_of::<TextPush>(),
+                    &text_push as *const TextUniforms as *const u8,
+                    std::mem::size_of::<TextUniforms>(),
                 ),
             );
             device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&scissor));

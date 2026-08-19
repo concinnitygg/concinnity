@@ -187,7 +187,7 @@ pub struct PointLightData {
 // One local light in the per-scene storage buffer the forward pass iterates
 // (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
 // packed_float3 sits inside one lane with no GPU alignment promotion. Must match
-// the GpuLight struct in every .metal / .hlsl / .glsl shader.
+// the `GpuLight` struct in the single-source shaders.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuLight {
@@ -303,8 +303,8 @@ impl LightUniforms {
 // froxel kernel), then tests each GpuLight sphere against it. The forward pass
 // reads the grid dims + depth range + screen size to map a fragment to its
 // cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
-// 16-byte lanes. Must match the ClusterParams struct in the .metal / .hlsl /
-// .glsl light-cull and forward shaders.
+// 16-byte lanes. Must match the `ClusterParams` struct in the light-cull and
+// forward shaders.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct ClusterParams {
@@ -359,7 +359,9 @@ impl ClusterParams {
 // Pushed to the shadow-pass vertex shader at buffer(0) (alongside a
 // cascade_idx push constant that picks one matrix) and to the main-pass
 // fragment shader at buffer(5). Layout must stay in sync with the
-// `ShadowUniforms` struct in every .metal / .hlsl / .glsl shader.
+// `ShadowUniforms` struct in the single-source shaders. Three of them declare
+// it: the forward pass stops at `active_cascades`, the shadow pass at
+// `cascade_splits`, and only the fog froxel kernel spells out the trailing pad.
 //
 // `cascade_splits` are the view-space depth thresholds (positive) marking the
 // FAR end of each cascade. The fragment shader picks the first cascade whose
@@ -1054,9 +1056,11 @@ impl DrawObject {
 // Layout (176 bytes) must stay in sync with the shader-side record, declared
 // once per language in concinnity-device: `vulkan/shaders/object_common.glsl`,
 // `directx/shaders/object_common.hlsl` and `metal/shaders/object_common.msl`,
-// each spliced into its backend's passes at an `{OBJECT_DATA}` marker. The
-// `gpu_object_data_*` layout test below pins the offsets all three rely on, and
-// `object_data_layout` in concinnity-device pins the fragments to them.
+// each spliced into its backend's passes at an `{OBJECT_DATA}` marker, plus
+// `shaders/object_common.slang` for the single-source passes.
+// `object_data_layout` in concinnity-device pins the three hand-written
+// fragments to each other, and `shader_layout` there pins this struct against
+// slangc's reflection of the fourth.
 //
 // `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
 // are indices into each backend's single handle-indexed texture pool: albedo,
@@ -1608,60 +1612,7 @@ impl SkinnedDrawObject {
 mod tests {
     use super::*;
     use crate::test_support::draw_object;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn gpu_object_data_layout_matches_msl() {
-        // The MSL `GpuObjectData` in main.metal lays the struct out with
-        // float4x4's 16-byte alignment; the offsets below must match it
-        // exactly or the bindless static pass reads garbage.
-        assert_eq!(size_of::<GpuObjectData>(), 176);
-        assert_eq!(offset_of!(GpuObjectData, model), 0);
-        assert_eq!(offset_of!(GpuObjectData, tint), 64);
-        assert_eq!(offset_of!(GpuObjectData, roughness), 76);
-        assert_eq!(offset_of!(GpuObjectData, emissive), 80);
-        assert_eq!(offset_of!(GpuObjectData, metallic), 92);
-        assert_eq!(offset_of!(GpuObjectData, albedo_index), 96);
-        assert_eq!(offset_of!(GpuObjectData, normal_index), 100);
-        assert_eq!(offset_of!(GpuObjectData, macro_variation), 104);
-        assert_eq!(offset_of!(GpuObjectData, terrain_blend), 108);
-        assert_eq!(offset_of!(GpuObjectData, bb_min), 112);
-        assert_eq!(offset_of!(GpuObjectData, cull_distance), 124);
-        assert_eq!(offset_of!(GpuObjectData, bb_max), 128);
-        assert_eq!(offset_of!(GpuObjectData, secondary_blend_sharpness), 140);
-        assert_eq!(offset_of!(GpuObjectData, albedo_secondary_index), 144);
-        assert_eq!(offset_of!(GpuObjectData, normal_secondary_index), 148);
-        assert_eq!(offset_of!(GpuObjectData, emissive_map_index), 152);
-        assert_eq!(offset_of!(GpuObjectData, orm_map_index), 156);
-        assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 160);
-        assert_eq!(offset_of!(GpuObjectData, _pad), 164);
-        // Size is a multiple of 16 so an array of records keeps every
-        // float4x4 model matrix 16-byte aligned.
-        assert_eq!(size_of::<GpuObjectData>() % 16, 0);
-        assert_eq!(align_of::<f32>(), 4);
-    }
-
-    #[test]
-    fn rt_geom_entry_layout_matches_msl() {
-        // The `RtGeomEntry` in rt_types.slang must match this exactly,
-        // which requires `tint` and `emissive` to be `packed_float3` there (NOT
-        // `float3`). A `float3` would 16-byte-align `tint`, pushing `roughness`
-        // to 32 and `model` to 64. `model` at offset 48 is already 16-aligned, so
-        // the float4x4 needs no padding; the `_pad` tail then rounds the struct
-        // to 128 bytes so the shader's matrix-bearing struct (which the GPU rounds
-        // up to a 16-byte multiple) strides identically to the Rust side.
-        assert_eq!(size_of::<RtGeomEntry>(), 128);
-        assert_eq!(offset_of!(RtGeomEntry, index_offset), 0);
-        assert_eq!(offset_of!(RtGeomEntry, base_vertex), 4);
-        assert_eq!(offset_of!(RtGeomEntry, albedo_index), 8);
-        assert_eq!(offset_of!(RtGeomEntry, normal_index), 12);
-        assert_eq!(offset_of!(RtGeomEntry, tint), 16);
-        assert_eq!(offset_of!(RtGeomEntry, roughness), 28);
-        assert_eq!(offset_of!(RtGeomEntry, metallic), 32);
-        assert_eq!(offset_of!(RtGeomEntry, emissive), 36);
-        assert_eq!(offset_of!(RtGeomEntry, model), 48);
-        assert_eq!(offset_of!(RtGeomEntry, emissive_map_index), 112);
-    }
+    use core::mem::{offset_of, size_of};
 
     #[test]
     fn material_uniforms_layout_matches_msl() {
@@ -1689,138 +1640,6 @@ mod tests {
     }
 
     #[test]
-    fn directional_light_data_layout_matches_msl() {
-        // MSL `DirectionalLightData` uses packed_float3 for `direction` and
-        // `color` so the 32-byte stride matches; a plain float3 would read the
-        // colour channel as zeros (see the comment in main.metal).
-        assert_eq!(size_of::<DirectionalLightData>(), 32);
-        assert_eq!(offset_of!(DirectionalLightData, direction), 0);
-        assert_eq!(offset_of!(DirectionalLightData, intensity), 12);
-        assert_eq!(offset_of!(DirectionalLightData, color), 16);
-        assert_eq!(offset_of!(DirectionalLightData, _pad), 28);
-    }
-
-    #[test]
-    fn point_light_data_layout_matches_msl() {
-        // MSL `PointLightData` uses packed_float3 for `position` and `color`.
-        assert_eq!(size_of::<PointLightData>(), 32);
-        assert_eq!(offset_of!(PointLightData, position), 0);
-        assert_eq!(offset_of!(PointLightData, range), 12);
-        assert_eq!(offset_of!(PointLightData, color), 16);
-        assert_eq!(offset_of!(PointLightData, intensity), 28);
-    }
-
-    #[test]
-    fn light_uniforms_layout_matches_msl() {
-        // MSL `LightUniforms` in main.metal (and `RaymarchLights` in
-        // raymarch_helpers.metal, which is bound from this same Rust struct):
-        // DirectionalLightData[4] then PointLightData[8] then two ints, then
-        // ambient_intensity + num_local_lights in the trailing 16-byte block.
-        // The raymarch struct declares the last word as a float pad it never
-        // reads; both occupy the same 4 bytes at offset 396.
-        assert_eq!(size_of::<LightUniforms>(), 400);
-        assert_eq!(offset_of!(LightUniforms, directional), 0);
-        assert_eq!(offset_of!(LightUniforms, point), 128);
-        assert_eq!(offset_of!(LightUniforms, num_directional), 384);
-        assert_eq!(offset_of!(LightUniforms, num_point), 388);
-        assert_eq!(offset_of!(LightUniforms, ambient_intensity), 392);
-        assert_eq!(offset_of!(LightUniforms, num_local_lights), 396);
-    }
-
-    #[test]
-    fn gpu_light_layout_matches_msl() {
-        // MSL `GpuLight` in main.metal uses packed_float3 for `position`,
-        // `color`, and `direction` so the 64-byte stride matches; a plain float3
-        // would promote to a 16-byte lane and shift every following field.
-        assert_eq!(size_of::<GpuLight>(), 64);
-        assert_eq!(offset_of!(GpuLight, position), 0);
-        assert_eq!(offset_of!(GpuLight, range), 12);
-        assert_eq!(offset_of!(GpuLight, color), 16);
-        assert_eq!(offset_of!(GpuLight, intensity), 28);
-        assert_eq!(offset_of!(GpuLight, direction), 32);
-        assert_eq!(offset_of!(GpuLight, kind), 44);
-        assert_eq!(offset_of!(GpuLight, cos_inner), 48);
-        assert_eq!(offset_of!(GpuLight, cos_outer), 52);
-        assert_eq!(offset_of!(GpuLight, shadow_index), 56);
-        assert_eq!(offset_of!(GpuLight, data_index), 60);
-    }
-
-    #[test]
-    fn cluster_params_layout_matches_msl() {
-        // MSL `ClusterParams` in the light-cull + forward shaders: a float4x4
-        // (16-aligned, 64 B) then packed_float3 cam_pos + z_near and packed_float3
-        // view_forward + z_far filling two 16-byte lanes, then the grid / count /
-        // screen scalars. packed_float3 keeps cam_pos / view_forward at the packed
-        // offsets; a plain float3 would promote to a 16-byte lane and shift them.
-        assert_eq!(size_of::<ClusterParams>(), 128);
-        assert_eq!(offset_of!(ClusterParams, inv_view_proj), 0);
-        assert_eq!(offset_of!(ClusterParams, cam_pos), 64);
-        assert_eq!(offset_of!(ClusterParams, z_near), 76);
-        assert_eq!(offset_of!(ClusterParams, view_forward), 80);
-        assert_eq!(offset_of!(ClusterParams, z_far), 92);
-        assert_eq!(offset_of!(ClusterParams, grid_x), 96);
-        assert_eq!(offset_of!(ClusterParams, grid_y), 100);
-        assert_eq!(offset_of!(ClusterParams, grid_z), 104);
-        assert_eq!(offset_of!(ClusterParams, num_lights), 108);
-        assert_eq!(offset_of!(ClusterParams, screen_w), 112);
-        assert_eq!(offset_of!(ClusterParams, screen_h), 116);
-        assert_eq!(offset_of!(ClusterParams, use_clusters), 120);
-        assert_eq!(offset_of!(ClusterParams, _pad), 124);
-        assert_eq!(size_of::<ClusterParams>() % 16, 0);
-    }
-
-    #[test]
-    fn area_light_data_layout_matches_msl() {
-        // MSL `AreaLightData` in main.metal: packed_float3 right + two_sided
-        // filling one 16-byte lane, then packed_float3 up + pad filling the next.
-        assert_eq!(size_of::<AreaLightData>(), 32);
-        assert_eq!(offset_of!(AreaLightData, right), 0);
-        assert_eq!(offset_of!(AreaLightData, two_sided), 12);
-        assert_eq!(offset_of!(AreaLightData, up), 16);
-        assert_eq!(offset_of!(AreaLightData, _pad), 28);
-        assert_eq!(size_of::<AreaLightData>() % 16, 0);
-    }
-
-    #[test]
-    fn spot_shadow_data_layout_matches_msl() {
-        // MSL `SpotShadowData` in main.metal: a float4x4 (16-aligned, 64 B)
-        // then three scalars sharing the fifth 16-byte lane. The Rust
-        // `[[f32; 4]; 4]` is only 4-aligned, so the trailing pad is what holds
-        // the struct at the 80 bytes MSL / HLSL / std430 all round to.
-        assert_eq!(size_of::<SpotShadowData>(), 80);
-        assert_eq!(offset_of!(SpotShadowData, light_vp), 0);
-        assert_eq!(offset_of!(SpotShadowData, depth_bias), 64);
-        assert_eq!(offset_of!(SpotShadowData, normal_bias), 68);
-        assert_eq!(offset_of!(SpotShadowData, _pad), 72);
-        assert_eq!(size_of::<SpotShadowData>() % 16, 0);
-    }
-
-    #[test]
-    fn shadow_uniforms_layout_matches_msl() {
-        // MSL `ShadowUniforms` in main.metal / shadow.metal (and
-        // `RaymarchShadowUniforms` in raymarch_helpers.metal, bound from this
-        // same struct): NUM_SHADOW_CASCADES float4x4s, then the splits, then the
-        // active-cascade count. The MSL declares the splits as `float4`
-        // (default/shadow) or `float[4]` (raymarch); both occupy the same 16
-        // bytes as the Rust `[f32; 4]`. `active_cascades` is a `uint` at offset
-        // 272; the struct rounds up to 288 for the 16-byte (float4x4) alignment.
-        assert_eq!(size_of::<ShadowUniforms>(), 288);
-        assert_eq!(offset_of!(ShadowUniforms, light_vps), 0);
-        assert_eq!(offset_of!(ShadowUniforms, cascade_splits), 256);
-        assert_eq!(offset_of!(ShadowUniforms, active_cascades), 272);
-        // 16-aligned size keeps the float4x4 array head aligned in MSL.
-        assert_eq!(size_of::<ShadowUniforms>() % 16, 0);
-    }
-
-    #[test]
-    fn shadow_pass_push_layout_matches_msl() {
-        // MSL `ShadowPassPush` in shadow.metal: a uint + three pad uints.
-        assert_eq!(size_of::<ShadowPassPush>(), 16);
-        assert_eq!(offset_of!(ShadowPassPush, cascade_idx), 0);
-        assert_eq!(offset_of!(ShadowPassPush, _pad), 4);
-    }
-
-    #[test]
     fn text_vertex_layout_matches_shaders() {
         // The text vertex buffer is consumed through a vertex descriptor whose
         // attributes sit at offsets 0 (pos), 8 (uv), 16 (color) with a 32-byte
@@ -1842,105 +1661,6 @@ mod tests {
         assert_eq!(offset_of!(LineVertex, pos), 0);
         assert_eq!(offset_of!(LineVertex, edge), 12);
         assert_eq!(offset_of!(LineVertex, color), 16);
-    }
-
-    #[test]
-    fn text_uniforms_layout_matches_shaders() {
-        // `TextUniforms` in `shaders/text.slang`: four floats.
-        assert_eq!(size_of::<TextUniforms>(), 16);
-        assert_eq!(offset_of!(TextUniforms, win_width), 0);
-        assert_eq!(offset_of!(TextUniforms, win_height), 4);
-        assert_eq!(offset_of!(TextUniforms, _pad), 8);
-    }
-
-    #[test]
-    fn post_process_params_layout_matches_msl() {
-        // MSL `PostUniforms` in post.metal / bloom.metal: nine floats.
-        assert_eq!(size_of::<PostProcessParams>(), 36);
-        assert_eq!(offset_of!(PostProcessParams, bloom_intensity), 0);
-        assert_eq!(offset_of!(PostProcessParams, bloom_threshold), 4);
-        assert_eq!(offset_of!(PostProcessParams, bloom_knee), 8);
-        assert_eq!(offset_of!(PostProcessParams, exposure), 12);
-        assert_eq!(offset_of!(PostProcessParams, vignette), 16);
-        assert_eq!(offset_of!(PostProcessParams, lut_strength), 20);
-        assert_eq!(offset_of!(PostProcessParams, hdr_output), 24);
-        assert_eq!(offset_of!(PostProcessParams, pq_output), 28);
-        assert_eq!(offset_of!(PostProcessParams, fxaa), 32);
-    }
-
-    #[test]
-    fn composite_params_layout_matches_msl() {
-        // MSL `CompositeUniforms` in post.metal: the nine `PostUniforms` floats
-        // followed by the fade, the channel-view selector, and the far plane.
-        assert_eq!(size_of::<CompositeParams>(), 48);
-        assert_eq!(offset_of!(CompositeParams, post), 0);
-        assert_eq!(offset_of!(CompositeParams, post.bloom_intensity), 0);
-        assert_eq!(offset_of!(CompositeParams, post.fxaa), 32);
-        assert_eq!(offset_of!(CompositeParams, fade), 36);
-        assert_eq!(offset_of!(CompositeParams, view_mode), 40);
-        assert_eq!(offset_of!(CompositeParams, far), 44);
-    }
-
-    #[test]
-    fn ssao_params_layout_matches_msl() {
-        // MSL `SsaoParams` in ssao.metal: four floats.
-        assert_eq!(size_of::<SsaoParams>(), 16);
-        assert_eq!(offset_of!(SsaoParams, radius), 0);
-        assert_eq!(offset_of!(SsaoParams, intensity), 4);
-        assert_eq!(offset_of!(SsaoParams, tan_half_fov_y), 8);
-        assert_eq!(offset_of!(SsaoParams, aspect), 12);
-    }
-
-    #[test]
-    fn ssr_params_layout_matches_msl() {
-        // MSL `SsrParams` in ssr.metal: eight scalars then a float4x4 at the
-        // already-16-aligned offset 32.
-        assert_eq!(size_of::<SsrParams>(), 96);
-        assert_eq!(offset_of!(SsrParams, intensity), 0);
-        assert_eq!(offset_of!(SsrParams, max_distance), 4);
-        assert_eq!(offset_of!(SsrParams, tan_half_fov_y), 8);
-        assert_eq!(offset_of!(SsrParams, aspect), 12);
-        assert_eq!(offset_of!(SsrParams, stride), 16);
-        assert_eq!(offset_of!(SsrParams, thickness), 20);
-        assert_eq!(offset_of!(SsrParams, prefilter_mip_count), 24);
-        assert_eq!(offset_of!(SsrParams, _pad), 28);
-        assert_eq!(offset_of!(SsrParams, inv_view), 32);
-    }
-
-    #[test]
-    fn ssgi_params_layout_matches_shaders() {
-        // Eight floats, byte-identical against the `SsgiParams` in
-        // ssgi.slang, which every backend compiles. The last two floats
-        // (`rays`, `steps`) sit where `_pad0`/`_pad1` used to and are read as
-        // loop bounds.
-        assert_eq!(size_of::<SsgiParams>(), 32);
-        assert_eq!(offset_of!(SsgiParams, intensity), 0);
-        assert_eq!(offset_of!(SsgiParams, max_distance), 4);
-        assert_eq!(offset_of!(SsgiParams, tan_half_fov_y), 8);
-        assert_eq!(offset_of!(SsgiParams, aspect), 12);
-        assert_eq!(offset_of!(SsgiParams, stride), 16);
-        assert_eq!(offset_of!(SsgiParams, thickness), 20);
-        assert_eq!(offset_of!(SsgiParams, rays), 24);
-        assert_eq!(offset_of!(SsgiParams, steps), 28);
-    }
-
-    #[test]
-    fn rt_params_layout_matches_msl() {
-        // `RtParams` in rt_types.slang: eight scalars, three float4s,
-        // then a float4x4. Every float4/float4x4 lands at a 16-aligned offset.
-        assert_eq!(size_of::<RtParams>(), 144);
-        assert_eq!(offset_of!(RtParams, intensity), 0);
-        assert_eq!(offset_of!(RtParams, max_distance), 4);
-        assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
-        assert_eq!(offset_of!(RtParams, aspect), 12);
-        assert_eq!(offset_of!(RtParams, prefilter_mip_count), 16);
-        assert_eq!(offset_of!(RtParams, _pad0), 20);
-        assert_eq!(offset_of!(RtParams, _pad1), 24);
-        assert_eq!(offset_of!(RtParams, _pad2), 28);
-        assert_eq!(offset_of!(RtParams, cam_pos), 32);
-        assert_eq!(offset_of!(RtParams, sun_dir), 48);
-        assert_eq!(offset_of!(RtParams, sun_color), 64);
-        assert_eq!(offset_of!(RtParams, inv_view), 80);
     }
 
     #[test]
@@ -2327,76 +2047,6 @@ mod tests {
         assert_eq!(offset_of!(GpuDrawArgs, index_offset), 4);
         assert_eq!(offset_of!(GpuDrawArgs, base_vertex), 8);
         assert_eq!(offset_of!(GpuDrawArgs, flags), 12);
-    }
-
-    #[test]
-    fn particle_params_layout_matches_shaders() {
-        // `ParticleParams` rides at buffer(2) of both Metal particle passes.
-        // Both halves splice it from `shaders/particle_types.slang`, which
-        // spells the three (vec3, scalar) pairs as float4 since MSL sizes a
-        // constant-buffer float3 at 16 bytes; these offsets pin the Rust side
-        // to that.
-        assert_eq!(size_of::<ParticleParams>(), 112);
-        assert_eq!(offset_of!(ParticleParams, position), 0);
-        assert_eq!(offset_of!(ParticleParams, spread_cos), 12);
-        assert_eq!(offset_of!(ParticleParams, direction), 16);
-        assert_eq!(offset_of!(ParticleParams, speed_min), 28);
-        assert_eq!(offset_of!(ParticleParams, gravity), 32);
-        assert_eq!(offset_of!(ParticleParams, speed_max), 44);
-        assert_eq!(offset_of!(ParticleParams, color_start), 48);
-        assert_eq!(offset_of!(ParticleParams, color_end), 64);
-        assert_eq!(offset_of!(ParticleParams, lifetime_min), 80);
-        assert_eq!(offset_of!(ParticleParams, lifetime_max), 84);
-        assert_eq!(offset_of!(ParticleParams, size_start), 88);
-        assert_eq!(offset_of!(ParticleParams, size_end), 92);
-        assert_eq!(offset_of!(ParticleParams, dt), 96);
-        assert_eq!(offset_of!(ParticleParams, spawn_budget), 100);
-        assert_eq!(offset_of!(ParticleParams, random_seed), 104);
-        assert_eq!(offset_of!(ParticleParams, max_particles), 108);
-        // Multiple of 16 so back-to-back records stay aligned.
-        assert_eq!(size_of::<ParticleParams>() % 16, 0);
-    }
-
-    #[test]
-    fn fog_params_layout_matches_msl() {
-        // `FogParams` rides at fragment buffer(0) of the volumetric-fog pass
-        // and at the froxel kernel's buffer(0). The single source
-        // (`shaders/fog.slang`) reads it as float4x4 + float4 + 3 float4 + 6
-        // scalars + a float2 + a scalar + padding: the three (vec3, pad) pairs
-        // are float4 because MSL sizes a constant-buffer float3 at 16 bytes.
-        assert_eq!(size_of::<FogParams>(), 176);
-        assert_eq!(offset_of!(FogParams, inv_vp), 0);
-        assert_eq!(offset_of!(FogParams, color), 64);
-        assert_eq!(offset_of!(FogParams, cam_pos), 80);
-        assert_eq!(offset_of!(FogParams, sun_dir), 96);
-        assert_eq!(offset_of!(FogParams, sun_color), 112);
-        assert_eq!(offset_of!(FogParams, density), 128);
-        assert_eq!(offset_of!(FogParams, height_falloff), 132);
-        assert_eq!(offset_of!(FogParams, height_reference), 136);
-        assert_eq!(offset_of!(FogParams, max_distance), 140);
-        assert_eq!(offset_of!(FogParams, phase_g), 144);
-        assert_eq!(offset_of!(FogParams, ambient), 148);
-        assert_eq!(offset_of!(FogParams, viewport), 152);
-        assert_eq!(offset_of!(FogParams, inv_max_distance), 160);
-        // Size is a multiple of 16 so the inv_vp at the head keeps a
-        // following array of records 16-byte aligned. Only one is ever
-        // pushed today, but the layout test pins the invariant.
-        assert_eq!(size_of::<FogParams>() % 16, 0);
-    }
-
-    #[test]
-    fn fog_froxel_params_layout_matches_msl() {
-        // `FogFroxelParams` rides alongside `FogParams` in both halves of the
-        // fog family. Pin every field offset so the `FogFroxelParams` struct in
-        // `shaders/fog.slang` stays in sync.
-        assert_eq!(size_of::<FogFroxelParams>(), 96);
-        assert_eq!(offset_of!(FogFroxelParams, view), 0);
-        assert_eq!(offset_of!(FogFroxelParams, froxel_dims), 64);
-        // _pad_align at 76 so the shader's `uint4 froxel_dims` (a 16-byte
-        // slot either way) lines up with `z_near` at 80 on both sides.
-        assert_eq!(offset_of!(FogFroxelParams, z_near), 80);
-        assert_eq!(offset_of!(FogFroxelParams, z_far), 84);
-        assert_eq!(size_of::<FogFroxelParams>() % 16, 0);
     }
 
     #[test]

@@ -8,8 +8,7 @@
 // concinnity-device crate) and are compiled unconditionally, so their layout
 // tests run on every platform's CI and count toward coverage. The DirectX
 // backend re-exports them under `directx` so it keeps its existing
-// `pass_timing` / `probe_uniforms` / `uniforms` paths.
+// `pass_timing` / `uniforms` paths.
 
 pub mod pass_timing;
-pub mod probe_uniforms;
 pub mod uniforms;

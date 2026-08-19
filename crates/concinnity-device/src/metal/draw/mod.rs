@@ -32,6 +32,7 @@ use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 use super::math::{mat4_mul, perspective};
 use super::uniforms::*;
+use concinnity_render::uniforms::*;
 
 // One term of the Halton low-discrepancy sequence. Used to drive the
 // sub-pixel projection jitter so successive frames sample slightly different
@@ -605,7 +606,7 @@ impl MtlContext {
             None
         };
         let taa_uniforms = if self.taa.enabled {
-            Some(TaaUniforms {
+            Some(TaaParams {
                 history_valid: if self.taa.history_valid { 1.0 } else { 0.0 },
             })
         } else {

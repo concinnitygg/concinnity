@@ -1370,7 +1370,7 @@ pub struct VkContext {
     // The probe set (count + per-probe parallax boxes) bound to the forward /
     // SSR / RT shaders. `EMPTY` (count 0 = sky reflection) until the staggered
     // capture bakes cubes and installs them; each install bumps the count.
-    pub(super) probe_set: super::probe_uniforms::ProbeSet,
+    pub(super) probe_set: concinnity_render::uniforms::ProbeSet,
     // Baked reflection-probe prefilter cubes, one per installed probe, parallel
     // to `probe_set.probes[..probe_set.count]`. Distinct from `env_map`; sampled
     // only by the specular reflection term once the capture installs them. Grows as

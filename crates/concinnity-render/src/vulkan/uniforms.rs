@@ -1,43 +1,24 @@
 // src/vulkan/uniforms.rs
 //
-// repr(C) uniform / push-constant structs shared between the Vulkan frame
-// encoders and the GLSL shaders (std140 / std430 / push-constant layouts). Each
-// struct is mirrored field-for-field in a `.glsl`/`.vert`/`.frag`/`.comp` shader
-// and locked by a layout test asserting its `size_of` and every `offset_of!`.
+// repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
+// (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
+// in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
+// the one `.slang` block Vulkan alone declares.
 //
-// These are GPU-free (plain repr(C) types, no ash/vk), so they live in
-// concinnity-render and their layout tests count toward coverage; the Vulkan
-// backend re-exports this module under `crate::vulkan::uniforms` and each pass
-// file re-exports the struct(s) it fills so their existing paths are unchanged.
+// Blocks whose shader counterpart is a single-source `.slang` declaration are
+// declared once for every backend in `crate::uniforms`; what is left here is
+// what only this backend binds. Their layouts are checked by `shader_layout` in
+// concinnity-device, which reads the expected offsets out of slangc's
+// reflection per target. The hand-written asserts below are for the families
+// whose shaders are still per backend -- the cull kernel, the skinning and
+// morph kernels, the raymarch SDF templates, the legacy per-draw main and
+// velocity passes, and Metal's water / glass_mesh_rt.
 
 use crate::assets::sdf_volume::SDF_PARAMS_LEN;
-
-// The auto-exposure push-constant block: the three luminance-mapping scalars
-// then a pad rounding to 16 bytes. Mirrors the HLSL / Metal struct of the same
-// name and the block in both auto-exposure compute shaders.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct AutoExposureParams {
-    pub lum_log2_min: f32,
-    pub lum_log2_range: f32,
-    pub lum_to_bin_scale: f32,
-    pub _pad: f32,
-}
 
 // Byte size of the auto-exposure push-constant range. Pins the struct size to
 // what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
-
-// The composite text push constant (text.slang): the window dimensions then two
-// pads rounding the block to 16 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct TextPush {
-    pub win_width: f32,
-    pub win_height: f32,
-    pub _pad0: f32,
-    pub _pad1: f32,
-}
 
 // The main-pass push constant (std430): the model matrix, roughness/metallic
 // with two pads, then tint and emissive vec3s each followed by a pad (112 B
@@ -56,13 +37,6 @@ pub struct MainPush {
     pub _mpad3: f32,
 }
 
-// The TAA resolve push constant (taa.frag): a single history-valid flag (4 B).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct TaaPush {
-    pub history_valid: f32,
-}
-
 // The GPU-cull push constant (cull.comp, std430): six already-normalised frustum
 // planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
 // the build-time object count, then the shader-bucket routing (120 B total).
@@ -78,44 +52,6 @@ pub struct CullParams {
     // `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
     pub bucket_count: u32,
     pub bucket_stride: u32,
-}
-
-// The main-pass std140 `ViewBlock` UBO: two mat4 (VP + view) then elapsed/pad and
-// the camera position as three scalars, the IBL prefilter mip count, and two end
-// pads (160 B total). cam_pos is three individual floats to avoid std140 vec3
-// alignment bumping subsequent fields.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ViewUniforms {
-    pub vp: [[f32; 4]; 4],
-    pub view_mat: [[f32; 4]; 4],
-    pub elapsed: f32,
-    // 1.0 when an SSR / RT reflection composite owns the sharp specular this frame,
-    // so the forward bindless shader fades its glossy-dielectric probe specular to
-    // avoid double-counting; 0.0 keeps the full forward reflection (and at probe
-    // bakes, where no resolve runs). Repurposes the former offset-132 pad.
-    pub reflections_enabled: f32,
-    pub cam_x: f32,
-    pub cam_y: f32,
-    pub cam_z: f32,
-    // Number of mip levels in the bound IBL prefilter cubemap. 0 = IBL off.
-    pub prefilter_mip_count: f32,
-    // 1.0 while the unlit view mode is active: the main fragment stage returns
-    // the surface base color before lighting. Repurposed pad space, so the
-    // struct size is unchanged.
-    pub shade_mode: f32,
-    pub _ep1: f32,
-}
-
-// The Hi-Z build push constant (hiz_init.comp / hiz_downsample.comp): four
-// tightly-packed uints (16 bytes).
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct HizParams {
-    pub dst_width: u32,
-    pub dst_height: u32,
-    pub src_mip: u32,
-    pub sample_count: u32,
 }
 
 // Cull-side Hi-Z uniforms (cull.comp, std140, 80 bytes): the previous frame's
@@ -136,18 +72,6 @@ pub struct CullHizParams {
     pub hiz_enabled: u32,
 }
 
-// The G-buffer pre-pass std140 `GbView` UBO (set 0, binding 0): the jittered VP
-// rasterises, the un-jittered cur/prev VPs drive the motion vector, the view
-// matrix transforms the normal + depth. Four column-major mat4 (256 B).
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct GbViewUniforms {
-    pub jittered_vp: [[f32; 4]; 4],
-    pub cur_vp: [[f32; 4]; 4],
-    pub prev_vp: [[f32; 4]; 4],
-    pub view_mat: [[f32; 4]; 4],
-}
-
 // The G-buffer pre-pass push constant (shared GLSL `PushBlock`): cur_model then
 // prev_model (two column-major mat4) then roughness, plus a trailing pad to
 // 16-byte alignment. The motion vector reads cur/prev model; the fragment reads
@@ -164,74 +88,6 @@ pub struct GbModelPush {
 // Byte size of the G-buffer pre-pass push-constant range (cur_model 64 +
 // prev_model 64 + roughness 4 + 12 pad). Pins the struct size.
 pub const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
-
-// The line pass per-frame view UBO (line.{vert,frag} `LineViewBlock`, std140,
-// 80 bytes): the column-major view-projection then the occluded-alpha
-// multiplier and three pads. Mirrors the DirectX / Metal `LineView`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct LineView {
-    pub vp: [[f32; 4]; 4],
-    pub occluded_alpha: f32,
-    pub _pad: [f32; 3],
-}
-
-// The transparent (glass) per-frame view UBO (glass.{vert,frag}
-// `TransparentViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
-// `TransparentView`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct TransparentView {
-    pub vp: [[f32; 4]; 4],
-    pub inv_vp: [[f32; 4]; 4],
-    pub camera_pos: [f32; 4],
-    pub viewport: [f32; 2],
-    pub time: f32,
-    // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound. The glass
-    // reflection keeps the white rim where no probe covers and no env cube exists.
-    pub prefilter_mip_count: f32,
-}
-
-// The per-panel glass UBO (glass `GlassParamsBlock`, std140, 64 bytes). Vec3
-// fields ride in vec4s (.w unused) so the layout is byte-identical regardless of
-// std140 packing. Mirrors the DirectX `GlassParamsGpu`.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct GlassParams {
-    pub centre: [f32; 4],
-    pub normal: [f32; 4],
-    pub tint: [f32; 4],
-    pub opacity: f32,
-    pub refraction_strength: f32,
-    pub fresnel_power: f32,
-    // 1.0 when this pane was assigned a planar reflection slot (sample the sharp
-    // mirror render), 0.0 keeps the probe / sky reflection path.
-    pub planar: f32,
-}
-
-// One particle slot in the simulation pool (`Particle` in
-// particle_types.slang, std430): a (vec3, float) position/age then a
-// (vec3, float) velocity/lifetime, 32 bytes.
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct GpuParticle {
-    pub position: [f32; 3],
-    pub age: f32,
-    pub velocity: [f32; 3],
-    pub lifetime: f32,
-}
-
-// The particle render pass per-frame view UBO (particle.slang `ParticleView`,
-// std140): a mat4 then two (vec3, pad) camera-basis slots, 96 bytes.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ParticleView {
-    pub vp: [[f32; 4]; 4],
-    pub cam_right: [f32; 3],
-    pub _pad0: f32,
-    pub cam_up: [f32; 3],
-    pub _pad1: f32,
-}
 
 // The raymarch pass per-frame view UBO (raymarch_helpers.glsl
 // `RaymarchViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
@@ -281,33 +137,6 @@ mod tests {
     use super::*;
     use std::mem::{offset_of, size_of};
 
-    // AutoExposureParams must match the `AutoExposureParams` push-constant block
-    // in both auto-exposure compute shaders: the three luminance-mapping scalars
-    // then a pad rounding to 16 bytes. Pinned by AUTO_EXPOSURE_PUSH_BYTES.
-    #[test]
-    fn auto_exposure_params_layout_matches_glsl() {
-        assert_eq!(size_of::<AutoExposureParams>(), 16);
-        assert_eq!(
-            size_of::<AutoExposureParams>() as u32,
-            AUTO_EXPOSURE_PUSH_BYTES
-        );
-        assert_eq!(offset_of!(AutoExposureParams, lum_log2_min), 0);
-        assert_eq!(offset_of!(AutoExposureParams, lum_log2_range), 4);
-        assert_eq!(offset_of!(AutoExposureParams, lum_to_bin_scale), 8);
-        assert_eq!(offset_of!(AutoExposureParams, _pad), 12);
-    }
-
-    // TextPush must match the `TextUniforms` push constant in text.slang: the window
-    // dimensions then two pads rounding the block to 16 bytes.
-    #[test]
-    fn text_push_layout_matches_glsl() {
-        assert_eq!(size_of::<TextPush>(), 16);
-        assert_eq!(offset_of!(TextPush, win_width), 0);
-        assert_eq!(offset_of!(TextPush, win_height), 4);
-        assert_eq!(offset_of!(TextPush, _pad0), 8);
-        assert_eq!(offset_of!(TextPush, _pad1), 12);
-    }
-
     // MainPush must match the `PushBlock` push constant in the main-pass shaders
     // (std430): the model matrix, roughness/metallic with two pads, then tint and
     // emissive vec3s each followed by a pad (112 B total).
@@ -325,14 +154,6 @@ mod tests {
         assert_eq!(offset_of!(MainPush, _mpad3), 108);
     }
 
-    // TaaPush must match the `TaaBlock` push constant in taa.frag: a single
-    // history-valid flag (4 bytes).
-    #[test]
-    fn taa_push_layout_matches_glsl() {
-        assert_eq!(size_of::<TaaPush>(), 4);
-        assert_eq!(offset_of!(TaaPush, history_valid), 0);
-    }
-
     // CullParams must match the `CullParams` push-constant block in cull.comp
     // (std430): six frustum planes, then cam_pos sharing its 16-byte slot with
     // object_count (112 B total).
@@ -346,34 +167,6 @@ mod tests {
         assert_eq!(offset_of!(CullParams, bucket_stride), 116);
     }
 
-    // ViewUniforms must match the std140 `ViewBlock` UBO in the main-pass
-    // shaders: two mat4 then elapsed/pad and the camera position as three
-    // scalars, prefilter mip count, and two end pads (160 B total).
-    #[test]
-    fn view_uniforms_layout_matches_glsl() {
-        assert_eq!(size_of::<ViewUniforms>(), 160);
-        assert_eq!(offset_of!(ViewUniforms, vp), 0);
-        assert_eq!(offset_of!(ViewUniforms, view_mat), 64);
-        assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
-        assert_eq!(offset_of!(ViewUniforms, reflections_enabled), 132);
-        assert_eq!(offset_of!(ViewUniforms, cam_x), 136);
-        assert_eq!(offset_of!(ViewUniforms, cam_y), 140);
-        assert_eq!(offset_of!(ViewUniforms, cam_z), 144);
-        assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
-        assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
-        assert_eq!(offset_of!(ViewUniforms, _ep1), 156);
-    }
-
-    // GLSL HizParams push block: four tightly packed uints (16 bytes).
-    #[test]
-    fn hiz_params_layout() {
-        assert_eq!(size_of::<HizParams>(), 16);
-        assert_eq!(offset_of!(HizParams, dst_width), 0);
-        assert_eq!(offset_of!(HizParams, dst_height), 4);
-        assert_eq!(offset_of!(HizParams, src_mip), 8);
-        assert_eq!(offset_of!(HizParams, sample_count), 12);
-    }
-
     // std140 CullHizParams in cull.comp: mat4 (64) + vec2 (8, 8-aligned) + two
     // uints. Total 80 bytes, tightly packed after the mat4.
     #[test]
@@ -383,86 +176,6 @@ mod tests {
         assert_eq!(offset_of!(CullHizParams, hiz_size), 64);
         assert_eq!(offset_of!(CullHizParams, hiz_mip_count), 72);
         assert_eq!(offset_of!(CullHizParams, hiz_enabled), 76);
-    }
-
-    // GbViewUniforms must match the `GbView` UBO (set 0, binding 0) in every
-    // pre-pass VS: four std140 column-major mat4 at offsets 0, 64, 128, 192
-    // (256 B total).
-    #[test]
-    fn gb_view_uniforms_layout_matches_glsl() {
-        assert_eq!(size_of::<GbViewUniforms>(), 256);
-        assert_eq!(offset_of!(GbViewUniforms, jittered_vp), 0);
-        assert_eq!(offset_of!(GbViewUniforms, cur_vp), 64);
-        assert_eq!(offset_of!(GbViewUniforms, prev_vp), 128);
-        assert_eq!(offset_of!(GbViewUniforms, view_mat), 192);
-    }
-
-    // GbModelPush is pushed as the shared `PushBlock`: cur_model then prev_model
-    // (two column-major mat4) then roughness at offset 128, plus pad. The total
-    // must match the push-constant range size.
-    #[test]
-    fn gb_model_push_layout_matches_glsl() {
-        assert_eq!(size_of::<GbModelPush>(), 144);
-        assert_eq!(offset_of!(GbModelPush, cur_model), 0);
-        assert_eq!(offset_of!(GbModelPush, prev_model), 64);
-        assert_eq!(offset_of!(GbModelPush, roughness), 128);
-        assert_eq!(size_of::<GbModelPush>() as u32, GBUFFER_PREPASS_PUSH_BYTES);
-    }
-
-    // The GLSL `LineViewBlock` std140 layout is 80 bytes: a mat4 then the
-    // occluded-alpha scalar and three pads.
-    #[test]
-    fn line_view_layout_matches_glsl() {
-        assert_eq!(size_of::<LineView>(), 80);
-        assert_eq!(offset_of!(LineView, vp), 0);
-        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
-        assert_eq!(offset_of!(LineView, _pad), 68);
-    }
-
-    // The GLSL `TransparentViewBlock` std140 layout is 160 bytes.
-    #[test]
-    fn transparent_view_layout_matches_glsl() {
-        assert_eq!(size_of::<TransparentView>(), 160);
-        assert_eq!(offset_of!(TransparentView, vp), 0);
-        assert_eq!(offset_of!(TransparentView, inv_vp), 64);
-        assert_eq!(offset_of!(TransparentView, camera_pos), 128);
-        assert_eq!(offset_of!(TransparentView, viewport), 144);
-        assert_eq!(offset_of!(TransparentView, time), 152);
-        assert_eq!(offset_of!(TransparentView, prefilter_mip_count), 156);
-    }
-
-    // The GLSL `GlassParamsBlock` std140 layout is 64 bytes.
-    #[test]
-    fn glass_params_layout_matches_glsl() {
-        assert_eq!(size_of::<GlassParams>(), 64);
-        assert_eq!(offset_of!(GlassParams, centre), 0);
-        assert_eq!(offset_of!(GlassParams, normal), 16);
-        assert_eq!(offset_of!(GlassParams, tint), 32);
-        assert_eq!(offset_of!(GlassParams, opacity), 48);
-        assert_eq!(offset_of!(GlassParams, refraction_strength), 52);
-        assert_eq!(offset_of!(GlassParams, fresnel_power), 56);
-        assert_eq!(offset_of!(GlassParams, planar), 60);
-    }
-
-    // Mirrors the `Particle` struct in particle_simulate.comp: std430 packs
-    // (vec3, float) into a 16-byte block, so the struct is 32 bytes total.
-    #[test]
-    fn gpu_particle_layout_matches_glsl() {
-        assert_eq!(size_of::<GpuParticle>(), 32);
-        assert_eq!(offset_of!(GpuParticle, position), 0);
-        assert_eq!(offset_of!(GpuParticle, age), 12);
-        assert_eq!(offset_of!(GpuParticle, velocity), 16);
-        assert_eq!(offset_of!(GpuParticle, lifetime), 28);
-    }
-
-    // Mirrors the `ParticleView` uniform block in particle.slang: mat4 (64) +
-    // (vec3 + pad) + (vec3 + pad) = 96.
-    #[test]
-    fn particle_view_layout_matches_glsl() {
-        assert_eq!(size_of::<ParticleView>(), 96);
-        assert_eq!(offset_of!(ParticleView, vp), 0);
-        assert_eq!(offset_of!(ParticleView, cam_right), 64);
-        assert_eq!(offset_of!(ParticleView, cam_up), 80);
     }
 
     // The GLSL `RaymarchViewBlock` std140 layout is 160 bytes.

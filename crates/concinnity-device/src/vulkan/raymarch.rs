@@ -64,7 +64,8 @@ const CUBE_INDEX_COUNT: u32 = 36;
 // SDF UBO) are GPU-free layout structs that live in concinnity-render;
 // re-export them so `crate::vulkan::raymarch::{RaymarchView,RaymarchVolumeUniforms}`
 // are unchanged for the encode + `volume_uniforms_from` paths.
-pub(in crate::vulkan) use crate::vulkan::uniforms::{RaymarchView, RaymarchVolumeUniforms};
+pub(in crate::vulkan) use crate::vulkan::uniforms::RaymarchView;
+pub(in crate::vulkan) use crate::vulkan::uniforms::RaymarchVolumeUniforms;
 
 pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
