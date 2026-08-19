@@ -16,7 +16,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 
 // The injected typed fields the form reads its controls back from.
 fn world_with_fields() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in panel::all_field_ids()
         .into_iter()
         .chain(form_panel::all_field_ids())

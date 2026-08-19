@@ -101,14 +101,6 @@ GLFW remains the windowing layer on Linux only.
 cargo build --release --features vulkan
 ```
 
-Switching between the Metal and Vulkan builds changes a `cfg` across the whole
-workspace, so each switch is a full rebuild. Pass `--target-dir` to keep both
-warm:
-
-```sh
-cargo build --features vulkan --target-dir target-vk
-```
-
 ### Known gaps
 
 MoltenVK is not a native Vulkan driver, and the backend is newer here than on

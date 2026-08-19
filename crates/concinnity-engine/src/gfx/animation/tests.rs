@@ -32,7 +32,7 @@ fn resumed_origin_freezes_clip_time_across_pause() {
 // constructed by `World::start`, not declared as an asset.
 #[test]
 fn animation_component_spawns_internal_system() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(Animation::default());
     world.start().unwrap();
 
@@ -44,7 +44,7 @@ fn animation_component_spawns_internal_system() {
 // content.
 #[test]
 fn no_animation_no_internal_system() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.start().unwrap();
     assert!(world.systems().is_empty());
 }
@@ -53,7 +53,7 @@ fn no_animation_no_internal_system() {
 // build error, but the runtime gate must not depend on validation).
 #[test]
 fn anim_graph_component_spawns_internal_system() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(AnimGraph::default());
     world.start().unwrap();
 
@@ -100,7 +100,7 @@ fn hero_graph() -> AnimGraph {
 }
 
 fn graph_world() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(clip("idle_clip", 1.0));
     world.add_component(clip("run_clip", 0.8));
     world.add_component(hero_graph());
@@ -150,7 +150,7 @@ fn graph_init_seeds_params_and_initial_state() {
 #[test]
 fn blendspace_weights_follow_the_parameter() {
     let target = SkinnedMeshHandle(intern("hero_blend").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
         let mut a = clip(name, duration);
         a.target = Some(SkinnedMeshHandle(target.0));
@@ -254,7 +254,7 @@ fn mode_mismatched_commands_are_rejected() {
         assert!(err.contains("anim-param"));
     });
 
-    let mut flat_world = World::new_empty();
+    let mut flat_world = World::new();
     let mut a = clip("solo_clip", 1.0);
     a.target = Some(SkinnedMeshHandle(intern("flat_hero").0));
     flat_world.add_component(a);
@@ -275,7 +275,7 @@ fn mode_mismatched_commands_are_rejected() {
 #[test]
 fn root_motion_clip_publishes_displacement_events() {
     let target = SkinnedMeshHandle(intern("hero_rm").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rm",
         "duration": 1.0,
@@ -319,7 +319,7 @@ fn root_motion_clip_publishes_displacement_events() {
 // sequence run to run.
 #[test]
 fn root_motion_events_emit_in_handle_order() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut handles = Vec::new();
     for name in ["rm_ord_c", "rm_ord_a", "rm_ord_b"] {
         handles.push(SkinnedMeshHandle(intern(name).0));
@@ -367,7 +367,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
     let target = SkinnedMeshHandle(intern("hero_ik").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
 
     // A leg hanging from x = 0.6: hip at y = 2, knee at y = 1, foot at
     // y = 0 (bind). Named joints so the chain resolves.
@@ -472,7 +472,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 #[test]
 fn rig_capsule_follows_root_motion() {
     let target = SkinnedMeshHandle(intern("hero_rig").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rig",
         "duration": 1.0,
@@ -571,7 +571,7 @@ fn flat_clip(name: &str, target: SkinnedMeshHandle) -> Animation {
 #[test]
 fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
     let target = SkinnedMeshHandle(intern("flat_reload").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(flat_clip("fr_solo", target));
     world.start().unwrap();
     world.step();
@@ -652,7 +652,7 @@ fn single_joint_pose(target: SkinnedMeshHandle) -> crate::assets::SkeletonPose {
 #[test]
 fn flat_single_clip_samples_the_pose() {
     let target = SkinnedMeshHandle(intern("flat_single_pose").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(flat_clip("fs_solo", target));
     world.add_component(single_joint_pose(target));
     world.start().unwrap();
@@ -672,7 +672,7 @@ fn flat_single_clip_samples_the_pose() {
 #[test]
 fn flat_fade_in_blends_multiple_clips_into_the_pose() {
     let target = SkinnedMeshHandle(intern("flat_blend_pose").0);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     // One clip requests a fade-in, so init builds a startup weight ramp.
     let mut faded = flat_clip("fb_a", target);
     faded.fade_in_secs = 0.5;

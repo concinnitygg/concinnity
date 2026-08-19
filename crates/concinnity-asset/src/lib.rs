@@ -193,5 +193,5 @@ pub use variables::{VarDecl, Variables};
 pub use volumetric_fog::VolumetricFog;
 pub use voxel_chunk::VoxelChunk;
 pub use voxel_world::VoxelWorld;
-pub use water_surface::{WaterSurface, WaterWave};
+pub use water_surface::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 pub use window::{Window, WindowArgs, WindowMode};

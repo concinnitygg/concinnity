@@ -17,7 +17,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 
 // A world holding the console's command-line field.
 fn console_world() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in console_panel::all_field_ids() {
         world.add_component(crate::assets::TextInput {
             asset_id: id,

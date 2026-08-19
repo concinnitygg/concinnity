@@ -266,7 +266,7 @@ mod tests {
     const BASE: u32 = 0x3000_0000 + 0x1F00;
 
     fn injected_world(rows: usize) -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for id in all_sprite_ids(BASE, rows, true) {
             world.add_component(Sprite {
                 asset_id: id,
@@ -416,7 +416,7 @@ mod tests {
     fn label_only_row_insets_by_pad_not_a_box() {
         // A label-only panel injects no checkbox ids (`all_sprite_ids(.., false)`),
         // so its rows have nothing to inset past: the label sits at PAD.
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for id in all_sprite_ids(BASE, 1, false) {
             world.add_component(Sprite {
                 asset_id: id,

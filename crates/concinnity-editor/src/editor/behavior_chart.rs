@@ -486,7 +486,7 @@ mod tests {
     use serde_json::json;
 
     fn injected_world() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for id in all_sprite_ids() {
             world.add_component(Sprite {
                 asset_id: id,

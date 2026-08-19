@@ -4,6 +4,10 @@ use crate::AssetId;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// Maximum number of waves per water surface. Shared by the render backends'
+/// wave uniforms and the build-side water validator.
+pub const MAX_WATER_WAVES: usize = 4;
+
 /// One wave in a water surface's motion. A surface sums up to
 /// [`MAX_WATER_WAVES`] of these to displace its flat grid. Each wave travels
 /// horizontally along `direction`, rising and falling with `amplitude` peak

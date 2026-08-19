@@ -2468,7 +2468,7 @@ use super::driver::{HotReloadDriver, apply_effects};
 #[test]
 fn driver_on_a_world_without_graphics_stays_unarmed() {
     let mut driver = HotReloadDriver::new();
-    let mut world = crate::ecs::World::new_empty();
+    let mut world = crate::ecs::World::new();
     driver.drive(&mut world);
     assert!(driver.pending().is_none());
 }
@@ -2491,7 +2491,7 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
     // must not panic or drop the armed state.
     let mut driver = HotReloadDriver::new();
     driver.arm(HotReloadSources::default());
-    let mut world = crate::ecs::World::new_empty();
+    let mut world = crate::ecs::World::new();
     driver.drive(&mut world);
     assert!(driver.pending().is_some());
 }
@@ -2501,7 +2501,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
     use crate::assets::SkeletonPose;
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
-    let mut world = crate::ecs::World::new_empty();
+    let mut world = crate::ecs::World::new();
     world.add_component(SkeletonPose::new(
         Default::default(),
         0,
@@ -2545,7 +2545,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
 
 #[test]
 fn apply_effects_sends_a_story_reload_event() {
-    let mut world = crate::ecs::World::new_empty();
+    let mut world = crate::ecs::World::new();
     let story = crate::assets::Story {
         asset_id: Default::default(),
         title: "Tale".to_string(),

@@ -100,7 +100,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let mut result = build_compiled(loaded.assets, None)?;
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
-    let mut world = World::new(crate::blob::BlobData::new(payload_sections));
+    let mut world = World::from_blob(crate::blob::BlobData::new(payload_sections));
     // Index every named component's entity as it is minted, matching the
     // shipped runtime's `load_blob`, so name references resolve for any type.
     let mut by_name = std::collections::BTreeMap::new();

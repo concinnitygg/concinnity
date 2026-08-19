@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn decomposes_props_onto_their_entities() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         // A model-backed parent placement.
         let mut frame = prop(1);
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn forward_parent_reference_resolves() {
         // Child declared BEFORE its parent: the two-pass resolution still links.
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let mut child = prop(1);
         child.mesh = Some(MeshHandle(10));
         child.parent = Some(AssetId(2));
@@ -267,7 +267,7 @@ mod tests {
     // components.
     #[test]
     fn decomposed_default_drains_prop_keeping_components() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let mut a = prop(1);
         a.mesh = Some(MeshHandle(10));
         world.add_component(a);
@@ -289,7 +289,7 @@ mod tests {
     // its own column drains with the pass.
     #[test]
     fn prop_body_decomposes_to_body_dynamics_on_the_owner() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let mut crate_prop = prop(1);
         crate_prop.mesh = Some(MeshHandle(10));
         crate_prop.collider = Some(PropCollider::default());

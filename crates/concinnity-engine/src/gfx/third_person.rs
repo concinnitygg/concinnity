@@ -423,7 +423,7 @@ mod tests {
         // resolver's interner fallback, so the handle carries the interned id;
         // the components this seeds must use the same value.
         let target = SkinnedMeshHandle(intern("hero").0);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(follow_camera("hero", drive, jump_height));
         world.add_component(crate::assets::CharacterRig::new(
             target,

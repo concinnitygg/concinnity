@@ -191,7 +191,7 @@ mod tests {
             tex_resource("tex_b", 1, "pack.glb", 3),
             tex_resource("tex_a", 0, "a.png", 0),
         ]);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 2);
         let tex = world.resource::<TextureSources>().unwrap();
@@ -211,7 +211,7 @@ mod tests {
             kind: "Texture".to_string(),
             ..Default::default()
         }]);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 0);
         assert!(world.resource::<TextureSources>().unwrap().0.is_empty());
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn procedural_texture_leaves_an_empty_source() {
         let lock = lock_with(vec![tex_resource("noise", 0, "", 0)]);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 0);
         assert_eq!(world.resource::<TextureSources>().unwrap().0[0].source, "");
@@ -241,7 +241,7 @@ mod tests {
             }),
             ..Default::default()
         }]);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let installed = install(&mut world, &[], &lock);
         assert_eq!(installed, 1);
         let meshes = world.resource::<MeshSources>().unwrap();
@@ -256,7 +256,7 @@ mod tests {
         let mut resource = tex_resource("late_tex", 0, "late.png", 0);
         resource.id = None;
         let lock = lock_with(vec![resource]);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         install(&mut world, &[], &lock);
         let tex = world.resource::<TextureSources>().unwrap();
         assert_eq!(tex.0[0].name_id, crate::ecs::asset_id::intern("late_tex").0);
@@ -273,7 +273,7 @@ mod tests {
                 serde_json::json!({"source": "sky.hdr", "prefilter_face_size": 128}),
             ),
         ];
-        let mut world = World::new_empty();
+        let mut world = World::new();
         install(&mut world, &entries, &lock);
         assert_eq!(
             world.resource::<ColorLutSources>().unwrap().0.as_deref(),
@@ -294,7 +294,7 @@ mod tests {
             "EnvironmentMap",
             serde_json::json!({"source": "sky.hdr", "generator": "gradient"}),
         )];
-        let mut world = World::new_empty();
+        let mut world = World::new();
         install(&mut world, &entries, &lock);
         assert!(
             world

@@ -136,12 +136,13 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
     start_runtime(app, RunOptions::default())
 }
 
-// Startup and loop entry once the App's world is populated from a compiled
-// blob. Registers the CTRL+C handler, activates AppKit on macOS, starts the
-// app, then drives frames -- pipelined (sim thread + render half) or serial
-// (the single-threaded world loop) -- until the window closes, a system stops
-// the world, or CTRL+C is received.
-pub fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
+// Startup and loop entry once the App's world is populated. Registers the
+// CTRL+C handler, activates AppKit on macOS, starts the app, then drives
+// frames -- pipelined (sim thread + render half) or serial (the
+// single-threaded world loop) -- until the window closes, a system stops the
+// world, or CTRL+C is received. External callers reach this through
+// `App::run` / `App::run_with`.
+pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
     tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&app);
 

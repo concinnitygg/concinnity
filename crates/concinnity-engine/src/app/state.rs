@@ -34,7 +34,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             status: AppStatus::Created,
-            world: World::new_empty(),
+            world: World::new(),
             shutdown: ShutdownToken::new(),
             pacer: Default::default(),
             clock: Default::default(),
@@ -44,7 +44,7 @@ impl App {
     pub fn new_with_token(shutdown: ShutdownToken) -> Self {
         Self {
             status: AppStatus::Created,
-            world: World::new_empty(),
+            world: World::new(),
             shutdown,
             pacer: Default::default(),
             clock: Default::default(),
@@ -64,7 +64,7 @@ impl App {
             loaded.blob,
         );
 
-        let mut world = World::new(blob_data);
+        let mut world = World::from_blob(blob_data);
         // The manifest's per-type counts size each column once up front, so
         // the bulk load below never reallocates mid-push.
         world.reserve_components(&manifest.component_counts);
@@ -187,6 +187,17 @@ impl App {
         self.world.insert_resource(timing);
         self.world.step()
     }
+
+    /// Run this app on the runtime loop with default options, consuming it.
+    pub fn run(self) -> std::io::Result<()> {
+        self.run_with(crate::app::run::RunOptions::default())
+    }
+
+    /// Run this app on the runtime loop, consuming it. Drives frames until the
+    /// window closes, a system stops the world, or CTRL+C is received.
+    pub fn run_with(self, options: crate::app::run::RunOptions) -> std::io::Result<()> {
+        crate::app::run::start_runtime(self, options)
+    }
 }
 
 #[cfg(test)]
@@ -264,7 +275,7 @@ mod tests {
         app.start().unwrap();
         assert!(app.start().is_err(), "the app is Started");
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Application {
             limits: AppLimits {
                 max_memory_mb: 256,

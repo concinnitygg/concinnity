@@ -247,7 +247,7 @@ mod tests {
     // shared test lock; the flag is restored before returning.
     fn world_with_reload_entry(source: &str, animation_name: &str) -> crate::ecs::World {
         concinnity_engine::app::dev_flags::set_enabled(true);
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         world.add_component(file_backed_animation(source, animation_name));
         let started = world.start();
         concinnity_engine::app::dev_flags::set_enabled(false);

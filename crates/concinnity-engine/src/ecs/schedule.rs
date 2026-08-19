@@ -317,7 +317,7 @@ mod tests {
     // A PhysicsConfig gates the internal physics system on.
     #[test]
     fn physics_config_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(PhysicsConfig::default());
         world.start().unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -327,7 +327,7 @@ mod tests {
     // A RigidBody (character capsule) gates physics on, even with no config.
     #[test]
     fn rigid_body_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(RigidBody::default());
         world.start().unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -337,7 +337,7 @@ mod tests {
     // No physics content (no PhysicsConfig / RigidBody / PropBody) → no system.
     #[test]
     fn no_physics_content_no_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
@@ -346,7 +346,7 @@ mod tests {
     // previous-frame movement intent.
     #[test]
     fn physics_runs_before_camera_controller() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(PhysicsConfig::default());
         world.add_component(controlled_camera());
         world.start().unwrap();
@@ -358,7 +358,7 @@ mod tests {
     // one, no audio device is opened.
     #[test]
     fn audio_emitter_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(crate::assets::AudioEmitter::default());
         world.start().unwrap();
 
@@ -369,7 +369,7 @@ mod tests {
     // No audio content means no AudioSystem (no audio device is opened).
     #[test]
     fn no_audio_emitter_means_no_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
@@ -378,7 +378,7 @@ mod tests {
     // world can play screen-triggered audio.
     #[test]
     fn audio_cue_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(crate::assets::AudioCue::default());
         world.start().unwrap();
 
@@ -396,7 +396,7 @@ mod tests {
         use crate::ecs::AudioClipHandle;
         use crate::ecs::asset_id::AssetId;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen = AssetId(90);
         // The cue references its clip by handle. Matching (screen + clip present)
         // is independent of the clip payload, so no `AudioClipTable` is needed

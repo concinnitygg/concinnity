@@ -48,7 +48,7 @@ fn hash_world(world: &World) -> u64 {
 // accumulate shared variables and move their entity, and dynamic bodies
 // falling onto a floor. No graphics band (no GPU in tests).
 fn build_world() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
 
     // Independent per-prop movers: each Prop drifts along +X every tick.
     world.add_component(Behavior {

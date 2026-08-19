@@ -194,7 +194,7 @@ mod tests {
     // its own kind's records, at their handles.
     #[test]
     fn install_wires_every_kind_table_into_the_world() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         install_resource_tables(&mut world, &mut records());
 
         assert_eq!(table_lens(&world), [1, 2, 3, 4, 5, 6, 7, 8]);
@@ -210,7 +210,7 @@ mod tests {
     // one rather than a missing resource.
     #[test]
     fn install_with_no_records_installs_empty_tables() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         install_resource_tables(&mut world, &mut []);
         assert_eq!(table_lens(&world), [0; 8]);
     }

@@ -159,6 +159,7 @@ pub use concinnity_asset::{FileArgs, FileKind};
 pub use concinnity_asset::{InstanceTransform, InstancedProp};
 pub use concinnity_asset::{Joint, JointKind};
 pub use concinnity_asset::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
+pub use concinnity_asset::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 pub use concinnity_asset::{MainMenu, MainMenuItem, SettingsProfile};
 pub use concinnity_asset::{Mesh, VertexData};
 pub use concinnity_asset::{Model, SubMeshRef};
@@ -167,7 +168,6 @@ pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use concinnity_asset::{Sprite, SpriteFit};
 pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{TriggerFilter, TriggerVolume};
-pub use concinnity_asset::{WaterSurface, WaterWave};
 pub use concinnity_asset::{Window, WindowArgs, WindowMode};
 pub use contact_event::ContactEvent;
 pub use controls_command::ControlsCommand;
@@ -204,12 +204,6 @@ pub use story_command::StoryCommand;
 pub use target::Target;
 pub use visibility_request::VisibilityRequest;
 pub use volume_event::VolumeEvent;
-// `MAX_WATER_WAVES` stays in core: the build-side water-surface validator
-// (concinnity-world) reaches it on every backend, and the Metal water encoder
-// also reaches `WaterWave` through the asset crate.
-/// Maximum number of waves per water surface. Shared by the render backends'
-/// wave uniforms and the build-side water validator.
-pub const MAX_WATER_WAVES: usize = 4;
 
 // Per-instance components an entity is composed from.
 pub use body_dynamics::BodyDynamics;

@@ -474,7 +474,7 @@ mod tests {
     }
 
     fn hud_world(vw: f32, mouse: (f32, f32)) -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for id in all_sprite_ids() {
             world.add_component(Sprite {
                 asset_id: id,

@@ -33,7 +33,7 @@ fn log(h: &EditorHook) -> String {
 // `/select type` replaces the selection with every working entry of that type.
 #[test]
 fn select_type_replaces_the_selection() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(entries());
     h.selection.set(vec!["mat".to_string()]);
 
@@ -47,7 +47,7 @@ fn select_type_replaces_the_selection() {
 // `/select using` replaces the selection with everything referencing the target.
 #[test]
 fn select_using_replaces_the_selection_with_the_referencing_assets() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(entries());
 
     h.run_console_line(&mut world, "/select using box");
@@ -65,7 +65,7 @@ fn select_using_replaces_the_selection_with_the_referencing_assets() {
 // alone, so a mistyped target cannot silently clear what the user had picked.
 #[test]
 fn a_relationship_with_no_matches_leaves_the_selection_alone() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(entries());
     h.selection.set(vec!["p1".to_string()]);
 
@@ -81,7 +81,7 @@ fn a_relationship_with_no_matches_leaves_the_selection_alone() {
 // `/select origin` needs an active member to group from.
 #[test]
 fn select_origin_without_a_selection_errors() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(entries());
 
     h.run_console_line(&mut world, "/select origin");
@@ -95,7 +95,7 @@ fn select_origin_without_a_selection_errors() {
 fn select_origin_gathers_the_active_members_group() {
     isolate_state_dir();
     let _guard = crate::test_support::lock();
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}}),
         serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
@@ -117,7 +117,7 @@ fn select_origin_gathers_the_active_members_group() {
 fn select_origin_reports_a_name_no_group_lists() {
     isolate_state_dir();
     let _guard = crate::test_support::lock();
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}}),
     ]);

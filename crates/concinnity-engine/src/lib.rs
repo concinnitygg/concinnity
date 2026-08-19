@@ -31,6 +31,11 @@ pub mod app;
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
 pub use app::run::run_from;
+// The application surface a host embeds: construct an App, populate its world,
+// and drive it with `App::run` / `App::run_with`. Exported flat so the
+// `concinnity` facade crate re-exports these under its own root.
+pub use app::run::{PipelineMode, RunOptions, init_logging};
+pub use app::state::{App, AppStatus};
 // Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.

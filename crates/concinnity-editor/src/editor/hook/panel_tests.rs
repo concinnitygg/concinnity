@@ -20,7 +20,7 @@ fn hook() -> EditorHook {
 // A world carrying every panel's injected elements, which is what the panels'
 // `draw` / `hide` mutate.
 fn injected_world() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     inject::editor_hud(&mut world);
     world
 }

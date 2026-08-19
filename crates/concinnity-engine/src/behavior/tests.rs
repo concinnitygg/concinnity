@@ -1187,7 +1187,7 @@ fn a_restored_variable_is_not_an_edge_for_variable_sources() {
 
 #[test]
 fn behavior_gates_the_system_and_a_menu_freezes_it() {
-    let mut world = crate::ecs::World::new_empty();
+    let mut world = crate::ecs::World::new();
     // A `story` node emits unconditionally; `named` targets would need a live
     // entity and a name index this bare world has not built.
     world.add_component(Behavior {

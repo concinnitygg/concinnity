@@ -15,7 +15,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 
 // A world holding the palette's query field.
 fn palette_world() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in palette_panel::all_field_ids() {
         world.add_component(crate::assets::TextInput {
             asset_id: id,

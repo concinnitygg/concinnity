@@ -240,7 +240,7 @@ mod tests {
     }
 
     fn world_with(ids: &[AssetId]) -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for &id in ids {
             world.add_component(Sprite {
                 asset_id: id,

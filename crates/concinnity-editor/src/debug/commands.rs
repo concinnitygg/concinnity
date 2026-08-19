@@ -1765,7 +1765,7 @@ mod tests {
     }
 
     fn graph_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         world.add_component(anim_clip("idle_clip", 1.0));
         world.add_component(anim_clip("run_clip", 0.8));
         world.add_component(hero_graph());
@@ -1774,7 +1774,7 @@ mod tests {
     }
 
     fn flat_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         world.add_component(anim_clip("wave_clip", 1.0));
         world.add_component(anim_clip("bow_clip", 0.5));
         world.start().unwrap();

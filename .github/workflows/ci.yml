@@ -58,6 +58,9 @@ jobs:
       - name: Run Cargo Build
         run: cargo build --locked --all-features --all-targets --workspace
 
+      - name: Run Doctests
+        run: cargo test --locked --all-features --doc --workspace
+
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 

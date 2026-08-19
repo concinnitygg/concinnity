@@ -13,12 +13,11 @@ path = "main.rs"
 [features]
 # Pass-through so a Windows host can target the Vulkan backend, matching the
 # rest of the workspace. Inert on macOS (always Metal) and Linux (always Vulkan).
-vulkan = ["example-common/vulkan"]
+vulkan = ["concinnity/vulkan"]
 
 [dependencies]
-# Shared host glue: compile a world.jsonl in memory and run it on the runtime.
-example-common = { path = "../common" }
-concinnity-memory = { path = "../../crates/concinnity-memory" }
+# The framework facade: compile a world.jsonl in memory and run it on the runtime.
+concinnity = { path = "../.." }
 # First-run asset fetch. ureq downloads the archive (HTTP, already used
 # elsewhere in the workspace); zip unpacks it. deflate-only to keep the
 # dependency lean. These are example-only and never reach the engine crates.

@@ -23,7 +23,7 @@ fn hook() -> EditorHook {
 fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
     crate::ecs::asset_id::reset_interner();
     let id = crate::ecs::asset_id::intern("box");
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(Camera3D {
         position: pos,
         view_matrix: concinnity_core::gfx::camera::view_matrix(pos, 0.0, 0.0),
@@ -341,7 +341,7 @@ fn a_recall_cancels_an_in_flight_tumble() {
 fn selection_bounds_fall_back_to_a_billboards_transform() {
     crate::ecs::asset_id::reset_interner();
     let id = crate::ecs::asset_id::intern("lamp");
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let entity = world.push(crate::assets::Transform {
         position: [4.0, 5.0, 6.0],
         rotation_deg: [0.0; 3],

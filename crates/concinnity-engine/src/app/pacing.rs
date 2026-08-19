@@ -147,7 +147,7 @@ mod tests {
     // interval.
     #[test]
     fn cap_change_rebases_the_deadline() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.insert_resource(crate::ecs::FrameRateCap(1000));
         let mut pacer = FramePacer::default();
         pacer.pace(&world);
@@ -164,7 +164,7 @@ mod tests {
     // paces.
     #[test]
     fn unpublished_cap_is_unlimited() {
-        let world = World::new_empty();
+        let world = World::new();
         let mut pacer = FramePacer::default();
         pacer.pace(&world);
         assert!(pacer.deadline.is_none());

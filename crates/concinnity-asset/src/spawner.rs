@@ -3,7 +3,7 @@
 
 use crate::AssetId;
 
-/// Authored fields of a [`Spawner`]; the runtime accumulator is not declared.
+/// Authored fields of a `Spawner`; the runtime accumulator is not declared.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpawnerArgs {

@@ -303,7 +303,7 @@ mod tests {
     // authored value stands instead.
     #[test]
     fn injection_overrides_an_authored_title_bar_only_where_the_chrome_survives() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Window {
             title: "My Game".into(),
             width: 1600,
@@ -325,7 +325,7 @@ mod tests {
     // With nothing to override there is no reason to synthesize one.
     #[test]
     fn injection_materializes_a_window_to_override_only_where_the_chrome_survives() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         editor_hud(&mut world);
 
         let windows: Vec<&Window> = world.query::<Window>().collect();
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn injection_pins_a_non_windowed_mode_to_windowed() {
         for mode in [WindowMode::Borderless, WindowMode::Fullscreen] {
-            let mut world = World::new_empty();
+            let mut world = World::new();
             world.add_component(Window {
                 title: "My Game".into(),
                 width: 1600,
@@ -371,7 +371,7 @@ mod tests {
     // hidden) -- every one a view-less overlay at a reserved id.
     #[test]
     fn injects_top_bar_and_hidden_panels() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         editor_hud(&mut world);
 
         // Top-bar buttons are visible.
@@ -456,7 +456,7 @@ mod tests {
     // DebugHud itself is dropped by the injection (the editor takes over F1).
     #[test]
     fn prefers_the_hud_chip_font_over_the_first_label() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextLabel {
             asset_id: AssetId(0),
             font: Some(FontHandle(99)),
@@ -489,7 +489,7 @@ mod tests {
     // the debug HUD only).
     #[test]
     fn resolves_the_font_from_stat_hud_chips() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextLabel {
             asset_id: AssetId(0),
             font: Some(FontHandle(99)),
@@ -516,7 +516,7 @@ mod tests {
     // beats none, because a label without a loaded font is not drawn.
     #[test]
     fn falls_back_to_any_label_font_without_hud_chips() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextLabel {
             asset_id: AssetId(0),
             font: Some(FontHandle(42)),

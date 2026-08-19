@@ -25,7 +25,7 @@ use crate::test_support::isolate_state_dir;
 
 // A world holding just a FrameInput, for driving `tick` directly.
 fn world_with_input(input: FrameInput) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(input);
     world
 }
@@ -33,7 +33,7 @@ fn world_with_input(input: FrameInput) -> World {
 // A world with the injected typed fields, for the add / edit flow (the
 // combo filter, the form's name heading, and its arg-input pool).
 fn world_with_fields() -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in panel::all_field_ids()
         .into_iter()
         .chain(form_panel::all_field_ids())
@@ -145,7 +145,7 @@ fn starts_in_edit_mode_with_hud_shown() {
 #[test]
 fn view_button_and_view_rows_toggle_the_panels() {
     let mut h = hook(Vec::new());
-    let mut world = World::new_empty();
+    let mut world = World::new();
     h.apply_top(HudAction::ToggleView, &mut world);
     assert!(h.view_open, "the View button shows the View panel");
     h.apply_top(HudAction::ToggleView, &mut world);
@@ -214,7 +214,7 @@ fn template_detail_rows_and_close() {
 #[test]
 fn entry_changes_request_a_preview_rebuild() {
     let mut h = hook(Vec::new());
-    h.apply_top(HudAction::ToggleView, &mut World::new_empty());
+    h.apply_top(HudAction::ToggleView, &mut World::new());
     assert!(
         !h.rebuild_preview && !h.dirty,
         "a view toggle is not an entry change"
@@ -233,14 +233,14 @@ fn entry_changes_request_a_preview_rebuild() {
 // form open during the swap is not blanked.
 #[test]
 fn field_snapshot_carries_typed_text_across_a_reinjection() {
-    let mut old = World::new_empty();
+    let mut old = World::new();
     super::super::inject::editor_hud(&mut old);
     widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
     widget::seed_field(&mut old, panel::SEARCH_INPUT, "Point");
     let snapshot = EditorHook::field_snapshot(&old);
 
     // A fresh HUD injection starts every field blank.
-    let mut new = World::new_empty();
+    let mut new = World::new();
     super::super::inject::editor_hud(&mut new);
     assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "");
 
@@ -775,7 +775,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     // Row 0 is the World group header; row 1 is the asset. Aim at its name,
     // clear of the hide toggle now heading the row.
     let row = panel::row_rect(po, panel::PANEL_W, 1);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: vp,
@@ -838,7 +838,7 @@ fn deleting_entries_fixes_up_the_open_form_index() {
 #[test]
 fn edit_panel_drags_by_its_title_bar() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     h.panel_open = true;
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
@@ -1099,7 +1099,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
@@ -1165,7 +1165,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
@@ -1788,7 +1788,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
 // it again re-renders the form.
 #[test]
 fn a_hidden_assets_panel_hides_the_form_elements() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
@@ -1861,7 +1861,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
             .clone()
     };
 
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
@@ -2135,7 +2135,7 @@ fn fog_density_binding() -> usize {
 // controls from the entries.
 #[test]
 fn lighting_opens_via_the_view_panel_and_seeds() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
@@ -2172,7 +2172,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
 // args update and the live preview rebuild is requested.
 #[test]
 fn lighting_apply_commits_sun_intensity() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
@@ -2197,7 +2197,7 @@ fn lighting_apply_commits_sun_intensity() {
 // edit form uses), so Apply never corrupts an entry.
 #[test]
 fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
@@ -2213,7 +2213,7 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
 // capturing the text controls, so an in-progress typed edit stays pending.
 #[test]
 fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![fog_entry(false)]);
     h.lighting_open = true;
@@ -2244,7 +2244,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
 // derive and seed.
 #[test]
 fn lighting_add_row_appends_the_missing_singleton() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
@@ -2285,7 +2285,7 @@ fn story_import(source: &str) -> serde_json::Value {
 // A hook + injected world with the story loaded from `lines` (no file IO: the
 // line editor operates purely on the loaded lines until Apply).
 fn story_session(lines: &[&str]) -> (EditorHook, World) {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("unused.md")]);
     h.story_open = true;
@@ -2366,7 +2366,7 @@ fn story_apply_validates_then_writes() {
     std::fs::write(&path, super::super::story::STARTER_STORY).unwrap();
     let src = path.to_string_lossy().to_string();
 
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import(&src)]);
     h.story_open = true;
@@ -2409,7 +2409,7 @@ fn story_apply_validates_then_writes() {
 // A missing source file loads as an empty editable story with the error shown.
 #[test]
 fn story_load_missing_file_shows_status() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("/no/such/dir/story.md")]);
     h.story_open = true;
@@ -2429,7 +2429,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     let old = std::env::current_dir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
 
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
     h.story_open = true;
@@ -2459,7 +2459,7 @@ fn story_create_writes_starter_and_adds_the_import() {
 // Import panel
 
 fn import_session() -> (EditorHook, World, std::path::PathBuf) {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     super::super::inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
     h.import_open = true;
@@ -3110,7 +3110,7 @@ fn a_broken_world_reports_its_error_in_the_status_line() {
 // clears dirty when that list matches the on-disk state), redo replays it.
 #[test]
 fn undo_reverts_a_committed_edit_and_redo_replays_it() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     assert!(!h.hud_state().undo && !h.hud_state().redo);
 
@@ -3135,7 +3135,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
 // Editing from an undone state forks the timeline: the redo branch is gone.
 #[test]
 fn an_edit_after_undo_drops_the_redo_branch() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -3162,7 +3162,7 @@ fn a_no_change_mark_records_no_undo_step() {
 // they can never point at a removed or shifted row.
 #[test]
 fn undo_drops_entry_indexed_ui_state() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -3224,7 +3224,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
 // redoing back to the saved list cleans the chip again.
 #[test]
 fn dirty_tracks_the_saved_list_across_history_jumps() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -3814,7 +3814,7 @@ fn gizmo_rotate_drag_snaps_the_applied_angle() {
 // /snap drives the same settings the Preview panel rows toggle.
 #[test]
 fn console_snap_adjusts_and_reports_the_settings() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![]);
     h.run_console_line(&mut world, "/snap 0.25");
     assert!(h.snap.translate.enabled, "a step also enables the family");
@@ -3838,7 +3838,7 @@ fn console_snap_adjusts_and_reports_the_settings() {
 // a unique name, skips singletons, selects the copies, and is one undo step.
 #[test]
 fn duplicate_selection_clones_entries_and_selects_the_copies() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({
             "name": "box", "type": "Prop", "args": { "position": [1.0, 2.0, 3.0] }
@@ -3987,7 +3987,7 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
 // search query ranks, and a cell click selects the asset.
 #[test]
 fn content_grid_lists_filters_and_selects_visual_assets() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({
             "name": "brick_tex", "type": "Texture",
@@ -4819,7 +4819,7 @@ fn locked_assets_are_skipped_by_viewport_picking() {
 // the tree's window.
 #[test]
 fn viewport_pick_reveals_the_tree_row() {
-    let world = World::new_empty();
+    let world = World::new();
     let mut h = hook(Vec::new());
     h.panel_open = true;
     h.tree_stale = false;
@@ -5015,7 +5015,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
 // and everything they do lands in the log sink.
 #[test]
 fn console_commands_edit_the_working_entries() {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut h = hook(Vec::new());
 
     h.run_console_line(&mut world, "/add PhysicsConfig phys");
@@ -5094,7 +5094,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
 #[test]
 fn console_ghost_completes_del_names_and_tab_accepts() {
     let mut h = hook(vec![entry("cube_red", "Prop")]);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.add_component(TextInput {
         asset_id: console_panel::INPUT,
         content: "/del cu".to_string(),
@@ -5168,7 +5168,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
 
 // An open Behavior panel over `entries`, with its value field injected.
 fn behavior_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in behavior_panel::all_field_ids() {
         world.add_component(TextInput {
             asset_id: id,
@@ -5618,7 +5618,7 @@ fn behavior_value_field_is_carried_across_a_preview_rebuild() {
     let (_, mut world) = behavior_session(vec![behavior("b", serde_json::json!({}))]);
     widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "half typed");
     let snapshot = EditorHook::field_snapshot(&world);
-    let mut fresh = World::new_empty();
+    let mut fresh = World::new();
     for id in behavior_panel::all_field_ids() {
         fresh.add_component(TextInput {
             asset_id: id,
@@ -6852,7 +6852,7 @@ fn behavior_duplicate_is_undoable() {
 }
 
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     for id in variables_panel::all_field_ids() {
         world.add_component(TextInput {
             asset_id: id,
@@ -7230,7 +7230,7 @@ fn transport_keys_play_pause_stop_and_step() {
 #[test]
 fn transport_chips_drive_the_transport() {
     let mut h = hook(Vec::new());
-    let mut world = World::new_empty();
+    let mut world = World::new();
     h.apply_top(HudAction::PlayPause, &mut world);
     assert!(h.sim.playing());
     h.apply_top(HudAction::Step, &mut world);
@@ -7280,7 +7280,7 @@ fn the_trace_request_follows_the_live_debug_panels() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     h.drive_trace(&mut world);
     assert!(
         world.resource::<crate::ecs::TraceRequest>().is_none(),
@@ -7300,7 +7300,7 @@ fn the_trace_request_follows_the_live_debug_panels() {
 // A world carrying one published trace tick for behavior `b`'s first node.
 fn traced_world(id: crate::ecs::asset_id::AssetId, hit: bool) -> World {
     use crate::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let event = TraceEvent {
         behavior: id,
         node: 0,
@@ -7415,7 +7415,7 @@ fn ctrl_click_toggles_a_card_breakpoint() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    let mut world = World::new_empty();
+    let mut world = World::new();
     h.behavior_open = true;
     let data = h.behavior_data();
     let card = data
@@ -7529,7 +7529,7 @@ fn display_menu_rows_set_mode_and_flags() {
 fn toast_presses_claim_cards_and_fall_through_elsewhere() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
-    let mut world = World::new_empty();
+    let mut world = World::new();
     // Empty queue: any press falls straight through.
     assert!(!h.try_toast_press(vp[0] - 20.0, vp[1] - 20.0, vp, &mut world));
     h.notifier
@@ -7554,7 +7554,7 @@ fn toast_presses_claim_cards_and_fall_through_elsewhere() {
 fn toast_drive_settles_hidden_when_the_queue_empties() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
-    let mut world = World::new_empty();
+    let mut world = World::new();
     h.notifier.success("saved");
     h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
     assert!(!h.toasts_hidden);

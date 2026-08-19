@@ -282,7 +282,7 @@ mod tests {
     fn focused_field_types_through_the_schedule() {
         // A world with just a TextInput builds only TextInputSystem; a typed
         // character lands in the focused field.
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextInput {
             asset_id: AssetId(1),
             focused: true,
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn click_focuses_the_field_under_the_cursor() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextInput {
             asset_id: AssetId(1),
             x: 0.0,

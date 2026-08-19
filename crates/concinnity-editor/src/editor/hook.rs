@@ -1241,7 +1241,7 @@ impl EditorHook {
             return;
         };
         staged.world_mut().insert_resource(PendingBackend(backend));
-        let new_world = std::mem::replace(staged.world_mut(), World::new_empty());
+        let new_world = std::mem::replace(staged.world_mut(), World::new());
         app.load_world(new_world);
         if let Err(e) = app.start() {
             tracing::error!("editor: live preview start failed: {e:?}");

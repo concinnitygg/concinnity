@@ -334,7 +334,7 @@ mod tests {
     // A Camera3D whose `controller` is set spawns the internal controller.
     #[test]
     fn controlled_camera_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
         world.start().unwrap();
 
@@ -345,7 +345,7 @@ mod tests {
     // `controller: null` opts out: a cutscene camera gets no controller.
     #[test]
     fn uncontrolled_camera_has_no_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(camera(None));
         world.start().unwrap();
         assert!(world.systems().is_empty());
@@ -358,7 +358,7 @@ mod tests {
     fn controls_command_updates_sensitivity_live() {
         use crate::assets::{ControlsCommand, FrameInput};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         // Free-fly avoids the PhysicsSystem path; start from a known sensitivity.
         let ctrl = CameraController {
             free_fly: true,
@@ -396,7 +396,7 @@ mod tests {
     fn controls_command_updates_fov_live() {
         use crate::assets::{ControlsCommand, FrameInput};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let ctrl = CameraController {
             free_fly: true,
             ..CameraController::default()
@@ -456,7 +456,7 @@ mod tests {
         use crate::assets::{FrameInput, KeyBinding, Screen, ScreenCommand};
         use crate::ecs::asset_id::AssetId;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
         world.add_component(Screen {
             asset_id: AssetId(50),
@@ -498,7 +498,7 @@ mod tests {
         use crate::assets::Prop;
         use crate::ecs::asset_id::AssetId;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let ctrl = CameraController {
             free_fly: true,
             ..CameraController::default()
@@ -549,7 +549,7 @@ mod tests {
         use crate::assets::FrameInput;
         use crate::gfx::camera::view_matrix;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let ctrl = CameraController {
             free_fly: false,
             move_speed: 5.0,

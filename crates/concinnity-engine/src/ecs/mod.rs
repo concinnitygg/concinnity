@@ -371,8 +371,20 @@ impl std::fmt::Debug for World {
     }
 }
 
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl World {
-    pub fn new(blob: BlobData) -> Self {
+    // An empty world, for contexts that have no blob data (e.g. unit tests,
+    // or worlds built entirely from runtime-only assets).
+    pub fn new() -> Self {
+        Self::from_blob(BlobData::empty())
+    }
+
+    pub fn from_blob(blob: BlobData) -> Self {
         Self {
             components: ComponentStorage::default(),
             systems: Vec::new(),
@@ -384,12 +396,6 @@ impl World {
             internal_systems_built: false,
             schedule: None,
         }
-    }
-
-    // Convenience constructor for contexts that have no blob data
-    // (e.g. unit tests, or worlds built entirely from runtime-only assets).
-    pub fn new_empty() -> Self {
-        Self::new(BlobData::empty())
     }
 
     // Pre-size the component columns from the blob manifest's per-type record
@@ -870,7 +876,7 @@ mod tests {
     // be unit-tested here: its `init` builds the GPU backend.)
     #[test]
     fn graphics_config_makes_world_render() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         assert!(!world.renders());
         world.add_component(crate::assets::GraphicsConfig::default());
         assert!(world.renders());
@@ -883,7 +889,7 @@ mod tests {
     fn hud_components_spawn_in_schedule_order() {
         use crate::assets::{DebugHud, FpsCounter, StatHud};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(FpsCounter::default());
         world.add_component(StatHud::default());
         world.add_component(DebugHud::default());
@@ -900,7 +906,7 @@ mod tests {
     fn system_manifest_matches_started_systems() {
         use crate::assets::{DebugHud, FpsCounter, StatHud, Story, TextInput};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(StatHud::default());
         world.add_component(DebugHud::default());
         world.add_component(FpsCounter::default());
@@ -919,7 +925,7 @@ mod tests {
     fn system_manifest_is_a_table_order_subset() {
         use crate::assets::{FpsCounter, StatHud};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(FpsCounter::default());
         world.add_component(StatHud::default());
 
@@ -940,7 +946,7 @@ mod tests {
     // never builds a GPU, unlike `start()`.)
     #[test]
     fn streaming_runs_immediately_before_graphics() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(crate::assets::GraphicsConfig::default());
         let manifest = world.system_manifest();
         let s = manifest
@@ -966,7 +972,7 @@ mod tests {
 
         let mut fly_cam = Camera3D::bake(Default::default());
         fly_cam.controller = Some(CameraController::default());
-        let mut fly = World::new_empty();
+        let mut fly = World::new();
         fly.add_component(fly_cam);
         assert_eq!(fly.system_manifest(), ["Camera3DSystem"]);
 
@@ -975,7 +981,7 @@ mod tests {
             follow: Some(FollowController::default()),
             ..Default::default()
         });
-        let mut follow = World::new_empty();
+        let mut follow = World::new();
         follow.add_component(follow_cam);
         assert_eq!(follow.system_manifest(), ["ThirdPersonSystem"]);
     }
@@ -985,7 +991,7 @@ mod tests {
     // `System::init`.
     #[test]
     fn audio_gate_probes_without_a_device() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(crate::assets::AudioEmitter::default());
         assert_eq!(world.system_manifest(), ["AudioSystem"]);
     }
@@ -1006,7 +1012,7 @@ mod tests {
     // device (build_audio needs a page/choice cue), so this stays device-free.
     #[test]
     fn story_component_spawns_story_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(crate::assets::Story::default());
         world.start().unwrap();
 
@@ -1022,7 +1028,7 @@ mod tests {
         struct Ping;
         struct Pong;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         for _ in 0..5 {
             world.events_mut::<Ping>().send(Ping);
@@ -1043,7 +1049,7 @@ mod tests {
     fn world_debug_impl_reports_counts() {
         use crate::assets::TextLabel;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextLabel::default());
         world.add_component(TextLabel::default());
         let text = format!("{world:?}");
@@ -1058,7 +1064,7 @@ mod tests {
     fn empty_world_fills_from_components_then_systems() {
         use crate::assets::{FpsCounter, TextLabel};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         assert!(world.is_empty());
         assert_eq!(world.component_count(), 0);
         assert_eq!(world.system_count(), 0);
@@ -1078,7 +1084,7 @@ mod tests {
     fn push_lands_in_the_typed_slot() {
         use crate::assets::TextLabel;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.push(TextLabel {
             content: "pushed".to_string(),
             ..Default::default()
@@ -1097,7 +1103,7 @@ mod tests {
     fn remove_all_drops_only_the_named_type() {
         use crate::assets::{DebugHud, TextLabel};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(TextLabel::default());
         world.add_component(DebugHud::default());
         assert_eq!(world.component_count(), 2);
@@ -1114,7 +1120,7 @@ mod tests {
     fn component_census_counts_one_entry_per_populated_type() {
         use crate::assets::TextLabel;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         assert!(world.component_census().is_empty());
 
         world.add_component(TextLabel::default());
@@ -1139,7 +1145,7 @@ mod tests {
     fn despawn_removes_an_entitys_components() {
         use crate::assets::{MeshRenderer, Prop, Transform};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Prop::default());
         // start() runs decompose, which gives the Prop's entity its Transform +
         // MeshRenderer.
@@ -1159,7 +1165,7 @@ mod tests {
     // timings before any step has run.
     #[test]
     fn profile_is_exposed_before_any_step() {
-        let world = World::new_empty();
+        let world = World::new();
         assert!(world.profile().system_timings().is_empty());
     }
 
@@ -1167,7 +1173,7 @@ mod tests {
     // a world that never built a backend reports nothing rather than panicking.
     #[test]
     fn streaming_readouts_are_absent_before_graphics_init() {
-        let world = World::new_empty();
+        let world = World::new();
         assert!(world.streaming_stats().is_none());
         assert!(world.streaming_pressure().is_none());
     }
@@ -1176,7 +1182,7 @@ mod tests {
     // borrow still hands back the (empty) system list.
     #[test]
     fn render_backend_accessors_without_a_backend() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         assert!(world.take_render_backend().is_none());
 
         let (systems, backend) = world.systems_and_render_backend();

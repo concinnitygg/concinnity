@@ -13,8 +13,8 @@ use crate::assets::{
     WaterSurface, WaterWave,
 };
 
-// The wave ceiling lives in core (`concinnity_core::assets::MAX_WATER_WAVES`,
-// shared with the render backends); re-imported here for the clamp.
+// The wave ceiling lives with the schema in concinnity-asset and is shared with
+// the render backends; re-imported here for the clamp.
 use crate::assets::MAX_WATER_WAVES;
 
 // Resolve the fragment shader source path for the current build backend from a

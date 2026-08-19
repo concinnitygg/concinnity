@@ -29,7 +29,7 @@ fn prop(i: usize) -> Prop {
 
 // A world holding `n` Props, with the entity handle for each.
 fn populated(n: usize) -> (World, Vec<Entity>) {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     world.reserve_components(&[(<Prop as ComponentSlot>::DISCRIMINANT, n as u32)]);
     let entities = (0..n).map(|i| world.push(prop(i))).collect();
     (world, entities)
@@ -52,7 +52,7 @@ fn main() {
             &format!("engine/world_populate_unreserved/{label}"),
             n as u64,
             || {
-                let mut world = World::new_empty();
+                let mut world = World::new();
                 for i in 0..n {
                     world.push(prop(i));
                 }

@@ -389,7 +389,7 @@ mod tests {
     fn debug_hud_component_spawns_internal_system() {
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(DebugHud::default());
         world.start().unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -399,7 +399,7 @@ mod tests {
     // Build a world with a DebugHud wired to four chips, a camera (no
     // controller, so no camera system), and pre-filled chip labels.
     fn hud_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         world.add_component(DebugHud {
             passes_label: Some(AssetId(1)),
             mouse_label: Some(AssetId(2)),

@@ -62,7 +62,7 @@ mod tests {
     // An FpsCounter component spawns the internal counter system.
     #[test]
     fn fps_counter_component_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(FpsCounter::default());
         world.start().unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn no_fps_counter_no_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
@@ -85,7 +85,7 @@ mod tests {
         use crate::ecs::asset_id::AssetId;
         use std::time::{Duration, Instant};
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(FpsCounter {
             label: Some(AssetId(1)),
         });

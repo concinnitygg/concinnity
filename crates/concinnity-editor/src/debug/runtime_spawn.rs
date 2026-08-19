@@ -864,7 +864,7 @@ mod tests {
         use crate::assets::{Camera3D, CameraController};
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
@@ -903,7 +903,7 @@ mod tests {
         use crate::assets::{Camera3D, CameraController};
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
@@ -933,7 +933,7 @@ mod tests {
     // No Camera3D in the world is a clean error, not a panic.
     #[test]
     fn apply_camera_set_errors_without_camera() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let args = CameraSetArgs::default();
         assert!(apply_camera_set(&args, &mut world).is_err());
     }
@@ -1078,7 +1078,7 @@ mod tests {
         use crate::assets::{Camera3D, CameraController};
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
@@ -1115,7 +1115,7 @@ mod tests {
     // the motion.
     #[test]
     fn apply_camera_move_step_false_without_camera() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let motion = CameraMotion {
             forward: 1.0,
             right: 0.0,
@@ -1483,7 +1483,7 @@ mod tests {
         fn dropped(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> bool {
             rx.recv().is_err()
         }
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_camera_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
@@ -1537,7 +1537,7 @@ mod tests {
         use crate::assets::Camera3D;
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(controlled_camera());
         world.start().unwrap();
 
@@ -1562,7 +1562,7 @@ mod tests {
 
     #[test]
     fn dispatch_quality_set_sends_setting_command() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_quality_set(
             RuntimeCommand::QualitySet {
@@ -1588,7 +1588,7 @@ mod tests {
 
     #[test]
     fn dispatch_rebind_sends_rebind_setting_command() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_rebind(
             RuntimeCommand::Rebind {
@@ -1615,7 +1615,7 @@ mod tests {
 
     #[test]
     fn dispatch_story_forwards_the_command() {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_story(
             RuntimeCommand::Story {
@@ -1640,7 +1640,7 @@ mod tests {
         let _guard = test_support::lock();
         crate::ecs::asset_id::reset_interner();
         crate::ecs::asset_id::intern_all(&["crate_a", "crate_b"]);
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_despawn(
@@ -1680,7 +1680,7 @@ mod tests {
         let _guard = test_support::lock();
         crate::ecs::asset_id::reset_interner();
         crate::ecs::asset_id::intern_all(&["box_a", "frame"]);
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let mut cursor = crate::ecs::EventCursor::default();
 
         // Both names known -> queued with both ids.
@@ -1760,7 +1760,7 @@ mod tests {
         let _guard = test_support::lock();
         crate::ecs::asset_id::reset_interner();
         crate::ecs::asset_id::intern_all(&["template_a"]);
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         let mut cursor = crate::ecs::EventCursor::default();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);

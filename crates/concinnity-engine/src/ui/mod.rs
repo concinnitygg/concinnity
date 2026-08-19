@@ -1933,7 +1933,7 @@ mod tests {
 
     #[test]
     fn hover_applies_and_restores_label_style() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         world.add_component(TextLabel {
             asset_id: AssetId(1),
@@ -2000,7 +2000,7 @@ mod tests {
     // highlighted when its screen is shown again.
     #[test]
     fn hover_style_restored_when_region_screen_is_hidden() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let menu = AssetId(80);
         let settings = AssetId(81);
         world.add_component(Screen {
@@ -2083,7 +2083,7 @@ mod tests {
     // sends a SetIndex command and closes.
     fn dropdown_world() -> (World, AssetId) {
         let screen = AssetId(9);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: screen,
             initial: true,
@@ -2166,7 +2166,7 @@ mod tests {
     // click picks the OPTION under the row (not the raw row index).
     fn scrolled_dropdown_world() -> World {
         let screen = AssetId(9);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: screen,
             initial: true,
@@ -2424,7 +2424,7 @@ mod tests {
     // of the build-side `default_menu_hover_is_color_only` guarantee.
     #[test]
     fn hover_with_matching_scale_changes_color_only() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         world.add_component(TextLabel {
             asset_id: AssetId(1),
@@ -2476,7 +2476,7 @@ mod tests {
 
     #[test]
     fn click_pushes_scene_command() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         world.add_component(HitRegion {
             x: 0.0,
@@ -2506,7 +2506,7 @@ mod tests {
 
     #[test]
     fn quit_action_returns_stop() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         world.add_component(HitRegion {
             x: 0.0,
@@ -2533,7 +2533,7 @@ mod tests {
     // Showing a screen makes its sprites visible and hides them again on Hide.
     #[test]
     fn screen_show_and_hide_toggles_sprite_visibility() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         let screen_id = AssetId(10);
         world.add_component(Screen {
@@ -2613,7 +2613,7 @@ mod tests {
     }
 
     fn overlay_region_world() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen_id = AssetId(30);
         world.add_component(Screen {
             asset_id: screen_id,
@@ -2669,7 +2669,7 @@ mod tests {
     // While a screen is active, underlying scene HitRegions don't fire.
     #[test]
     fn hit_region_filtered_when_view_is_active() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         let screen_id = AssetId(20);
         world.add_component(Screen {
@@ -2715,7 +2715,7 @@ mod tests {
     #[test]
     fn fire_action_dispatches_view_variants() {
         // screen:hide → ScreenCommand::Hide
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2740,7 +2740,7 @@ mod tests {
         ));
 
         // screen:show:42 → ScreenCommand::Show(42)
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2763,7 +2763,7 @@ mod tests {
         assert!(matches!(cmd, Some(ScreenCommand::Show(AssetId(42)))));
 
         // screen:toggle:43 → ScreenCommand::Toggle(43)
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2790,7 +2790,7 @@ mod tests {
     fn fire_action_dispatches_setting_with_value_label() {
         // setting:vsync:next → SettingCommand carrying the region's label as the
         // value-label to update, and the parsed direction.
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let value_label = AssetId(99);
         world.add_component(HitRegion {
             x: 0.0,
@@ -2820,7 +2820,7 @@ mod tests {
 
         // The :prev suffix parses to the reverse direction. The default
         // HitRegion is 100x40, so click within those bounds.
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             action: "setting:vsync:prev".to_string(),
             ..Default::default()
@@ -2839,7 +2839,7 @@ mod tests {
     // out at init) is inert: clicking where it sits fires nothing.
     #[test]
     fn disabled_region_does_not_fire() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2871,7 +2871,7 @@ mod tests {
     // the init-time capability gating above.
     #[test]
     fn runtime_disabled_setting_row_does_not_fire() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2904,7 +2904,7 @@ mod tests {
 
     #[test]
     fn slider_drag_pushes_set_fraction_then_persists_on_release() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let value_label = AssetId(7);
         world.add_component(HitRegion {
             x: 100.0,
@@ -2967,7 +2967,7 @@ mod tests {
     // then goes inert.
     #[test]
     fn group_toggle_collapses_body_and_updates_header() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen = AssetId(50);
         let (header, body) = (AssetId(51), AssetId(52));
         world.add_component(Screen {
@@ -3068,7 +3068,7 @@ mod tests {
     // up: the top row's element moves up by wheel-delta * speed (clamped).
     #[test]
     fn wheel_scrolls_panel_content() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen = AssetId(60);
         let e0 = AssetId(61);
         world.add_component(Screen {
@@ -3143,7 +3143,7 @@ mod tests {
     // track beside it (thumb = 30px, travel = 30px, max scroll = 60px). Each
     // row carries a setting region so focus navigation has targets.
     fn scrollbar_panel_world() -> (World, AssetId) {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen = AssetId(60);
         let e0 = AssetId(61);
         world.add_component(Screen {
@@ -3287,7 +3287,7 @@ mod tests {
     // A rebind row: a value TextLabel showing the current key + a HitRegion over
     // it whose action enters capture mode.
     fn rebind_world() -> (World, AssetId) {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let value = AssetId(7);
         world.add_component(TextLabel {
             asset_id: value,
@@ -3410,7 +3410,7 @@ mod tests {
     // active screen, so screen-triggered consumers (AudioCue) hear every screen.
     #[test]
     fn view_activation_emits_view_shown() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let first = AssetId(80);
         let second = AssetId(81);
         for (id, initial) in [(first, true), (second, false)] {
@@ -3441,7 +3441,7 @@ mod tests {
 
     #[test]
     fn escape_key_binding_fires_action() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
 
         let screen_id = AssetId(50);
         world.add_component(Screen {
@@ -3482,7 +3482,7 @@ mod tests {
     #[test]
     fn pressed_key_binding_fires_action() {
         for key in [Key::Space, Key::Enter] {
-            let mut world = World::new_empty();
+            let mut world = World::new();
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
                 action: "story:advance".to_string(),
@@ -3508,7 +3508,7 @@ mod tests {
     // scrollable list reads must not be swallowed by a phantom action).
     #[test]
     fn pressed_key_without_a_binding_fires_nothing() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(KeyBinding {
             key: "Space".to_string(),
             action: "story:advance".to_string(),
@@ -3531,7 +3531,7 @@ mod tests {
     // record the outgoing screen as the dismiss target.
     #[test]
     fn escape_from_menu_returns_to_world_after_visiting_a_subview() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let menu = AssetId(60);
         let settings = AssetId(61);
         world.add_component(Screen {
@@ -3622,7 +3622,7 @@ mod tests {
     // without any KeyBinding.
     #[test]
     fn toggle_key_opens_and_closes_a_screen() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: AssetId(80),
             toggle_key: "Backtick".to_string(),
@@ -3665,7 +3665,7 @@ mod tests {
     // reaches the top of the stack, and loses it when the screen closes.
     #[test]
     fn focus_field_follows_the_top_screen() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: AssetId(90),
             toggle_key: "Backtick".to_string(),
@@ -3706,7 +3706,7 @@ mod tests {
     // suspended so typing cannot fire actions.
     #[test]
     fn keybindings_are_suspended_while_typing() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: AssetId(100),
             ..Default::default()
@@ -3753,7 +3753,7 @@ mod tests {
     // A KeyBinding scoped to a screen fires only while that screen is on top.
     #[test]
     fn scoped_keybinding_fires_only_while_its_screen_is_top() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: AssetId(110),
             ..Default::default()
@@ -3804,7 +3804,7 @@ mod tests {
     // and hiding the pushed screen reveals the one beneath.
     #[test]
     fn push_stacks_over_the_current_screen() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for (screen, sprite) in [(120u32, 130u32), (121, 131)] {
             world.add_component(Screen {
                 asset_id: AssetId(screen),
@@ -3862,7 +3862,7 @@ mod tests {
     // A gating component (here a Screen) spawns the internal UiInputSystem.
     #[test]
     fn ui_component_spawns_internal_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: AssetId(1),
             initial: false,
@@ -3878,7 +3878,7 @@ mod tests {
     // No HitRegion / Screen / KeyBinding means no UiInputSystem.
     #[test]
     fn no_ui_components_means_no_system() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
@@ -3937,7 +3937,7 @@ mod tests {
     // A menu screen (id 90) with two buttons at y 100 / 200 whose labels take a
     // hover color, plus a second screen (91) the first button navigates to.
     fn focus_menu_world() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let menu = AssetId(90);
         world.add_component(Screen {
             asset_id: menu,
@@ -4067,7 +4067,7 @@ mod tests {
     // focused row send Prev/Next for its setting instead of moving focus.
     #[test]
     fn focus_left_right_adjusts_value_rows() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let screen = AssetId(95);
         world.add_component(Screen {
             asset_id: screen,
@@ -4172,7 +4172,7 @@ mod tests {
     // open it closes it.
     #[test]
     fn back_mirrors_escape_only_while_a_screen_is_active() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let menu = AssetId(97);
         world.add_component(Screen {
             asset_id: menu,
@@ -4226,7 +4226,7 @@ mod tests {
     // story stage's advance region), which is itself excluded from focus.
     #[test]
     fn confirm_without_focus_fires_a_full_canvas_region() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let stage = AssetId(98);
         world.add_component(Screen {
             asset_id: stage,
@@ -4269,7 +4269,7 @@ mod tests {
     // button, not a back pulse: it binds instead of cancelling.
     #[test]
     fn pad_capture_binds_east_instead_of_backing_out() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let mut label = panel_label(7, 0.0, AssetId(0), "South");
         label.screen = None;
         world.add_component(label);

@@ -303,7 +303,7 @@ mod tests {
     fn world_with<C: crate::ecs::ComponentSlot>(name: &str, component: C) -> World {
         crate::ecs::asset_id::reset_interner();
         let id = crate::ecs::asset_id::intern(name);
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let entity = world.push(component);
         let mut by_name = std::collections::BTreeMap::new();
         by_name.insert(id, entity);

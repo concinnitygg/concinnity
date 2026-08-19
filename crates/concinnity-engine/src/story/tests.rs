@@ -103,7 +103,7 @@ fn add_stage_furniture(world: &mut World) {
 // A world with the stage scaffolding the build expansion would generate
 // for a story named "s", plus the compiled graph itself.
 fn story_world(story: Story) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut story = story;
     story.asset_id = intern("s");
     story.scaffold = scaffold();
@@ -124,7 +124,7 @@ fn story_world(story: Story) -> World {
 // scaffold has one), so the scrolling window over the logical slots can be
 // exercised.
 fn multi_slot_world(story: Story, rows: usize) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
@@ -164,7 +164,7 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
 // (contiguous, centered, only the applicable buttons) from the save state on
 // the first `ScreenShown`. Mirrors the title-screen scaffold the build produces.
 fn title_menu_world(story: Story) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
@@ -208,7 +208,7 @@ fn title_menu_world(story: Story) -> World {
 // the active screen is observable. Mirrors the scaffold the build produces once
 // the pause menu is injected and its screens are threaded into the story.
 fn story_world_with_pause(story: Story) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
@@ -1468,7 +1468,7 @@ fn backdate_clock(world: &mut World, secs: f32) {
 // A story world whose stage carries two option slots (the shared scaffold has
 // one), so an unoccupied slot is observable when a menu has fewer choices.
 fn two_option_world(story: Story) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new();
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();

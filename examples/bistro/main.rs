@@ -15,9 +15,10 @@
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use example_common::{compile_world, init_logging, paths, run};
+use concinnity::world::compile_world;
+use concinnity::{App, init_logging, paths};
 
-concinnity_memory::install_global_allocator!();
+concinnity::install_global_allocator!();
 
 // The NVIDIA ORCA download. It redirects to the actual archive; ureq follows
 // redirects. Override with BISTRO_URL, or point BISTRO_ARCHIVE at an
@@ -94,7 +95,9 @@ fn main() -> io::Result<()> {
     }
 
     let content = std::fs::read_to_string("world.jsonl")?;
-    run(compile_world(&content)?)
+    let mut app = App::new();
+    app.load_world(compile_world(&content)?);
+    app.run()
 }
 
 // Download and unpack the Bistro asset pack unless it is already on disk.

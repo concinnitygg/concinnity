@@ -128,7 +128,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
 /// and integer-typed. Cross-asset name resolution is not covered here; that is
 /// the `CrossReferenced` pass over the whole world.
 ///
-/// The [Fault](crate::check::fault::Fault) says where in `args` the problem is,
+/// The [Fault] says where in `args` the problem is,
 /// for callers that can show the author the spot; its `message` is the same text
 /// a build reports.
 pub fn check_with_variables(

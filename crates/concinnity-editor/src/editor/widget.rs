@@ -361,7 +361,7 @@ mod tests {
     use super::*;
 
     fn world_with(ids: &[AssetId]) -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for &id in ids {
             world.add_component(Sprite {
                 asset_id: id,
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn place_message_bounds_text_to_the_box_that_holds_it() {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         let id = AssetId(1);
         world.add_component(TextLabel {
             asset_id: id,

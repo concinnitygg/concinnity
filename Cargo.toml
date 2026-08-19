@@ -1,3 +1,35 @@
+[package]
+name = "concinnity"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autoexamples = false
+autobenches = false
+autotests = false
+autobins = false
+
+[lib]
+name = "concinnity"
+path = "src/lib.rs"
+
+[features]
+default = ["world"]
+world = ["dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
+vulkan = ["concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
+
+[dependencies]
+concinnity-engine = { path = "crates/concinnity-engine" }
+concinnity-memory = { path = "crates/concinnity-memory" }
+concinnity-store = { path = "crates/concinnity-store" }
+concinnity-cook = { path = "crates/concinnity-cook", optional = true }
+concinnity-world = { path = "crates/concinnity-world", optional = true }
+concinnity-shader = { path = "crates/concinnity-shader", optional = true }
+
+[build-dependencies]
+concinnity-toolchain = { path = "crates/concinnity-toolchain" }
+
 [workspace]
 resolver = "2"
 members = [
@@ -7,11 +39,12 @@ members = [
 ]
 
 default-members = [
+    ".",
     "crates/*",
 ]
 
 [workspace.package]
-version = "0.18.33"
+version = "0.18.34"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
@@ -19,10 +52,6 @@ license = "MIT"
 [profile.dev]
 opt-level = 2
 
-# Build scripts run unoptimized by default, which makes concinnity-render's
-# build-time LTC fit (a few million BRDF evaluations) roughly ten times slower
-# than it needs to be. The scripts themselves are small, so optimizing them costs
-# little to compile and is paid back on the first run.
 [profile.dev.build-override]
 opt-level = 3
 

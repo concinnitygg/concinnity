@@ -1271,7 +1271,7 @@ mod tests {
 
     // A world with every panel element injected (hidden), for driving `apply`.
     fn injected_world() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         for id in all_sprite_ids() {
             world.add_component(Sprite {
                 asset_id: id,

@@ -242,7 +242,7 @@ mod tests {
     const SCENE: AssetId = AssetId(9);
 
     fn overlay_world() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(LoadingOverlay {
             screen: Some(SCREEN),
             backdrop: Some(BACKDROP),

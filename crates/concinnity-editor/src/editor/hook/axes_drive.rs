@@ -31,7 +31,7 @@ mod tests {
     use super::*;
 
     fn world_with_camera() -> World {
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(Camera3D {
             position: [0.0; 3],
             view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
@@ -85,6 +85,6 @@ mod tests {
 
     #[test]
     fn a_world_without_a_camera_publishes_nothing() {
-        assert!(axis_lines(&hook(), &World::new_empty()).is_empty());
+        assert!(axis_lines(&hook(), &World::new()).is_empty());
     }
 }

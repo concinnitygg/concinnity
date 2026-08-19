@@ -325,7 +325,7 @@ mod tests {
         use crate::assets::StatHud;
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.add_component(StatHud::default());
         world.start().unwrap();
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -336,7 +336,7 @@ mod tests {
     fn no_stat_hud_no_system() {
         use crate::ecs::World;
 
-        let mut world = World::new_empty();
+        let mut world = World::new();
         world.start().unwrap();
         assert!(world.systems().is_empty());
     }
@@ -344,7 +344,7 @@ mod tests {
     // A world carrying a StatHud wired to fps + vram + ram chips and their
     // labels.
     fn hud_world() -> crate::ecs::World {
-        let mut world = crate::ecs::World::new_empty();
+        let mut world = crate::ecs::World::new();
         world.add_component(StatHud {
             fps_label: Some(AssetId(1)),
             vram_label: Some(AssetId(2)),
