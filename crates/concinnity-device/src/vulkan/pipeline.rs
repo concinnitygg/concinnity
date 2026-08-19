@@ -376,8 +376,8 @@ pub(super) fn resolve_shadow_shader(
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
     let ctx = builtins::Ctx::plain(hot_reload);
-    let vert = builtins::TEXT_VERT.compile(&ctx)?;
-    let frag = builtins::TEXT_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::TEXT_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

@@ -18,9 +18,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, create_buffer};
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing, align_up};
 use crate::gfx::render_types::LineVertex;
@@ -111,16 +111,17 @@ impl LineResources {
     }
 }
 
-// Compile the line vertex + fragment shaders; the MSAA define keeps the
+// Compile the line vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's sample
 // count. Used by the lazy build and by shader hot-reload.
 fn compile_line_shaders(msaa_samples: u32, hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx {
-        hot_reload,
-        msaa: msaa_samples > 1,
+    let frag = if msaa_samples > 1 {
+        &slang_builtins::LINE_FRAG_MSAA
+    } else {
+        &slang_builtins::LINE_FRAG
     };
-    let vs = builtins::LINE_VERT.compile(&ctx)?;
-    let ps = builtins::LINE_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::LINE_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -140,7 +141,9 @@ pub(in crate::directx) fn rebuild_line_pso(
     )
 }
 
-// Root-signature layout (binds 1:1 with the HLSL register declarations):
+// Root-signature layout (binds 1:1 with the `line.slang` declarations, whose
+// registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
+// build.rs pins each one):
 //   [0] root CBV b0   LineView (per-frame)
 //   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.
@@ -185,7 +188,7 @@ fn create_line_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
 }
 
 // Vertex input elements for the line pass (32-byte `LineVertex` struct),
-// asserted by `line_vertex_layout_matches_msl`.
+// asserted by `line_vertex_layout_matches_shaders`.
 fn line_input_layout() -> [D3D12_INPUT_ELEMENT_DESC; 3] {
     [
         D3D12_INPUT_ELEMENT_DESC {

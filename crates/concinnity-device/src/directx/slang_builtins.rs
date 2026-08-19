@@ -74,6 +74,10 @@ const SSGI_SLANG: &str = include_str!("../shaders/ssgi.slang");
 const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
+const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
+const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
+const LINE_SLANG: &str = include_str!("../shaders/line.slang");
+const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
 
 // The bindless main pair's variant defines. `MAX_PROBES` sizes the probe cube
 // array the root signature's descriptor table covers; `probe_cube_count_matches`
@@ -519,6 +523,105 @@ pub(super) static GLASS_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
     ],
 };
 
+// The remaining raster families: the particle billboard pair, the projected
+// decal, world-space lines and the text / sprite overlay. Each has real vertex
+// geometry, so unlike the post passes they keep their own vertex entry rather
+// than pairing with `fullscreen.slang`.
+//
+// Only the particle pair takes an ABI block, and only to swap two constant
+// buffers: its root signature in `particle.rs` binds the view at b0 and the
+// per-emitter params at b1, where the Metal buffer indices are 1 and 2. Decal,
+// line and text need none -- declaration order already lands each resource on
+// the register its root signature declares, which the rows in build.rs's
+// `SLANG_DXIL_ENTRY_ABI` pin so a slangc release cannot move one silently.
+//
+// The two depth-reading fragments come as MSAA pairs the way the fog and glass
+// fragments do: the sample count is a host difference, so the caller picks by
+// MSAA state and the export-time precompile leaves a bundle warm for either.
+// Their vertex stages never name the depth source and take neither.
+const PARTICLE_ABI: &[(&str, &str)] = &[("DXIL_ABI", "1")];
+
+pub(super) static PARTICLE_VERT: SlangProgram = SlangProgram {
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entry: "particle_vertex",
+    profile: "vs_6_0",
+    label: "particle_vert.slang",
+    defines: PARTICLE_ABI,
+};
+pub(super) static PARTICLE_FRAG: SlangProgram = SlangProgram {
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entry: "particle_fragment",
+    profile: "ps_6_0",
+    label: "particle_frag.slang",
+    defines: PARTICLE_ABI,
+};
+pub(super) static DECAL_VERT: SlangProgram = SlangProgram {
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entry: "decal_vertex",
+    profile: "vs_6_0",
+    label: "decal_vert.slang",
+    defines: &[],
+};
+pub(super) static DECAL_FRAG: SlangProgram = SlangProgram {
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entry: "decal_fragment",
+    profile: "ps_6_0",
+    label: "decal_frag.slang",
+    defines: &[("USE_MSAA", "0")],
+};
+pub(super) static DECAL_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entry: "decal_fragment",
+    profile: "ps_6_0",
+    label: "decal_frag_msaa.slang",
+    defines: &[("USE_MSAA", "1")],
+};
+pub(super) static LINE_VERT: SlangProgram = SlangProgram {
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entry: "line_vertex",
+    profile: "vs_6_0",
+    label: "line_vert.slang",
+    defines: &[],
+};
+pub(super) static LINE_FRAG: SlangProgram = SlangProgram {
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entry: "line_fragment",
+    profile: "ps_6_0",
+    label: "line_frag.slang",
+    defines: &[("USE_MSAA", "0")],
+};
+pub(super) static LINE_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entry: "line_fragment",
+    profile: "ps_6_0",
+    label: "line_frag_msaa.slang",
+    defines: &[("USE_MSAA", "1")],
+};
+pub(super) static TEXT_VERT: SlangProgram = SlangProgram {
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entry: "text_vertex_main",
+    profile: "vs_6_0",
+    label: "text_vert.slang",
+    defines: &[],
+};
+pub(super) static TEXT_FRAG: SlangProgram = SlangProgram {
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entry: "text_fragment_main",
+    profile: "ps_6_0",
+    label: "text_frag.slang",
+    defines: &[],
+};
+
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated, and both MSAA halves of every fragment that has
 // them: which one a device runs depends on its MSAA mode, and a bundle should
@@ -567,6 +670,16 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &GLASS_RT_FRAG_MSAA,
     &GLASS_RT_FRAG_TEXTURED,
     &GLASS_RT_FRAG_TEXTURED_MSAA,
+    &PARTICLE_VERT,
+    &PARTICLE_FRAG,
+    &DECAL_VERT,
+    &DECAL_FRAG,
+    &DECAL_FRAG_MSAA,
+    &LINE_VERT,
+    &LINE_FRAG,
+    &LINE_FRAG_MSAA,
+    &TEXT_VERT,
+    &TEXT_FRAG,
 ];
 
 impl SlangProgram {
@@ -661,6 +774,7 @@ mod tests {
                 "{PROBE_COMMON}",
                 "{RT_TYPES}",
                 "{RT_TRACE}",
+                "{PARTICLE_TYPES}",
             ] {
                 assert!(
                     !src.contains(marker),

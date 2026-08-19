@@ -25,7 +25,6 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -55,10 +54,9 @@ type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 pub(in crate::directx) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> Result<ParticleShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
-    let vs = builtins::PARTICLE_VERT.compile(&ctx)?;
-    let ps = builtins::PARTICLE_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::PARTICLE_VERT.compile(hot_reload)?;
+    let ps = slang_builtins::PARTICLE_FRAG.compile(hot_reload)?;
     Ok((cs, vs, ps))
 }
 
@@ -130,7 +128,9 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
     serialize_desc_and_create(device, &desc, "particle simulate root sig")
 }
 
-// Graphics root signature for `particle_vert` + `particle_frag`:
+// Graphics root signature for `particle_vertex` + `particle_fragment`. The two
+// constant buffers are why `particle.slang` carries a `DXIL_ABI` block at all:
+// b0 / b1 here are Metal buffer indices 1 / 2 there.
 //   [0] root CBV b0   : ParticleView   (per-frame)
 //   [1] root CBV b1   : ParticleParams (per-emitter)
 //   [2] root SRV t0   : pool           (structured-buffer SRV)

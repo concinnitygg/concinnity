@@ -13,8 +13,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLDevice as _, MTLLibrary as _, MTLPixelFormat, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState,
+    MTLDevice as _, MTLPixelFormat, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
 };
 
 use crate::metal::post::fullscreen::{FullscreenBlend, build_slang_fullscreen_pipeline};
@@ -75,13 +74,9 @@ fn object_common(hot_reload: bool) -> std::borrow::Cow<'static, str> {
 pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
     let embedded: &'static str = match name {
         "cull.metal" => include_str!("shaders/cull.metal"),
-        "decal.metal" => include_str!("shaders/decal.metal"),
         "glass_mesh_rt.metal" => include_str!("shaders/glass_mesh_rt.metal"),
-        "line.metal" => include_str!("shaders/line.metal"),
         "main.metal" => include_str!("shaders/main.metal"),
-        "particle.metal" => include_str!("shaders/particle.metal"),
         "rt_skin.metal" => include_str!("shaders/rt_skin.metal"),
-        "text.metal" => include_str!("shaders/text.metal"),
         "water.metal" => include_str!("shaders/water.metal"),
         "water_rt.metal" => include_str!("shaders/water_rt.metal"),
         _ => panic!(
@@ -157,8 +152,8 @@ pub(super) fn load_library(
         .map_err(|e| format!("{:?}", e))
 }
 
-// Build the text overlay render pipeline by compiling a small inline MSL source.
-// The resulting pipeline renders screen-space quads with alpha blending and no depth test.
+// Build the text overlay render pipeline from the single-source `text.slang`
+// pair. Renders screen-space quads with alpha blending and no depth test.
 pub(super) fn build_text_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     swap_pixel_format: MTLPixelFormat,
@@ -168,14 +163,18 @@ pub(super) fn build_text_pipeline(
         MTLBlendFactor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
     };
 
-    let library = shader_library(device, hot_reload, "text.metal")?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("text_vertex_main"))
-        .ok_or("text_vertex_main not found")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("text_fragment_main"))
-        .ok_or("text_fragment_main not found")?;
+    // Each entry compiles to its own metallib, so the two stages come from
+    // separate libraries and pair by semantic.
+    let vert_fn = crate::metal::slang_shaders::entry_function(
+        device,
+        &crate::metal::slang_shaders::TEXT_VERT,
+        hot_reload,
+    )?;
+    let frag_fn = crate::metal::slang_shaders::entry_function(
+        device,
+        &crate::metal::slang_shaders::TEXT_FRAG,
+        hot_reload,
+    )?;
 
     // Vertex layout: pos (float2) @ 0, uv (float2) @ 8, color (float3) @ 16,
     // mode (float) @ 28; buffer(1). Mirrors TextVertex in render_types.rs.
@@ -254,9 +253,11 @@ mod shader_source_tests {
 
     #[test]
     fn embedded_path_when_hot_reload_off() {
-        let s = shader_source(false, "text.metal");
+        // A shader with no `{OBJECT_DATA}` marker, so the embedded path is
+        // borrowed rather than spliced.
+        let s = shader_source(false, "water.metal");
         assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
-        assert!(s.contains("text_fragment_main"));
+        assert!(s.contains("water_fragment("));
     }
 
     #[test]
@@ -281,8 +282,8 @@ mod shader_source_tests {
     fn hot_reload_prefers_disk_when_present() {
         // The shader files live in this checkout, so the disk-load path
         // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "text.metal");
-        assert!(s.contains("text_fragment_main"));
+        let s = shader_source(true, "water.metal");
+        assert!(s.contains("water_fragment("));
     }
 
     #[test]

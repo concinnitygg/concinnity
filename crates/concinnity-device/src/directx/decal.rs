@@ -16,13 +16,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::slang_builtins;
 use crate::directx::texture::{HDR_FORMAT, create_buffer, upload_buffer, write_texture_srv};
 use crate::gfx::decal::DecalRecord;
 
-// Compile the decal vertex + fragment shaders; the MSAA define keeps the
+// Compile the decal vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
 // sample count. Used by [`DecalResources::new`] at init and by shader hot-
 // reload to rebuild the decal PSO.
@@ -30,12 +30,13 @@ pub(in crate::directx) fn compile_decal_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = Ctx {
-        hot_reload,
-        msaa: msaa_samples > 1,
+    let frag = if msaa_samples > 1 {
+        &slang_builtins::DECAL_FRAG_MSAA
+    } else {
+        &slang_builtins::DECAL_FRAG
     };
-    let vs = builtins::DECAL_VERT.compile(&ctx)?;
-    let ps = builtins::DECAL_FRAG.compile(&ctx)?;
+    let vs = slang_builtins::DECAL_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -79,7 +80,9 @@ const CUBE_INDICES: [u16; 36] = [
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
 pub(in crate::directx) use crate::directx::uniforms::{DecalParams, DecalView};
 
-// Root-signature layout (binds 1:1 with the HLSL register declarations):
+// Root-signature layout (binds 1:1 with the `decal.slang` declarations, whose
+// registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
+// build.rs pins each one):
 //   [0] root CBV b0   DecalView    (per-frame)
 //   [1] root CBV b1   DecalParams  (per-decal)
 //   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)

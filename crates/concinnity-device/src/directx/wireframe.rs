@@ -12,7 +12,7 @@
 
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::builtins::{self, Ctx};
+use super::builtins;
 use super::context::{DxContext, dump_on_err};
 use super::init::pipelines::{compile_main_bindless_shaders, create_main_pso_wireframe};
 use super::resources::create_skinned_pso_wireframe;
@@ -59,7 +59,6 @@ impl DxContext {
         let device = self.device.clone();
         let iq = self.info_queue.clone();
         let msaa = self.hdr.msaa_samples;
-        let ctx = Ctx::plain(self.hot_reload.enabled);
         let mut built = DxWireframe {
             built: true,
             ..Default::default()
@@ -87,8 +86,8 @@ impl DxContext {
         // are rebuilt from the built-in shaders rather than a world's custom
         // ones: a custom fragment stage is free to ignore the fill mode's intent
         // and the edges only need to be visible.
-        let main_ps = builtins::MAIN_FRAG.compile(&ctx)?;
-        let main_vs = builtins::MAIN_VERT.compile(&ctx)?;
+        let main_ps = builtins::MAIN_FRAG.compile(self.hot_reload.enabled)?;
+        let main_vs = builtins::MAIN_VERT.compile(self.hot_reload.enabled)?;
         built.main = Some(dump_on_err(
             iq.as_ref(),
             create_main_pso_wireframe(
@@ -102,7 +101,7 @@ impl DxContext {
         )?);
 
         if let Some(root_sig) = self.instanced.root_sig.as_ref() {
-            let vs = builtins::MAIN_VERT_INSTANCED.compile(&ctx)?;
+            let vs = builtins::MAIN_VERT_INSTANCED.compile(self.hot_reload.enabled)?;
             built.instanced = Some(dump_on_err(
                 iq.as_ref(),
                 create_main_pso_wireframe(&device, root_sig, &vs, &main_ps, HDR_FORMAT, msaa),
@@ -116,7 +115,7 @@ impl DxContext {
         if self.skinned.pso.is_some()
             && let Some(root_sig) = self.skinned.root_sig.as_ref()
         {
-            let vs = builtins::SKINNED_VERT.compile(&ctx)?;
+            let vs = builtins::SKINNED_VERT.compile(self.hot_reload.enabled)?;
             built.skinned = Some(dump_on_err(
                 iq.as_ref(),
                 create_skinned_pso_wireframe(&device, root_sig, &vs, &main_ps, HDR_FORMAT, msaa),

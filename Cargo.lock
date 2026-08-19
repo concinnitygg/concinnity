@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "bistro"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-memory",
  "concinnity-toolchain",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-asset"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "postcard",
  "serde",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-audio"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-core",
  "concinnity-store",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-bench"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-asset",
  "concinnity-blob",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-blob"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-asset",
  "concinnity-toolchain",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cli"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "ash",
  "clap",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cpu"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "bytemuck",
  "concinnity-asset",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "ash",
  "block2",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-docs"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-world",
  "syn",
@@ -771,11 +771,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-eas"
-version = "0.18.31"
+version = "0.18.32"
 
 [[package]]
 name = "concinnity-editor"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "argon2",
  "async-stream",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "ciborium",
  "concinnity-audio",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-font"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-cpu",
  "fontdue",
@@ -860,11 +860,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-memory"
-version = "0.18.31"
+version = "0.18.32"
 
 [[package]]
 name = "concinnity-physics"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-core",
  "concinnity-cpu",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-render"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-runtime"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-engine",
  "concinnity-memory",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-cook",
  "concinnity-device",
@@ -913,11 +913,11 @@ dependencies = [
 
 [[package]]
 name = "concinnity-slang"
-version = "0.18.31"
+version = "0.18.32"
 
 [[package]]
 name = "concinnity-store"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-blob",
  "concinnity-core",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-slang",
  "tempfile",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-world"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-core",
  "concinnity-cpu",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "example-common"
-version = "0.18.31"
+version = "0.18.32"
 dependencies = [
  "concinnity-cook",
  "concinnity-engine",

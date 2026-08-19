@@ -870,7 +870,7 @@ pub struct FogFroxelParams {
 // dynamic per-frame inputs the compute kernel needs to age + integrate +
 // respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
 // Metal particle passes, so the layout must stay in sync with
-// `ParticleParams` in `metal/shaders/particle.metal`. 144 bytes.
+// `ParticleParams` in `shaders/particle_types.slang`. 144 bytes.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct ParticleParams {
@@ -1821,10 +1821,11 @@ mod tests {
     }
 
     #[test]
-    fn text_vertex_layout_matches_msl() {
+    fn text_vertex_layout_matches_shaders() {
         // The text vertex buffer is consumed through a vertex descriptor whose
         // attributes sit at offsets 0 (pos), 8 (uv), 16 (color) with a 32-byte
-        // stride, matching the `TextVtxIn` attribute slots in text.metal.
+        // stride, matching the `TextVertexIn` attribute slots in
+        // `shaders/text.slang`.
         assert_eq!(size_of::<TextVertex>(), 32);
         assert_eq!(offset_of!(TextVertex, pos), 0);
         assert_eq!(offset_of!(TextVertex, uv), 8);
@@ -1833,10 +1834,10 @@ mod tests {
     }
 
     #[test]
-    fn line_vertex_layout_matches_msl() {
+    fn line_vertex_layout_matches_shaders() {
         // Consumed through a vertex descriptor whose attributes sit at offsets
         // 0 (pos), 12 (edge), 16 (color) with a 32-byte stride, matching the
-        // `LineVtxIn` attribute slots in line.metal.
+        // `LineVertexIn` attribute slots in `shaders/line.slang`.
         assert_eq!(size_of::<LineVertex>(), 32);
         assert_eq!(offset_of!(LineVertex, pos), 0);
         assert_eq!(offset_of!(LineVertex, edge), 12);
@@ -1844,8 +1845,8 @@ mod tests {
     }
 
     #[test]
-    fn text_uniforms_layout_matches_msl() {
-        // MSL `TextUniforms` in text.metal: four floats.
+    fn text_uniforms_layout_matches_shaders() {
+        // `TextUniforms` in `shaders/text.slang`: four floats.
         assert_eq!(size_of::<TextUniforms>(), 16);
         assert_eq!(offset_of!(TextUniforms, win_width), 0);
         assert_eq!(offset_of!(TextUniforms, win_height), 4);
@@ -2329,13 +2330,12 @@ mod tests {
     }
 
     #[test]
-    fn particle_params_layout_matches_msl() {
-        // `ParticleParams` rides at compute buffer(2) and vertex buffer(1) of
-        // the Metal particle passes. The single-source simulation kernel
-        // (`shaders/particle_simulate.slang`) spells the three (vec3, scalar)
-        // pairs as float4, since MSL sizes a constant-buffer float3 at 16
-        // bytes; the still-per-backend render pair reads them as packed_float3
-        // + scalar. Byte-identical either way, which is what these offsets pin.
+    fn particle_params_layout_matches_shaders() {
+        // `ParticleParams` rides at buffer(2) of both Metal particle passes.
+        // Both halves splice it from `shaders/particle_types.slang`, which
+        // spells the three (vec3, scalar) pairs as float4 since MSL sizes a
+        // constant-buffer float3 at 16 bytes; these offsets pin the Rust side
+        // to that.
         assert_eq!(size_of::<ParticleParams>(), 112);
         assert_eq!(offset_of!(ParticleParams, position), 0);
         assert_eq!(offset_of!(ParticleParams, spread_cos), 12);

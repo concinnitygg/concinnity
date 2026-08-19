@@ -48,6 +48,7 @@ const SLANG_SHADER_FRAGMENTS: &[(&str, &str)] = &[
     ("{PROBE_COMMON}", "probe_common.slang"),
     ("{RT_TYPES}", "rt_types.slang"),
     ("{RT_TRACE}", "rt_trace.slang"),
+    ("{PARTICLE_TYPES}", "particle_types.slang"),
 ];
 
 // The Metal bindless texture-pool capacity and reflection-probe array length,
@@ -241,6 +242,74 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
         entry: "glass_rt_fragment",
         profile: "ps_6_5",
         registers: GLASS_RT_TEXTURED_REGISTERS,
+    },
+    // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
+    // `pipeline.rs`. Only the particle pair carries a `DXIL_ABI` block, and only
+    // to swap the two constant buffers; the rest are here because slangc
+    // assigns their registers from declaration order, which is a weaker
+    // guarantee than a `register()` annotation and nothing else would catch a
+    // release that changed it.
+    DxilAbi {
+        file: "particle.slang",
+        gates: &[],
+        entry: "particle_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0"), ("params", "b1"), ("pool", "t0")],
+    },
+    DxilAbi {
+        file: "particle.slang",
+        gates: &[],
+        entry: "particle_fragment",
+        profile: "ps_6_0",
+        registers: &[("albedo_texture", "t1"), ("albedo_sampler", "s0")],
+    },
+    DxilAbi {
+        file: "decal.slang",
+        gates: &[],
+        entry: "decal_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0"), ("params", "b1")],
+    },
+    DxilAbi {
+        file: "decal.slang",
+        gates: &[],
+        entry: "decal_fragment",
+        profile: "ps_6_0",
+        registers: &[
+            ("view", "b0"),
+            ("params", "b1"),
+            ("scene_depth", "t0"),
+            ("decal_tex_texture", "t1"),
+            ("decal_tex_sampler", "s0"),
+        ],
+    },
+    DxilAbi {
+        file: "line.slang",
+        gates: &[],
+        entry: "line_vertex",
+        profile: "vs_6_0",
+        registers: &[("view", "b0")],
+    },
+    DxilAbi {
+        file: "line.slang",
+        gates: &[],
+        entry: "line_fragment",
+        profile: "ps_6_0",
+        registers: &[("view", "b0"), ("scene_depth", "t0")],
+    },
+    DxilAbi {
+        file: "text.slang",
+        gates: &[],
+        entry: "text_vertex_main",
+        profile: "vs_6_0",
+        registers: &[("uni", "b0")],
+    },
+    DxilAbi {
+        file: "text.slang",
+        gates: &[],
+        entry: "text_fragment_main",
+        profile: "ps_6_0",
+        registers: &[("atlas_texture", "t0"), ("atlas_sampler", "s0")],
     },
 ];
 
@@ -502,6 +571,54 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         defines: &[("METAL_BINDINGS", "1")],
     },
     SlangLibSpec {
+        name: "particle_vert.slang",
+        file: "particle.slang",
+        entries: &["particle_vertex"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "particle_frag.slang",
+        file: "particle.slang",
+        entries: &["particle_fragment"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "decal_vert.slang",
+        file: "decal.slang",
+        entries: &["decal_vertex"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "decal_frag.slang",
+        file: "decal.slang",
+        entries: &["decal_fragment"],
+        defines: &[("USE_MSAA", "0")],
+    },
+    SlangLibSpec {
+        name: "line_vert.slang",
+        file: "line.slang",
+        entries: &["line_vertex"],
+        defines: &[],
+    },
+    SlangLibSpec {
+        name: "line_frag.slang",
+        file: "line.slang",
+        entries: &["line_fragment"],
+        defines: &[("USE_MSAA", "0")],
+    },
+    SlangLibSpec {
+        name: "text_vert.slang",
+        file: "text.slang",
+        entries: &["text_vertex_main"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
+        name: "text_frag.slang",
+        file: "text.slang",
+        entries: &["text_fragment_main"],
+        defines: &[("METAL_BINDINGS", "1")],
+    },
+    SlangLibSpec {
         name: "rt_reflections_frag.slang",
         file: "rt_reflections.slang",
         entries: &["rt_reflections_fragment"],
@@ -711,7 +828,9 @@ fn assert_slang_dxil_abi(slang_dir: &std::path::Path) {
 }
 
 // The same check over every other single-source family. Each variant compiles
-// alone, so a register only has to hold in the entry that declares it.
+// alone, so a register only has to hold in the entry that declares it. A file
+// with no `DXIL_ABI` block is still worth a row: `DXIL_ABI` is simply inert
+// there and the check reads back slangc's declaration-order assignment.
 fn assert_slang_dxil_entry_abi(slang_dir: &std::path::Path, out_dir: &std::path::Path) {
     for abi in SLANG_DXIL_ENTRY_ABI {
         let mut defines: Vec<(&str, &str)> = vec![("DXIL_ABI", "1")];

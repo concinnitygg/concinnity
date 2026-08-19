@@ -412,8 +412,8 @@ fn compile_line_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::builtins::LINE_VERT.compile(&ctx)?;
-    let frag = super::builtins::LINE_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::LINE_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::LINE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -457,7 +457,7 @@ fn create_line_pipeline(
             .name(&entry),
     ];
     // `LineVertex` (position, edge, colour) at 32 bytes, asserted by
-    // `line_vertex_layout_matches_msl`.
+    // `line_vertex_layout_matches_shaders`.
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
         .stride(std::mem::size_of::<LineVertex>() as u32)

@@ -56,8 +56,8 @@ pub(in crate::vulkan) fn compile_particle_shaders(
 ) -> Result<ParticleShaderSpirv, String> {
     let ctx = super::builtins::Ctx::plain(hot_reload);
     let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
-    let vs = super::builtins::PARTICLE_VERT.compile(&ctx)?;
-    let fs = super::builtins::PARTICLE_FRAG.compile(&ctx)?;
+    let vs = super::slang_builtins::PARTICLE_VERT.compile(&ctx)?;
+    let fs = super::slang_builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, fs))
 }
 
@@ -113,7 +113,7 @@ pub(in crate::vulkan) struct ParticleResources {
     // set 0: (pool SSBO, counter SSBO) per emitter.
     pub(in crate::vulkan) compute_set_layout: vk::DescriptorSetLayout,
 
-    // Render pass: particle.vert / particle.frag.
+    // Render pass: the particle.slang billboard pair.
     pub(in crate::vulkan) render_pass: vk::RenderPass,
     pub(in crate::vulkan) render_pipeline: vk::Pipeline,
     pub(in crate::vulkan) render_pipeline_layout: vk::PipelineLayout,

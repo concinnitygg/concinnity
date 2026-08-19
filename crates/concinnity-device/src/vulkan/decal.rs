@@ -54,7 +54,7 @@ const CUBE_INDICES: [u16; 36] = [
 const PARAMS_STRIDE: u64 = 256;
 
 // Per-frame view inputs to the decal pass. Mirrors the `DecalViewBlock`
-// uniform in `decal.vert` / `decal.frag`. 144 bytes.
+// uniform in `shaders/decal.slang`. 144 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
 struct DecalView {
@@ -551,8 +551,8 @@ fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::builtins::DECAL_VERT.compile(&ctx)?;
-    let frag = super::builtins::DECAL_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::DECAL_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::DECAL_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

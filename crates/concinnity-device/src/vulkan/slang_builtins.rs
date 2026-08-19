@@ -67,6 +67,10 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
+const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
+const LINE_SLANG: &str = include_str!("../shaders/line.slang");
+const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
 
@@ -379,6 +383,84 @@ pub(super) static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
     msaa: false,
 };
 
+// The remaining raster families: the particle billboard pair, the projected
+// decal, world-space lines and the text / sprite overlay. Each has real vertex
+// geometry, so unlike the post passes they keep their own vertex entry rather
+// than pairing with `fullscreen.slang`. Only the two depth-reading fragments
+// take the host's sample count; their vertex stages never name the depth source.
+pub(super) static PARTICLE_VERT: SlangProgram = SlangProgram {
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entry: "particle_vertex",
+    label: "particle_vert.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+pub(super) static PARTICLE_FRAG: SlangProgram = SlangProgram {
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entry: "particle_fragment",
+    label: "particle_frag.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+pub(super) static DECAL_VERT: SlangProgram = SlangProgram {
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entry: "decal_vertex",
+    label: "decal_vert.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+pub(super) static DECAL_FRAG: SlangProgram = SlangProgram {
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entry: "decal_fragment",
+    label: "decal_frag.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: true,
+};
+pub(super) static LINE_VERT: SlangProgram = SlangProgram {
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entry: "line_vertex",
+    label: "line_vert.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+pub(super) static LINE_FRAG: SlangProgram = SlangProgram {
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entry: "line_fragment",
+    label: "line_frag.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: true,
+};
+pub(super) static TEXT_VERT: SlangProgram = SlangProgram {
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entry: "text_vertex_main",
+    label: "text_vert.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+pub(super) static TEXT_FRAG: SlangProgram = SlangProgram {
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entry: "text_fragment_main",
+    label: "text_frag.slang",
+    gates: &[],
+    sizes: Sizes::None,
+    msaa: false,
+};
+
 // Every declared program, iterated by the export-time precompile. Both Hi-Z
 // init variants are enumerated: which one a device runs depends on its MSAA
 // The ray-traced families, compiled only where `VK_KHR_ray_query` is present:
@@ -475,6 +557,14 @@ pub(crate) static ALL: &[&SlangProgram] = &[
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
+    &PARTICLE_VERT,
+    &PARTICLE_FRAG,
+    &DECAL_VERT,
+    &DECAL_FRAG,
+    &LINE_VERT,
+    &LINE_FRAG,
+    &TEXT_VERT,
+    &TEXT_FRAG,
     &RT_REFLECTIONS_FRAG,
     &RT_REFLECTIONS_FRAG_TEXTURED,
     &GLASS_VERT,
@@ -582,6 +672,7 @@ mod tests {
                 "{PROBE_COMMON}",
                 "{RT_TYPES}",
                 "{RT_TRACE}",
+                "{PARTICLE_TYPES}",
             ] {
                 assert!(
                     !src.contains(marker),
@@ -590,6 +681,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Reading the main pass's depth is what makes a program's assembly depend on
+    // the host's sample count, and the export-time precompile enumerates both
+    // variants for exactly those. A program that gained or lost the dependency
+    // silently would leave a bundle cold for one MSAA mode.
+    #[test]
+    fn only_the_depth_reading_programs_take_the_sample_count() {
+        let mut sampled: Vec<&str> = ALL.iter().filter(|p| p.msaa).map(|p| p.label).collect();
+        sampled.sort_unstable();
+        assert_eq!(
+            sampled,
+            [
+                "decal_frag.slang",
+                "fog_frag.slang",
+                "glass_frag.slang",
+                "glass_frag_rt.slang",
+                "glass_frag_rt_textured.slang",
+                "glass_vert.slang",
+                "line_frag.slang",
+            ]
+        );
     }
 
     // Two programs collide when they would compile identical source with the

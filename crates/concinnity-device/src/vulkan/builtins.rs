@@ -30,8 +30,6 @@ pub(crate) fn bindless_pool_size(texture_count: usize) -> usize {
 // inject immediately after `#version` (later injections land closer to it);
 // substitutions then replace the body's `{...}` markers.
 pub(crate) struct Assembly {
-    // Inject `#define USE_MSAA {0|1}` from `Ctx::msaa`.
-    pub msaa: bool,
     // Inject a fixed define line (kernel variants such as CULL_PHASE2).
     pub define: Option<&'static str>,
     // Substitute `{POOL_SIZE}` from `Ctx::pool_size`.
@@ -41,22 +39,10 @@ pub(crate) struct Assembly {
 }
 
 const PLAIN: Assembly = Assembly {
-    msaa: false,
     define: None,
     pool_size: false,
     object_data: false,
 };
-const MSAA: Assembly = Assembly {
-    msaa: true,
-    ..PLAIN
-};
-
-impl Assembly {
-    // MSAA values this assembly can produce, for the export-time enumeration.
-    fn msaa_variants(&self) -> &'static [bool] {
-        if self.msaa { &[false, true] } else { &[false] }
-    }
-}
 
 // Inputs a call site supplies to assemble a program's source.
 pub(crate) struct Ctx {
@@ -102,9 +88,6 @@ impl GlslProgram {
     // Assemble the exact source text this program compiles under `ctx`.
     pub fn source(&self, ctx: &Ctx) -> String {
         let mut src = shader_source(ctx.hot_reload, self.file, self.embedded).into_owned();
-        if self.assembly.msaa {
-            src = inject_define(&src, msaa_define(ctx.msaa));
-        }
         if let Some(define) = self.assembly.define {
             src = inject_define(&src, define);
         }
@@ -129,14 +112,6 @@ impl GlslProgram {
     }
 }
 
-fn msaa_define(msaa: bool) -> &'static str {
-    if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
-    }
-}
-
 // Compile every declared program (all enumerable variants) into `out_dir`,
 // reusing local cache artifacts where present. `texture_count` sizes the
 // `{POOL_SIZE}` substitution exactly as the exported world's first launch will.
@@ -151,31 +126,29 @@ pub(crate) fn precompile(
 ) {
     let pool_size = bindless_pool_size(texture_count);
     for program in ALL {
-        for &msaa in program.assembly.msaa_variants() {
-            let ctx = Ctx {
-                hot_reload: false,
-                msaa,
-                pool_size,
-                probe_count: super::probe_uniforms::MAX_PROBES,
-            };
-            let source = program.source(&ctx);
-            let key = if program.rt {
-                super::pipeline::glsl_rt_cache_key(&source, program.kind)
+        let ctx = Ctx {
+            hot_reload: false,
+            msaa: false,
+            pool_size,
+            probe_count: super::probe_uniforms::MAX_PROBES,
+        };
+        let source = program.source(&ctx);
+        let key = if program.rt {
+            super::pipeline::glsl_rt_cache_key(&source, program.kind)
+        } else {
+            super::pipeline::glsl_cache_key(&source, program.kind)
+        };
+        let compile = || {
+            if program.rt {
+                compile_glsl_rt(&source, program.kind, program.label)
             } else {
-                super::pipeline::glsl_cache_key(&source, program.kind)
-            };
-            let compile = || {
-                if program.rt {
-                    compile_glsl_rt(&source, program.kind, program.label)
-                } else {
-                    compile_glsl(&source, program.kind, program.label)
-                }
-            };
-            report.record(
-                program.label,
-                crate::shader_cache::ensure_in(out_dir, &key, compile),
-            );
-        }
+                compile_glsl(&source, program.kind, program.label)
+            }
+        };
+        report.record(
+            program.label,
+            crate::shader_cache::ensure_in(out_dir, &key, compile),
+        );
     }
 
     // The single-source programs precompile through the same cache under their
@@ -289,67 +262,6 @@ pub(super) static CULL_SHADOW: GlslProgram = GlslProgram {
     )
 };
 
-pub(super) static TEXT_VERT: GlslProgram = glsl(
-    "text.vert",
-    include_str!("shaders/text.vert"),
-    Vertex,
-    "text_vert.glsl",
-);
-pub(super) static TEXT_FRAG: GlslProgram = glsl(
-    "text.frag",
-    include_str!("shaders/text.frag"),
-    Fragment,
-    "text_frag.glsl",
-);
-
-pub(super) static PARTICLE_VERT: GlslProgram = glsl(
-    "particle.vert",
-    include_str!("shaders/particle.vert"),
-    Vertex,
-    "particle.vert",
-);
-pub(super) static PARTICLE_FRAG: GlslProgram = glsl(
-    "particle.frag",
-    include_str!("shaders/particle.frag"),
-    Fragment,
-    "particle.frag",
-);
-
-pub(super) static DECAL_VERT: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "decal.vert",
-        include_str!("shaders/decal.vert"),
-        Vertex,
-        "decal.vert",
-    )
-};
-pub(super) static DECAL_FRAG: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "decal.frag",
-        include_str!("shaders/decal.frag"),
-        Fragment,
-        "decal.frag",
-    )
-};
-
-pub(super) static LINE_VERT: GlslProgram = glsl(
-    "line.vert",
-    include_str!("shaders/line.vert"),
-    Vertex,
-    "line.vert",
-);
-pub(super) static LINE_FRAG: GlslProgram = GlslProgram {
-    assembly: MSAA,
-    ..glsl(
-        "line.frag",
-        include_str!("shaders/line.frag"),
-        Fragment,
-        "line.frag",
-    )
-};
-
 // Ray-query (Vulkan 1.2 / SPIR-V 1.4) programs.
 
 // The SdfVolume proxy vertex shaders are pure engine text (only the fragment
@@ -386,14 +298,6 @@ pub(crate) static ALL: &[&GlslProgram] = &[
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
-    &TEXT_VERT,
-    &TEXT_FRAG,
-    &PARTICLE_VERT,
-    &PARTICLE_FRAG,
-    &DECAL_VERT,
-    &DECAL_FRAG,
-    &LINE_VERT,
-    &LINE_FRAG,
     &RAYMARCH_PROXY_VERT,
     &RAYMARCH_SHADOW_PROXY_VERT,
 ];
@@ -474,17 +378,10 @@ mod tests {
     fn defines_inject_after_the_version_directive() {
         let ctx = Ctx {
             hot_reload: false,
-            msaa: true,
+            msaa: false,
             pool_size: 3,
             probe_count: 3,
         };
-        let src = DECAL_FRAG.source(&ctx);
-        let mut lines = src.lines();
-        assert!(lines.next().unwrap().starts_with("#version"));
-        assert_eq!(lines.next().unwrap(), "#define USE_MSAA 1");
-
-        // A fixed define lands closer to #version than the MSAA define,
-        // matching the historical assembly order.
         let src = CULL_PHASE2.source(&ctx);
         let mut lines = src.lines();
         assert!(lines.next().unwrap().starts_with("#version"));
@@ -535,11 +432,5 @@ mod tests {
             spliced += usize::from(declares);
         }
         assert_eq!(spliced, 3, "object-data program count changed");
-    }
-
-    #[test]
-    fn msaa_programs_enumerate_both_variants() {
-        assert_eq!(DECAL_FRAG.assembly.msaa_variants(), &[false, true]);
-        assert_eq!(CULL_PHASE2.assembly.msaa_variants(), &[false]);
     }
 }

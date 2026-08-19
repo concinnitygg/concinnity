@@ -228,7 +228,7 @@ pub struct AutoExposureParams {
 }
 
 // Per-frame view inputs to the projected-decal pass. Layout must match the
-// `DecalView` MSL struct in `shaders/decal.metal`. 144 bytes.
+// `DecalView` struct in `shaders/decal.slang`. 144 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct DecalView {
@@ -243,7 +243,7 @@ pub struct DecalView {
 }
 
 // Per-frame view inputs to the line pass. Layout must match the
-// `LineView` MSL struct in `shaders/line.metal`. 80 bytes.
+// `LineView` struct in `shaders/line.slang`. 80 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct LineView {
@@ -256,7 +256,7 @@ pub struct LineView {
 }
 
 // Per-decal uniforms pushed before each draw. Layout must match the
-// `DecalParams` MSL struct in `shaders/decal.metal`. 160 bytes (two
+// `DecalParams` struct in `shaders/decal.slang`. 160 bytes (two
 // float4x4s + a float4 tint + four scalars).
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -271,7 +271,7 @@ pub struct DecalParams {
 }
 
 // Per-frame view inputs to the particle render pass. Layout must match the
-// `ParticleView` MSL struct in `shaders/particle.metal`. 96 bytes.
+// `ParticleView` struct in `shaders/particle.slang`. 96 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct ParticleView {
@@ -422,7 +422,7 @@ pub struct HizParams {
 }
 
 // One particle slot on the GPU. Layout must match the `Particle` MSL struct in
-// `shaders/particle.metal` (32 bytes per slot: `packed_float3 + float` twice).
+// `shaders/particle_types.slang` (32 bytes per slot: two float3 + float pairs).
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct GpuParticle {
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn decal_view_layout_matches_msl() {
-        // MSL `DecalView` in decal.metal: two float4x4, a float2 + pad.
+        // `DecalView` in decal.slang: two float4x4, a float2 + pad.
         assert_eq!(size_of::<DecalView>(), 144);
         assert_eq!(offset_of!(DecalView, vp), 0);
         assert_eq!(offset_of!(DecalView, inv_vp), 64);
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn decal_params_layout_matches_msl() {
-        // MSL `DecalParams` in decal.metal: two float4x4, a float4 tint, then
+        // `DecalParams` in decal.slang: two float4x4, a float4 tint, then
         // four scalars.
         assert_eq!(size_of::<DecalParams>(), 160);
         assert_eq!(offset_of!(DecalParams, model), 0);
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn line_view_layout_matches_msl() {
-        // MSL `LineView` in line.metal: a float4x4 then four floats.
+        // `LineView` in line.slang: a float4x4 then four floats.
         assert_eq!(size_of::<LineView>(), 80);
         assert_eq!(offset_of!(LineView, vp), 0);
         assert_eq!(offset_of!(LineView, occluded_alpha), 64);
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn particle_view_layout_matches_msl() {
-        // MSL `ParticleView` in particle.metal: float4x4 vp, two
+        // `ParticleView` in particle.slang: float4x4 vp, two
         // packed_float3 + pad billboard axes.
         assert_eq!(size_of::<ParticleView>(), 96);
         assert_eq!(offset_of!(ParticleView, vp), 0);
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn gpu_particle_layout_matches_msl() {
-        // Mirrors the `Particle` struct in `shaders/particle.metal`:
+        // Mirrors the `Particle` struct in `shaders/particle_types.slang`:
         // packed_float3 + float, twice = 32 bytes, layout 0/12/16/28.
         assert_eq!(size_of::<GpuParticle>(), 32);
         assert_eq!(offset_of!(GpuParticle, position), 0);

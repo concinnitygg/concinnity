@@ -17,14 +17,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLCommandBuffer, MTLDevice as _, MTLLibrary as _, MTLLoadAction,
-    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLBlendFactor, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
     MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLStoreAction,
     MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_library};
+
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::render_types::LineVertex;
 
@@ -146,16 +146,15 @@ fn build_line_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "line.metal")?;
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("line_vertex"))
-        .ok_or("line_vertex not found")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("line_fragment"))
-        .ok_or("line_fragment not found")?;
+    // Each entry compiles to its own metallib, so the two stages come from
+    // separate libraries and pair by semantic.
+    let vert_fn =
+        super::slang_shaders::entry_function(device, &super::slang_shaders::LINE_VERT, hot_reload)?;
+    let frag_fn =
+        super::slang_shaders::entry_function(device, &super::slang_shaders::LINE_FRAG, hot_reload)?;
 
     // Vertex layout: `LineVertex` (position, edge, colour) at 32 bytes,
-    // asserted by `line_vertex_layout_matches_msl`.
+    // asserted by `line_vertex_layout_matches_shaders`.
     let vert_desc = MTLVertexDescriptor::new();
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);

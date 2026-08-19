@@ -15,14 +15,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLCommandBuffer as _, MTLDevice as _, MTLIndexType, MTLLibrary as _,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction,
-    MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLBlendFactor, MTLCommandBuffer as _, MTLDevice as _, MTLIndexType, MTLLoadAction,
+    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction, MTLVertexDescriptor,
+    MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_library};
+
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::{DecalParams, DecalView};
 use crate::gfx::decal::DecalRecord;
@@ -220,14 +220,18 @@ pub(super) fn build_decal_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let library = shader_library(device, hot_reload, "decal.metal")?;
-
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("decal_vertex"))
-        .ok_or("decal_vertex not found")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("decal_fragment"))
-        .ok_or("decal_fragment not found")?;
+    // Each entry compiles to its own metallib, so the two stages come from
+    // separate libraries and pair by semantic.
+    let vert_fn = super::slang_shaders::entry_function(
+        device,
+        &super::slang_shaders::DECAL_VERT,
+        hot_reload,
+    )?;
+    let frag_fn = super::slang_shaders::entry_function(
+        device,
+        &super::slang_shaders::DECAL_FRAG,
+        hot_reload,
+    )?;
 
     // Vertex layout: a single float3 position at buffer(2). The cube buffer
     // holds 8 unit-cube corners in [-0.5, 0.5]^3.

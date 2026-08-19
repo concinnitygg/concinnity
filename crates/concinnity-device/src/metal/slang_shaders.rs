@@ -62,6 +62,10 @@ const REFLECTION_SLANG: &str = include_str!("../shaders/reflection.slang");
 const FOG_SLANG: &str = include_str!("../shaders/fog.slang");
 const AUTO_EXPOSURE_SLANG: &str = include_str!("../shaders/auto_exposure.slang");
 const PARTICLE_SIMULATE_SLANG: &str = include_str!("../shaders/particle_simulate.slang");
+const PARTICLE_SLANG: &str = include_str!("../shaders/particle.slang");
+const DECAL_SLANG: &str = include_str!("../shaders/decal.slang");
+const LINE_SLANG: &str = include_str!("../shaders/line.slang");
+const TEXT_SLANG: &str = include_str!("../shaders/text.slang");
 const RT_REFLECTIONS_SLANG: &str = include_str!("../shaders/rt_reflections.slang");
 const GLASS_SLANG: &str = include_str!("../shaders/glass.slang");
 
@@ -317,6 +321,69 @@ pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
     defines: &[("METAL_BINDINGS", "1")],
 };
 
+// The remaining raster families: the particle billboard pair, the projected
+// decal, world-space lines and the text / sprite overlay. Each has real vertex
+// geometry, so unlike the post passes they keep their own vertex entry rather
+// than pairing with `fullscreen.slang`. The two depth-reading fragments always
+// compile against the resolved single-sample depth here, the way the fog
+// fragment does; only Vulkan reads the multisampled original.
+pub(super) static PARTICLE_VERT: SlangLib = SlangLib {
+    name: "particle_vert.slang",
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entries: &["particle_vertex"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+pub(super) static PARTICLE_FRAG: SlangLib = SlangLib {
+    name: "particle_frag.slang",
+    file: "particle.slang",
+    embedded: PARTICLE_SLANG,
+    entries: &["particle_fragment"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+pub(super) static DECAL_VERT: SlangLib = SlangLib {
+    name: "decal_vert.slang",
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entries: &["decal_vertex"],
+    defines: &[],
+};
+pub(super) static DECAL_FRAG: SlangLib = SlangLib {
+    name: "decal_frag.slang",
+    file: "decal.slang",
+    embedded: DECAL_SLANG,
+    entries: &["decal_fragment"],
+    defines: &[("USE_MSAA", "0")],
+};
+pub(super) static LINE_VERT: SlangLib = SlangLib {
+    name: "line_vert.slang",
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entries: &["line_vertex"],
+    defines: &[],
+};
+pub(super) static LINE_FRAG: SlangLib = SlangLib {
+    name: "line_frag.slang",
+    file: "line.slang",
+    embedded: LINE_SLANG,
+    entries: &["line_fragment"],
+    defines: &[("USE_MSAA", "0")],
+};
+pub(super) static TEXT_VERT: SlangLib = SlangLib {
+    name: "text_vert.slang",
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entries: &["text_vertex_main"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+pub(super) static TEXT_FRAG: SlangLib = SlangLib {
+    name: "text_frag.slang",
+    file: "text.slang",
+    embedded: TEXT_SLANG,
+    entries: &["text_fragment_main"],
+    defines: &[("METAL_BINDINGS", "1")],
+};
+
 // The ray-traced families. Only ever loaded on a device that supports ray
 // tracing: the trace is compiled in, and the hosts build these pipelines only
 // once an acceleration structure exists. The textured variants read the
@@ -418,6 +485,14 @@ pub(super) static ALL: &[&SlangLib] = &[
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
+    &PARTICLE_VERT,
+    &PARTICLE_FRAG,
+    &DECAL_VERT,
+    &DECAL_FRAG,
+    &LINE_VERT,
+    &LINE_FRAG,
+    &TEXT_VERT,
+    &TEXT_FRAG,
     &RT_REFLECTIONS_FRAG,
     &RT_REFLECTIONS_FRAG_TEXTURED,
     &GLASS_VERT,
@@ -527,7 +602,7 @@ mod tests {
             for hot_reload in [false, true] {
                 let src = lib.source(hot_reload);
                 assert!(!src.trim().is_empty(), "{}: empty source", lib.name);
-                for marker in ["{POST_COMMON}", "{OBJECT_COMMON}"] {
+                for marker in ["{POST_COMMON}", "{OBJECT_COMMON}", "{PARTICLE_TYPES}"] {
                     assert!(
                         !src.contains(marker),
                         "{}: unspliced fragment marker {marker}",

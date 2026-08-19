@@ -2,8 +2,9 @@
 //
 // repr(C) uniform / root-constant structs shared between the DirectX frame
 // encoders and the HLSL shaders (cbuffer / root-constant layouts). Each struct
-// is mirrored field-for-field in an `.hlsl` shader and locked by a layout test
-// asserting its `size_of` and every `offset_of!`.
+// is mirrored field-for-field in a shader declaration -- an `.hlsl` under
+// `directx/shaders/`, or a single-source `.slang` under `shaders/` -- and
+// locked by a layout test asserting its `size_of` and every `offset_of!`.
 //
 // These are GPU-free (plain repr(C) types, no D3D12), so they live in
 // concinnity-render and their layout tests count toward coverage; the DirectX
@@ -141,8 +142,9 @@ pub struct GpuParticle {
     pub lifetime: f32,
 }
 
-// The particle render pass per-frame `ParticleView` cbuffer (particle_vert.hlsl,
-// 96 bytes: float4x4 + two (float3, pad) camera-basis slots).
+// The particle render pass per-frame `ParticleView` cbuffer
+// (shaders/particle.slang, 96 bytes: float4x4 + two (float3, pad) camera-basis
+// slots).
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct ParticleView {
@@ -330,10 +332,10 @@ mod tests {
         assert_eq!(offset_of!(GpuParticle, lifetime), 28);
     }
 
-    // Mirrors the `ParticleView` cbuffer in particle_vert.hlsl: float4x4 (64) +
-    // (float3 + pad) + (float3 + pad) = 96.
+    // Mirrors the `ParticleView` cbuffer in shaders/particle.slang: float4x4 (64)
+    // + (float3 + pad) + (float3 + pad) = 96.
     #[test]
-    fn particle_view_layout_matches_hlsl() {
+    fn particle_view_layout_matches_shaders() {
         assert_eq!(size_of::<ParticleView>(), 96);
         assert_eq!(offset_of!(ParticleView, vp), 0);
         assert_eq!(offset_of!(ParticleView, cam_right), 64);

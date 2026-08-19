@@ -12,7 +12,7 @@ use crate::gfx::backend::ChunkMesh;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
 
-use super::builtins::{self, Ctx};
+use super::builtins;
 use super::context::*;
 use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
 use super::math::*;
@@ -35,13 +35,12 @@ use super::texture::*;
 type SkinnedShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 fn compile_skinned_shaders(frag_bytes: &[u8], hot_reload: bool) -> Result<SkinnedShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
-    let main_vs = builtins::SKINNED_VERT.compile(&ctx)?;
+    let main_vs = builtins::SKINNED_VERT.compile(hot_reload)?;
     let shadow_vs = slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)?;
     let frag_ps = if !frag_bytes.is_empty() {
         frag_bytes.to_vec()
     } else {
-        builtins::MAIN_FRAG.compile(&ctx)?
+        builtins::MAIN_FRAG.compile(hot_reload)?
     };
     Ok((main_vs, shadow_vs, frag_ps))
 }

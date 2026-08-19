@@ -2,22 +2,23 @@
 //
 // The declarative table of every built-in HLSL program the DirectX backend
 // compiles at runtime. Each program is declared exactly once: its source file,
-// entry point, target profile, compiler, and how the compile source is
-// assembled from the file (the MSAA define, the object_common injection).
-// Renderer init and hot-reload compile through
-// `HlslProgram::compile`, and the
-// export-time precompile iterates `ALL` to populate a bundle's shader cache
-// from the very same declarations, so the two can never drift.
+// entry point, target profile, compiler, and whether its body takes the shared
+// object_common injection. Renderer init and hot-reload compile through
+// `HlslProgram::compile`, and the export-time precompile iterates `ALL` to
+// populate a bundle's shader cache from the very same declarations, so the two
+// can never drift.
 //
-// Not declared here: the single-source `.slang` programs (`slang_builtins`),
-// which compile to DXIL through slangc rather than FXC; and the SdfVolume
+// What is left here is the per-draw main pass, its skinned and instanced
+// vertex siblings, the cull kernel and the RT skinned refit: everything else
+// ships from `src/shaders/*.slang` (`slang_builtins`), which compiles to DXIL
+// through slangc rather than FXC. Also not declared here: the SdfVolume
 // raymarch pipelines (raymarch.rs), whose fragment source embeds
 // world-authored shader text and therefore cannot be enumerated ahead of a
 // world. Both compile at init through the same cache.
 
 use std::borrow::Cow;
 
-use super::pipeline::{reflection_cut_prelude, shader_source};
+use super::pipeline::shader_source;
 
 // The shared bindless per-object record, substituted into every pass that
 // strides the per-frame object StructuredBuffer at its `{OBJECT_DATA}` marker.
@@ -33,47 +34,6 @@ pub(crate) enum Compiler {
     Dxc,
 }
 
-// How a program's compile source is assembled from its shader file. Prefixes
-// are prepended in the order below; the body's markers are substituted
-// afterwards.
-pub(crate) struct Assembly {
-    // Prepend `#define USE_MSAA {0|1}` from `Ctx::msaa`.
-    pub msaa: bool,
-    // Prepend the reflection roughness-cut prelude (see `reflection_cut_prelude`).
-    pub cut: bool,
-    // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
-    pub object_data: bool,
-}
-
-const PLAIN: Assembly = Assembly {
-    msaa: false,
-    cut: false,
-    object_data: false,
-};
-
-impl Assembly {
-    // MSAA values this assembly can produce, for the export-time enumeration.
-    fn msaa_variants(&self) -> &'static [bool] {
-        if self.msaa { &[false, true] } else { &[false] }
-    }
-}
-
-// Inputs a call site supplies to assemble a program's source.
-pub(crate) struct Ctx {
-    pub hot_reload: bool,
-    pub msaa: bool,
-}
-
-impl Ctx {
-    // For programs whose assembly ignores the MSAA state.
-    pub fn plain(hot_reload: bool) -> Self {
-        Self {
-            hot_reload,
-            msaa: false,
-        }
-    }
-}
-
 pub(crate) struct HlslProgram {
     // File name under `src/directx/shaders/` for the `cn debug` disk-first resolve.
     pub file: &'static str,
@@ -81,7 +41,8 @@ pub(crate) struct HlslProgram {
     pub entry: &'static str,
     pub target: &'static str,
     pub compiler: Compiler,
-    pub assembly: Assembly,
+    // Substitute `{OBJECT_DATA}` with the shared `GpuObjectData` declaration.
+    pub object_data: bool,
 }
 
 impl HlslProgram {
@@ -89,27 +50,18 @@ impl HlslProgram {
         shader_source(hot_reload, self.file, self.embedded)
     }
 
-    // Assemble the exact source text this program compiles under `ctx`.
-    pub fn source(&self, ctx: &Ctx) -> String {
-        let assembly = &self.assembly;
-        let mut src = String::new();
-        if assembly.cut {
-            src.push_str(&reflection_cut_prelude());
-        }
-        if assembly.msaa {
-            src.push_str(msaa_define(ctx.msaa));
-        }
-        src.push_str(&self.body(ctx.hot_reload));
-        if assembly.object_data {
-            let object_common =
-                shader_source(ctx.hot_reload, "object_common.hlsl", OBJECT_COMMON_HLSL);
+    // Assemble the exact source text this program compiles.
+    pub fn source(&self, hot_reload: bool) -> String {
+        let mut src = self.body(hot_reload).into_owned();
+        if self.object_data {
+            let object_common = shader_source(hot_reload, "object_common.hlsl", OBJECT_COMMON_HLSL);
             src = src.replace("{OBJECT_DATA}", &object_common);
         }
         src
     }
 
-    pub fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
-        let source = self.source(ctx);
+    pub fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
+        let source = self.source(hot_reload);
         match self.compiler {
             Compiler::Fxc => super::pipeline::compile_hlsl(&source, self.entry, self.target),
             Compiler::Dxc => super::dxc::compile_hlsl_dxc(&source, self.entry, self.target),
@@ -117,45 +69,25 @@ impl HlslProgram {
     }
 }
 
-fn msaa_define(msaa: bool) -> &'static str {
-    if msaa {
-        "#define USE_MSAA 1\n"
-    } else {
-        "#define USE_MSAA 0\n"
-    }
-}
-
-// Compile every declared program (all enumerable variants) into `out_dir`,
-// reusing local cache artifacts where present. DXC programs are skipped as a
-// group when `dxcompiler.dll` is unavailable, mirroring the runtime fallback
-// (RT stays off, SSR takes over), and reported rather than failing the export.
+// Compile every declared program into `out_dir`, reusing local cache artifacts
+// where present. DXC programs are skipped as a group when `dxcompiler.dll` is
+// unavailable, mirroring the runtime fallback (RT stays off, SSR takes over),
+// and reported rather than failing the export.
 pub(crate) fn precompile(out_dir: &std::path::Path, report: &mut crate::precompile::Report) {
     for program in ALL {
-        for &msaa in program.assembly.msaa_variants() {
-            let ctx = Ctx {
-                hot_reload: false,
-                msaa,
-            };
-            let source = program.source(&ctx);
-            let key = match program.compiler {
-                Compiler::Fxc => {
-                    super::pipeline::fxc_cache_key(&source, program.entry, program.target)
-                }
-                Compiler::Dxc => super::dxc::dxc_cache_key(&source, program.entry, program.target),
-            };
-            let compile = || match program.compiler {
-                Compiler::Fxc => {
-                    super::pipeline::compile_hlsl(&source, program.entry, program.target)
-                }
-                Compiler::Dxc => {
-                    super::dxc::compile_hlsl_dxc(&source, program.entry, program.target)
-                }
-            };
-            report.record(
-                &format!("{} {}", program.entry, program.target),
-                crate::shader_cache::ensure_in(out_dir, &key, compile),
-            );
-        }
+        let source = program.source(false);
+        let key = match program.compiler {
+            Compiler::Fxc => super::pipeline::fxc_cache_key(&source, program.entry, program.target),
+            Compiler::Dxc => super::dxc::dxc_cache_key(&source, program.entry, program.target),
+        };
+        let compile = || match program.compiler {
+            Compiler::Fxc => super::pipeline::compile_hlsl(&source, program.entry, program.target),
+            Compiler::Dxc => super::dxc::compile_hlsl_dxc(&source, program.entry, program.target),
+        };
+        report.record(
+            &format!("{} {}", program.entry, program.target),
+            crate::shader_cache::ensure_in(out_dir, &key, compile),
+        );
     }
 }
 
@@ -164,7 +96,7 @@ const MAIN_VERT_HLSL: &str = include_str!("shaders/main_vert.hlsl");
 const MAIN_FRAG_HLSL: &str = include_str!("shaders/main_frag.hlsl");
 const CULL_HLSL: &str = include_str!("shaders/cull.hlsl");
 
-// Declaration shorthand: FXC, single `main` entry, no assembly.
+// Declaration shorthand: FXC, single `main` entry, no object_data splice.
 const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static str) -> HlslProgram {
     HlslProgram {
         file,
@@ -172,20 +104,9 @@ const fn fxc_main(file: &'static str, embedded: &'static str, target: &'static s
         entry: "main",
         target,
         compiler: Compiler::Fxc,
-        assembly: PLAIN,
+        object_data: false,
     }
 }
-
-pub(super) static TEXT_VERT: HlslProgram = fxc_main(
-    "text_vert.hlsl",
-    include_str!("shaders/text_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static TEXT_FRAG: HlslProgram = fxc_main(
-    "text_frag.hlsl",
-    include_str!("shaders/text_frag.hlsl"),
-    "ps_5_1",
-);
 
 // The main geometry pass. Both vertex entry points share main_vert.hlsl.
 pub(super) static MAIN_VERT: HlslProgram = HlslProgram {
@@ -194,7 +115,7 @@ pub(super) static MAIN_VERT: HlslProgram = HlslProgram {
     entry: "vertex_main",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: PLAIN,
+    object_data: false,
 };
 pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     file: "main_vert.hlsl",
@@ -202,7 +123,7 @@ pub(super) static MAIN_VERT_INSTANCED: HlslProgram = HlslProgram {
     entry: "vertex_main_instanced",
     target: "vs_5_1",
     compiler: Compiler::Fxc,
-    assembly: PLAIN,
+    object_data: false,
 };
 pub(super) static MAIN_FRAG: HlslProgram = fxc_main("main_frag.hlsl", MAIN_FRAG_HLSL, "ps_5_1");
 pub(super) static SKINNED_VERT: HlslProgram = fxc_main(
@@ -214,10 +135,7 @@ pub(super) static SKINNED_VERT: HlslProgram = fxc_main(
 const fn fxc_cull(entry: &'static str) -> HlslProgram {
     HlslProgram {
         entry,
-        assembly: Assembly {
-            object_data: true,
-            ..PLAIN
-        },
+        object_data: true,
         ..fxc_main("cull.hlsl", CULL_HLSL, "cs_5_1")
     }
 }
@@ -225,57 +143,6 @@ const fn fxc_cull(entry: &'static str) -> HlslProgram {
 pub(super) static CULL: HlslProgram = fxc_cull("main");
 pub(super) static CULL_PHASE2: HlslProgram = fxc_cull("main_phase2");
 pub(super) static CULL_SHADOW: HlslProgram = fxc_cull("main_shadow");
-
-pub(super) static DECAL_VERT: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "decal_vert.hlsl",
-        include_str!("shaders/decal_vert.hlsl"),
-        "vs_5_1",
-    )
-};
-pub(super) static DECAL_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "decal_frag.hlsl",
-        include_str!("shaders/decal_frag.hlsl"),
-        "ps_5_1",
-    )
-};
-
-pub(super) static LINE_VERT: HlslProgram = fxc_main(
-    "line_vert.hlsl",
-    include_str!("shaders/line_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static LINE_FRAG: HlslProgram = HlslProgram {
-    assembly: Assembly {
-        msaa: true,
-        ..PLAIN
-    },
-    ..fxc_main(
-        "line_frag.hlsl",
-        include_str!("shaders/line_frag.hlsl"),
-        "ps_5_1",
-    )
-};
-
-pub(super) static PARTICLE_VERT: HlslProgram = fxc_main(
-    "particle_vert.hlsl",
-    include_str!("shaders/particle_vert.hlsl"),
-    "vs_5_1",
-);
-pub(super) static PARTICLE_FRAG: HlslProgram = fxc_main(
-    "particle_frag.hlsl",
-    include_str!("shaders/particle_frag.hlsl"),
-    "ps_5_1",
-);
 
 // The one SM 6.5 program left on this table (DXC): the RT skinned-vertex refit
 // kernel. Its ray-traced siblings are single-source now.
@@ -285,13 +152,11 @@ pub(super) static RT_SKIN: HlslProgram = HlslProgram {
     entry: "rt_skin",
     target: "cs_6_5",
     compiler: Compiler::Dxc,
-    assembly: PLAIN,
+    object_data: false,
 };
 
 // Every declared program, iterated by the export-time precompile.
 pub(crate) static ALL: &[&HlslProgram] = &[
-    &TEXT_VERT,
-    &TEXT_FRAG,
     &MAIN_VERT,
     &MAIN_FRAG,
     &MAIN_VERT_INSTANCED,
@@ -299,12 +164,6 @@ pub(crate) static ALL: &[&HlslProgram] = &[
     &CULL,
     &CULL_PHASE2,
     &CULL_SHADOW,
-    &DECAL_VERT,
-    &DECAL_FRAG,
-    &LINE_VERT,
-    &LINE_FRAG,
-    &PARTICLE_VERT,
-    &PARTICLE_FRAG,
     &RT_SKIN,
 ];
 
@@ -323,34 +182,13 @@ mod tests {
                 Compiler::Fxc => "fxc",
                 Compiler::Dxc => "dxc",
             };
-            let ctx = Ctx::plain(false);
             assert!(
-                seen.insert((compiler, p.source(&ctx), p.entry, p.target)),
+                seen.insert((compiler, p.source(false), p.entry, p.target)),
                 "duplicate program: {} {}",
                 p.entry,
                 p.target
             );
         }
-    }
-
-    #[test]
-    fn msaa_assemblies_enumerate_both_variants() {
-        assert_eq!(DECAL_FRAG.assembly.msaa_variants(), &[false, true]);
-        assert_eq!(LINE_FRAG.assembly.msaa_variants(), &[false, true]);
-        assert_eq!(TEXT_VERT.assembly.msaa_variants(), &[false]);
-    }
-
-    // The assembled text must match the shape the pass code historically built
-    // by hand: the define first, then the body.
-    #[test]
-    fn assembly_orders_prefixes_before_the_body() {
-        let ctx = Ctx {
-            hot_reload: false,
-            msaa: true,
-        };
-        let decal = DECAL_FRAG.source(&ctx);
-        assert!(decal.starts_with("#define USE_MSAA 1\n"));
-        assert!(decal.ends_with(DECAL_FRAG.embedded));
     }
 
     // Every program's assembled source must embed its body, so a shader edit is
@@ -359,7 +197,7 @@ mod tests {
     #[test]
     fn every_program_source_contains_its_embedded_body() {
         for p in ALL {
-            let src = p.source(&Ctx::plain(false));
+            let src = p.source(false);
             for part in p.embedded.split("{OBJECT_DATA}") {
                 assert!(src.contains(part), "{} {} lost its body", p.entry, p.target);
             }
@@ -374,12 +212,12 @@ mod tests {
     fn object_data_programs_splice_the_shared_record() {
         let mut spliced = 0usize;
         for p in ALL {
-            let src = p.source(&Ctx::plain(false));
+            let src = p.source(false);
             let declares = src.contains("struct GpuObjectData");
             assert_eq!(
-                declares, p.assembly.object_data,
+                declares, p.object_data,
                 "{} {}: declares GpuObjectData = {declares}, object_data = {}",
-                p.entry, p.target, p.assembly.object_data
+                p.entry, p.target, p.object_data
             );
             assert!(
                 !src.contains("{OBJECT_DATA}"),

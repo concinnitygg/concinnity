@@ -6,49 +6,13 @@
 // of the frame's spawn budget (atomically) and respawns with a fresh velocity
 // sampled inside a cone of half-angle acos(spread_cos) around `direction`.
 //
-// The render half of the particle system (the billboard vertex + fragment
-// pair) is still per-backend, so `ParticleParams` is declared there too; the
-// two declarations are locked to the same Rust struct by
-// `particle_params_layout_matches_msl` in render_types.rs.
+// `Particle` and `ParticleParams` arrive from the shared PARTICLE_TYPES
+// fragment, which the render half (`particle.slang`) splices too, so the pool
+// this kernel writes and the pool that pass reads have one declaration. Both
+// are locked to the Rust struct by `particle_params_layout_matches_msl` in
+// render_types.rs.
 
-// One particle slot, 32 B. Matches `GpuParticle` in each backend's particle
-// module. `float3` packs to 12 bytes inside a structured buffer on every
-// target (unlike a constant buffer, where MSL pads it to 16), so the
-// (vec3, float) pairs need no rewriting here.
-struct Particle
-{
-    float3 position;
-    float age;
-    float3 velocity;
-    float lifetime;
-};
-
-// Per-frame emitter uniform, 112 B. Mirrors `ParticleParams` in
-// gfx/render_types.rs. The three (vec3, scalar) pairs are spelled as float4:
-// MSL sizes a constant-buffer float3 at 16 bytes, so a literal transcription
-// would push every following field four bytes late on Metal alone.
-struct ParticleParams
-{
-    // xyz = world-space spawn origin, w = cosine of the emission cone's
-    // half-angle (1 = straight jet, -1 = full sphere).
-    float4 position_spread;
-    // xyz = unit-length mean emission direction, w = minimum spawn speed.
-    float4 direction_speed_min;
-    // xyz = constant per-frame acceleration, w = maximum spawn speed.
-    float4 gravity_speed_max;
-    float4 color_start;
-    float4 color_end;
-    float lifetime_min;
-    float lifetime_max;
-    float size_start;
-    float size_end;
-    float dt;
-    // Particles the kernel may emit this frame. Threads race for slots through
-    // the counter below, so only this many succeed.
-    uint spawn_budget;
-    uint random_seed;
-    uint max_particles;
-};
+{PARTICLE_TYPES}
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Particle> pool : register(u0);
 // Remaining spawn budget for this dispatch, as a single counter at element 0.

@@ -10,7 +10,7 @@ use crate::assets::ParticleEmitter;
 use crate::render_types::ParticleParams;
 
 // Upper bound on the per-emitter pool the backend will allocate. Each slot
-// is 32 bytes on the GPU (matching `Particle` in `metal/shaders/particle.metal`),
+// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.slang`),
 // so 65 536 slots = 2 MiB per emitter, already well past the visual point
 // of diminishing returns for a billboard pool.
 pub const MAX_PARTICLES_PER_EMITTER: u32 = 65_536;

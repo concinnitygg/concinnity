@@ -25,6 +25,8 @@ use std::borrow::Cow;
 // Two of them come in pairs, because a shader's resource bindings sit between
 // the halves: PROBE_TYPES / RT_TYPES declare the records a binding names, and
 // PROBE_COMMON / RT_TRACE the code that reads the bound resources.
+// PARTICLE_TYPES is the one shared by two halves of a *system* rather than of a
+// shader: the simulation kernel writes the pool the render pair reads.
 const FRAGMENTS: &[(&str, &str, &str)] = &[
     (
         "{POST_COMMON}",
@@ -55,6 +57,11 @@ const FRAGMENTS: &[(&str, &str, &str)] = &[
         "{RT_TRACE}",
         "rt_trace.slang",
         include_str!("shaders/rt_trace.slang"),
+    ),
+    (
+        "{PARTICLE_TYPES}",
+        "particle_types.slang",
+        include_str!("shaders/particle_types.slang"),
     ),
 ];
 
@@ -158,6 +165,17 @@ mod tests {
         let src = assemble(false, "x.slang", "{POST_COMMON}\n{OBJECT_COMMON}\n", &[]);
         assert!(src.contains("float2 combined_size("));
         assert!(src.contains("struct GpuObjectData"));
+    }
+
+    // The particle pool record and the per-emitter uniform arrive from one
+    // fragment, so the simulation kernel that writes the pool and the render
+    // pair that reads it cannot drift apart in their declaration of either.
+    #[test]
+    fn the_particle_types_marker_is_spliced_into_the_body() {
+        let src = assemble(false, "x.slang", "A\n{PARTICLE_TYPES}\nB\n", &[]);
+        assert!(!src.contains("{PARTICLE_TYPES}"));
+        assert!(src.contains("struct Particle"));
+        assert!(src.contains("struct ParticleParams"));
     }
 
     // The probe and ray-tracing fragments each splice in two halves, and the

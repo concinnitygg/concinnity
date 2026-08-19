@@ -28,7 +28,7 @@ pub struct AutoExposureParams {
 // what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
-// The composite text push constant (text.vert): the window dimensions then two
+// The composite text push constant (text.slang): the window dimensions then two
 // pads rounding the block to 16 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -209,9 +209,9 @@ pub struct GlassParams {
     pub planar: f32,
 }
 
-// One particle slot in the simulation pool (particle_simulate.comp / particle.vert
-// `Particle`, std430): a (vec3, float) position/age then a (vec3, float)
-// velocity/lifetime, 32 bytes.
+// One particle slot in the simulation pool (`Particle` in
+// particle_types.slang, std430): a (vec3, float) position/age then a
+// (vec3, float) velocity/lifetime, 32 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct GpuParticle {
@@ -221,7 +221,7 @@ pub struct GpuParticle {
     pub lifetime: f32,
 }
 
-// The particle render pass per-frame view UBO (particle.vert `ParticleView`,
+// The particle render pass per-frame view UBO (particle.slang `ParticleView`,
 // std140): a mat4 then two (vec3, pad) camera-basis slots, 96 bytes.
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(offset_of!(AutoExposureParams, _pad), 12);
     }
 
-    // TextPush must match the `TextPush` push constant in text.vert: the window
+    // TextPush must match the `TextUniforms` push constant in text.slang: the window
     // dimensions then two pads rounding the block to 16 bytes.
     #[test]
     fn text_push_layout_matches_glsl() {
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(offset_of!(GpuParticle, lifetime), 28);
     }
 
-    // Mirrors the `ParticleView` uniform block in particle.vert: mat4 (64) +
+    // Mirrors the `ParticleView` uniform block in particle.slang: mat4 (64) +
     // (vec3 + pad) + (vec3 + pad) = 96.
     #[test]
     fn particle_view_layout_matches_glsl() {

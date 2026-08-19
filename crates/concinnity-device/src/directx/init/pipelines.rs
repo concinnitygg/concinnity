@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtins::{self, Ctx};
+use crate::directx::builtins;
 use crate::directx::context::{FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader, compile_cull_shader_phase2,
@@ -56,16 +56,15 @@ pub(super) fn compile_all_shaders(
     need_instanced: bool,
     hot_reload: bool,
 ) -> Result<CompiledShaders, String> {
-    let ctx = Ctx::plain(hot_reload);
     let main_vs = if !vert_bytes.is_empty() {
         vert_bytes.to_vec()
     } else {
-        builtins::MAIN_VERT.compile(&ctx)?
+        builtins::MAIN_VERT.compile(hot_reload)?
     };
     let main_ps = if !frag_bytes.is_empty() {
         frag_bytes.to_vec()
     } else {
-        builtins::MAIN_FRAG.compile(&ctx)?
+        builtins::MAIN_FRAG.compile(hot_reload)?
     };
     // The shadow vertex shader is engine-internal: a real DXBC override (>4
     // bytes) is used verbatim, otherwise (empty / stub) the baked
@@ -80,7 +79,7 @@ pub(super) fn compile_all_shaders(
     let main_vs_instanced = if !vert_instanced_bytes.is_empty() {
         Some(vert_instanced_bytes.to_vec())
     } else if need_instanced {
-        Some(builtins::MAIN_VERT_INSTANCED.compile(&ctx)?)
+        Some(builtins::MAIN_VERT_INSTANCED.compile(hot_reload)?)
     } else {
         None
     };

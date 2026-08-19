@@ -58,18 +58,6 @@ pub(in crate::directx) fn shader_source(
     std::borrow::Cow::Borrowed(embedded)
 }
 
-// Generated HLSL prelude declaring the shared reflection roughness cut as a
-// compile-time constant, single-sourced from `concinnity_core::gfx::ssr`. Prepended
-// to the SSR / RT / reflection-composite shaders so the resolve gates and the
-// composite blur ramp cannot drift from one another (mirrors Metal's
-// `reflection_constants_prelude`). Compile-folds, so zero runtime cost.
-pub(in crate::directx) fn reflection_cut_prelude() -> String {
-    format!(
-        "static const float REFLECTION_ROUGHNESS_CUT = {:?};\n",
-        crate::gfx::ssr::REFLECTION_ROUGHNESS_CUT
-    )
-}
-
 // A stable pseudo-filename for the in-memory source. Without one FXC names the
 // module after the source buffer's address, so compile errors read
 // `Shader@0x00007ff...` instead of something a developer recognises.
@@ -308,7 +296,13 @@ pub(super) fn skinned_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     layout
 }
 
-// Vertex input elements for the text pass (32-byte TextVertex struct).
+// Vertex input elements for the text pass (32-byte TextVertex struct), asserted
+// by `text_vertex_layout_matches_shaders`.
+//
+// `mode` takes a semantic of its own rather than a second TEXCOORD: slangc
+// appends its own index to whatever a semantic spells, so `TEXCOORD1` in
+// `text.slang` would reach DXIL as TEXCOORD index 10 and never match an element
+// declared at index 1.
 fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     vec![
         D3D12_INPUT_ELEMENT_DESC {
@@ -339,8 +333,8 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
             InstanceDataStepRate: 0,
         },
         D3D12_INPUT_ELEMENT_DESC {
-            SemanticName: windows::core::s!("TEXCOORD"),
-            SemanticIndex: 1,
+            SemanticName: windows::core::s!("MODE"),
+            SemanticIndex: 0,
             Format: DXGI_FORMAT_R32_FLOAT,
             InputSlot: 0,
             AlignedByteOffset: 28,
@@ -611,9 +605,8 @@ pub(super) fn create_composite_pso(
 
 // Compile the text overlay shaders.
 pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = super::builtins::Ctx::plain(hot_reload);
-    let text_vs = super::builtins::TEXT_VERT.compile(&ctx)?;
-    let text_ps = super::builtins::TEXT_FRAG.compile(&ctx)?;
+    let text_vs = super::slang_builtins::TEXT_VERT.compile(hot_reload)?;
+    let text_ps = super::slang_builtins::TEXT_FRAG.compile(hot_reload)?;
     Ok((text_vs, text_ps))
 }
 

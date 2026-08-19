@@ -13,12 +13,19 @@ include!(concat!(env!("OUT_DIR"), "/engine_metallibs.rs"));
 mod tests {
     use super::embedded_metallib;
 
+    // A shader the build script always compiles when the Metal toolchain is
+    // present, so its absence means the stub lookup and nothing else. It has to
+    // be one that still exists: a name that has been ported away skips both
+    // coverage tests silently, which is what `post.metal` did after the
+    // composite pass moved to single source.
+    const TOOLCHAIN_SENTINEL: &str = "main.metal";
+
     #[test]
     fn precompiled_coverage_is_all_or_nothing() {
         // The build script either compiles every eligible shader or emits the
         // stub lookup; per-shader gaps would mean a silent slow path. Skip when
         // the build host had no Metal toolchain (stub lookup).
-        if embedded_metallib("post.metal").is_none() {
+        if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
@@ -39,7 +46,7 @@ mod tests {
     // runtime compile path takes over, warned at build time).
     #[test]
     fn slang_precompiled_coverage_is_all_or_nothing() {
-        if embedded_metallib("post.metal").is_none() {
+        if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
         }
         let present: Vec<bool> = crate::metal::slang_shaders::ALL

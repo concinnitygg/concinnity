@@ -40,7 +40,7 @@ use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 // `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
-use super::builtins::{self, Ctx};
+use super::builtins;
 use super::context::FRAMES;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 
@@ -386,7 +386,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
 // skin pipeline `None` and skinned geometry is absent from the BVH (the RT pass
 // still runs for static geometry).
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPipeline, String> {
-    let cs = builtins::RT_SKIN.compile(&Ctx::plain(hot_reload))?;
+    let cs = builtins::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         // Borrow the root signature without an AddRef. `pRootSignature` is a

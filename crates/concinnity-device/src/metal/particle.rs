@@ -34,7 +34,7 @@ use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
 
 use super::context::MtlContext;
-use super::pipeline::{ns_str, shader_library};
+use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
@@ -337,11 +337,9 @@ pub(super) fn build_particle_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> Result<ParticlePipelines, String> {
-    let library = shader_library(device, hot_reload, "particle.metal")?;
-
-    // Compute kernel, from the single-source `particle_simulate.slang`. The
-    // render pair below is raster and still per-backend, which is why
-    // `ParticleParams` is declared in both places for now.
+    // Compute kernel, from `particle_simulate.slang`. The render pair below
+    // splices the same `{PARTICLE_TYPES}` fragment, so both halves stride one
+    // declaration of the pool record and the per-emitter uniform.
     let sim_lib = super::slang_shaders::PARTICLE_SIMULATE.library(device, hot_reload)?;
     let sim_fn = sim_lib
         .newFunctionWithName(&ns_str("particle_simulate"))
@@ -352,12 +350,18 @@ pub(super) fn build_particle_pipelines(
 
     // Render pipeline. No vertex descriptor: the vertex shader reads from the
     // particle pool storage buffer directly via `[[vertex_id]]` + `[[instance_id]]`.
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("particle_vertex"))
-        .ok_or("particle_vertex not found")?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("particle_fragment"))
-        .ok_or("particle_fragment not found")?;
+    // Each entry compiles to its own metallib, so the two stages come from
+    // separate libraries and pair by semantic.
+    let vert_fn = super::slang_shaders::entry_function(
+        device,
+        &super::slang_shaders::PARTICLE_VERT,
+        hot_reload,
+    )?;
+    let frag_fn = super::slang_shaders::entry_function(
+        device,
+        &super::slang_shaders::PARTICLE_FRAG,
+        hot_reload,
+    )?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
