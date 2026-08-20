@@ -182,6 +182,8 @@ fn create_hiz_view(
             base_array_layer: 0,
             layer_count: 1,
         });
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("hiz view: {e}"))
 }
 
@@ -224,10 +226,14 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create hiz pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
@@ -429,6 +435,8 @@ impl HiZResources {
         }
 
         // Reset the pool and reallocate every set (init / downsample / read).
+        // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
+        // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
             device
                 .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
@@ -518,6 +526,8 @@ impl HiZResources {
         init: vk::Pipeline,
         downsample: vk::Pipeline,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.init_pipeline, None);
             device.destroy_pipeline(self.downsample_pipeline, None);
@@ -545,6 +555,8 @@ impl HiZResources {
     // Destroy every non-pooled GPU resource and drop the pooled ones (the
     // pyramid + its views and the cull UBO rings retire through the allocator).
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_pipeline(self.init_pipeline, None);
@@ -588,6 +600,8 @@ impl crate::vulkan::context::VkContext {
             src_mip: 0,
             sample_count: hiz.sample_count.max(1),
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, hiz.init_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -620,6 +634,8 @@ impl crate::vulkan::context::VkContext {
         let mut cur_w = hiz.width;
         let mut cur_h = hiz.height;
         for mip in 1..hiz.mip_count {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
@@ -646,6 +662,8 @@ impl crate::vulkan::context::VkContext {
                 src_mip: mip - 1,
                 sample_count: 0,
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
@@ -718,6 +736,8 @@ fn create_set_layout(
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
         })
         .collect();
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe {
         device.create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&binds),
@@ -733,6 +753,8 @@ fn create_pipeline_layout(
     push_range: vk::PushConstantRange,
 ) -> Result<vk::PipelineLayout, String> {
     let layouts = [set_layout];
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe {
         device.create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default()
@@ -773,6 +795,8 @@ fn create_pool(
     ];
     // init (frames) + cull-read (frames per read ring) + downsample (per mip).
     let max_sets = (1 + read_rings) * f + MAX_HIZ_MIPS as u32;
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe {
         device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -794,6 +818,8 @@ fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .min_lod(0.0)
         .max_lod(MAX_HIZ_MIPS as f32);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("hiz sampler: {e}"))
 }
 
@@ -813,6 +839,8 @@ fn write_sampler(
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .image_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -827,6 +855,8 @@ fn write_sampled_image(device: &Device, set: vk::DescriptorSet, binding: u32, vi
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -839,6 +869,8 @@ fn write_storage_image(device: &Device, set: vk::DescriptorSet, binding: u32, vi
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .image_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -858,6 +890,8 @@ fn write_uniform_buffer(
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 

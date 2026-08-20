@@ -279,6 +279,8 @@ fn create_fog_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -335,6 +337,8 @@ fn create_fog_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create fog PSO: {e}"))
 }
@@ -350,6 +354,8 @@ fn create_fog_froxel_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -357,6 +363,8 @@ fn create_fog_froxel_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create fog froxel PSO: {e}"))
 }
@@ -391,6 +399,8 @@ fn create_fog_froxel_volume(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -416,6 +426,8 @@ fn create_fog_froxel_volume(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateUnorderedAccessView(&resource, None, Some(&uav_desc), uav_cpu);
     }
@@ -432,6 +444,8 @@ fn create_fog_froxel_volume(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(&resource, Some(&srv_desc), srv_cpu) };
 
     Ok(resource)
@@ -560,6 +574,8 @@ impl FogResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map fog params ubo: {e}"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
@@ -578,6 +594,8 @@ impl FogResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map fog froxel params ubo: {e}"))?;
             froxel_params_ubo_ptrs.push(ptr as *mut u8);
@@ -688,6 +706,9 @@ impl DxContext {
             self.fog.sun_color,
             viewport,
         );
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const FogParams as *const u8,
@@ -700,8 +721,10 @@ impl DxContext {
                 std::mem::size_of::<FogFroxelParams>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let params_gva = unsafe { fog.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
         let froxel_params_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // The shadow map's cascade tap is a declared read of this pass, so the
@@ -710,6 +733,8 @@ impl DxContext {
         // `UNORDERED_ACCESS`; the graph's Fog consumer barrier is what returns it
         // to a shader-resource state for the render pass.
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(&fog.froxel_root_sig);
             cmd.SetPipelineState(&fog.froxel_pso);
@@ -755,8 +780,10 @@ impl DxContext {
 
         // `FogParams` / `FogFroxelParams` were uploaded by `encode_fog_froxel`
         // for this frame's slot, so we only read their GVAs here.
+        // SAFETY: a property query on a live resource; it only reads.
         let params_gva = unsafe { fog.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
         let froxel_params_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Main depth and the froxel volume are both graph resources, so both
@@ -770,6 +797,8 @@ impl DxContext {
 
         let w = self.render_width;
         let h = self.render_height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
             let vp_state = D3D12_VIEWPORT {

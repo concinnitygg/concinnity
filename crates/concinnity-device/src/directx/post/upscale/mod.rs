@@ -129,6 +129,8 @@ fn create_output_texture(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -154,6 +156,8 @@ fn write_output_uav(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateUnorderedAccessView(res, None, Some(&desc), cpu) };
 }
 
@@ -171,6 +175,8 @@ fn write_output_srv(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(res, Some(&desc), cpu) };
 }
 

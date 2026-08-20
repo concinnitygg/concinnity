@@ -55,6 +55,8 @@ impl VkContext {
             self.descriptors.object_set_layout,
             joint_set_layout,
         ];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let skinned_pipeline_layout = unsafe {
             self.device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -84,6 +86,8 @@ impl VkContext {
                     .offset(0)
                     .size(80);
                 let shadow_set_layouts = [shadow_global, joint_set_layout];
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 let layout = unsafe {
                     self.device.create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
@@ -149,6 +153,8 @@ impl VkContext {
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count((n * frames) as u32),
         ];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let pool = unsafe {
             self.device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -183,6 +189,8 @@ impl VkContext {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&nm_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { self.device.update_descriptor_sets(&writes, &[]) };
         }
 
@@ -201,6 +209,10 @@ impl VkContext {
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )?;
+                // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
+                // `size`, which is at least the source length, so `mapped_ptr()` is a live mapping
+                // of that many bytes; the source is a separate live allocation, so the ranges
+                // cannot overlap.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         identity_seed.as_ptr() as *const u8,
@@ -222,6 +234,8 @@ impl VkContext {
                     .dst_binding(0)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&info));
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe {
                     self.device
                         .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -464,6 +478,9 @@ impl VkContext {
                 continue;
             };
             let count = mats.len().min(MAX_JOINTS);
+            // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to
+            // hold a `the params struct`, so the mapped pointer is a live mapping of at least that
+            // many bytes; the source is a separate live borrow, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     mats.as_ptr() as *const u8,
@@ -536,6 +553,9 @@ impl VkContext {
                         vk::MemoryPropertyFlags::HOST_VISIBLE
                             | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )?;
+                    // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at
+                    // least the cull count's worth of records, so each mapped pointer covers the
+                    // range being zeroed.
                     unsafe { std::ptr::write_bytes(buf.mapped_ptr(), 0, size as usize) };
                     bufs.push(buf);
                 }
@@ -578,6 +598,8 @@ impl VkContext {
                             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                             .buffer_info(std::slice::from_ref(&weight_info)),
                     ];
+                    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
+                    // and every set and resource it names belongs to this device.
                     unsafe { device.update_descriptor_sets(&writes, &[]) };
                 }
             }
@@ -613,6 +635,9 @@ impl VkContext {
             else {
                 continue;
             };
+            // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to
+            // hold a `f32`, so the mapped pointer is a live mapping of at least that many bytes;
+            // the source is a separate live borrow, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     w.as_ptr() as *const u8,

@@ -225,11 +225,16 @@ impl XessExtQuery {
         let mut count: u32 = 0;
         let mut exts: *const *const c_char = ptr::null();
         let mut min_api: u32 = 0;
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe { (self.get_instance_exts)(&mut count, &mut exts, &mut min_api) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS: xessVKGetRequiredInstanceExtensions returned {rc}");
             return (Vec::new(), 0);
         }
+        // SAFETY: `count`/`exts` are the pair the SDK just wrote on the success path above, and the
+        // library owns that array for as long as it stays loaded.
         (unsafe { copy_ext_names(count, exts) }, min_api)
     }
 
@@ -240,6 +245,9 @@ impl XessExtQuery {
     ) -> Vec<CString> {
         let mut count: u32 = 0;
         let mut exts: *const *const c_char = ptr::null();
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe {
             (self.get_device_exts)(instance.handle(), physical_device, &mut count, &mut exts)
         };
@@ -247,6 +255,7 @@ impl XessExtQuery {
             tracing::warn!("XeSS: xessVKGetRequiredDeviceExtensions returned {rc}");
             return Vec::new();
         }
+        // SAFETY: as in `instance_extensions` -- `count`/`exts` are the pair the SDK just wrote.
         unsafe { copy_ext_names(count, exts) }
     }
 
@@ -263,6 +272,9 @@ impl XessExtQuery {
     ) -> *mut c_void {
         let mut chain = head;
         let rc =
+            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
+            // the SDK's declared signature; the context and every parameter / out-param it is
+            // handed are live for the call.
             unsafe { (self.get_device_features)(instance.handle(), physical_device, &mut chain) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!(
@@ -354,7 +366,7 @@ pub(in crate::vulkan) struct XessUpscaler {
     reset_pending: Cell<bool>,
 }
 
-// The XeSS context handle + loaded function pointers are raw C pointers used
+// SAFETY: The XeSS context handle + loaded function pointers are raw C pointers used
 // only on the render thread; the trait's `Send` bound is satisfied unsafely,
 // same as the rest of `VkContext`.
 unsafe impl Send for XessUpscaler {}
@@ -394,6 +406,9 @@ impl XessUpscaler {
             super::resolve_render_dims(output_width, output_height, upscale_scale);
 
         let mut ctx: xess_context_handle_t = ptr::null_mut();
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe {
             (xess.create_context)(
                 instance.handle(),
@@ -410,6 +425,9 @@ impl XessUpscaler {
         }
 
         let init_flags = XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE;
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe {
             (xess.build_pipelines)(
                 ctx,
@@ -422,6 +440,9 @@ impl XessUpscaler {
             tracing::warn!(
                 "XeSS (Vulkan): xessVKBuildPipelines returned {rc}; trying the next backend"
             );
+            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
+            // the SDK's declared signature; the context and every parameter / out-param it is
+            // handed are live for the call.
             unsafe { (xess.destroy_context)(ctx) };
             return Ok(None);
         }
@@ -441,9 +462,15 @@ impl XessUpscaler {
             texture_heap_offset: 0,
             pipeline_cache: crate::vulkan::pipeline_cache::handle(),
         };
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe { (xess.init)(ctx, &init_params) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS (Vulkan): xessVKInit returned {rc}; trying the next backend");
+            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
+            // the SDK's declared signature; the context and every parameter / out-param it is
+            // handed are live for the call.
             unsafe { (xess.destroy_context)(ctx) };
             return Ok(None);
         }
@@ -451,6 +478,9 @@ impl XessUpscaler {
         // Motion vectors are RG16F `prev_uv - cur_uv` in UV space; XeSS expects
         // pixel-space velocity (default low-res), so scale by the render extent.
         let rc =
+            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
+            // the SDK's declared signature; the context and every parameter / out-param it is
+            // handed are live for the call.
             unsafe { (xess.set_velocity_scale)(ctx, render_width as f32, render_height as f32) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS (Vulkan): xessSetVelocityScale returned {rc} (non-fatal)");
@@ -466,6 +496,9 @@ impl XessUpscaler {
         ) {
             Ok(img) => img,
             Err(e) => {
+                // SAFETY: the entry point was resolved from the loaded XeSS library at init and
+                // matches the SDK's declared signature; the context and every parameter / out-param
+                // it is handed are live for the call.
                 unsafe { (xess.destroy_context)(ctx) };
                 return Err(e);
             }
@@ -574,6 +607,9 @@ impl VkUpscaleBackend for XessUpscaler {
             reserved0: zero,
             output_color_base: zero,
         };
+        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
+        // SDK's declared signature; the context and every parameter / out-param it is handed are
+        // live for the call.
         let rc = unsafe { (self.xess.execute)(self.ctx, cmd, &params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(format!("xessVKExecute returned {rc}"));
@@ -583,6 +619,9 @@ impl VkUpscaleBackend for XessUpscaler {
 
     fn destroy(&mut self, _device: &Device) {
         if !self.ctx.is_null() {
+            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
+            // the SDK's declared signature; the context and every parameter / out-param it is
+            // handed are live for the call.
             unsafe {
                 let _ = (self.xess.destroy_context)(self.ctx);
             }

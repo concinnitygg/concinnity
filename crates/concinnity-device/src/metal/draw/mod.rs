@@ -912,6 +912,8 @@ impl MtlContext {
                 .unwrap_or(0);
             let handler = block2::RcBlock::new(
                 move |cb: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
+                    // SAFETY: Metal hands the completion handler a live command buffer, and the
+                    // borrow does not escape the block.
                     let cb = unsafe { cb.as_ref() };
                     // A faulted frame render buffer is the usual origin of a
                     // `SubmissionsIgnored` cascade seen later on the RT build.

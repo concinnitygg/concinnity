@@ -233,6 +233,8 @@ impl VkContext {
                 // loader actually supports so an unsupported request can't fail instance
                 // creation (the backend then falls back). The engine's own shaders are
                 // unaffected by the bump.
+                // SAFETY: an enumeration query on a live instance handle; it only reads, and ash
+                // sizes the output vector from the count the driver reports.
                 let loader_version = unsafe { entry.try_enumerate_instance_version() }
                     .ok()
                     .flatten()
@@ -270,6 +272,8 @@ impl VkContext {
                 // so a portability driver (MoltenVK) is enumerable at all. A
                 // missing one degrades rather than failing instance creation.
                 let available_ext_props =
+                    // SAFETY: an enumeration query on a live instance handle; it only reads, and
+                    // ash sizes the output vector from the count the driver reports.
                     unsafe { entry.enumerate_instance_extension_properties(None) }
                         .unwrap_or_default();
                 let optional_exts = super::instance_exts::select(
@@ -306,6 +310,8 @@ impl VkContext {
                     .enabled_extension_names(&ext_names_raw)
                     .enabled_layer_names(&layer_names_raw);
 
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 let instance = unsafe { entry.create_instance(&instance_info, None) }
                     .map_err(|e| format!("create instance: {e}"))?;
                 // A run with no layer messages looks exactly like a run the layer
@@ -344,6 +350,8 @@ impl VkContext {
                         )
                         .pfn_user_callback(Some(debug_callback))
                         .user_data(user_data);
+                    // SAFETY: the create-info and every slice it borrows are live for the call, and
+                    // each handle it names belongs to this device.
                     let messenger = unsafe { du.create_debug_utils_messenger(&info, None) }
                         .map_err(|e| format!("debug messenger: {e}"))?;
                     (Some(du), Some(messenger))
@@ -380,7 +388,9 @@ impl VkContext {
                     &upscale_sdk,
                 )?;
 
+                // SAFETY: a property query on a live handle; it only reads.
                 let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
+                // SAFETY: a property query on a live handle; it only reads.
                 let present_queue = unsafe { device.get_device_queue(present_family, 0) };
 
                 //  Timestamp support: the per-frame GPU-time chip uses a query pool
@@ -390,12 +400,14 @@ impl VkContext {
                 //  either the renderer leaves `gpu_frame_us` at zero. Mirrors
                 //  `directx::build_timestamp_resources`.
                 let device_props =
+                    // SAFETY: a property query on a live handle; it only reads.
                     unsafe { instance.get_physical_device_properties(physical_device) };
 
                 //  Persisted pipeline cache: seeded from disk when a blob for
                 //  this device exists, handed to every pipeline creation below.
                 super::pipeline_cache::install(&device, &device_props);
 
+                // SAFETY: a property query on a live handle; it only reads.
                 let queue_family_props = unsafe {
                     instance.get_physical_device_queue_family_properties(physical_device)
                 };
@@ -411,6 +423,8 @@ impl VkContext {
                     let info = vk::QueryPoolCreateInfo::default()
                         .query_type(vk::QueryType::TIMESTAMP)
                         .query_count((super::pass_timing::SLOTS_PER_FRAME * frames) as u32);
+                    // SAFETY: the create-info and every slice it borrows are live for the call, and
+                    // each handle it names belongs to this device.
                     match unsafe { device.create_query_pool(&info, None) } {
                         Ok(p) => Some(p),
                         Err(e) => {
@@ -428,6 +442,7 @@ impl VkContext {
                 //  zero (matching DirectX's adapter-without-QueryVideoMemoryInfo
                 //  fallback).
                 let memory_props =
+                    // SAFETY: a property query on a live handle; it only reads.
                     unsafe { instance.get_physical_device_memory_properties(physical_device) };
                 let device_local_heaps: Vec<u32> = if memory_budget_supported {
                     (0..memory_props.memory_heap_count as usize)
@@ -459,6 +474,7 @@ impl VkContext {
                 // is no portable max-EDR query), so we synthesise the placeholder
                 // `max_edr` from it. scRGB-linear drives the extended-linear path; an
                 // `HDR10_ST2084_EXT` pair (float or 10-bit packed) drives the PQ path.
+                // SAFETY: a property query on a live handle; it only reads.
                 let surface_formats = unsafe {
                     surface_loader.get_physical_device_surface_formats(physical_device, surface)
                 }
@@ -601,6 +617,8 @@ impl VkContext {
             let info = vk::CommandPoolCreateInfo::default()
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
                 .queue_family_index(graphics_family);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.create_command_pool(&info, None) }
                 .map_err(|e| format!("command pool: {e}"))?
         };
@@ -663,6 +681,8 @@ impl VkContext {
         //  is in "unavailable" state, so `get_query_pool_results` returns
         //  NOT_READY → 0 cleanly until `record_frame` writes the first pair.
         if let Some(pool) = timestamp_query_pool {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             super::texture::one_shot_submit(&device, command_pool, graphics_queue, |cmd| unsafe {
                 device.cmd_reset_query_pool(
                     cmd,
@@ -813,8 +833,10 @@ impl VkContext {
         // `device.rs`). Clamp the requested degree (GraphicsConfig.anisotropy) to
         // the GPU's 1..16 range and then to the device limit.
         let scene_aniso = {
+            // SAFETY: a property query on a live handle; it only reads.
             let feats = unsafe { instance.get_physical_device_features(physical_device) };
             if feats.sampler_anisotropy != 0 {
+                // SAFETY: a property query on a live handle; it only reads.
                 let limit = unsafe { instance.get_physical_device_properties(physical_device) }
                     .limits
                     .max_sampler_anisotropy;
@@ -1137,6 +1159,7 @@ impl VkContext {
         // drops out of the plain per-layout count entirely. Desktop stays on the
         // plain path untouched.
         let max_per_stage_samplers =
+            // SAFETY: a property query on a live handle; it only reads.
             unsafe { instance.get_physical_device_properties(physical_device) }
                 .limits
                 .max_per_stage_descriptor_samplers;
@@ -1265,6 +1288,8 @@ impl VkContext {
             if global_update_after_bind {
                 info = info.flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL);
             }
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.create_descriptor_set_layout(&info, None) }
                 .map_err(|e| format!("global set layout: {e}"))?
         };
@@ -1316,6 +1341,8 @@ impl VkContext {
             .offset(0)
             .size(112);
         let main_set_layouts = [global_set_layout, object_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let main_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1332,6 +1359,8 @@ impl VkContext {
             // 64 bytes for model + 16 bytes for cascade_idx + padding.
             .size(80);
         let shadow_set_layouts = [shadow_global_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let shadow_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1347,6 +1376,8 @@ impl VkContext {
             .offset(0)
             .size(16);
         let text_set_layouts = [text_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let text_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1373,6 +1404,8 @@ impl VkContext {
 
         // Composite layout: one descriptor set (HDR resolve + bloom mip 0).
         let composite_set_layouts = [composite_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let composite_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1386,6 +1419,8 @@ impl VkContext {
         // Bloom layout: one descriptor set (the input image) + the shared
         // post-process push constant (read only by the prefilter).
         let bloom_set_layouts = [bloom_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let bloom_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1430,6 +1465,8 @@ impl VkContext {
             let instance_set_layout = instance_set_layout_opt
                 .expect("instance set layout was created because instanced draws are needed");
             let instanced_set_layouts = [global_set_layout, object_set_layout, instance_set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let instanced_pl = unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -1873,6 +1910,8 @@ impl VkContext {
         if bindless_uab || global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("descriptor pool: {e}"))?;
 
@@ -2071,6 +2110,8 @@ impl VkContext {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&ltc_magnitude_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
 
@@ -2088,6 +2129,8 @@ impl VkContext {
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(std::slice::from_ref(&su_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
 
@@ -2131,6 +2174,8 @@ impl VkContext {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(std::slice::from_ref(&nm_info)),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
             sets
@@ -2177,10 +2222,14 @@ impl VkContext {
                     .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
                     .push_next(&mut flags_info);
             }
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let set_layout = unsafe { device.create_descriptor_set_layout(&set_info, None) }
                 .map_err(|e| format!("bindless set layout: {e}"))?;
 
             let layouts = [global_set_layout, set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let pipeline_layout = unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
@@ -2249,6 +2298,8 @@ impl VkContext {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&pool_infos),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
 
@@ -2512,6 +2563,8 @@ impl VkContext {
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
                 .collect();
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let set_layout = unsafe {
                 device.create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
@@ -2547,6 +2600,8 @@ impl VkContext {
                 .offset(0)
                 .size(CULL_PUSH_CONSTANT_BYTES);
             let layouts = [set_layout, hiz.read_set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let pipeline_layout = unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -2632,6 +2687,8 @@ impl VkContext {
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&status_info)),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
 
@@ -2741,6 +2798,8 @@ impl VkContext {
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
                 .collect();
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let sc_set_layout = unsafe {
                 device.create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&sc_bindings),
@@ -2754,6 +2813,8 @@ impl VkContext {
                 .offset(0)
                 .size(CULL_PUSH_CONSTANT_BYTES);
             let sc_layouts = [sc_set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let sc_pl = unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -2773,6 +2834,8 @@ impl VkContext {
                 .offset(0)
                 .size(4);
             let sb_layouts = [shadow_global_set_layout, bl_set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let sb_pl = unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
@@ -2840,6 +2903,8 @@ impl VkContext {
                             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                             .buffer_info(std::slice::from_ref(&cmd_info)),
                     ];
+                    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
+                    // and every set and resource it names belongs to this device.
                     unsafe { device.update_descriptor_sets(&writes, &[]) };
                 }
                 sc_indirect_bufs.push(bufs);
@@ -2976,6 +3041,8 @@ impl VkContext {
             let pool_size = vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(4 * n_frames);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let pool = unsafe {
                 device.create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
@@ -3018,6 +3085,8 @@ impl VkContext {
                             .buffer_info(std::slice::from_ref(info))
                     })
                     .collect();
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
 
@@ -3077,6 +3146,8 @@ impl VkContext {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(std::slice::from_ref(&nm_info)),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
             sets
@@ -3121,6 +3192,8 @@ impl VkContext {
                         .dst_binding(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&info));
+                    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
+                    // and every set and resource it names belongs to this device.
                     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
                 }
                 instance_buffers.push(bufs);
@@ -3144,6 +3217,8 @@ impl VkContext {
                     .dst_binding(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&img_info));
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
             }
             sets
@@ -3183,6 +3258,8 @@ impl VkContext {
         let bloom_pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(bloom_pool_capacity);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let bloom_descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -3621,6 +3698,8 @@ impl VkContext {
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(frames as u32);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
             .map_err(|e| format!("allocate command buffers: {e}"))?;
 
@@ -3635,6 +3714,8 @@ impl VkContext {
             | vk::CommandPoolCreateFlags::TRANSIENT;
         let make_pool_with_buffer =
             |device: &ash::Device| -> Result<(vk::CommandPool, vk::CommandBuffer), String> {
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 let pool = unsafe {
                     device.create_command_pool(
                         &vk::CommandPoolCreateInfo::default()
@@ -3644,6 +3725,8 @@ impl VkContext {
                     )
                 }
                 .map_err(|e| format!("per-pass command pool: {e}"))?;
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 let buf = unsafe {
                     device.allocate_command_buffers(
                         &vk::CommandBufferAllocateInfo::default()
@@ -3684,16 +3767,22 @@ impl VkContext {
         let mut render_finished = Vec::with_capacity(swapchain_images.len());
         for _ in 0..swapchain_images.len() {
             render_finished.push(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe { device.create_semaphore(&sem_info, None) }
                     .map_err(|e| format!("semaphore: {e}"))?,
             );
         }
         for _ in 0..frames {
             image_available.push(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe { device.create_semaphore(&sem_info, None) }
                     .map_err(|e| format!("semaphore: {e}"))?,
             );
             in_flight.push(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe { device.create_fence(&fence_info, None) }
                     .map_err(|e| format!("fence: {e}"))?,
             );
@@ -3716,6 +3805,9 @@ impl VkContext {
         let shadow_pipeline_layout_field = if shadow_pipeline_opt.is_some() {
             Some(shadow_pipeline_layout)
         } else {
+            // SAFETY: every handle here was created from this device and is destroyed exactly once;
+            // the caller has already waited for the device to go idle, so no submission still
+            // references them.
             unsafe { device.destroy_pipeline_layout(shadow_pipeline_layout, None) };
             None
         };
@@ -4332,18 +4424,26 @@ unsafe extern "system" fn debug_callback(
     if data.is_null() {
         return vk::FALSE;
     }
+    // SAFETY: the null check above passed, and Vulkan guarantees the callback data outlives the
+    // callback.
     let data = unsafe { &*data };
 
     // Drop the benign DLSS first-frame layout errors (see the helper); any other
     // VUID, or an exhausted budget, still logs.
     if !user.is_null() && !data.p_message_id_name.is_null() {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
         let vuid = unsafe { CStr::from_ptr(data.p_message_id_name) };
+        // SAFETY: `user` is the `AtomicU32` budget pointer this messenger was registered with; it
+        // is non-null per the check above and outlives the messenger.
         let budget = unsafe { &*(user as *const std::sync::atomic::AtomicU32) };
         if drop_benign_dlss_layout_error(vuid.to_bytes(), budget) {
             return vk::FALSE;
         }
     }
 
+    // SAFETY: Vulkan fills `p_message` with a NUL-terminated string that lives for the duration of
+    // the callback.
     let msg = unsafe { CStr::from_ptr(data.p_message) }.to_string_lossy();
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         tracing::error!("[Vulkan] {}", msg);

@@ -72,6 +72,9 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
     let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
     let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
 
+    // SAFETY: `src_c`, `entry_c` and `target_c` are NUL-terminated buffers live for the call,
+    // `source.len()` is exactly the byte length behind `src_c`, and `blob` / `error` are live
+    // locals that receive the results.
     let result = unsafe {
         D3DCompile(
             src_c.as_ptr() as *const std::ffi::c_void,
@@ -92,10 +95,14 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
         let msg = error
             .as_ref()
             .map(|e| {
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let ptr = unsafe { e.GetBufferPointer() } as *const u8;
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let len = unsafe { e.GetBufferSize() };
                 // The error blob's size counts its NUL terminator; keeping it
                 // would embed a NUL in the middle of the build error text.
+                // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
+                // live while `e` is held, and the text is copied out before the blob is released.
                 String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
                     .trim_end_matches(['\0', '\n'])
                     .to_string()
@@ -113,8 +120,12 @@ fn compile_hlsl(source: &str, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::
             args.asset_name
         ))
     })?;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let ptr = unsafe { b.GetBufferPointer() } as *const u8;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let len = unsafe { b.GetBufferSize() };
+    // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays live while
+    // `b` is held, and the bytes are copied out before the blob is released.
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
 }
 

@@ -84,6 +84,8 @@ pub(in crate::metal) fn build_water_surface_record(
     let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
     let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
 
+    // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
+    // bytes into the new buffer before the call returns.
     let vb = unsafe {
         let ptr = std::ptr::NonNull::new(packed.as_ptr() as *mut _)
             .ok_or("water vertex buffer: source pointer is null")?;
@@ -91,6 +93,8 @@ pub(in crate::metal) fn build_water_surface_record(
             .newBufferWithBytes_length_options(ptr, vb_bytes, MTLResourceOptions::StorageModeShared)
             .ok_or("failed to allocate water vertex buffer")?
     };
+    // SAFETY: the pointer and length describe the live `idxs` allocation, and Metal copies those
+    // bytes into the new buffer before the call returns.
     let ib = unsafe {
         let ptr = std::ptr::NonNull::new(idxs.as_ptr() as *mut _)
             .ok_or("water index buffer: source pointer is null")?;
@@ -304,6 +308,8 @@ fn build_water_pipeline_from(
     // Standard mesh vertex layout (pos / normal / tangent / colour / uv at
     // buffer(1)). Stride = sizeof(Vertex) = 56 bytes.
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -340,6 +346,8 @@ fn build_water_pipeline_from(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);

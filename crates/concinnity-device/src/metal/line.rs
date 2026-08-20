@@ -87,6 +87,8 @@ impl MtlContext {
             _pad: [0.0; 3],
         };
         let bytes = std::mem::size_of_val(vertices);
+        // SAFETY: the pointer and length describe the live `vertices` allocation, and Metal copies
+        // those bytes into the new buffer before the call returns.
         let vbuf = unsafe {
             self.device
                 .newBufferWithBytes_length_options(
@@ -98,6 +100,8 @@ impl MtlContext {
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
@@ -114,6 +118,8 @@ impl MtlContext {
             "lines",
         );
         enc.setRenderPipelineState(pipeline);
+        // SAFETY: each pointer is derived from the live `view` with its `size_of` as the length,
+        // and `vbuf` outlives the encoder; the indices are the slots the line shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(&view).cast(),
@@ -156,6 +162,8 @@ fn build_line_pipeline(
     // Vertex layout: `LineVertex` (position, edge, colour) at 32 bytes,
     // asserted by `line_vertex_layout_matches_shaders`.
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -181,6 +189,8 @@ fn build_line_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);

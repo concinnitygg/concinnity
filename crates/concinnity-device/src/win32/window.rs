@@ -116,6 +116,8 @@ impl Drop for WindowState {
         // adopts it (e.g. the process is exiting, or a rebuild failed), the HWND
         // stays parked until the next `create_window` or is reclaimed by the OS
         // at process exit -- never presented to, so it is harmless.
+        // SAFETY: `self.hwnd` is this window's live handle, and the call only stores an integer in
+        // a per-window slot.
         unsafe { SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0) };
         park_window(self.hwnd);
     }
@@ -134,13 +136,16 @@ pub(crate) fn do_capture_cursor(hwnd: HWND, state: &mut WindowState) {
     // set_camera_capture retries every frame until focus arrives, and the
     // click-to-capture path is always foreground by the time the button
     // message is delivered.
+    // SAFETY: a read of the foreground window handle; it borrows nothing.
     if unsafe { GetForegroundWindow() } != hwnd {
         return;
     }
     state.cursor_captured = true;
     state.recapture_on_click = false;
+    // SAFETY: adjusts this thread's cursor display count; it borrows nothing.
     unsafe { ShowCursor(false) };
     let mut rect = windows::Win32::Foundation::RECT::default();
+    // SAFETY: `hwnd` is this window's live handle, and `rect` is a live local the call fills.
     if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() {
         let mut tl = POINT {
             x: rect.left,
@@ -150,6 +155,8 @@ pub(crate) fn do_capture_cursor(hwnd: HWND, state: &mut WindowState) {
             x: rect.right,
             y: rect.bottom,
         };
+        // SAFETY: `hwnd` is this window's live handle, and both points are live locals the calls
+        // convert in place.
         unsafe {
             let _ = ClientToScreen(hwnd, &mut tl);
             let _ = ClientToScreen(hwnd, &mut br);
@@ -160,6 +167,7 @@ pub(crate) fn do_capture_cursor(hwnd: HWND, state: &mut WindowState) {
             right: br.x,
             bottom: br.y,
         };
+        // SAFETY: `screen_rect` is a live local the call only reads.
         let _ = unsafe { ClipCursor(Some(&screen_rect)) };
     }
     // Discard any spurious deltas accumulated before capture.
@@ -173,6 +181,8 @@ pub(crate) fn do_release_cursor(state: &mut WindowState) {
     }
     state.cursor_captured = false;
     state.recapture_on_click = true;
+    // SAFETY: neither call borrows state: one drops the clip, the other adjusts this thread's
+    // cursor display count.
     unsafe {
         let _ = ClipCursor(None);
         ShowCursor(true);
@@ -188,6 +198,7 @@ pub(crate) fn do_set_ui_cursor_hidden(state: &mut WindowState, hidden: bool) {
         return;
     }
     state.ui_cursor_hidden = hidden;
+    // SAFETY: adjusts this thread's cursor display count; it borrows nothing.
     unsafe { ShowCursor(!hidden) };
 }
 
@@ -196,6 +207,7 @@ pub(crate) fn do_set_ui_cursor_hidden(state: &mut WindowState, hidden: bool) {
 // test and its fullscreen `ClipCursor` bounds.
 fn client_screen_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
+    // SAFETY: `hwnd` is this window's live handle, and `rect` is a live local the call fills.
     if unsafe { GetClientRect(hwnd, &mut rect) }.is_err() {
         return None;
     }
@@ -207,6 +219,8 @@ fn client_screen_rect(hwnd: HWND) -> Option<RECT> {
         x: rect.right,
         y: rect.bottom,
     };
+    // SAFETY: `hwnd` is this window's live handle, and both points are live locals the calls
+    // convert in place.
     unsafe {
         if ClientToScreen(hwnd, &mut tl).as_bool() && ClientToScreen(hwnd, &mut br).as_bool() {
             Some(RECT {
@@ -240,6 +254,7 @@ pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
     }
     let mut cursor = POINT::default();
     let (Ok(()), Some(rect)) = (
+        // SAFETY: `cursor` is a live local the call fills.
         unsafe { GetCursorPos(&mut cursor) },
         client_screen_rect(state.hwnd),
     ) else {
@@ -260,7 +275,9 @@ pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
         // clip. It is a hard OS confine (no visible snap-back), re-applied each
         // frame while foreground; released once when the condition ends
         // (see `release_menu_clip`).
+        // SAFETY: a read of the foreground window handle; it borrows nothing.
         if unsafe { GetForegroundWindow() } == state.hwnd {
+            // SAFETY: `rect` is a live local the call only reads.
             let _ = unsafe { ClipCursor(Some(&rect)) };
             state.menu_clip_active = true;
         } else {
@@ -286,6 +303,7 @@ pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
 fn release_menu_clip(state: &mut WindowState) {
     if state.menu_clip_active {
         state.menu_clip_active = false;
+        // SAFETY: the call releases this thread's clip and borrows nothing.
         let _ = unsafe { ClipCursor(None) };
     }
 }
@@ -306,6 +324,8 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
     // Record the mode so the per-frame cursor confinement can tell fullscreen
     // (confine) from windowed / borderless (hide the arrow on leave).
     state.window_mode = mode;
+    // SAFETY: `hwnd` is this window's live handle, and every rect and style these calls read or
+    // fill is a live local.
     unsafe {
         match mode {
             WindowMode::Windowed => {
@@ -354,6 +374,8 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
 // ResizeBuffers.
 pub(crate) fn do_set_window_size(state: &mut WindowState, width: u32, height: u32) {
     let hwnd = state.hwnd;
+    // SAFETY: `hwnd` is this window's live handle, and `rect` is a live local `AdjustWindowRect`
+    // fills before `SetWindowPos` reads it.
     unsafe {
         let mut rect = RECT {
             left: 0,
@@ -376,6 +398,8 @@ pub(crate) fn do_set_window_size(state: &mut WindowState, width: u32, height: u3
 
 // Work-area-inclusive bounds of the monitor the window is mostly on.
 fn monitor_rect(hwnd: HWND) -> Option<RECT> {
+    // SAFETY: `hwnd` is this window's live handle, `mon` comes from the query on the line above,
+    // and `info` is a live local whose own `cbSize` tells the call how much to fill.
     unsafe {
         let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
@@ -396,6 +420,12 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: `install_window_state` stored the address of this window's boxed `WindowState`, whose
+    // heap allocation outlives the window, and `WindowState::drop` clears the slot before the HWND
+    // is parked, so a non-null pointer here always addresses a live state. Messages reach this
+    // procedure only from `pump_messages` on the thread that owns the window, so the `&mut` is not
+    // aliased by another dispatch, and every handle and local the arms below name is live for the
+    // call.
     unsafe {
         let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
         if state_ptr.is_null() {
@@ -500,30 +530,27 @@ unsafe extern "system" fn wnd_proc(
                 LRESULT(0)
             }
             WM_INPUT => {
-                // Raw input for captured-cursor delta.
+                // Raw input for captured-cursor delta. The packet is read
+                // straight into a `RAWINPUT` rather than a `Vec<u8>` that is
+                // then cast: a byte vector carries no alignment guarantee, and
+                // only mouse devices are registered, so a `RAWINPUT`-sized
+                // destination always holds the whole packet.
                 if state.cursor_captured {
-                    let mut size: u32 = 0;
-                    windows::Win32::UI::Input::GetRawInputData(
+                    let mut raw = windows::Win32::UI::Input::RAWINPUT::default();
+                    let mut size =
+                        std::mem::size_of::<windows::Win32::UI::Input::RAWINPUT>() as u32;
+                    let copied = windows::Win32::UI::Input::GetRawInputData(
                         windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
                         windows::Win32::UI::Input::RID_INPUT,
-                        None,
+                        Some(&mut raw as *mut _ as *mut std::ffi::c_void),
                         &mut size,
                         std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTHEADER>() as u32,
                     );
-                    if size > 0 {
-                        let mut buf = vec![0u8; size as usize];
-                        windows::Win32::UI::Input::GetRawInputData(
-                            windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
-                            windows::Win32::UI::Input::RID_INPUT,
-                            Some(buf.as_mut_ptr() as *mut std::ffi::c_void),
-                            &mut size,
-                            std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTHEADER>() as u32,
-                        );
-                        let raw = &*(buf.as_ptr() as *const windows::Win32::UI::Input::RAWINPUT);
-                        if raw.header.dwType == windows::Win32::UI::Input::RIM_TYPEMOUSE.0 {
-                            state.mouse_dx += raw.data.mouse.lLastX as f32;
-                            state.mouse_dy += raw.data.mouse.lLastY as f32;
-                        }
+                    if copied != u32::MAX
+                        && raw.header.dwType == windows::Win32::UI::Input::RIM_TYPEMOUSE.0
+                    {
+                        state.mouse_dx += raw.data.mouse.lLastX as f32;
+                        state.mouse_dy += raw.data.mouse.lLastY as f32;
                     }
                 }
                 LRESULT(0)
@@ -621,12 +648,17 @@ fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
         dwFlags: windows::Win32::UI::Input::RIDEV_INPUTSINK,
         hwndTarget: hwnd,
     };
+    // SAFETY: `rid` is a live local, and the element size passed alongside it is that local's own
+    // type.
     let _ = unsafe {
         windows::Win32::UI::Input::RegisterRawInputDevices(
             &[rid],
             std::mem::size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>() as u32,
         )
     };
+    // SAFETY: the stored address is that of a `WindowState` held in a `Box` whose heap allocation
+    // outlives the window, so `wnd_proc` can dereference it for as long as the window delivers
+    // messages.
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, win_state as *mut WindowState as isize) };
 }
 
@@ -639,6 +671,8 @@ fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
 fn adopt_parked_window(hwnd: HWND, title_bar: bool) -> (HWND, Box<WindowState>) {
     let (width, height) = {
         let mut rect = RECT::default();
+        // SAFETY: `hwnd` is the parked window's live handle, and `rect` is a live local the call
+        // fills.
         if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() {
             (
                 (rect.right - rect.left).max(1),
@@ -668,6 +702,7 @@ pub(crate) fn create_window(
         // SWP_NOSIZE keeps the reposition-free reuse parking exists for -- so a
         // reload that flipped `title_bar` (or parked while borderless) lands on
         // the style the state claims.
+        // SAFETY: `hwnd` is the parked window's live handle, and the restyle borrows nothing else.
         unsafe {
             SetWindowLongPtrW(hwnd, GWL_STYLE, windowed_style(title_bar).0 as isize);
             let _ = SetWindowPos(
@@ -686,6 +721,7 @@ pub(crate) fn create_window(
     let class_name: Vec<u16> = "ConcinnityWindow\0".encode_utf16().collect();
     let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
 
+    // SAFETY: a query for this process's own module handle; it borrows nothing.
     let hinstance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
         .map_err(|e| format!("GetModuleHandle: {e}"))?;
 
@@ -695,9 +731,12 @@ pub(crate) fn create_window(
         lpfnWndProc: Some(wnd_proc),
         hInstance: hinstance.into(),
         lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+        // SAFETY: loads a built-in system cursor named by a constant; it borrows nothing.
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() },
         ..Default::default()
     };
+    // SAFETY: `wc` and the NUL-terminated class-name buffer it points at are live for the call,
+    // which copies the name into the process's class atom table.
     unsafe { RegisterClassExW(&wc) };
 
     let style = windowed_style(title_bar);
@@ -707,8 +746,11 @@ pub(crate) fn create_window(
         right: width as i32,
         bottom: height as i32,
     };
+    // SAFETY: `rect` is a live local the call adjusts in place.
     unsafe { AdjustWindowRect(&mut rect, style, false) }.ok();
 
+    // SAFETY: the window class was registered above, and the NUL-terminated class-name and title
+    // buffers outlive the call.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -727,6 +769,8 @@ pub(crate) fn create_window(
     }
     .map_err(|e| format!("CreateWindowExW: {e}"))?;
 
+    // SAFETY: `hwnd` is the window just created and still owned here; none of these calls borrow
+    // anything else.
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         // Explicitly take foreground + keyboard focus. SW_SHOW alone can
@@ -803,7 +847,11 @@ pub(crate) fn take_input_snapshot(state: &mut WindowState) -> crate::gfx::input:
 
 pub(crate) fn pump_messages() {
     let mut msg = MSG::default();
+    // SAFETY: `msg` is a live local the pump fills.
     while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+        // SAFETY: `msg` was just filled by `PeekMessageW` and is live for both calls.
+        // `DispatchMessageW` re-enters `wnd_proc`, which reaches its own window's state through the
+        // per-window slot rather than through anything borrowed here.
         unsafe {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);

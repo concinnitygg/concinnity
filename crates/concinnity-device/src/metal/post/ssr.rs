@@ -131,6 +131,7 @@ pub(crate) fn create_ssr_targets(
     let blur_scale = blur_scale.max(1);
     let make_at = |w: usize, h: usize| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -195,6 +196,9 @@ impl MtlContext {
                 pipeline: resolve_ps,
                 label: "SSR resolve",
             },
+            // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
+            // texture indices the shader declares; `probe_cube_or_sky` returns the sky for unbaked
+            // slots, so all MAX_PROBES slots are live.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 1);
@@ -273,6 +277,8 @@ impl MtlContext {
                 pipeline: blur_ps,
                 label: "reflection blur",
             },
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gb_roughness), 1);
@@ -290,6 +296,8 @@ impl MtlContext {
                 pipeline: composite_ps,
                 label: "reflection composite",
             },
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 1);

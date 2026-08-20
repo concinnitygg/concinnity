@@ -108,6 +108,7 @@ pub(crate) fn create_bloom_targets(
         let mw = (full_w >> (i + 1)).max(1) as usize;
         let mh = (full_h >> (i + 1)).max(1) as usize;
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(BLOOM_FORMAT);
@@ -174,6 +175,9 @@ impl MtlContext {
                 pipeline: &bloom_pipelines.prefilter,
                 label: "bloom prefilter",
             },
+            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+            // `size_of` as the length, and every bound resource outlives the encoder; the indices
+            // are the slots the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(scene_color), 0);
                 enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
@@ -196,6 +200,8 @@ impl MtlContext {
                     pipeline: &bloom_pipelines.downsample,
                     label: "bloom downsample",
                 },
+                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
+                // the buffer/texture indices the shaders declare.
                 |enc| unsafe {
                     enc.setFragmentTexture_atIndex(Some(mips[i - 1].as_ref()), 0);
                     enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
@@ -222,6 +228,8 @@ impl MtlContext {
                     pipeline: &bloom_pipelines.upsample,
                     label: "bloom upsample",
                 },
+                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
+                // the buffer/texture indices the shaders declare.
                 |enc| unsafe {
                     enc.setFragmentTexture_atIndex(Some(mips[i + 1].as_ref()), 0);
                     enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);

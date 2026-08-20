@@ -101,6 +101,8 @@ impl DxContext {
             let Some(pso) = self.world_pipeline(bucket) else {
                 return;
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };
             self.execute_bucket_region(cmd, cull_sig, indirect, max_count, bucket);
         })
@@ -147,6 +149,8 @@ impl DxContext {
         max_count: u32,
         bucket: usize,
     ) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ExecuteIndirect(
                 cull_sig,

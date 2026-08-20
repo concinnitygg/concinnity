@@ -21,11 +21,16 @@ use crate::ecs::StepResult;
 // one entry point installs it per process.
 pub fn install_ctrlc_handler(app: &App) {
     let token = app.shutdown_token();
-    ctrlc::set_handler(move || {
+    let installed = ctrlc::set_handler(move || {
         tracing::info!("CTRL+C received, cancelling all subsystems");
         token.cancel();
-    })
-    .expect("failed to set CTRL+C handler");
+    });
+    // A host that already owns the signal (an embedding application, or a
+    // second run in one process) keeps its handler; refusing to run over it
+    // is not a reason to abort.
+    if let Err(e) = installed {
+        tracing::warn!("CTRL+C handler not installed: {e}");
+    }
 }
 
 // Activate NSApplication so AppKit windows can be displayed. Must be called
@@ -84,6 +89,8 @@ pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut A
 pub(crate) fn drain_cocoa_events() {
     use core_foundation::runloop::{CFRunLoopRunInMode, kCFRunLoopDefaultMode};
     loop {
+        // SAFETY: `kCFRunLoopDefaultMode` is a framework-owned static mode
+        // name and this thread is the one that started the run loop.
         let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true as u8) };
         if result != 4 {
             break;

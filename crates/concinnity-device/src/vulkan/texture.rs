@@ -67,6 +67,7 @@ pub(super) fn find_memory_type(
     type_filter: u32,
     properties: vk::MemoryPropertyFlags,
 ) -> Result<u32, String> {
+    // SAFETY: a property query on a live handle; it only reads.
     let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device) };
     for i in 0..mem_props.memory_type_count {
         if (type_filter & (1 << i)) != 0
@@ -143,6 +144,8 @@ pub(super) fn create_image_view(
                 .base_array_layer(0)
                 .layer_count(1),
         );
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_image_view(&view_info, None) }
         .map_err(|e| format!("create_image_view: {e}"))
 }
@@ -165,19 +168,27 @@ where
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_buffer_count(1);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
         .map_err(|e| format!("one_shot allocate: {e}"))?[0];
 
     let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence was
+    // waited on), so it is in the initial state that `begin` requires.
     unsafe { device.begin_command_buffer(cmd, &begin_info) }
         .map_err(|e| format!("one_shot begin: {e}"))?;
 
     f(cmd);
 
+    // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
     unsafe { device.end_command_buffer(cmd) }.map_err(|e| format!("one_shot end: {e}"))?;
 
     let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+    // SAFETY: every command buffer in `submit_bufs` was ended and belongs to this frame slot, the
+    // semaphores and fence were created from this device, and `submit_info` borrows all of them for
+    // the call.
     unsafe { device.queue_submit(queue, std::slice::from_ref(&submit_info), vk::Fence::null()) }
         .map_err(|e| format!("one_shot submit: {e}"))?;
     Ok(cmd)
@@ -194,7 +205,10 @@ where
     F: FnOnce(vk::CommandBuffer),
 {
     let cmd = one_shot_submit_nowait(device, command_pool, queue, f)?;
+    // SAFETY: `queue` belongs to this device; the wait takes no borrowed state.
     unsafe { device.queue_wait_idle(queue) }.map_err(|e| format!("one_shot wait: {e}"))?;
+    // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+    // caller has already waited for the device to go idle, so no submission still references them.
     unsafe { device.free_command_buffers(command_pool, std::slice::from_ref(&cmd)) };
     Ok(())
 }
@@ -256,6 +270,8 @@ pub(super) fn transition_image_layout_range(
         .src_access_mask(src_access)
         .dst_access_mask(dst_access);
 
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
+    // commands name is live for the call.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -429,6 +445,8 @@ pub(super) struct StreamedUploadRetire {
 
 impl StreamedUploadRetire {
     pub(super) fn destroy(&self, device: &Device, command_pool: vk::CommandPool) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.free_command_buffers(command_pool, std::slice::from_ref(&self.cmd));
         }
@@ -541,7 +559,10 @@ pub(super) fn finish_upload(
     ctx: &GpuUploadContext,
     in_flight: UploadInFlight,
 ) -> Result<(), String> {
+    // SAFETY: `ctx.queue` belongs to `ctx.device`; the wait takes no borrowed state.
     unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
+    // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+    // caller has already waited for the device to go idle, so no submission still references them.
     unsafe {
         ctx.device
             .free_command_buffers(ctx.command_pool, std::slice::from_ref(&in_flight.cmd));
@@ -577,6 +598,9 @@ fn upload_texture_levels_deferred(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         let ptr = staging.mapped_ptr();
         let mut off = 0usize;
@@ -646,6 +670,8 @@ fn upload_texture_levels_deferred(
             );
             off += level.data.len() as u64;
         }
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
@@ -687,6 +713,8 @@ fn upload_texture_levels_deferred(
                     .base_array_layer(0)
                     .layer_count(1),
             );
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
             .map_err(|e| format!("create_image_view: {e}"))?
     };
@@ -754,6 +782,9 @@ pub(super) fn upload_color_lut(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), needed);
     }
@@ -806,6 +837,8 @@ pub(super) fn upload_color_lut(
                 height: size,
                 depth: size,
             });
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
@@ -837,6 +870,8 @@ pub(super) fn upload_color_lut(
                 .base_array_layer(0)
                 .layer_count(1),
         );
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
         .map_err(|e| format!("create_image_view (LUT): {e}"))?;
 
@@ -878,6 +913,9 @@ pub(super) fn upload_float_lut(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(texels.as_ptr(), staging.mapped_ptr() as *mut f32, needed);
     }
@@ -928,6 +966,8 @@ pub(super) fn upload_float_lut(
                 height: size,
                 depth: 1,
             });
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
@@ -959,6 +999,8 @@ pub(super) fn upload_float_lut(
                 .base_array_layer(0)
                 .layer_count(1),
         );
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
         .map_err(|e| format!("create_image_view (float LUT): {e}"))?;
 
@@ -1060,6 +1102,8 @@ pub(super) fn create_shadow_map_array(
                     .base_array_layer(0)
                     .layer_count(layer_count),
             );
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
             .map_err(|e| format!("shadow array view: {e}"))?
     };
@@ -1079,6 +1123,8 @@ pub(super) fn create_shadow_map_array(
                     .base_array_layer(i)
                     .layer_count(1),
             );
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let v = unsafe { device.create_image_view(&info, None) }
             .map_err(|e| format!("shadow slice view {i}: {e}"))?;
         aux_views.push(v);
@@ -1240,6 +1286,8 @@ pub(super) fn create_sampler_linear_repeat(
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("linear repeat sampler: {e}"))
 }
 
@@ -1257,6 +1305,8 @@ pub(super) fn create_sampler_shadow(device: &Device) -> Result<vk::Sampler, Stri
         .compare_enable(true)
         .compare_op(vk::CompareOp::LESS_OR_EQUAL)
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("shadow sampler: {e}"))
 }
 
@@ -1273,6 +1323,8 @@ pub(super) fn create_sampler_linear_clamp(device: &Device) -> Result<vk::Sampler
         .unnormalized_coordinates(false)
         .compare_enable(false)
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("linear clamp sampler: {e}"))
 }
 
@@ -1360,6 +1412,9 @@ fn create_cube_image(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         let ptr = staging.mapped_ptr();
         let mut off = 0usize;
@@ -1418,6 +1473,8 @@ fn create_cube_image(
                 off += face_bytes;
             }
         }
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_copy_buffer_to_image(
                 cmd,
@@ -1460,6 +1517,8 @@ fn create_cube_image(
                     .base_array_layer(0)
                     .layer_count(6),
             );
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("cube view: {e}"))?
     };
 
@@ -1555,5 +1614,7 @@ pub(super) fn create_sampler_cube_linear(device: &Device) -> Result<vk::Sampler,
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("cube sampler: {e}"))
 }

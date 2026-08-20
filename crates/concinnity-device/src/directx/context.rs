@@ -90,6 +90,7 @@ pub(super) fn build_timestamp_resources(
     u64,
 ) {
     let device = alloc.device();
+    // SAFETY: a property query on a live command queue; it only reads.
     let frequency = unsafe { alloc.queue().GetTimestampFrequency() }.unwrap_or(0);
     if frequency == 0 {
         return (None, None, std::ptr::null(), 0);
@@ -105,6 +106,8 @@ pub(super) fn build_timestamp_resources(
         NodeMask: 0,
     };
     let mut heap: Option<ID3D12QueryHeap> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     if let Err(e) = unsafe { device.CreateQueryHeap(&heap_desc, &mut heap) } {
         tracing::warn!("timestamp query heap create failed: {e}");
         return (None, None, std::ptr::null(), 0);
@@ -122,6 +125,8 @@ pub(super) fn build_timestamp_resources(
         }
     };
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     if let Err(e) = unsafe { readback.Map(0, None, Some(&mut ptr)) } {
         tracing::warn!("timestamp readback map failed: {e}");
         return (None, None, std::ptr::null(), 0);
@@ -564,6 +569,7 @@ impl SpotShadowState {
     // GPU address of slice `slice`'s baked `ShadowUniforms`.
     pub fn slice_ubo_gva(&self, slice: u32) -> u64 {
         debug_assert!(slice < self.count());
+        // SAFETY: a property query on a live resource; it only reads.
         let base = unsafe { self.ubo.GetGPUVirtualAddress() };
         base + slice as u64 * self.ubo_stride
     }
@@ -630,6 +636,8 @@ impl DxUniforms {
             .iter()
             .chain(self.shadow_ubo_resources.iter())
         {
+            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+            // past this call.
             unsafe { res.Unmap(0, None) };
         }
     }
@@ -1251,6 +1259,10 @@ pub struct DxContext {
 
 // uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
 // text_upload's RefCells + map pointers are single-threaded.
+// SAFETY: `DxContext` owns COM objects and host-mapped pointers that are only ever touched from the
+// thread that built it, which `debug_assert_main_thread` enforces at every mutation entry point.
+// Moving the whole context to another thread is therefore safe as long as it stays main-thread-only
+// there, and nothing in it is shared across threads (hence `Send` without `Sync`).
 unsafe impl Send for DxContext {}
 
 // Win32 thread id of the thread that built the context. `DxContext::new` runs
@@ -1261,6 +1273,7 @@ static MAIN_THREAD_ID: OnceLock<u32> = OnceLock::new();
 // Record the calling thread as the main (render) thread. Called once from
 // `DxContext::new`, which always runs on the main thread.
 pub(super) fn record_main_thread() {
+    // SAFETY: a read of the calling thread's own id; it borrows nothing.
     let _ = MAIN_THREAD_ID.set(unsafe { GetCurrentThreadId() });
 }
 
@@ -1282,6 +1295,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
     debug_assert!(
         MAIN_THREAD_ID
             .get()
+            // SAFETY: a read of the calling thread's own id; it borrows nothing.
             .is_none_or(|&main| unsafe { GetCurrentThreadId() } == main),
         "{entry} must be called from the main thread: DxContext is main-thread-only \
          (see `unsafe impl Send for DxContext`); driving GraphicsSystem off the main \
@@ -1343,8 +1357,11 @@ impl DxContext {
         let frame = self.current_frame;
 
         // Wait for this frame slot's previous work to finish before reusing it.
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
         if self.frame_sync.fence_values[frame] > completed {
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
             unsafe {
                 self.frame_sync.fence.SetEventOnCompletion(
                     self.frame_sync.fence_values[frame],
@@ -1352,6 +1369,8 @@ impl DxContext {
                 )
             }
             .map_err(|e| super::error::map_hresult(e.code(), "SetEventOnCompletion"))?;
+            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
+            // context, and the wait borrows nothing else.
             unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
         }
 
@@ -1423,6 +1442,8 @@ impl DxContext {
             .and_then(|a| {
                 let mut info =
                     windows::Win32::Graphics::Dxgi::DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+                // parameters it fills are live locals that outlive the call.
                 unsafe {
                     a.QueryVideoMemoryInfo(
                         0,
@@ -1467,6 +1488,9 @@ impl DxContext {
             std::ptr::null()
         };
         let gpu_frame_us = if timestamps_live {
+            // SAFETY: `block_base` is non-null here (`timestamps_live`), and points at the frame's
+            // block in a READBACK buffer sized for `SLOTS_PER_FRAME` u64s per frame, whose first
+            // pair is the whole-frame timestamps. The fence wait above retired the writes.
             unsafe {
                 let ts_start = block_base.read();
                 let ts_end = block_base.add(1).read();
@@ -1495,7 +1519,12 @@ impl DxContext {
                 // Slot 2 + 2*i = start, slot 3 + 2*i = end (skip the
                 // whole-frame pair at the front of the block).
                 let off = 2 + 2 * i;
+                // SAFETY: `off` stays below `SLOTS_PER_FRAME` (the loop breaks at
+                // `MAX_PASS_TIMINGS`), so both reads stay inside this frame's block of the READBACK
+                // buffer, whose writes the fence wait above retired.
                 let ts_start = unsafe { block_base.add(off).read() };
+                // SAFETY: `off + 1` is the end slot of the same pair, still inside this frame's
+                // block.
                 let ts_end = unsafe { block_base.add(off + 1).read() };
                 let micros = if ts_end > ts_start {
                     ticks_to_micros(ts_end - ts_start)
@@ -1551,12 +1580,16 @@ impl DxContext {
         //    then close it immediately. The fence wait at the top of the
         //    function gated this slot's previous submission, so it's
         //    safe to reset.
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
         unsafe { self.commands.command_allocators[frame].Reset() }
             .map_err(|e| format!("start allocator reset: {e}"))?;
         // Owned clone (COM refcount bump) so the per-frame RT acceleration-
         // structure update below can take `&mut self` without holding a borrow
         // of `self.commands.command_lists`.
         let start_cmd = self.commands.command_lists[frame].clone();
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
         unsafe { start_cmd.Reset(&self.commands.command_allocators[frame], None) }
             .map_err(|e| format!("start cmd reset: {e}"))?;
 
@@ -1574,6 +1607,8 @@ impl DxContext {
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
             let (start_slot, _) = super::pass_timing::whole_frame_pair(frame);
             let block_base = (frame * super::pass_timing::SLOTS_PER_FRAME) as u32;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
                 // Pre-init each per-pass (start, end) pair as **end then
@@ -1598,6 +1633,8 @@ impl DxContext {
         // static this frame.
         self.rt_dynamic_update(&start_cmd, frame);
 
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
         unsafe { start_cmd.Close() }.map_err(|e| format!("start cmd close: {e}"))?;
 
         // Line resources: built on the first frame that publishes lines, so
@@ -1610,14 +1647,20 @@ impl DxContext {
         //    executor's main-thread Composite arm encodes onto this
         //    cmd list; this function appends the final timestamp +
         //    resolve after `record_frame` returns.
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
         unsafe { self.commands.end_command_allocators[frame].Reset() }
             .map_err(|e| format!("end allocator reset: {e}"))?;
         let end_cmd = &self.commands.end_command_lists[frame];
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
         unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
             .map_err(|e| format!("end cmd reset: {e}"))?;
 
+        // SAFETY: a property query on a live COM object; it only reads.
         let back_idx = unsafe { self.swapchain.GetCurrentBackBufferIndex() } as usize;
         let back_buffer = self.back_buffers[back_idx].clone();
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { self.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + back_idx * self.rtv_descriptor_size,
@@ -1717,6 +1760,8 @@ impl DxContext {
             self.timestamps.readback.as_ref(),
         ) {
             let (_, end_slot) = super::pass_timing::whole_frame_pair(frame);
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
                 end_cmd.ResolveQueryData(
@@ -1730,6 +1775,8 @@ impl DxContext {
             }
         }
 
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
         unsafe { end_cmd.Close() }
             .map_err(|e| super::error::map_hresult(e.code(), "end cmd close"))?;
 
@@ -1750,6 +1797,8 @@ impl DxContext {
         let end_handle: ID3D12CommandList =
             end_cmd.cast().map_err(|e| format!("end cmd cast: {e}"))?;
         submission.push(Some(end_handle));
+        // SAFETY: every command list in the submission is live and closed, and the slice outlives
+        // the call.
         unsafe { self.command_queue.ExecuteCommandLists(&submission) };
 
         // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
@@ -1762,12 +1811,15 @@ impl DxContext {
         } else {
             DXGI_PRESENT(0)
         };
+        // SAFETY: the swapchain is live, and `Present` takes no borrowed state beyond the interval
+        // and flags.
         let present_result = unsafe {
             self.swapchain
                 .Present(self.present_sync_interval, present_flags)
         };
         if let Err(e) = present_result.ok() {
             self.flush_validation();
+            // SAFETY: a property query on a live COM object; it only reads.
             let reason = unsafe { self.device.GetDeviceRemovedReason() };
             return Err(super::error::classify_present_failure(
                 e.code(),
@@ -1788,6 +1840,7 @@ impl DxContext {
         let next_val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(next_val + 1);
         self.frame_sync.fence_values[frame] = next_val;
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { self.command_queue.Signal(&self.frame_sync.fence, next_val) }
             .map_err(|e| super::error::map_hresult(e.code(), "Signal"))?;
 
@@ -2012,14 +2065,21 @@ impl DxContext {
         // Signal a new fence value and wait until the GPU reaches it.
         let val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(val + 1);
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         if unsafe { self.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
             && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
             && let Ok(()) = unsafe {
                 self.frame_sync
                     .fence
                     .SetEventOnCompletion(val, self.frame_sync.fence_event)
             }
         {
+            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
+            // context, and the wait borrows nothing else.
             unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
         }
     }
@@ -2242,6 +2302,7 @@ impl DxContext {
         let Some(adapter) = self.adapter.as_ref() else {
             return GpuProfile::UNKNOWN;
         };
+        // SAFETY: a property query on a live COM object; it only reads.
         let desc = match unsafe { adapter.GetDesc1() } {
             Ok(d) => d,
             Err(_) => return GpuProfile::UNKNOWN,
@@ -2274,6 +2335,7 @@ impl DxContext {
 
     // GPU descriptor handle for the per-object (albedo, normal) SRV pair.
     pub(super) fn object_srv_gpu(&self, obj_idx: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -2288,6 +2350,7 @@ impl DxContext {
 
     // GPU descriptor handle for the per-cluster (albedo, normal) SRV pair.
     pub(super) fn cluster_srv_gpu(&self, cluster_idx: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -2301,6 +2364,7 @@ impl DxContext {
 
     // GPU descriptor handle for skinned object `i`'s (albedo, normal) SRV pair.
     pub(super) fn skinned_srv_gpu(&self, i: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -2340,6 +2404,8 @@ impl Drop for DxContext {
         // Unmap persistent CBV mappings (view + shadow).
         self.uniforms.unmap();
         self.light_cull.unmap();
+        // SAFETY: the event was created in `DxContext::new`, is closed exactly once here, and
+        // `wait_idle` at the top of `drop` retired every wait that used it.
         unsafe { CloseHandle(self.frame_sync.fence_event) }.ok();
         // The remaining COM objects (device, swapchain, heaps, etc.) are reference-
         // counted and released automatically when the struct fields are dropped.
@@ -2353,21 +2419,38 @@ impl Drop for DxContext {
 // surface only as the bare `E_INVALIDARG` HRESULT from CreateGraphicsPipelineState.
 
 pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
+    // SAFETY: a property query on a live COM object; it only reads.
     let count = unsafe { iq.GetNumStoredMessages() };
     for i in 0..count {
         let mut len = 0usize;
+        // SAFETY: `iq` is live and a null message pointer asks for the message
+        // size alone, which lands in the live local `len`.
         if unsafe { iq.GetMessage(i, None, &mut len) }.is_err() {
             continue;
         }
-        let mut buf = vec![0u8; len];
+        // A D3D12_MESSAGE is variable length: the fixed header followed by the
+        // description text it points into. Back it with u64s rather than bytes so
+        // the header lands on the alignment the struct needs.
+        if len < std::mem::size_of::<D3D12_MESSAGE>() {
+            continue;
+        }
+        let mut buf = vec![0u64; len.div_ceil(std::mem::size_of::<u64>())];
         let msg_ptr = buf.as_mut_ptr() as *mut D3D12_MESSAGE;
+        // SAFETY: `iq` is live, `len` is the size it just reported, and `msg_ptr`
+        // addresses a live allocation of at least that many bytes.
         if unsafe { iq.GetMessage(i, Some(msg_ptr), &mut len) }.is_err() {
             continue;
         }
+        // SAFETY: `GetMessage` filled `buf` with a message at least as long as the
+        // header, and the u64 backing store is aligned for it. The borrow ends
+        // before `buf` is dropped at the end of the iteration.
         let msg = unsafe { &*msg_ptr };
         let text = if msg.pDescription.is_null() {
             "(no description)".to_owned()
         } else {
+            // SAFETY: `pDescription` is the non-null, NUL-terminated description
+            // D3D12 wrote into `buf` alongside the header, so it stays live for
+            // the copy this makes.
             unsafe { std::ffi::CStr::from_ptr(msg.pDescription as *const i8) }
                 .to_string_lossy()
                 .into_owned()
@@ -2384,6 +2467,7 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
             }
         }
     }
+    // SAFETY: `iq` is live and every message read above has been copied out.
     unsafe { iq.ClearStoredMessages() };
 }
 

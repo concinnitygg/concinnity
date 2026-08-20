@@ -33,7 +33,7 @@ pub struct AppKitVkWindow {
     layer: Retained<CAMetalLayer>,
 }
 
-// Only ever used on the thread that created it, like the GLFW and Win32 windows.
+// SAFETY: Only ever used on the thread that created it, like the GLFW and Win32 windows.
 unsafe impl Send for AppKitVkWindow {}
 
 impl AppKitVkWindow {
@@ -190,6 +190,8 @@ impl AppKitVkWindow {
         let info =
             vk::MetalSurfaceCreateInfoEXT::default().layer(Retained::as_ptr(&self.layer).cast());
         let loader = ash::ext::metal_surface::Instance::new(entry, instance);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { loader.create_metal_surface(&info, None) }
             .map_err(|e| format!("vkCreateMetalSurfaceEXT: {e}"))
     }

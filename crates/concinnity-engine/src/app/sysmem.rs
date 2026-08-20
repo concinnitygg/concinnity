@@ -50,6 +50,8 @@ mod imp {
     // libc use rather than pull in another dependency for one static.
     #[allow(deprecated)]
     pub(super) fn process_resident_bytes() -> Option<u64> {
+        // SAFETY: `mach_task_basic_info` is a plain C struct of integer
+        // fields, so all-zero is a valid inhabitant.
         let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
         let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
             / std::mem::size_of::<libc::natural_t>())

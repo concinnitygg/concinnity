@@ -124,6 +124,8 @@ fn create_fullscreen_pso(
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         // Borrow the root signature without an AddRef (see the SSR PSO builder).
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -173,6 +175,8 @@ fn create_fullscreen_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create reflection composite PSO: {e}"))
 }
@@ -378,6 +382,8 @@ impl DxContext {
         // Pass 1: the roughness blur into the reduced-resolution `blur` target
         // (begin_fullscreen_rt sizes the viewport to the target's own dimensions).
         self.begin_fullscreen_rt(cmd, &rc.blur, rc.blur_rtv);
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&rc.blur_pso);
             cmd.SetGraphicsRootSignature(&rc.blur_root_sig);
@@ -398,6 +404,8 @@ impl DxContext {
         // for this pass's declared write, and which the next consumer's barrier
         // takes back out.
         self.bind_fullscreen_rt(cmd, &rc.output, rc.output_rtv);
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&rc.composite_pso);
             cmd.SetGraphicsRootSignature(&rc.composite_root_sig);

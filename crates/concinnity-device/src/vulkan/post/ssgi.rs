@@ -151,6 +151,8 @@ fn create_gather_render_pass(device: &Device) -> Result<vk::RenderPass, String> 
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("SSGI gather render pass: {e}"))
 }
@@ -180,6 +182,8 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("SSGI composite render pass: {e}"))
 }
@@ -285,6 +289,8 @@ fn create_ssgi_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -292,6 +298,8 @@ fn create_ssgi_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create ssgi pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -394,6 +402,8 @@ impl SsgiResources {
             .offset(0)
             .size(std::mem::size_of::<SsgiParams>() as u32);
         let set_layouts = [set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -428,6 +438,8 @@ impl SsgiResources {
         let pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(sampler_count);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -498,6 +510,8 @@ impl SsgiResources {
             height: gh,
         };
         self.gi = create_gi_target(alloc, device, gw, gh)?;
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         self.gather_framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -512,6 +526,8 @@ impl SsgiResources {
         .map_err(|e| format!("ssgi gather framebuffer: {e}"))?;
         let mut fbs = Vec::with_capacity(hdr_resolve_views.len());
         for &view in hdr_resolve_views {
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -568,6 +584,8 @@ impl SsgiResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&gb_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
         let gi_info = vk::DescriptorImageInfo::default()
@@ -591,6 +609,8 @@ impl SsgiResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&gb_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -609,6 +629,8 @@ impl SsgiResources {
     }
 
     fn destroy_targets(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if self.gather_framebuffer != vk::Framebuffer::null() {
                 device.destroy_framebuffer(self.gather_framebuffer, None);
@@ -649,6 +671,8 @@ impl SsgiResources {
         device: &Device,
         rebuilt: RebuiltSsgiPipelines,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.gather_pso, None);
             device.destroy_pipeline(self.composite_pso, None);
@@ -660,6 +684,8 @@ impl SsgiResources {
     // Destroy every SSGI resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
@@ -768,12 +794,16 @@ impl FullscreenPass for SsgiFullscreenPass<'_> {
     fn draw(&self, cmd: &Self::Rec) {
         let cmd = *cmd;
         let device = &self.ctx.device;
+        // SAFETY: `SsgiParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no padding
+        // and all 32 of its bytes are initialised; the slice borrows it and does not outlive it.
         let push = unsafe {
             std::slice::from_raw_parts(
                 self.params as *const SsgiParams as *const u8,
                 std::mem::size_of::<SsgiParams>(),
             )
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pso);
             device.cmd_bind_descriptor_sets(

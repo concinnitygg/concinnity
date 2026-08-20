@@ -337,6 +337,8 @@ impl DxContext {
         let decal_rtv_extra = if msaa_samples > 1 { 1 } else { 0 };
         let decal_srv_extra = crate::directx::decal::MAX_DECALS + 1;
         let _ = &decals; // referenced below where the pipeline is built.
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let rtv_heap: ID3D12DescriptorHeap = unsafe {
             device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
@@ -356,18 +358,25 @@ impl DxContext {
         }
         .map_err(|e| format!("RTV heap: {e}"))?;
         let rtv_descriptor_size =
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) }
                 as usize;
 
         // Back-buffer RTVs
         let mut back_buffers = Vec::with_capacity(FRAMES);
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         for i in 0..FRAMES {
+            // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
+            // it fills are live locals that outlive the call.
             let buf: ID3D12Resource = unsafe { swapchain.GetBuffer(i as u32) }
                 .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr + i * rtv_descriptor_size,
             };
+            // SAFETY: the view descriptor and the resource it names are live for the call, and the
+            // destination handle addresses a slot this context reserved for the view in a heap it
+            // owns.
             unsafe {
                 device.CreateRenderTargetView(&buf, None, rtv_handle);
             }
@@ -379,6 +388,8 @@ impl DxContext {
         // shadow DSVs (one slice each into the shadow map array),
         // [..+MAX_SHADOWED_SPOTS] = per-spot shadow slice DSVs, then the
         // unified G-buffer pre-pass's private depth buffer.
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let dsv_heap: ID3D12DescriptorHeap = unsafe {
             device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
@@ -391,8 +402,10 @@ impl DxContext {
         }
         .map_err(|e| format!("DSV heap: {e}"))?;
         let dsv_descriptor_size =
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) }
                 as usize;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let dsv_base = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
         let main_dsv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: dsv_base.ptr };
         let shadow_dsv_base_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
@@ -485,6 +498,8 @@ impl DxContext {
             albedo_count: flat_albedo_count,
             normal_count: flat_normal_count,
         });
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let srv_heap: ID3D12DescriptorHeap = unsafe {
             device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -497,10 +512,13 @@ impl DxContext {
             })
         }
         .map_err(|e| format!("SRV heap: {e}"))?;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_descriptor_size = unsafe {
             device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
         } as usize;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_cpu_base = unsafe { srv_heap.GetCPUDescriptorHandleForHeapStart() };
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe { srv_heap.GetGPUDescriptorHandleForHeapStart() };
 
         let slot_cpu = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
@@ -567,6 +585,8 @@ impl DxContext {
         // descriptors (a few bytes). Reserved unconditionally so the heap
         // layout stays anchored.
         let raymarch_sampler_base_slot = 4usize;
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let sampler_heap: ID3D12DescriptorHeap = unsafe {
             device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
                 Type: D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
@@ -577,9 +597,12 @@ impl DxContext {
         }
         .map_err(|e| format!("sampler heap: {e}"))?;
         let sampler_descriptor_size =
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER) }
                 as usize;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let samp_cpu_base = unsafe { sampler_heap.GetCPUDescriptorHandleForHeapStart() };
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let samp_gpu_base = unsafe { sampler_heap.GetGPUDescriptorHandleForHeapStart() };
 
         create_samplers(&device, samp_cpu_base, sampler_descriptor_size, anisotropy);
@@ -682,12 +705,16 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map spot-shadow UBO: {e}"))?;
             for (i, sd) in spot_shadows.iter().enumerate() {
                 let mut u = crate::gfx::csm::empty_shadow_uniforms();
                 u.light_vps[0] = sd.light_vp;
                 u.active_cascades = 1;
+                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
+                // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         &u as *const ShadowUniforms as *const u8,
@@ -696,6 +723,8 @@ impl DxContext {
                     );
                 }
             }
+            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+            // past this call.
             unsafe { buf.Unmap(0, None) };
             buf
         };
@@ -808,10 +837,14 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map probe set cbv: {e}"))?;
             // Initialise to the empty set (count 0) until the first frame writes it.
             let empty = concinnity_render::uniforms::ProbeSet::EMPTY;
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &empty as *const concinnity_render::uniforms::ProbeSet as *const u8,
@@ -830,9 +863,13 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map probe empty cbv: {e}"))?;
             let empty = concinnity_render::uniforms::ProbeSet::EMPTY;
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &empty as *const concinnity_render::uniforms::ProbeSet as *const u8,
@@ -1039,6 +1076,9 @@ impl DxContext {
                         + ssgi_rtv_extra)
                         * rtv_descriptor_size,
             };
+            // SAFETY: the view descriptor and the resource it names are live for the call, and the
+            // destination handle addresses a slot this context reserved for the view in a heap it
+            // owns.
             unsafe {
                 let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
                     Format: crate::directx::texture::HDR_FORMAT,
@@ -1100,11 +1140,13 @@ impl DxContext {
         let index_buffer = upload_buffer(&alloc, idx_bytes_raw, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
 
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vert_bytes_raw.len().max(4) as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
             SizeInBytes: idx_bytes_raw.len().max(4) as u32,
             // Static IB is u32: the `indices: &[u32]` signature is honoured
@@ -1130,6 +1172,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map view ubo: {e}"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
@@ -1155,6 +1199,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map shadow ubo: {e}"))?;
             shadow_ubo_ptrs.push(ptr as *mut u8);
@@ -1165,6 +1211,8 @@ impl DxContext {
         // Seed every frame's shadow UBO with the empty uniforms; per-frame
         // compute_shadow_uniforms in record_frame overwrites them.
         for ptr in &shadow_ubo_ptrs {
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &shadow_uniforms as *const ShadowUniforms as *const u8,
@@ -1793,13 +1841,19 @@ impl DxContext {
         let mut command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let alloc: ID3D12CommandAllocator =
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
                     .map_err(|e| format!("command allocator: {e}"))?;
+            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
+            // the new COM object lands in a binding that owns it.
             let list: ID3D12GraphicsCommandList = unsafe {
                 device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
             }
             .map_err(|e| format!("command list: {e}"))?;
             // Close immediately; we re-open each frame.
+            // SAFETY: the command list is live and in the recording state, which is what `Close`
+            // requires.
             unsafe { list.Close() }.map_err(|e| format!("close cmd list: {e}"))?;
             command_allocators.push(alloc);
             command_lists.push(list);
@@ -1817,13 +1871,19 @@ impl DxContext {
         let mut pass_cmd_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(pass_pool_size);
         for _ in 0..pass_pool_size {
             let alloc: ID3D12CommandAllocator =
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
                     .map_err(|e| format!("per-pass command allocator: {e}"))?;
+            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
+            // the new COM object lands in a binding that owns it.
             let list: ID3D12GraphicsCommandList = unsafe {
                 device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
             }
             .map_err(|e| format!("per-pass command list: {e}"))?;
             // Close immediately; we re-open per-pass each frame as needed.
+            // SAFETY: the command list is live and in the recording state, which is what `Close`
+            // requires.
             unsafe { list.Close() }.map_err(|e| format!("close per-pass cmd list: {e}"))?;
             pass_allocators.push(alloc);
             pass_cmd_lists.push(list);
@@ -1836,19 +1896,29 @@ impl DxContext {
         let mut end_command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
             let alloc: ID3D12CommandAllocator =
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
                     .map_err(|e| format!("end command allocator: {e}"))?;
+            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
+            // the new COM object lands in a binding that owns it.
             let list: ID3D12GraphicsCommandList = unsafe {
                 device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
             }
             .map_err(|e| format!("end command list: {e}"))?;
+            // SAFETY: the command list is live and in the recording state, which is what `Close`
+            // requires.
             unsafe { list.Close() }.map_err(|e| format!("close end cmd list: {e}"))?;
             end_command_allocators.push(alloc);
             end_command_lists.push(list);
         }
 
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
             .map_err(|e| format!("create fence: {e}"))?;
+        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // attributes; the call borrows nothing.
         let fence_event = unsafe { CreateEventW(None, false, false, None) }
             .map_err(|e| format!("create fence event: {e}"))?;
         let fence_values = vec![0u64; FRAMES];
@@ -1907,6 +1977,8 @@ impl DxContext {
                 )
                 .map_err(|e| format!("instance upload buf: {e}"))?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
+                // live local that receives the mapping.
                 unsafe {
                     buf.Map(0, None, Some(&mut ptr))
                         .map_err(|e| format!("map instance buf: {e}"))?;
@@ -2539,6 +2611,8 @@ fn create_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
             &shadow_samp,
@@ -2561,6 +2635,8 @@ fn create_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
             &linear_samp,
@@ -2580,6 +2656,8 @@ fn create_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
             &cube_samp,
@@ -2605,6 +2683,8 @@ fn create_samplers(
         MaxLOD: 0.0,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
             &clamp_samp,

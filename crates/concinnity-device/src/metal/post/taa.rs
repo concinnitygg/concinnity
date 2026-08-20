@@ -80,6 +80,7 @@ pub(crate) fn create_taa_targets(
     let h = height.max(1) as usize;
     let make = || -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -134,6 +135,9 @@ impl MtlContext {
                 label: "TAA resolve",
             },
             |enc| {
+                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+                // `size_of` as the length, and every bound resource outlives the encoder; the
+                // indices are the slots the shaders declare.
                 unsafe {
                     enc.setFragmentTexture_atIndex(Some(scene_input), 0);
                     enc.setFragmentTexture_atIndex(Some(velocity), 1);

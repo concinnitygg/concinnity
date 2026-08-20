@@ -106,6 +106,8 @@ pub(super) fn create_main_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("main render pass: {e}"))
 }
@@ -254,6 +256,8 @@ pub(super) fn create_main_render_pass_two_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("two-pass main render pass: {e}"))
 }
@@ -281,6 +285,8 @@ pub(super) fn create_shadow_render_pass(device: &Device) -> Result<vk::RenderPas
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass));
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("shadow render pass: {e}"))
 }
@@ -330,6 +336,8 @@ pub(super) fn create_composite_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("composite render pass: {e}"))
 }
@@ -397,6 +405,8 @@ pub(super) fn create_bloom_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("bloom render pass: {e}"))
 }

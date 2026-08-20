@@ -177,6 +177,8 @@ impl VkContext {
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(clears);
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
 
         // Opaque menu backdrop, single-sample path: the render pass above
@@ -185,6 +187,8 @@ impl VkContext {
         // behind the menu. (The MSAA path returned earlier without beginning a
         // render pass at all.)
         if world_hidden {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe { device.cmd_end_render_pass(cmd) };
             return;
         }
@@ -199,6 +203,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
@@ -206,6 +212,8 @@ impl VkContext {
 
         // Geometry buffers, pipeline-layout-independent, so bound once for
         // both the bindless and legacy main sub-passes below.
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
             device.cmd_bind_index_buffer(
@@ -238,6 +246,8 @@ impl VkContext {
                 .cull
                 .bindless_pipeline_layout
                 .expect("bindless pipeline layout is live alongside its pipeline");
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 device.cmd_bind_descriptor_sets(
@@ -280,6 +290,8 @@ impl VkContext {
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
             }
         }
@@ -291,6 +303,8 @@ impl VkContext {
         // instanced + skinned passes' fragment shader.
         let legacy_needed = !use_bindless || !self.clone_slot_by_draw_idx.is_empty();
         if legacy_needed {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
@@ -347,6 +361,8 @@ impl VkContext {
                         [i.min(self.descriptors.object_sets.len().saturating_sub(1))]
                 };
 
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_bind_descriptor_sets(
                         cmd,
@@ -374,6 +390,8 @@ impl VkContext {
                     emissive: obj.material.emissive,
                     _mpad3: 0.0,
                 };
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_push_constants(
                         cmd,
@@ -406,6 +424,8 @@ impl VkContext {
             && !self.instanced.clusters.is_empty()
             && !use_bindless
         {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
@@ -450,6 +470,8 @@ impl VkContext {
                 let Some(buckets) = self.instanced.lod_buckets.get(cluster_idx) else {
                     continue;
                 };
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     // Set 1: per-cluster (albedo, normal) sampler.
                     device.cmd_bind_descriptor_sets(
@@ -523,6 +545,8 @@ impl VkContext {
                 self.cull.bindless_pipeline_layout,
                 self.skinned.deformed.get(frame_idx),
             ) {
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_bind_pipeline(
                         cmd,
@@ -573,6 +597,8 @@ impl VkContext {
             && !self.skinned.draw_objects.is_empty()
         {
             let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
@@ -610,6 +636,8 @@ impl VkContext {
                     emissive: obj.material.emissive,
                     _mpad3: 0.0,
                 };
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_bind_descriptor_sets(
                         cmd,
@@ -645,6 +673,8 @@ impl VkContext {
 
         // End the main scene pass. The render pass leaves the HDR resolve
         // image in SHADER_READ_ONLY_OPTIMAL for the composite pass to sample.
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_end_render_pass(cmd) };
     }
 
@@ -701,6 +731,8 @@ impl VkContext {
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -721,6 +753,8 @@ impl VkContext {
             .render_pass(render_pass)
             .framebuffer(self.framebuffers[frame_idx])
             .render_area(vk::Rect2D::default().extent(extent));
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
 
         // Same negative-height viewport flip as the phase-1 main pass so the
@@ -734,6 +768,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
@@ -782,6 +818,8 @@ impl VkContext {
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
                 device.cmd_bind_vertex_buffers(
@@ -810,6 +848,8 @@ impl VkContext {
         // End the phase-2 pass. The render pass resolves the combined phase-1 +
         // phase-2 MSAA colour into `hdr_resolve` and leaves it
         // SHADER_READ_ONLY_OPTIMAL, so the post stack reads the combined scene.
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_end_render_pass(cmd) };
     }
 }

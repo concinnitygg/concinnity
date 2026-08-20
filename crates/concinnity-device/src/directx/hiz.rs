@@ -170,6 +170,8 @@ fn create_hiz_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -177,6 +179,8 @@ fn create_hiz_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create {label} PSO: {e}"))
 }
@@ -218,6 +222,8 @@ fn create_hiz_texture(
         ..Default::default()
     };
     let mut tex: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -253,6 +259,8 @@ pub(in crate::directx) fn write_hiz_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(tex, Some(&desc), srv_cpu) };
 }
 
@@ -273,6 +281,8 @@ pub(in crate::directx) fn write_hiz_mip_uav(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateUnorderedAccessView(tex, None, Some(&desc), uav_cpu) };
 }
 
@@ -425,6 +435,8 @@ impl crate::directx::context::DxContext {
             src_mip: 0,
             sample_count: self.hdr.msaa_samples.max(1),
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(&hiz.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
@@ -443,6 +455,8 @@ impl crate::directx::context::DxContext {
             cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[0]);
             cmd.Dispatch(hiz.width.div_ceil(8), hiz.height.div_ceil(8), 1);
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };
 
         // 2. Downsample chain. Each dispatch reads the prior mip and writes the
@@ -461,6 +475,8 @@ impl crate::directx::context::DxContext {
                 src_mip: mip - 1,
                 sample_count: 0,
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(&hiz.downsample_pso);
                 cmd.SetComputeRoot32BitConstants(

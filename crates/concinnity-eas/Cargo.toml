@@ -14,3 +14,6 @@ doctest = false
 # concinnity-eas <- concinnity-core <- concinnity-engine. A thread pool is
 # injected as a trait rather than taken as a dependency here.
 [dependencies]
+
+[lints]
+workspace = true

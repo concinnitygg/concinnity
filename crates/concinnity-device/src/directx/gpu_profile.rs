@@ -26,10 +26,15 @@ pub(crate) fn probe_gpu_profile() -> GpuProfile {
 // `pick_adapter` loop in `init/window.rs`.
 fn probe_adapter() -> Option<GpuProfile> {
     let factory: IDXGIFactory4 =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }.ok()?;
     let mut i = 0u32;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     while let Ok(adapter) = unsafe { factory.EnumAdapters1(i) } {
         i += 1;
+        // SAFETY: a property query on a live COM object; it only reads.
         let desc = match unsafe { adapter.GetDesc1() } {
             Ok(d) => d,
             Err(_) => continue,
@@ -40,6 +45,8 @@ fn probe_adapter() -> Option<GpuProfile> {
         }
         // D3D12 support as a pure capability check (a null device-out pointer
         // builds no device).
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let supported = unsafe {
             D3D12CreateDevice(
                 &adapter,

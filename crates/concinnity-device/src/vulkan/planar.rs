@@ -127,10 +127,11 @@ pub(in crate::vulkan) struct PlanarCullSources<'a> {
     pub(in crate::vulkan) hiz: Option<(vk::DescriptorSetLayout, vk::ImageView, vk::Sampler)>,
 }
 
-// The mapped view-ring pointers are POD raw pointers; the upload buffers stay
+// SAFETY: The mapped view-ring pointers are POD raw pointers; the upload buffers stay
 // alive through the struct fields and the pointers are written on the render
 // thread only. Mirrors GlassResources.
 unsafe impl Send for PlanarReflectionSet {}
+// SAFETY: as for `Send` above.
 unsafe impl Sync for PlanarReflectionSet {}
 
 // The GPU allocation context threaded through every planar create call: the
@@ -280,6 +281,8 @@ fn create_framebuffers(
             .width(width.max(1))
             .height(height.max(1))
             .layers(1);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let fb = unsafe { device.create_framebuffer(&info, None) }
             .map_err(|e| format!("planar framebuffer: {e}"))?;
         out.push(fb);
@@ -437,6 +440,9 @@ impl PlanarReflectionSet {
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let probeset_buf =
             alloc.create_buffer(probeset_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
+        // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+        // which is at least the source length, so `mapped_ptr()` is a live mapping of that many
+        // bytes; the source is a separate live allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &empty as *const ProbeSet as *const u8,
@@ -511,6 +517,8 @@ impl PlanarReflectionSet {
         if global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("planar descriptor pool: {e}"))?;
 
@@ -550,6 +558,8 @@ impl PlanarReflectionSet {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&probe_cube_sky),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
             // Binding 9: the shared per-scene local-light SSBO.
             write_storage(
@@ -571,6 +581,8 @@ impl PlanarReflectionSet {
                 .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(std::slice::from_ref(&cluster_params_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&cluster_write), &[]) };
             write_storage(
                 device,
@@ -587,6 +599,8 @@ impl PlanarReflectionSet {
                 super::descriptor_layout::SPOT_SHADOW_MAP_BINDING,
                 &spot_img,
             );
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&spot_write), &[]) };
             write_storage(
                 device,
@@ -609,6 +623,8 @@ impl PlanarReflectionSet {
                 sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
                 sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&ltc_writes, &[]) };
         }
 
@@ -657,6 +673,10 @@ impl PlanarReflectionSet {
             let params_size = std::mem::size_of::<CullHizParams>() as u64;
             let ubo =
                 alloc.create_buffer(params_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
+            // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
+            // `size`, which is at least the source length, so `mapped_ptr()` is a live mapping of
+            // that many bytes; the source is a separate live allocation, so the ranges cannot
+            // overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const CullHizParams as *const u8,
@@ -668,6 +688,8 @@ impl PlanarReflectionSet {
             let img = img_info(hiz_view, hiz_sampler);
             let ubo_info = buf_info(ubo.buffer(), params_size);
             let writes = [sampler_write(set, 0, &img), ubo_write(set, 1, &ubo_info)];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
             (Some(set), Some(ubo))
         } else {
@@ -726,6 +748,8 @@ impl PlanarReflectionSet {
         };
         let img = img_info(view, sampler);
         let write = sampler_write(set, 0, &img);
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
 
@@ -765,6 +789,8 @@ impl PlanarReflectionSet {
             },
         )?;
 
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -781,6 +807,8 @@ impl PlanarReflectionSet {
     }
 
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -822,6 +850,8 @@ fn write_storage(
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -917,6 +947,10 @@ impl VkContext {
                 _end_pad: 0.0,
             };
             let ring = slot * set.frames + frame_idx;
+            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
+            // hold a `ViewUniforms`, so `mapped_ptr()` is a live mapping of at least
+            // `size_of::<ViewUniforms>()` bytes; the source is a separate live borrow, so the
+            // ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &view as *const ViewUniforms as *const u8,
@@ -1004,6 +1038,8 @@ impl VkContext {
                     })
             })
             .collect();
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.device.cmd_pipeline_barrier(
                 cmd,

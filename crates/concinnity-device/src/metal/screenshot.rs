@@ -58,6 +58,7 @@ impl MtlContext {
         // from that. `ShaderRead` is the default usage and is enough for a blit
         // destination.
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(self.swap_pixel_format);
@@ -82,6 +83,8 @@ impl MtlContext {
         let blit = cmd_buf
             .blitCommandEncoder()
             .ok_or("screenshot: failed to get blit encoder")?;
+        // SAFETY: `staging` was created with the same format and at least `width` x `height` texels
+        // as `src`, and the origin/size cover exactly that region of slice 0, mip 0 of both.
         unsafe {
             blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
                 &src,

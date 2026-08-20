@@ -51,6 +51,8 @@ pub(in crate::vulkan) unsafe fn create_graphics_pipelines(
     infos: &[vk::GraphicsPipelineCreateInfo],
 ) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)> {
     let started = std::time::Instant::now();
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let result = unsafe { device.create_graphics_pipelines(current(), infos, None) };
     crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     result
@@ -65,6 +67,8 @@ pub(in crate::vulkan) unsafe fn create_compute_pipelines(
     infos: &[vk::ComputePipelineCreateInfo],
 ) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)> {
     let started = std::time::Instant::now();
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let result = unsafe { device.create_compute_pipelines(current(), infos, None) };
     crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     result
@@ -99,6 +103,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         ok
     });
     let info = vk::PipelineCacheCreateInfo::default().initial_data(disk.as_deref().unwrap_or(&[]));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let created = unsafe { device.create_pipeline_cache(&info, None) }.or_else(|e| {
         // A header can match while the driver still rejects the payload (a
         // truncated tail, a driver update with an unchanged UUID). Drop the
@@ -106,6 +112,8 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         tracing::warn!("pipeline cache: driver rejected {file} ({e}), rebuilding cold");
         crate::pipeline_cache::delete(&file);
         let empty = vk::PipelineCacheCreateInfo::default();
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { device.create_pipeline_cache(&empty, None) }
     });
     match created {
@@ -147,6 +155,7 @@ pub(in crate::vulkan) fn serialize(device: &Device) {
     };
     // On a lost device this returns an error and the write is skipped; the
     // previous blob on disk stays valid.
+    // SAFETY: a property query on a live handle; it only reads.
     let Ok(data) = (unsafe { device.get_pipeline_cache_data(current()) }) else {
         return;
     };
@@ -164,6 +173,9 @@ pub(in crate::vulkan) fn shutdown(device: &Device) {
         let cache = current();
         CURRENT.store(0, Ordering::Relaxed);
         if cache != vk::PipelineCache::null() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline_cache(cache, None) };
         }
     }

@@ -495,6 +495,8 @@ impl VkContext {
                 .dst_binding(6)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe {
                 self.device
                     .update_descriptor_sets(std::slice::from_ref(&write), &[])

@@ -66,11 +66,17 @@ pub(super) fn current(window: Option<&NSWindow>) -> Option<DisplayMode> {
 fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> {
     // Ask for the duplicate low-resolution modes too; without the option the
     // scaled (HiDPI) resolutions a game typically offers are omitted.
+    // SAFETY: `kCFBooleanTrue` and `kCGDisplayShowDuplicateLowResolutionModes`
+    // are framework-owned statics that outlive the dictionary built from them,
+    // and that dictionary is the options type CGDisplayCopyAllDisplayModes
+    // documents; `display` came from a live CGDirectDisplayID.
     let options = unsafe {
         kCFBooleanTrue.map(|yes| {
             CFDictionary::from_slices(&[kCGDisplayShowDuplicateLowResolutionModes], &[yes])
         })
     };
+    // SAFETY: as above -- `options` is either null or the documented options
+    // dictionary, and it outlives the call.
     let array =
         unsafe { CGDisplayCopyAllDisplayModes(display, options.as_deref().map(|d| d.as_opaque())) };
     let Some(array) = array else {
@@ -78,14 +84,16 @@ fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> 
     };
     let mut out = Vec::new();
     for i in 0..array.count() {
-        // The array's values are CGDisplayModes (documented by
+        // SAFETY: the array's values are CGDisplayModes (documented by
         // CGDisplayCopyAllDisplayModes) and `i` is in bounds, so the raw
-        // accessor's requirements hold; retaining detaches the reference from
-        // the array's lifetime.
+        // accessor's requirements hold.
         let ptr = unsafe { array.value_at_index(i) };
         if ptr.is_null() {
             continue;
         }
+        // SAFETY: non-null per the check above, and the array owns the mode for
+        // the rest of this loop body; `retain` then detaches the reference from
+        // the array's lifetime.
         let mode: &CGDisplayMode = unsafe { &*ptr.cast() };
         out.push(mode.retain());
     }
@@ -210,6 +218,8 @@ impl FullscreenDisplayMode {
         if self.original.is_none() {
             self.original = CGDisplayCopyDisplayMode(display);
         }
+        // SAFETY: `mode` was just looked up from this same display's mode
+        // list, so it is a valid mode for `display`; no options are passed.
         let err = unsafe { CGDisplaySetDisplayMode(display, Some(&mode), None) };
         if err == CGError::Success {
             self.applied = Some(desired);
@@ -235,6 +245,8 @@ impl FullscreenDisplayMode {
         let Some(display) = self.display else {
             return;
         };
+        // SAFETY: `original` was copied from this same display before the
+        // first switch, so it is a valid mode for `display`.
         let err = unsafe { CGDisplaySetDisplayMode(display, Some(&original), None) };
         if err != CGError::Success {
             tracing::warn!("restoring the desktop display mode failed: {:?}", err);

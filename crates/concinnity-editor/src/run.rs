@@ -88,8 +88,10 @@ pub(crate) fn start_app(
     }
 
     if let Err(e) = app.start() {
-        eprintln!("Failed to start app: {}", e);
-        std::process::exit(1);
+        // Returned rather than exiting the process, so the world's systems
+        // (and the GPU resources they hold) still drop on the way out.
+        tracing::error!("failed to start app: {e}");
+        return Err(std::io::Error::other(format!("failed to start app: {e}")));
     }
 
     // The interpreted path ticks its debug hook each frame before the world step.

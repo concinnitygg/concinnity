@@ -69,6 +69,8 @@ fn main() -> io::Result<()> {
         } else {
             "warn"
         };
+        // SAFETY: single-threaded startup -- this runs before logging init
+        // and before any thread that could read the environment is spawned.
         unsafe { std::env::set_var("RUST_LOG", format!("{base},fbxcel=error")) };
     }
 

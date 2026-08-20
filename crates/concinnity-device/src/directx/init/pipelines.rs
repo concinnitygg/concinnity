@@ -1106,6 +1106,8 @@ fn create_main_pso_filled(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -1166,6 +1168,8 @@ fn create_main_pso_filled(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create main PSO: {e}"))
 }
@@ -1181,6 +1185,8 @@ pub(in crate::directx) fn create_shadow_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -1223,6 +1229,8 @@ pub(in crate::directx) fn create_shadow_pso(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create shadow PSO: {e}"))
 }
@@ -1539,6 +1547,8 @@ pub(super) fn build_main_pipelines(
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map object buffer: {e}"))?;
             object_buffer_ptrs.push(ptr as *mut u8);
@@ -1616,6 +1626,8 @@ pub(super) fn build_main_pipelines(
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { da.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map draw args buffer: {e}"))?;
             draw_args_buffer_ptrs.push(ptr as *mut u8);
@@ -1702,6 +1714,8 @@ pub(super) fn build_main_pipelines(
                     D3D12_RESOURCE_STATE_GENERIC_READ,
                 )?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
+                // live local that receives the mapping.
                 unsafe { buf.Map(0, None, Some(&mut ptr)) }
                     .map_err(|e| format!("map prev_model buffer: {e}"))?;
                 prev_model_buffer_ptrs.push(ptr as *mut u8);

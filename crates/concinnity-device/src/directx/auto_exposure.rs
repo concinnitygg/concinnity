@@ -150,6 +150,8 @@ impl AutoExposureResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // READBACK heaps allow leaving Map active across submissions; the
             // pointer stays valid for the resource's lifetime.
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("auto-exposure readback map: {e}"))?;
             readback_ptrs.push(ptr as *const f32);
@@ -285,6 +287,8 @@ pub(in crate::directx) fn create_compute_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -292,6 +296,8 @@ pub(in crate::directx) fn create_compute_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create {label} PSO: {e}"))
 }
@@ -338,6 +344,9 @@ impl DxContext {
         // Read the previous frame's average log-luminance for this slot. The
         // fence wait above this call already gated the GPU work that wrote it,
         // so the READBACK-heap mapping reflects the committed value.
+        // SAFETY: `ptr` is this frame slot's persistent mapping of the auto-exposure READBACK
+        // buffer, which holds one `f32`, and the fence wait ahead of this call retired the compute
+        // pass that wrote it.
         let avg_log_lum = unsafe { ptr.read() };
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum
@@ -392,12 +401,18 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_compute]) };
 
+        // SAFETY: a property query on a live resource; it only reads.
         let histogram_gva = unsafe { resources.histogram.GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let output_gva = unsafe { resources.output_buf.GetGPUVirtualAddress() };
 
         // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(&resources.build_root_sig);
             cmd.SetPipelineState(&resources.build_pso);
@@ -418,9 +433,13 @@ impl DxContext {
 
         // UAV barrier so the average dispatch sees the build kernel's writes.
         let barrier = uav_barrier(&resources.histogram);
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
 
         // Average dispatch: one threadgroup of 256 threads.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(&resources.average_root_sig);
             cmd.SetPipelineState(&resources.average_pso);
@@ -437,6 +456,8 @@ impl DxContext {
 
         // UAV barrier so the readback copy sees the average kernel's write.
         let barrier = uav_barrier(&resources.output_buf);
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
 
         // Copy the freshly-written average to this slot's readback buffer. A
@@ -447,8 +468,12 @@ impl DxContext {
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_copy_src]) };
         if let Some(readback) = resources.readback_bufs.get(frame_idx) {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.CopyBufferRegion(
                     &**readback,
@@ -464,6 +489,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_uav]) };
 
         // Restore the HDR source to PIXEL_SHADER_RESOURCE for the post stack.
@@ -472,6 +499,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[back_to_psr]) };
     }
 }

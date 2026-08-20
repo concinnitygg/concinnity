@@ -78,6 +78,8 @@ impl DxContext {
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
                 &self.geometry.vertex_buffer,
@@ -302,6 +304,8 @@ impl DxContext {
         )?;
         write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
         write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
@@ -335,11 +339,13 @@ impl DxContext {
             obj.lod_alternates = lods;
         }
         self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
             SizeInBytes: new_v_bytes as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
             SizeInBytes: new_i_bytes as u32,
             Format: DXGI_FORMAT_R32_UINT,
@@ -415,6 +421,8 @@ impl DxContext {
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
                 &v_buf,
@@ -626,6 +634,8 @@ impl DxContext {
         )?;
         write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
         write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
@@ -652,11 +662,13 @@ impl DxContext {
             obj.index_count = i_count;
         }
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
             SizeInBytes: new_v_bytes as u32,
             StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
             SizeInBytes: new_i_bytes as u32,
             Format: DXGI_FORMAT_R16_UINT,
@@ -667,15 +679,32 @@ impl DxContext {
     }
 }
 
+// Byte capacity of a buffer resource. `Width` is the buffer's size in bytes.
+fn buffer_bytes(res: &ID3D12Resource) -> u64 {
+    // SAFETY: a property query on a live resource; it only reads.
+    unsafe { res.GetDesc() }.Width
+}
+
 // Map a READBACK-heap buffer and copy `count` `T`s out into a CPU Vec. The
 // caller has already gated the GPU writes (via `one_shot_submit`'s internal
 // fence wait), so the memcpy sees fully committed bytes. `T` must match the
 // buffer's stride exactly.
 fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> Result<Vec<T>, String> {
+    let want = (count * std::mem::size_of::<T>()) as u64;
+    let have = buffer_bytes(src);
+    assert!(
+        want <= have,
+        "read_typed_vec: {want} bytes exceeds readback buffer {have}"
+    );
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { src.Map(0, None, Some(&mut ptr)) }
         .map_err(|e| format!("rebuild readback map: {e}"))?;
     let mut out: Vec<T> = Vec::with_capacity(count);
+    // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
+    // least `count` `T`s, `out` reserved that many, and the two are separate allocations, so the
+    // ranges cannot overlap. `set_len` follows a copy that initialized every element.
     unsafe {
         std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), count);
         out.set_len(count);
@@ -687,8 +716,19 @@ fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> Result<Vec<T>,
 // Map an UPLOAD-heap buffer and copy `bytes` into it. Standard UPLOAD-heap
 // idiom: Map (CPU writes), copy_nonoverlapping, Unmap (driver flushes).
 fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> Result<(), String> {
+    let have = buffer_bytes(dest);
+    assert!(
+        bytes.len() as u64 <= have,
+        "write_upload_buffer: {} bytes exceeds upload buffer {have}",
+        bytes.len()
+    );
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { dest.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("rebuild upload map: {e}"))?;
+    // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
+    // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
+    // overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
         dest.Unmap(0, None);

@@ -170,6 +170,8 @@ extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
             p = p.add(1);
         }
     }
+    // SAFETY: `message` is non-null and the scan above stopped at its NUL, so `len` units of UTF-16
+    // are readable from it, and FFX keeps the string alive for the duration of the callback.
     let slice = unsafe { std::slice::from_raw_parts(message, len) };
     let text = String::from_utf16_lossy(slice);
     match ty {
@@ -278,9 +280,14 @@ impl FfxApi {
     // `FreeLibrary`.
     fn load() -> Option<Self> {
         let module =
+            // SAFETY: the name is a NUL-terminated literal, and a failed load is reported rather
+            // than dereferenced.
             unsafe { LoadLibraryA(PCSTR(c"amd_fidelityfx_dx12.dll".as_ptr() as *const u8)) }
                 .ok()?;
         let resolve = |name: &CStr| -> Option<*const c_void> {
+            // SAFETY: `module` is the handle `LoadLibraryA` just returned, and `name` is a NUL-
+            // terminated `CStr` live for the call. The result is only a pointer here; the
+            // transmutes that give it a prototype are documented below.
             unsafe {
                 GetProcAddress(module, PCSTR(name.as_ptr() as *const u8))
                     .map(|p| p as *const c_void)
@@ -366,6 +373,10 @@ pub(in crate::directx) struct FsrUpscaler {
 // The FFX context handle + loaded function pointers are raw COM / C pointers
 // used only on the render thread; the trait's `Send` bound is satisfied
 // unsafely, same as the rest of `DxContext`.
+// SAFETY: `FsrUpscaler` owns its FFX context handle and the function pointers resolved from a DLL
+// held open for the context's lifetime. Neither is shared: every entry point runs on the render
+// thread that built them, under the same main-thread guard as the rest of `DxContext`. Moving the
+// whole upscaler hands over exclusive ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for FsrUpscaler {}
 
 // FFX takes a `ID3D12Device*` as a raw COM pointer. Pull it out of the
@@ -500,6 +511,9 @@ impl FsrUpscaler {
         };
 
         let mut ctx: ffxContext = ptr::null_mut();
+        // SAFETY: `ffx.create_context` was resolved from the loaded DLL with the header's
+        // prototype, `ctx` and `upscale` are live locals, and the description chain
+        // `upscale.header` heads stays live for the call.
         let rc = unsafe {
             (ffx.create_context)(
                 &mut ctx,
@@ -529,6 +543,8 @@ impl FsrUpscaler {
             debug_level: FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE,
         };
         let rc_dbg =
+            // SAFETY: `ctx` is the non-null context created above, and `global_debug` is a live
+            // local the call only reads.
             unsafe { (ffx.configure)(&mut ctx, &global_debug.header as *const ffxApiHeader) };
         let _ = &mut global_debug;
         if rc_dbg != FFX_API_RETURN_OK {
@@ -560,6 +576,8 @@ impl FsrUpscaler {
             display_width: output_width,
             out_phase_count: &mut phase_count,
         };
+        // SAFETY: `ctx` is the non-null context created above, and `jpc_desc` is a live local whose
+        // `out_phase_count` borrows another live local.
         let rc = unsafe { (ffx.query)(&mut ctx, &mut jpc_desc.header as *mut ffxApiHeader) };
         if rc != FFX_API_RETURN_OK || phase_count <= 0 {
             tracing::warn!(
@@ -649,6 +667,9 @@ impl super::UpscaleBackend for FsrUpscaler {
             out_x: &mut jx,
             out_y: &mut jy,
         };
+        // SAFETY: `self.ctx` is the live FFX context and `desc` is a live local. The cast only
+        // satisfies the C prototype, which takes the handle by pointer; only create/destroy write
+        // through it, and a jitter-offset query does not.
         let rc = unsafe {
             // `query` mutates the (caller-owned) context handle if the
             // call type requires it; for the GETJITTEROFFSET case the
@@ -795,6 +816,9 @@ impl super::UpscaleBackend for FsrUpscaler {
             flags: 0,
         };
 
+        // SAFETY: `self.ctx` is the live FFX context, and `desc` is a live local naming the command
+        // list and the resources the caller keeps alive for the frame. The cast only satisfies the
+        // C prototype; only create/destroy write through the handle, and a dispatch does not.
         let rc = unsafe {
             (self.ffx.dispatch)(
                 &self.ctx as *const ffxContext as *mut ffxContext,
@@ -892,6 +916,8 @@ impl crate::directx::context::DxContext {
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ));
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&barriers) };
 
         // Per-frame inputs FSR consumes. Clamp dt to a sane range:
@@ -945,6 +971,8 @@ impl crate::directx::context::DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
         upscaler.set_output_is_psr(true);
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[from_npsr_depth, output_to_psr]) };
 
         Ok(())
@@ -965,6 +993,8 @@ impl Drop for FsrUpscaler {
             // Destroy via the loaded entry point; the DLL stays
             // mapped until our `FfxApi` drops (which is just a
             // few-byte struct, not a resource).
+            // SAFETY: `self.ctx` is non-null here and is destroyed exactly once (nulled straight
+            // after), and the DLL the function pointer came from is still mapped.
             unsafe {
                 let _ = (self.ffx.destroy_context)(&mut self.ctx, ptr::null());
             }

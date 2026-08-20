@@ -117,6 +117,8 @@ impl MtlContext {
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
@@ -135,6 +137,9 @@ impl MtlContext {
         );
         enc.setRenderPipelineState(pipeline);
 
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             // Per-frame view inputs at buffer(0); rebound once.
             enc.setVertexBytes_length_atIndex(
@@ -181,6 +186,9 @@ impl MtlContext {
                 _pad2: 0.0,
             };
             let slot = d.texture_slot.min(last_tex);
+            // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
+            // length, every bound resource outlives the encoder, and the draw's index range is this
+            // decal cube's own slice of the bound index buffer.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&params).cast(),
@@ -237,6 +245,8 @@ pub(super) fn build_decal_pipeline(
     // Vertex layout: a single float3 position at buffer(2). The cube buffer
     // holds 8 unit-cube corners in [-0.5, 0.5]^3.
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -252,6 +262,8 @@ pub(super) fn build_decal_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);

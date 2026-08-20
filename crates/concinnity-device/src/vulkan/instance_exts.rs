@@ -63,6 +63,8 @@ pub(super) fn select(available: &[&CStr], hdr_display: bool) -> OptionalInstance
 pub(super) fn names_of(props: &[vk::ExtensionProperties]) -> Vec<&CStr> {
     props
         .iter()
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
         .map(|p| unsafe { CStr::from_ptr(p.extension_name.as_ptr()) })
         .collect()
 }

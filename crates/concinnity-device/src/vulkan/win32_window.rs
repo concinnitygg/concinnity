@@ -170,12 +170,16 @@ impl Win32Window {
         entry: &ash::Entry,
         instance: &ash::Instance,
     ) -> Result<vk::SurfaceKHR, String> {
+        // SAFETY: passing None asks for the handle of the current process image, which is always
+        // valid.
         let hinstance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
             .map_err(|e| format!("GetModuleHandleW: {e}"))?;
         let info = vk::Win32SurfaceCreateInfoKHR::default()
             .hinstance(hinstance.0 as isize)
             .hwnd(self.win_state.hwnd.0 as isize);
         let loader = ash::khr::win32_surface::Instance::new(entry, instance);
+        // SAFETY: `info` borrows the module handle and HWND for the call; both name live Win32
+        // objects owned by this window.
         unsafe { loader.create_win32_surface(&info, None) }
             .map_err(|e| format!("vkCreateWin32SurfaceKHR: {e}"))
     }

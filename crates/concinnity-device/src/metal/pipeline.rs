@@ -179,6 +179,8 @@ pub(super) fn build_text_pipeline(
     // Vertex layout: pos (float2) @ 0, uv (float2) @ 8, color (float3) @ 16,
     // mode (float) @ 28; buffer(1). Mirrors TextVertex in render_types.rs.
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let a0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         a0.setFormat(MTLVertexFormat::Float2);
@@ -206,6 +208,8 @@ pub(super) fn build_text_pipeline(
     pipeline_desc.setVertexFunction(Some(&vert_fn));
     pipeline_desc.setFragmentFunction(Some(&frag_fn));
     pipeline_desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = pipeline_desc.colorAttachments().objectAtIndexedSubscript(0);
         // The composite pass already chose the swapchain format (BGRA8Unorm

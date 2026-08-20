@@ -168,8 +168,10 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Resul
     }
 
     if let Err(e) = app.start() {
-        eprintln!("Failed to start app: {}", e);
-        std::process::exit(1);
+        // Returned rather than exiting the process, so the world's systems
+        // (and the GPU resources they hold) still drop on the way out.
+        tracing::error!("failed to start app: {e}");
+        return Err(std::io::Error::other(format!("failed to start app: {e}")));
     }
 
     match options.mode {
@@ -220,5 +222,19 @@ mod tests {
         // The fallback string must parse as an EnvFilter, otherwise log_filter
         // would panic when RUST_LOG is unset.
         EnvFilter::new(default_log_directive());
+    }
+
+    // A world that refuses to start reports it through the return value. The
+    // process stays alive, so the caller's cleanup and the world's own drops
+    // still run; an already-started app is the reproducible refusal.
+    #[test]
+    fn a_refused_start_returns_instead_of_exiting_the_process() {
+        let mut app = App::new();
+        app.start().expect("the first start succeeds");
+
+        let err = app
+            .run_with(RunOptions::default())
+            .expect_err("a second start is refused");
+        assert!(err.to_string().contains("failed to start app"), "{err}");
     }
 }

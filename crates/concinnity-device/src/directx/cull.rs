@@ -169,6 +169,8 @@ pub(in crate::directx) fn create_cull_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -176,6 +178,8 @@ pub(in crate::directx) fn create_cull_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create cull PSO: {e}"))
 }
@@ -212,6 +216,8 @@ pub(in crate::directx) fn create_cull_command_signature(
         NodeMask: 0,
     };
     let mut sig: Option<ID3D12CommandSignature> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateCommandSignature(&desc, bindless_root_sig, &mut sig) }
         .map_err(|e| format!("create cull command signature: {e}"))?;
     sig.ok_or_else(|| "create cull command signature: returned None".to_string())
@@ -418,14 +424,17 @@ impl DxContext {
             .expect("encode_cull: cull_root_sig missing");
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         let draw_args_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         // Per-object cull-status buffer (u1): always allocated alongside the
         // indirect buffer, always written, read by phase 2 under two-pass
         // occlusion (ignored under single-pass). Resting state is
         // `UNORDERED_ACCESS`, so it binds as a root UAV with no transition.
         let cull_status_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.cull_status_buffers[frame_idx].GetGPUVirtualAddress() };
 
         // Pack the six already-normalised frustum planes + the previous frame's
@@ -464,6 +473,8 @@ impl DxContext {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
         }
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso);
@@ -519,9 +530,12 @@ impl DxContext {
             .as_ref()
             .expect("encode_probe_cull: cull_root_sig missing");
         let indirect = &self.cull.indirect_cmd_buffers[slot];
+        // SAFETY: a property query on a live resource; it only reads.
         let object_gva = unsafe { self.cull.object_buffer_resources[slot].GetGPUVirtualAddress() };
         let draw_args_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.draw_args_buffer_resources[slot].GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let cull_status_gva = unsafe { self.cull.cull_status_buffers[slot].GetGPUVirtualAddress() };
 
         // A Hi-Z SRV is still bound (the root signature's descriptor table at [3]
@@ -548,6 +562,8 @@ impl DxContext {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
         }
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 indirect,
@@ -619,10 +635,14 @@ impl DxContext {
         }
 
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         let draw_args_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let status_gva = unsafe { status.GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let base_gva = unsafe { indirect.GetGPUVirtualAddress() };
 
         // Hi-Z is disabled for the shadow cull (`hiz_enabled = 0`), so the kernel
@@ -637,6 +657,8 @@ impl DxContext {
             None => ([1.0, 1.0], 1, None),
         };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 indirect,
@@ -748,9 +770,12 @@ impl DxContext {
         debug_assert!(n_cull <= region_count);
 
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         let draw_args_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let base_gva = unsafe { indirect.GetGPUVirtualAddress() };
 
         // Hi-Z disabled (`hiz_enabled = 0`): the kernel never samples the pyramid,
@@ -764,6 +789,8 @@ impl DxContext {
             None => ([1.0, 1.0], 1, None),
         };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 indirect,
@@ -857,10 +884,13 @@ impl DxContext {
         }
 
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         let draw_args_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
         let cull_status_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.cull_status_buffers[frame_idx].GetGPUVirtualAddress() };
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
@@ -885,6 +915,8 @@ impl DxContext {
             cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
         }
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso2);

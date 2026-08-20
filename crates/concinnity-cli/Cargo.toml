@@ -75,3 +75,6 @@ shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"
 
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }
+
+[lints]
+workspace = true

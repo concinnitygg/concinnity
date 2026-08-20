@@ -48,6 +48,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.device
                 .cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
@@ -60,6 +62,8 @@ impl VkContext {
 
     // End a fullscreen render pass. Paired with `begin_fullscreen_pass`.
     pub(in crate::vulkan) fn end_fullscreen_pass(&self, cmd: vk::CommandBuffer) {
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { self.device.cmd_end_render_pass(cmd) };
     }
 }

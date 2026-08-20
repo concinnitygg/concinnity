@@ -196,6 +196,8 @@ fn create_rt_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -245,6 +247,8 @@ fn create_rt_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create rt reflections PSO: {e}"))
 }
@@ -337,6 +341,8 @@ impl RtReflectionsResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map rt params ubo: {e}"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
@@ -473,6 +479,9 @@ impl DxContext {
             sun_color: self.fog.sun_color,
             prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
         });
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const RtParams as *const u8,
@@ -480,6 +489,7 @@ impl DxContext {
                 std::mem::size_of::<RtParams>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let params_gva = unsafe { rt.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
@@ -497,10 +507,14 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
         let w = self.render_width;
         let h = self.render_height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rt.output_rtv), false, None);
             let vp = D3D12_VIEWPORT {
@@ -574,6 +588,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[out_to_psr]) };
 
         // Blur the reflection by roughness and composite it over the scene into the

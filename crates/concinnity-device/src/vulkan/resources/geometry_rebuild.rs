@@ -523,6 +523,8 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Resu
                 .src_offset(0)
                 .dst_offset(0)
                 .size(bytes);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 ctx.device
                     .cmd_copy_buffer(cmd, src, staging.buffer(), std::slice::from_ref(&copy))
@@ -531,6 +533,9 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Resu
     )?;
 
     let mut out: Vec<T> = Vec::with_capacity(count);
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(staging.mapped_ptr() as *const T, out.as_mut_ptr(), count);
         out.set_len(count);

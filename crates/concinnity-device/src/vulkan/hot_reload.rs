@@ -499,6 +499,8 @@ impl VkContext {
         // All builds succeeded: destroy the displaced pipelines and swap
         // the freshly compiled ones in. The caller's `wait_idle` above this
         // method guarantees no command buffer still references them.
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.composite_pipeline, None);
         }
@@ -506,11 +508,16 @@ impl VkContext {
 
         if let Some(new_pipeline) = text_pipeline {
             if let Some(old) = self.text_pipeline.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.text_pipeline = Some(new_pipeline);
         }
 
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.bloom_pipeline_prefilter, None);
             device.destroy_pipeline(self.bloom_pipeline_downsample, None);
@@ -522,6 +529,9 @@ impl VkContext {
 
         if let Some(new_pipeline) = bindless_main_pipeline {
             if let Some(old) = self.cull.bindless_pipeline.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.cull.bindless_pipeline = Some(new_pipeline);
@@ -531,12 +541,18 @@ impl VkContext {
         self.invalidate_wireframe_pipelines();
         if let Some(new_pipeline) = cull_pipeline {
             if let Some(old) = self.cull.cull_pipeline.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.cull.cull_pipeline = Some(new_pipeline);
         }
         if let Some(new_pipeline) = cull_pipeline_phase2 {
             if let Some(old) = self.cull.cull_pipeline_phase2.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.cull.cull_pipeline_phase2 = Some(new_pipeline);
@@ -552,14 +568,23 @@ impl VkContext {
         }
 
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decals_state.as_mut()) {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline(decals.pipeline, None) };
             decals.pipeline = new_pipeline;
         }
         if let (Some(new_pipeline), Some(lines)) = (line_pipeline, self.lines.resources.as_mut()) {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline(lines.pipeline, None) };
             lines.pipeline = new_pipeline;
         }
         if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog_resources.as_mut()) {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe {
                 device.destroy_pipeline(fog.pipeline, None);
                 device.destroy_pipeline(fog.froxel_pipeline, None);
@@ -717,16 +742,24 @@ impl VkContext {
         // built-in `reload_shaders` path the draw loop guards. Mirrors the
         // internal `wait_idle` in `upload_skinned` / `update_skinned_mesh_geometry`.
         self.wait_idle();
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe { device.destroy_pipeline(self.main_pipeline, None) };
         self.main_pipeline = new_main;
         if let Some(p) = new_instanced {
             if let Some(old) = self.instanced.pipeline.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.instanced.pipeline = Some(p);
         }
         if let Some(p) = new_skinned {
             if let Some(old) = self.skinned.pipeline.take() {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_pipeline(old, None) };
             }
             self.skinned.pipeline = Some(p);

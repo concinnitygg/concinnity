@@ -79,6 +79,8 @@ impl PassTimingResources {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Option<Self> {
         // Look up the timestamp counter set among the device's reported sets.
         let sets: Retained<NSArray<ProtocolObject<dyn MTLCounterSet>>> = device.counterSets()?;
+        // SAFETY: `MTLCommonCounterSetTimestamp` is a framework-owned static NSString that outlives
+        // this borrow.
         let target_name = unsafe { MTLCommonCounterSetTimestamp };
         let mut timestamp_set: Option<Retained<ProtocolObject<dyn MTLCounterSet>>> = None;
         for set in sets.iter() {
@@ -259,6 +261,8 @@ fn slot_pair(pass: PassId) -> (usize, usize) {
 // proves wrong.
 pub fn resolve(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> [u32; PASS_COUNT] {
     let range = NSRange::new(0, PASS_COUNT * 2);
+    // SAFETY: `range` starts at 0 and the buffer was created with `PASS_COUNT * 2` sample slots, so
+    // the range is in bounds; a driver that cannot resolve it returns None rather than faulting.
     let Some(data) = (unsafe { buffer.resolveCounterRange(range) }) else {
         return [0; PASS_COUNT];
     };
@@ -301,6 +305,7 @@ pub fn resolve(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> [u32; PAS
 // Returns `None` when no pass wrote a valid timestamp pair.
 pub fn frame_span_us(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> Option<u32> {
     let range = NSRange::new(0, PASS_COUNT * 2);
+    // SAFETY: as in `resolve` -- `range` covers the buffer's own `PASS_COUNT * 2` slots.
     let data = unsafe { buffer.resolveCounterRange(range) }?;
     let needed = std::mem::size_of::<MTLCounterResultTimestamp>() * PASS_COUNT * 2;
     if data.len() < needed {

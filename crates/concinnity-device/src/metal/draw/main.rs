@@ -150,6 +150,8 @@ impl MtlContext {
             && self.cull.pipeline_phase2.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.clear_color;
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = main_pass_desc
                 .colorAttachments()
@@ -286,6 +288,8 @@ impl MtlContext {
         } = draw_inputs;
         let desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.clear_color;
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(face_color_msaa));
@@ -391,6 +395,8 @@ impl MtlContext {
         // two-pass), draw the disoccluded geometry on top, and resolve both at
         // end-of-pass: this resolve is the one the post stack consumes.
         let main_pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = main_pass_desc
                 .colorAttachments()
@@ -478,6 +484,8 @@ impl MtlContext {
         // by both ranges: the skinned records live in the same object buffer and
         // sample the same flat pool. The object id reaches the shader via each
         // command's [[base_instance]].
+        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+        // buffer/texture indices the shaders declare.
         unsafe {
             enc.setVertexBuffer_offset_atIndex(Some(obj_buf), 0, 9);
             enc.setFragmentBuffer_offset_atIndex(Some(obj_buf), 0, 9);
@@ -550,6 +558,8 @@ impl MtlContext {
         if let (Some(deformed), Some(icb0), Some(tail)) =
             (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
             }
@@ -596,6 +606,9 @@ impl MtlContext {
                 ..self.cluster_params
             }
         };
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(&cluster_params).cast(),
@@ -617,6 +630,9 @@ impl MtlContext {
         enc.setRenderPipelineState(pipeline_state);
         enc.setDepthStencilState(Some(&self.depth_state));
 
+        // SAFETY: each pointer is derived from the live `view_uniforms` borrow with its `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(view_uniforms).cast(),
@@ -759,6 +775,9 @@ impl MtlContext {
             draw_calls += self.draw_static_objects(enc, visible, cam_pos, |enc, obj, _| {
                 let model_uniforms = ModelUniforms { model: obj.model };
                 let slot = obj.texture_slot.min(last_tex);
+                // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as
+                // the length, and the textures are owned by `self`; `slot` was clamped to
+                // `last_tex`.
                 unsafe {
                     // model matrix at vertex buffer(2)
                     enc.setVertexBytes_length_atIndex(
@@ -827,6 +846,9 @@ impl MtlContext {
         // textures, shared across the cluster's LOD buckets. The shared helper
         // owns the cull / LOD-bucket / instance-buffer / draw loop.
         let draw_calls = self.draw_prepared_instances(enc, prepared, false, |enc, cluster| {
+            // SAFETY: each pointer is derived from a live borrow and paired with that type's
+            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
+            // buffer indices are the slots the shaders declare.
             unsafe {
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(&cluster.material).cast(),
@@ -835,6 +857,8 @@ impl MtlContext {
                 );
             }
             let slot = cluster.texture_slot.min(last_tex);
+            // SAFETY: `slot` was clamped to `last_tex`, so it indexes `self.textures`; the normal
+            // pool always returns a live texture, and the sampler is owned by `self`.
             unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
                 enc.setFragmentTexture_atIndex(
@@ -888,6 +912,8 @@ impl MtlContext {
             return 0;
         }
         enc.setRenderPipelineState(&skinned_ps);
+        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+        // buffer/texture indices the shaders declare.
         unsafe {
             enc.setVertexBuffer_offset_atIndex(Some(&svb), 0, 1);
         }
@@ -917,6 +943,8 @@ impl MtlContext {
                     *dst = *src;
                 }
             }
+            // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
+            // length, and the joint / morph-delta buffers outlive the encoder.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model_uniforms).cast(),

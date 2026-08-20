@@ -105,7 +105,13 @@ pub(in crate::directx) struct GlassResources {
 // The mapped view-ring pointers are POD raw pointers; the upload buffers stay
 // alive through the `Vec<ID3D12Resource>` field and the pointers are written on
 // the render thread only. Mirrors `RaymarchResources`.
+// SAFETY: the raw pointers `GlassResources` holds are the mappings of upload buffers the struct
+// also owns, so they stay valid for as long as it does. They are only values here: every
+// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
+// on the render thread.
 unsafe impl Send for GlassResources {}
+// SAFETY: sharing `&GlassResources` hands out the pointer values but no way to dereference them;
+// every write goes through a `&mut self` method on the context.
 unsafe impl Sync for GlassResources {}
 
 // Build the per-panel `GlassParams` from an authored panel. Pure; unit
@@ -366,6 +372,8 @@ fn create_glass_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -425,6 +433,8 @@ fn create_glass_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create glass PSO: {e}"))
 }
@@ -623,6 +633,8 @@ fn build_glass_rt(
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+        // that receives the mapping.
         unsafe { buf.Map(0, None, Some(&mut ptr)) }
             .map_err(|e| format!("map glass rt params ubo: {e}"))?;
         rt_params_ubo_ptrs.push(ptr as *mut u8);
@@ -658,6 +670,8 @@ fn write_scene_copy_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(scene_copy, Some(&desc), srv_cpu) };
 }
 
@@ -770,11 +784,13 @@ impl GlassResources {
             )?;
             let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
             let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+                // SAFETY: a property query on a live resource; it only reads.
                 BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
                 SizeInBytes: vbytes.len() as u32,
                 StrideInBytes: std::mem::size_of::<Vertex>() as u32,
             };
             let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+                // SAFETY: a property query on a live resource; it only reads.
                 BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
                 SizeInBytes: ibytes.len() as u32,
                 Format: DXGI_FORMAT_R16_UINT,
@@ -792,8 +808,12 @@ impl GlassResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut p = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { params_cbuffer.Map(0, None, Some(&mut p)) }
                 .map_err(|e| format!("map glass params cb: {e}"))?;
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const GlassParams as *const u8,
@@ -802,6 +822,7 @@ impl GlassResources {
                 );
                 // Persistently mapped, never unmap.
             }
+            // SAFETY: a property query on a live resource; it only reads.
             let params_cbuffer_gva = unsafe { params_cbuffer.GetGPUVirtualAddress() };
 
             records.push(GlassPanelRecord {
@@ -830,6 +851,8 @@ impl GlassResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map glass view ubo: {e}"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
@@ -916,6 +939,9 @@ impl DxContext {
         }
 
         // Upload this frame's view UBO.
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const TransparentView as *const u8,
@@ -923,6 +949,7 @@ impl DxContext {
                 std::mem::size_of::<TransparentView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { glass.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Per-pixel RT reflection is selected over the probe/planar path when RT
@@ -955,6 +982,9 @@ impl DxContext {
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
             });
+            // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
+            // that init sized for this payload, and the source is a separate live value, so the
+            // ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const RtParams as *const u8,
@@ -962,6 +992,7 @@ impl DxContext {
                     std::mem::size_of::<RtParams>(),
                 );
             }
+            // SAFETY: a property query on a live resource; it only reads.
             Some(unsafe { glass.rt_params_ubo_resources[frame_idx].GetGPUVirtualAddress() })
         } else {
             None
@@ -988,7 +1019,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]) };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.CopyResource(&glass.scene_copy, scene_res) };
         let scene_to_rt = transition_barrier(
             self.post_scene_target(),
@@ -1000,6 +1035,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[scene_to_rt, copy_to_psr]) };
 
         // Main depth is already in a shader-resource state for the fragment's
@@ -1008,6 +1045,8 @@ impl DxContext {
 
         let w = self.render_width;
         let h = self.render_height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
             let vp = D3D12_VIEWPORT {
@@ -1035,6 +1074,7 @@ impl DxContext {
         // and the per-frame ProbeSet CBV (b4). count == 0 keeps the sky / white rim.
         let prefilter_srv = self.prefilter_cube_srv_gpu();
         let probe_cube_srv = self.probe_cube_table_gpu();
+        // SAFETY: a property query on a live resource; it only reads.
         let probe_set_gva = unsafe { self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress() };
 
         if rt_live {
@@ -1055,6 +1095,8 @@ impl DxContext {
                 .rt_root_sig
                 .as_ref()
                 .expect("rt_live built rt root sig");
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(pso);
                 cmd.SetGraphicsRootSignature(sig);
@@ -1086,6 +1128,8 @@ impl DxContext {
             }
             for &i in &order {
                 let p = &glass.panels[i];
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.IASetVertexBuffers(0, Some(&[p.vertex_buffer_view]));
                     cmd.IASetIndexBuffer(Some(&p.index_buffer_view));
@@ -1095,6 +1139,8 @@ impl DxContext {
                 self.inc_draw_calls(1);
             }
         } else {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(&glass.pso);
                 cmd.SetGraphicsRootSignature(&glass.root_sig);
@@ -1119,6 +1165,8 @@ impl DxContext {
                             .map(|set| set.resolve_srv_gpu(s))
                     })
                     .unwrap_or(glass.scene_copy_srv_gpu);
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.IASetVertexBuffers(0, Some(&[p.vertex_buffer_view]));
                     cmd.IASetIndexBuffer(Some(&p.index_buffer_view));

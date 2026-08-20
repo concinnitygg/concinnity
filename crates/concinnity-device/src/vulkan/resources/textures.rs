@@ -31,6 +31,8 @@ impl VkContext {
             .dst_binding(binding)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(std::slice::from_ref(&info));
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe {
             self.device
                 .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -64,6 +66,8 @@ impl VkContext {
             .dst_array_element(index)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(std::slice::from_ref(&info));
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe {
             self.device
                 .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -365,6 +369,8 @@ impl VkContext {
                 .dst_binding(2)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe {
                 self.device
                     .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -434,6 +440,8 @@ impl VkContext {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&pre_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { self.device.update_descriptor_sets(&writes, &[]) };
         }
         // The IBL cubes are also bound outside `global_sets`: the SSR resolve
@@ -579,6 +587,8 @@ impl VkContext {
                     let pool_sizes = [vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .descriptor_count((MAX_CLONE_DRAWS * 2) as u32)];
+                    // SAFETY: the create-info and every slice it borrows are live for the call, and
+                    // each handle it names belongs to this device.
                     let pool = unsafe {
                         self.device.create_descriptor_pool(
                             &vk::DescriptorPoolCreateInfo::default()
@@ -596,6 +606,8 @@ impl VkContext {
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
                 .set_layouts(std::slice::from_ref(&self.descriptors.object_set_layout));
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let set = unsafe { self.device.allocate_descriptor_sets(&alloc_info) }
                 .map_err(|e| format!("allocate clone descriptor set: {e}"))?[0];
             self.write_object_image(set, 0, albedo_view);

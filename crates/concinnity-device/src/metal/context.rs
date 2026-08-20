@@ -716,8 +716,8 @@ pub struct MtlContext {
     pub(super) raymarch_cube_index_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
-// MtlContext is only ever accessed from the main thread (as documented on the
-// struct). The Retained<ProtocolObject<...>> Metal handles aren't Send by
+// SAFETY: MtlContext is only ever accessed from the main thread (as documented
+// on the struct). The Retained<ProtocolObject<...>> Metal handles aren't Send by
 // default, but `RenderBackend: Send` requires it so GraphicsSystem can box
 // the backend behind a trait object. Mirrors DxContext / VkContext.
 unsafe impl Send for MtlContext {}
@@ -1473,6 +1473,15 @@ pub(super) fn copy_buffer_prefix(
     if len == 0 {
         return;
     }
+    assert!(
+        len <= src.length() && len <= dst.length(),
+        "copy_buffer_prefix: {len} bytes exceeds src {} / dst {}",
+        src.length(),
+        dst.length()
+    );
+    // SAFETY: both buffers are shared storage, so `contents()` is a live CPU
+    // mapping, and the assert above proved each holds at least `len` bytes.
+    // They are distinct allocations, so the ranges cannot overlap.
     unsafe {
         let s = src.contents().as_ptr() as *const u8;
         let d = dst.contents().as_ptr() as *mut u8;
@@ -1504,6 +1513,9 @@ pub(super) fn write_buffer_region(
         return Ok(());
     }
     let dst = buffer.contents().as_ptr() as *mut u8;
+    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
+    // check above proved `offset + src.len()` is within its length. `src` is a separate borrow, so
+    // the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(offset), src.len());
     }
@@ -1530,6 +1542,8 @@ pub(super) fn zero_buffer_region(
         return Ok(());
     }
     let dst = buffer.contents().as_ptr() as *mut u8;
+    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
+    // check above proved `offset + len` is within its length.
     unsafe {
         std::ptr::write_bytes(dst.add(offset), 0, len);
     }

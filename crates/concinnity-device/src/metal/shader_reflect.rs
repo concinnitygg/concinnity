@@ -144,6 +144,8 @@ fn reflect_stage(
         desc.setVertexFunction(Some(&entry_fn));
         desc.setFragmentFunction(Some(&stub_fn));
     }
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         desc.colorAttachments()
             .objectAtIndexedSubscript(0)
@@ -191,6 +193,9 @@ fn bindings_to_map(
         // The binding conforms to MTLBufferBinding once it is the Buffer type.
         // ProtocolObject is a transparent wrapper over the same object, so this
         // cast just re-views it through the buffer sub-protocol.
+        // SAFETY: the type check above proved this binding is the Buffer variant, so it conforms to
+        // MTLBufferBinding; `ProtocolObject` is a transparent wrapper over the same object, so the
+        // cast only re-views it through the sub-protocol.
         let buf: &ProtocolObject<dyn MTLBufferBinding> = unsafe {
             &*(binding as *const ProtocolObject<dyn MTLBinding>
                 as *const ProtocolObject<dyn MTLBufferBinding>)
@@ -266,6 +271,8 @@ fn standard_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         (3, MTLVertexFormat::Float3, 36),
         (4, MTLVertexFormat::Float2, 48),
     ];
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         for (idx, fmt, offset) in attrs {
             let a = vd.attributes().objectAtIndexedSubscript(idx as usize);

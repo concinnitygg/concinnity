@@ -653,6 +653,9 @@ impl MtlContext {
             label,
         );
         enc.setComputePipelineState(pipeline);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound buffer outlives the encoder; the indices are the slots the
+        // kernel declares.
         unsafe {
             enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
             enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
@@ -778,6 +781,9 @@ impl MtlContext {
             "cull phase2",
         );
         enc.setComputePipelineState(pipeline);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound buffer outlives the encoder; the indices are the slots the
+        // kernel declares.
         unsafe {
             enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
             enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
@@ -871,6 +877,8 @@ impl MtlContext {
             "shadow cull",
         );
         enc.setComputePipelineState(pipeline);
+        // SAFETY: every bound buffer outlives the encoder, at the buffer indices the shadow cull
+        // kernel declares; `skinned_index_or_placeholder` always returns a live buffer.
         unsafe {
             enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
             enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
@@ -916,6 +924,9 @@ impl MtlContext {
                 bucket_count: 1,
                 _pad_skin: 0,
             };
+            // SAFETY: each pointer is derived from a live borrow and paired with that type's
+            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
+            // buffer indices are the slots the shaders declare.
             unsafe {
                 enc.setBytes_length_atIndex(
                     std::ptr::NonNull::from(&cull_uniforms).cast(),
@@ -984,10 +995,15 @@ impl MtlContext {
             } else {
                 self.textures[0].as_ref()
             };
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             unsafe {
                 enc.setTexture_atIndex(Some(tex), i);
             }
         }
+        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, and the
+        // argument ids match the layout the shaders declare: `count` shadow map, then irradiance,
+        // prefilter, AO, and `MAX_PROBES` probe cubes.
         unsafe {
             enc.setTexture_atIndex(Some(self.shadow_map.as_ref()), count);
             enc.setTexture_atIndex(Some(self.env_map.irradiance.as_ref()), count + 1);

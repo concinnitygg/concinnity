@@ -38,3 +38,6 @@ tracing = "0.1.44"
 # The LTC fitter in src/ltc/fit.rs, which build.rs include!s, fans its per-row
 # fits across cores.
 rayon = "1"
+
+[lints]
+workspace = true

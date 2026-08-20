@@ -80,6 +80,7 @@ pub(crate) fn create_gbuffer_targets(
     height: u32,
 ) -> Result<GBufferTargets, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -121,6 +122,8 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca0.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -149,6 +152,8 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
 // `Vertex` so the cull-baked `base_vertex` indexes it identically to stream 0.
 pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal,
         // colour for the skybox sentinel). Tangent/uv are unused by the G-buffer.
@@ -204,6 +209,8 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca0.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -301,6 +308,8 @@ impl MtlContext {
         };
 
         let desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
             ca0.setTexture(Some(normal_depth));
@@ -363,6 +372,9 @@ impl MtlContext {
 
         enc.setRenderPipelineState(static_ps);
         enc.setDepthStencilState(Some(&self.depth_state));
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(view).cast(),
@@ -387,6 +399,9 @@ impl MtlContext {
                 roughness: obj.material.roughness,
                 _pad: [0.0; 3],
             };
+            // SAFETY: each pointer is derived from a live borrow and paired with that type's
+            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
+            // buffer indices are the slots the shaders declare.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model).cast(),
@@ -414,6 +429,9 @@ impl MtlContext {
                         roughness: cluster.material.roughness,
                         _pad: [0.0; 3],
                     };
+                    // SAFETY: each pointer is derived from a live borrow and paired with that
+                    // type's `size_of` as the length, so the encoder copies exactly the bytes it
+                    // was handed; the buffer indices are the slots the shaders declare.
                     unsafe {
                         enc.setFragmentBytes_length_atIndex(
                             std::ptr::NonNull::from(&mat).cast(),
@@ -434,6 +452,8 @@ impl MtlContext {
         ) && !self.skinned.draw_objects.is_empty()
         {
             enc.setRenderPipelineState(skinned_ps);
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
             }
@@ -447,6 +467,9 @@ impl MtlContext {
                     _pad: [0.0; 3],
                 };
                 let prev = prev_joint_bufs.get(i).unwrap_or(&cur_joint_bufs[i]);
+                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+                // `size_of` as the length, and every bound resource outlives the encoder; the
+                // indices are the slots the shaders declare.
                 unsafe {
                     enc.setVertexBytes_length_atIndex(
                         std::ptr::NonNull::from(&model).cast(),
@@ -506,6 +529,9 @@ impl MtlContext {
         }
         enc.setRenderPipelineState(pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             // GBufferView (vbuf 0), current vertex stream (vbuf 1), previous
             // vertex stream (vbuf 2), object records (vbuf 9), prev_model parallel
@@ -568,6 +594,8 @@ impl MtlContext {
             } else {
                 deformed
             };
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
                 enc.setVertexBuffer_offset_atIndex(Some(prev), 0, 2);

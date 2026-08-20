@@ -397,11 +397,13 @@ impl DxContext {
             )?,
         )?;
         if let Some(pooled) = self.transient_pool.gbuffer_pooled() {
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             let srv_cpu_base = unsafe {
                 self.descriptors
                     .srv_heap
                     .GetCPUDescriptorHandleForHeapStart()
             };
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             let srv_gpu_base = unsafe {
                 self.descriptors
                     .srv_heap
@@ -431,11 +433,13 @@ impl DxContext {
             // Rewrite each mip's RTV + SRV into its existing (fixed) slot. The
             // SRV CPU handle is derived from the stored GPU handle the same way
             // the resize path does (the slot never moves).
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             let srv_cpu_base = unsafe {
                 self.descriptors
                     .srv_heap
                     .GetCPUDescriptorHandleForHeapStart()
             };
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             let srv_gpu_base = unsafe {
                 self.descriptors
                     .srv_heap

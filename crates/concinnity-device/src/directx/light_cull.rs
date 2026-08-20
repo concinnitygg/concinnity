@@ -45,6 +45,8 @@ impl LightCullState {
     // Unmap the persistent `ClusterParams` mappings. Called from `DxContext::drop`.
     pub(in crate::directx) fn unmap(&self) {
         for res in &self.params_resources {
+            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+            // past this call.
             unsafe { res.Unmap(0, None) };
         }
     }
@@ -115,6 +117,8 @@ pub(in crate::directx) fn create_light_cull_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -122,6 +126,8 @@ pub(in crate::directx) fn create_light_cull_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create light cull PSO: {e}"))
 }
@@ -158,11 +164,15 @@ pub(in crate::directx) fn build_cluster_params_buffers(
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let mut ptr = std::ptr::null_mut();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+        // that receives the mapping.
         unsafe { res.Map(0, None, Some(&mut ptr)) }
             .map_err(|e| format!("map cluster params buffer: {e}"))?;
         let ptr = ptr as *mut u8;
         // Slot 1: the `use_clusters = 0` copy. Static for the context's life.
         let unclustered = ClusterParams::ZERO;
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &unclustered as *const ClusterParams as *const u8,
@@ -186,12 +196,14 @@ impl DxContext {
         } else {
             CLUSTER_SLOT_UNCLUSTERED
         };
+        // SAFETY: a property query on a live resource; it only reads.
         let base = unsafe { self.light_cull.params_resources[frame_idx].GetGPUVirtualAddress() };
         base + slot * CLUSTER_PARAMS_SLOT_STRIDE
     }
 
     // GPU virtual address of the per-cluster light-index buffer (root SRV).
     pub(in crate::directx) fn cluster_list_gva(&self) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.light_cull.cluster_buffer.GetGPUVirtualAddress() }
     }
 
@@ -203,6 +215,8 @@ impl DxContext {
         params: &ClusterParams,
     ) {
         let dst = self.light_cull.params_ptrs[frame_idx];
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 params as *const ClusterParams as *const u8,
@@ -229,8 +243,11 @@ impl DxContext {
         };
         let cluster_buffer = &self.light_cull.cluster_buffer;
         let params_gva = self.cluster_params_gva(frame_idx, true);
+        // SAFETY: a property query on a live resource; it only reads.
         let lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(root_sig);
             cmd.SetPipelineState(pso);

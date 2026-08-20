@@ -58,6 +58,7 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
         let Some(adapter) = adapter else {
             return;
         };
+        // SAFETY: a property query on a live COM object; it only reads.
         let Ok(desc) = (unsafe { adapter.GetDesc1() }) else {
             return;
         };
@@ -116,6 +117,8 @@ fn create_library(
     device1: &ID3D12Device1,
     blob: Option<&[u8]>,
 ) -> windows::core::Result<ID3D12PipelineLibrary> {
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device1.CreatePipelineLibrary(blob.unwrap_or(&[])) }
 }
 
@@ -131,16 +134,26 @@ pub(super) unsafe fn create_graphics(
 ) -> windows::core::Result<ID3D12PipelineState> {
     let started = std::time::Instant::now();
     let result = STATE.with(|state| match &*state.borrow() {
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         None => unsafe { device.CreateGraphicsPipelineState(desc) },
         Some(state) => {
-            let name = wide(&graphics_name(desc));
+            // SAFETY: this fn's own contract is that `desc`'s pointers stay valid
+            // for the call, which is exactly what the name hash needs.
+            let name = wide(&unsafe { graphics_name(desc) });
+            // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and this fn's own
+            // contract is that `desc`'s pointers stay valid for it.
             let loaded: windows::core::Result<ID3D12PipelineState> = unsafe {
                 state
                     .library
                     .LoadGraphicsPipeline(PCWSTR(name.as_ptr()), desc)
             };
             loaded.or_else(|_| {
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 let pso: ID3D12PipelineState = unsafe { device.CreateGraphicsPipelineState(desc) }?;
+                // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and `pso` was
+                // just created from this device.
                 let _ = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) };
                 Ok(pso)
             })
@@ -160,16 +173,26 @@ pub(super) unsafe fn create_compute(
 ) -> windows::core::Result<ID3D12PipelineState> {
     let started = std::time::Instant::now();
     let result = STATE.with(|state| match &*state.borrow() {
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         None => unsafe { device.CreateComputePipelineState(desc) },
         Some(state) => {
-            let name = wide(&compute_name(desc));
+            // SAFETY: this fn's own contract is that `desc`'s pointers stay valid
+            // for the call, which is exactly what the name hash needs.
+            let name = wide(&unsafe { compute_name(desc) });
+            // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and this fn's own
+            // contract is that `desc`'s pointers stay valid for it.
             let loaded: windows::core::Result<ID3D12PipelineState> = unsafe {
                 state
                     .library
                     .LoadComputePipeline(PCWSTR(name.as_ptr()), desc)
             };
             loaded.or_else(|_| {
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 let pso: ID3D12PipelineState = unsafe { device.CreateComputePipelineState(desc) }?;
+                // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and `pso` was
+                // just created from this device.
                 let _ = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) };
                 Ok(pso)
             })
@@ -195,11 +218,14 @@ pub(super) fn disk_state() -> &'static str {
 pub(super) fn serialize() {
     STATE.with(|state| {
         if let Some(state) = state.borrow_mut().as_mut() {
+            // SAFETY: a property query on the live pipeline library; it only reads.
             let size = unsafe { state.library.GetSerializedSize() };
             if size == 0 {
                 return;
             }
             let mut bytes = vec![0u8; size];
+            // SAFETY: `bytes` is a live local the `GetSerializedSize` query above sized for the
+            // whole blob.
             let serialized = unsafe { state.library.Serialize(&mut bytes) };
             if serialized.is_ok()
                 && crate::pipeline_cache::store_if_grown(&state.file, &bytes, state.written)
@@ -229,10 +255,17 @@ fn wide(name: &str) -> Vec<u16> {
 // built for other state. The root signature is deliberately excluded (it is a
 // pointer, and no two backend PSOs share stage bytecode across root
 // signatures).
-fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
+//
+// # Safety
+//
+// `desc`'s raw pointers must be valid: each stage's `pShaderBytecode` must
+// address `BytecodeLength` bytes, and `pInputElementDescs`, when non-null, must
+// address `NumElements` descriptors whose `SemanticName`s are NUL-terminated.
+unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     let mut h = Sha256::new();
     for stage in [&desc.VS, &desc.PS, &desc.DS, &desc.HS, &desc.GS] {
-        hash_bytecode(&mut h, stage);
+        // SAFETY: the caller guarantees each stage's pointer and length agree.
+        unsafe { hash_bytecode(&mut h, stage) };
     }
     hash_u32s(
         &mut h,
@@ -271,6 +304,8 @@ fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     hash_stencil_op(&mut h, &desc.DepthStencilState.BackFace);
     hash_u32s(&mut h, &[desc.InputLayout.NumElements]);
     if !desc.InputLayout.pInputElementDescs.is_null() {
+        // SAFETY: the caller's contract is that a non-null `pInputElementDescs` addresses
+        // `NumElements` descriptors, and the null case is filtered out above.
         let elements = unsafe {
             std::slice::from_raw_parts(
                 desc.InputLayout.pInputElementDescs,
@@ -280,6 +315,8 @@ fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
         for e in elements {
             if !e.SemanticName.is_null() {
                 let semantic =
+                    // SAFETY: the caller's contract is that a non-null `SemanticName` is NUL-
+                    // terminated, and it stays live for the copy this makes.
                     unsafe { std::ffi::CStr::from_ptr(e.SemanticName.0 as *const _) }.to_bytes();
                 h.update((semantic.len() as u64).to_le_bytes());
                 h.update(semantic);
@@ -322,9 +359,14 @@ fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
 }
 
 // The library name for a compute desc: the kernel bytecode is the identity.
-fn compute_name(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
+//
+// # Safety
+//
+// `desc.CS.pShaderBytecode` must address `BytecodeLength` bytes.
+unsafe fn compute_name(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
     let mut h = Sha256::new();
-    hash_bytecode(&mut h, &desc.CS);
+    // SAFETY: the caller guarantees the kernel bytecode pointer and length agree.
+    unsafe { hash_bytecode(&mut h, &desc.CS) };
     hash_u32s(&mut h, &[desc.NodeMask, desc.Flags.0 as u32]);
     format!("c{:x}", Truncated(h.finalize()))
 }
@@ -342,9 +384,14 @@ impl std::fmt::LowerHex for Truncated {
     }
 }
 
-fn hash_bytecode(h: &mut Sha256, bytecode: &D3D12_SHADER_BYTECODE) {
+// # Safety
+//
+// `bytecode.pShaderBytecode`, when non-null, must address `BytecodeLength` bytes.
+unsafe fn hash_bytecode(h: &mut Sha256, bytecode: &D3D12_SHADER_BYTECODE) {
     h.update((bytecode.BytecodeLength as u64).to_le_bytes());
     if !bytecode.pShaderBytecode.is_null() && bytecode.BytecodeLength > 0 {
+        // SAFETY: the caller's contract is that a non-null `pShaderBytecode` addresses
+        // `BytecodeLength` bytes.
         h.update(unsafe {
             std::slice::from_raw_parts(
                 bytecode.pShaderBytecode as *const u8,
@@ -411,52 +458,65 @@ mod tests {
         }
     }
 
+    // Every desc these tests hash is built from slices that outlive the call, so
+    // the pointers `graphics_name` / `compute_name` walk are valid.
+    fn name_of(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
+        // SAFETY: the desc borrows caller-owned slices live for the call, and its
+        // input layout is left null.
+        unsafe { graphics_name(desc) }
+    }
+
+    fn compute_name_of(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
+        // SAFETY: the desc borrows a caller-owned kernel slice live for the call.
+        unsafe { compute_name(desc) }
+    }
+
     #[test]
     fn the_name_is_stable_for_identical_descs() {
         let (vs, ps) = ([1u8, 2, 3], [4u8, 5]);
         assert_eq!(
-            graphics_name(&graphics_desc(&vs, &ps)),
-            graphics_name(&graphics_desc(&vs, &ps))
+            name_of(&graphics_desc(&vs, &ps)),
+            name_of(&graphics_desc(&vs, &ps))
         );
     }
 
     #[test]
     fn every_discriminator_changes_the_name() {
         let (vs, ps) = ([1u8, 2, 3], [4u8, 5]);
-        let base = graphics_name(&graphics_desc(&vs, &ps));
-        assert_ne!(base, graphics_name(&graphics_desc(&[9u8], &ps)), "vs");
-        assert_ne!(base, graphics_name(&graphics_desc(&vs, &[9u8])), "ps");
+        let base = name_of(&graphics_desc(&vs, &ps));
+        assert_ne!(base, name_of(&graphics_desc(&[9u8], &ps)), "vs");
+        assert_ne!(base, name_of(&graphics_desc(&vs, &[9u8])), "ps");
 
         let mut rtv = graphics_desc(&vs, &ps);
         rtv.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        assert_ne!(base, graphics_name(&rtv), "rtv format");
+        assert_ne!(base, name_of(&rtv), "rtv format");
 
         let mut dsv = graphics_desc(&vs, &ps);
         dsv.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-        assert_ne!(base, graphics_name(&dsv), "dsv format");
+        assert_ne!(base, name_of(&dsv), "dsv format");
 
         let mut msaa = graphics_desc(&vs, &ps);
         msaa.SampleDesc.Count = 4;
-        assert_ne!(base, graphics_name(&msaa), "sample count");
+        assert_ne!(base, name_of(&msaa), "sample count");
 
         let mut blend = graphics_desc(&vs, &ps);
         blend.BlendState.RenderTarget[0].BlendEnable = true.into();
-        assert_ne!(base, graphics_name(&blend), "blend");
+        assert_ne!(base, name_of(&blend), "blend");
     }
 
     #[test]
     fn bytecode_boundaries_cannot_be_confused() {
         // Without length prefixes ("ab", "c") and ("a", "bc") would collide.
         assert_ne!(
-            graphics_name(&graphics_desc(b"ab", b"c")),
-            graphics_name(&graphics_desc(b"a", b"bc"))
+            name_of(&graphics_desc(b"ab", b"c")),
+            name_of(&graphics_desc(b"a", b"bc"))
         );
     }
 
     #[test]
     fn compute_and_graphics_names_never_collide() {
         let kernel = [7u8, 7, 7];
-        let compute = compute_name(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
+        let compute = compute_name_of(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
             CS: D3D12_SHADER_BYTECODE {
                 pShaderBytecode: kernel.as_ptr() as *const _,
                 BytecodeLength: kernel.len(),
@@ -464,6 +524,6 @@ mod tests {
             ..Default::default()
         });
         assert!(compute.starts_with('c'));
-        assert!(graphics_name(&graphics_desc(&kernel, &[])).starts_with('g'));
+        assert!(name_of(&graphics_desc(&kernel, &[])).starts_with('g'));
     }
 }

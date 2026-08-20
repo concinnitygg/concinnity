@@ -156,6 +156,7 @@ impl DxContext {
                 continue;
             }
             let inst_buf = &self.instanced.upload_buffers[frame_idx][cluster_idx];
+            // SAFETY: a property query on a live resource; it only reads.
             let inst_gva_base = unsafe { inst_buf.GetGPUVirtualAddress() };
 
             per_cluster(cluster_idx, cluster);

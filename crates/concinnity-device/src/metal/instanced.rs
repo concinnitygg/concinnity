@@ -154,6 +154,8 @@ impl MtlContext {
             per_cluster(enc, cluster);
             for b in &pc.buckets {
                 let index_byte_offset = b.index_offset * std::mem::size_of::<u32>();
+                // SAFETY: the bucket's instance buffer outlives the encoder, and
+                // `index_offset`/`index_count` bound the bucket's own slice of `self.index_buffer`.
                 unsafe {
                     enc.setVertexBuffer_offset_atIndex(Some(&b.instances), 0, 6);
                     if bind_prev {
@@ -211,6 +213,9 @@ impl MtlContext {
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u32>();
+            // SAFETY: `index_byte_offset` and `index_count` come from `active_lod`, which returns a
+            // range inside this object's own slice of `self.index_buffer`, and `base_vertex` is
+            // that object's own base.
             unsafe {
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
                     MTLPrimitiveType::Triangle,
@@ -259,6 +264,8 @@ impl MtlContext {
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u16>();
+            // SAFETY: the index range comes from `active_lod` on this object's own slice of the
+            // bound skinned index buffer `sib`.
             unsafe {
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                     MTLPrimitiveType::Triangle,

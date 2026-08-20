@@ -212,6 +212,8 @@ pub(super) fn create_output_image(
             })
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -280,6 +282,8 @@ pub(super) fn image_barrier(
         })
         .src_access_mask(src_access)
         .dst_access_mask(dst_access);
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
+    // commands name is live for the call.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -576,8 +580,11 @@ pub(super) unsafe fn copy_ext_names(count: u32, exts: *const *const c_char) -> V
     }
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
+        // SAFETY: `exts` points at `count` entries the SDK just wrote, and `i` is below `count`.
         let p = unsafe { *exts.add(i) };
         if !p.is_null() {
+            // SAFETY: `p` is non-null per the check above and the SDK owns the NUL-terminated name
+            // for the lifetime of the library; `to_owned` copies it out.
             out.push(unsafe { CStr::from_ptr(p) }.to_owned());
         }
     }
@@ -590,11 +597,15 @@ fn supported_device_extensions(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
 ) -> Vec<CString> {
+    // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+    // output vector from the count the driver reports.
     let props = unsafe { instance.enumerate_device_extension_properties(physical_device) }
         .unwrap_or_default();
     props
         .iter()
         .map(|e| {
+            // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow
+            // does not outlive the properties entry it points into.
             let name = unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) };
             CString::from(name)
         })

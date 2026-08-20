@@ -30,6 +30,9 @@ concinnity-shader = { path = "crates/concinnity-shader", optional = true }
 [build-dependencies]
 concinnity-toolchain = { path = "crates/concinnity-toolchain" }
 
+[lints]
+workspace = true
+
 [workspace]
 resolver = "2"
 members = [
@@ -43,8 +46,11 @@ default-members = [
     "crates/*",
 ]
 
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
 [workspace.package]
-version = "0.18.34"
+version = "0.18.35"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

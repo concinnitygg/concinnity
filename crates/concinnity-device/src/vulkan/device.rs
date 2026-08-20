@@ -12,13 +12,19 @@ pub(super) fn pick_physical_device(
     surface_loader: &ash::khr::surface::Instance,
     surface: vk::SurfaceKHR,
 ) -> Result<(vk::PhysicalDevice, u32, u32), String> {
+    // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+    // output vector from the count the driver reports.
     let devices = unsafe { instance.enumerate_physical_devices() }
         .map_err(|e| format!("enumerate physical devices: {e}"))?;
     for pd in devices {
         if let Ok((gf, pf)) = query_queue_families(instance, pd, surface_loader, surface) {
             let extensions =
+                // SAFETY: an enumeration query on a live instance handle; it only reads, and ash
+                // sizes the output vector from the count the driver reports.
                 unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
             let has_swapchain = extensions.iter().any(|e| {
+                // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the
+                // borrow does not outlive the properties entry it points into.
                 let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
                 name.to_bytes() == b"VK_KHR_swapchain"
             });
@@ -36,6 +42,7 @@ pub(super) fn query_queue_families(
     surface_loader: &ash::khr::surface::Instance,
     surface: vk::SurfaceKHR,
 ) -> Result<(u32, u32), String> {
+    // SAFETY: a property query on a live handle; it only reads.
     let families = unsafe { instance.get_physical_device_queue_family_properties(pd) };
     let mut graphics = None;
     let mut present = None;
@@ -43,6 +50,7 @@ pub(super) fn query_queue_families(
         if f.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
             graphics = Some(i as u32);
         }
+        // SAFETY: a property query on a live handle; it only reads.
         if unsafe { surface_loader.get_physical_device_surface_support(pd, i as u32, surface) }
             .unwrap_or(false)
         {
@@ -108,8 +116,12 @@ pub(super) fn create_logical_device(
     // report current VRAM residency. Falls back to a zero reading when
     // unavailable; matches DirectX's zero-fallback on adapters without
     // QueryVideoMemoryInfo support.
+    // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+    // output vector from the count the driver reports.
     let exts = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
     let has_memory_budget = exts.iter().any(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
         let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
         name.to_bytes() == b"VK_EXT_memory_budget"
     });
@@ -124,6 +136,8 @@ pub(super) fn create_logical_device(
     // to its FP32 path, keeping the two in sync.
     let has_ext = |needle: &[u8]| {
         exts.iter().any(|e| {
+            // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow
+            // does not outlive the properties entry it points into.
             let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
             name.to_bytes() == needle
         })
@@ -194,6 +208,7 @@ pub(super) fn create_logical_device(
                 .push_next(&mut rq_probe)
                 .push_next(&mut rt_bda_probe);
         }
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_features2(pd, &mut probe) };
     }
     let want_f16 = has_f16 && f16_probe.shader_float16 != 0;
@@ -262,6 +277,7 @@ pub(super) fn create_logical_device(
     let want_update_after_bind = di_probe.descriptor_binding_sampled_image_update_after_bind != 0
         && upscaler_sdk.choice != ResolvedBackend::Xess
         && super::descriptor_layout::sampler_budget_is_constrained(
+            // SAFETY: a property query on a live handle; it only reads.
             unsafe { instance.get_physical_device_properties(pd) }
                 .limits
                 .max_per_stage_descriptor_samplers,
@@ -304,6 +320,7 @@ pub(super) fn create_logical_device(
     // `StorageImage*WithoutFormat` SPIR-V capabilities). They're enabled when
     // the device supports them so the upscaler's pipelines validate cleanly;
     // inert for the engine's own shaders.
+    // SAFETY: a property query on a live handle; it only reads.
     let base_supported = unsafe { instance.get_physical_device_features(pd) };
     let features = vk::PhysicalDeviceFeatures::default()
         .shader_sampled_image_array_dynamic_indexing(true)
@@ -347,6 +364,7 @@ pub(super) fn create_logical_device(
     let mut draw_params_probe = vk::PhysicalDeviceShaderDrawParametersFeatures::default();
     {
         let mut probe = vk::PhysicalDeviceFeatures2::default().push_next(&mut draw_params_probe);
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_features2(pd, &mut probe) };
     }
     let want_draw_params = draw_params_probe.shader_draw_parameters != 0;
@@ -369,6 +387,7 @@ pub(super) fn create_logical_device(
             let mut bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
             {
                 let mut probe = vk::PhysicalDeviceFeatures2::default().push_next(&mut bda_probe);
+                // SAFETY: a property query on a live handle; it only reads.
                 unsafe { instance.get_physical_device_features2(pd, &mut probe) };
             }
             bda_probe.buffer_device_address != 0
@@ -425,6 +444,8 @@ pub(super) fn create_logical_device(
         // SAFETY: `head` is a valid feature `pNext` chain (our `features2`, with
         // XeSS structs appended), alive until `create_device` returns.
         device_info.p_next = head as *const c_void;
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let device = unsafe { instance.create_device(pd, &device_info, None) }
             .map_err(|e| format!("create device (xess features): {e}"))?;
         // Neither RT nor update-after-bind is ever co-enabled with XeSS (see
@@ -468,6 +489,8 @@ pub(super) fn create_logical_device(
         device_info = device_info.push_next(&mut portability_enable);
     }
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let device = unsafe { instance.create_device(pd, &device_info, None) }
         .map_err(|e| format!("create device: {e}"))?;
     Ok(LogicalDevice {
@@ -482,6 +505,7 @@ pub(super) fn get_max_usable_sample_count(
     instance: &ash::Instance,
     pd: vk::PhysicalDevice,
 ) -> vk::SampleCountFlags {
+    // SAFETY: a property query on a live handle; it only reads.
     let props = unsafe { instance.get_physical_device_properties(pd) };
     let counts =
         props.limits.framebuffer_color_sample_counts & props.limits.framebuffer_depth_sample_counts;

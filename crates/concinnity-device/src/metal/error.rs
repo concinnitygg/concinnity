@@ -42,6 +42,8 @@ pub(super) fn classify_command_buffer_error(code: usize, detail: String) -> Rend
 // command-buffer domain carry a meaningful code; anything else stays `Other`.
 pub(super) fn classify_ns_error(error: &NSError) -> RenderError {
     let detail = error.localizedDescription().to_string();
+    // SAFETY: `MTLCommandBufferErrorDomain` is a framework-owned static NSString that outlives this
+    // comparison.
     let in_metal_domain = &*error.domain() == unsafe { objc2_metal::MTLCommandBufferErrorDomain };
     if in_metal_domain {
         classify_command_buffer_error(error.code() as usize, detail)

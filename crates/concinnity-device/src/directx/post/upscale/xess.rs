@@ -123,8 +123,13 @@ impl XessApi {
     // failure; the caller logs and falls through. The DLL handle is held so the
     // function pointers stay valid for the context's lifetime.
     fn load() -> Option<Self> {
+        // SAFETY: the name is a NUL-terminated literal, and a failed load is reported rather than
+        // dereferenced.
         let module = unsafe { LoadLibraryA(PCSTR(c"libxess.dll".as_ptr() as *const u8)) }.ok()?;
         let resolve = |name: &CStr| -> Option<*const c_void> {
+            // SAFETY: `module` is the handle `LoadLibraryA` just returned, and `name` is a NUL-
+            // terminated `CStr` live for the call. The result is only a pointer here; the
+            // transmutes that give it a prototype are documented below.
             unsafe {
                 GetProcAddress(module, PCSTR(name.as_ptr() as *const u8))
                     .map(|p| p as *const c_void)
@@ -207,6 +212,10 @@ pub(in crate::directx) struct XessUpscaler {
 // The XeSS context handle + loaded function pointers are raw C pointers used
 // only on the render thread; the trait's `Send` bound is satisfied unsafely,
 // same as the rest of `DxContext`.
+// SAFETY: `XessUpscaler` owns its XeSS context handle and the function pointers resolved from a DLL
+// held open for the context's lifetime. Neither is shared: every entry point runs on the render
+// thread that built them, under the same main-thread guard as the rest of `DxContext`. Moving the
+// whole upscaler hands over exclusive ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for XessUpscaler {}
 
 impl XessUpscaler {
@@ -243,6 +252,9 @@ impl XessUpscaler {
         let render_height = (((output_height as f32) * scale).round() as u32).max(1);
 
         let mut ctx: xess_context_handle_t = ptr::null_mut();
+        // SAFETY: `xess.create_context` was resolved from the loaded DLL with the header's
+        // prototype, `device_raw` borrows the live D3D12 device, and `ctx` is a live local the call
+        // fills.
         let rc = unsafe { (xess.create_context)(device_raw(device), &mut ctx) };
         if rc != XESS_RESULT_SUCCESS || ctx.is_null() {
             tracing::warn!("XeSS: xessD3D12CreateContext returned {rc}; trying the next upscaler");
@@ -250,9 +262,13 @@ impl XessUpscaler {
         }
 
         let init_flags = XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE;
+        // SAFETY: `ctx` is the non-null context just created, and a null pipeline-library pointer
+        // is the header's "use the default" value.
         let rc = unsafe { (xess.build_pipelines)(ctx, ptr::null_mut(), true, init_flags) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS: xessD3D12BuildPipelines returned {rc}; trying the next upscaler");
+            // SAFETY: `ctx` is the non-null context created above and is destroyed exactly once on
+            // this path.
             unsafe { (xess.destroy_context)(ctx) };
             return Ok(None);
         }
@@ -272,9 +288,13 @@ impl XessUpscaler {
             texture_heap_offset: 0,
             p_pipeline_library: ptr::null_mut(),
         };
+        // SAFETY: `ctx` is the non-null context created above, and `init_params` is a live local
+        // the call only reads.
         let rc = unsafe { (xess.init)(ctx, &init_params) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS: xessD3D12Init returned {rc}; trying the next upscaler");
+            // SAFETY: `ctx` is the non-null context created above and is destroyed exactly once on
+            // this path.
             unsafe { (xess.destroy_context)(ctx) };
             return Ok(None);
         }
@@ -282,6 +302,8 @@ impl XessUpscaler {
         // Motion vectors are RG16F `prev_uv - cur_uv` in UV space; XeSS expects
         // pixel-space velocity (default low-res), so scale by the render extent.
         let rc =
+            // SAFETY: `ctx` is the non-null context created above; the call takes only scalars
+            // besides it.
             unsafe { (xess.set_velocity_scale)(ctx, render_width as f32, render_height as f32) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("XeSS: xessSetVelocityScale returned {rc} (non-fatal)");
@@ -392,6 +414,9 @@ impl super::UpscaleBackend for XessUpscaler {
             p_descriptor_heap: ptr::null_mut(),
             descriptor_heap_offset: 0,
         };
+        // SAFETY: `self.ctx` is the context created in `try_new`, `cmd` is the frame's command list
+        // in the recording state, and `params` is a live local naming resources the caller keeps
+        // alive for the frame.
         let rc = unsafe { (self.xess.execute)(self.ctx, cmd_list_raw(cmd), &params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(format!("xessD3D12Execute returned {rc}"));
@@ -403,6 +428,8 @@ impl super::UpscaleBackend for XessUpscaler {
 impl Drop for XessUpscaler {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
+            // SAFETY: `self.ctx` is non-null here and is destroyed exactly once (nulled straight
+            // after), and the DLL the function pointer came from is still open.
             unsafe {
                 let _ = (self.xess.destroy_context)(self.ctx);
             }

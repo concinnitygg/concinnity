@@ -183,6 +183,8 @@ impl VkContext {
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&sky);
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { self.device.update_descriptor_sets(&[write], &[]) };
         }
     }
@@ -265,6 +267,7 @@ impl VkContext {
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
         let done = self.probe_rendering.as_ref().is_some_and(|r| {
             r.cursor >= PROBE_FACE_COUNT
+                // SAFETY: the fence was created from this device; the query only reads.
                 && unsafe { self.device.get_fence_status(r.face_fences[r.last_fence()]) }
                     .unwrap_or(false)
         });
@@ -345,6 +348,8 @@ impl VkContext {
             self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>();
         let args_size =
             self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>();
+        // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at least the cull
+        // count's worth of records, so each mapped pointer covers the range being zeroed.
         unsafe {
             std::ptr::write_bytes(bake.object_buf.mapped_ptr(), 0, object_size);
             std::ptr::write_bytes(bake.draw_args_buf.mapped_ptr(), 0, args_size);
@@ -414,6 +419,8 @@ impl VkContext {
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&pool_infos);
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe {
             self.device
                 .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -481,14 +488,20 @@ impl VkContext {
                 .command_pool(self.commands.command_pool)
                 .level(vk::CommandBufferLevel::PRIMARY)
                 .command_buffer_count(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.allocate_command_buffers(&info) }
                 .map_err(|e| format!("probe face cmd alloc: {e}"))?[0]
         };
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let fence = match unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) } {
             Ok(f) => f,
             Err(e) => {
                 // The command buffer is allocated but not yet tracked; free it before
                 // bailing so it does not leak.
+                // SAFETY: the handle was created from this device moments ago and never submitted,
+                // so this cleanup is its only remaining use.
                 unsafe {
                     device.free_command_buffers(
                         self.commands.command_pool,
@@ -509,6 +522,8 @@ impl VkContext {
 
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence
+        // was waited on), so it is in the initial state that `begin` requires.
         unsafe { device.begin_command_buffer(cmd, &begin) }
             .map_err(|e| format!("probe face begin: {e}"))?;
         // Order the previous face's readback copy + indirect-draw read (a prior
@@ -536,6 +551,8 @@ impl VkContext {
                         | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                         | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
@@ -591,6 +608,8 @@ impl VkContext {
                 height: PROBE_FACE_SIZE,
                 depth: 1,
             });
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -733,6 +752,8 @@ impl VkContext {
                 .dst_array_element(index as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&img_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { self.device.update_descriptor_sets(&[write], &[]) };
         }
 
@@ -792,6 +813,8 @@ impl VkContext {
                 std::mem::size_of::<CullParams>(),
             )
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
@@ -885,6 +908,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
@@ -955,6 +980,8 @@ impl RenderingBake {
         let Some(set) = self.bake.hiz_set else { return };
         let img = img_info(view, sampler);
         let write = sampler_write(set, 0, &img);
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
 
@@ -963,6 +990,8 @@ impl RenderingBake {
     // caller has ensured the GPU retired them (the last face's fence is signalled, or
     // the device is idle).
     pub(super) fn destroy(self, device: &ash::Device, command_pool: vk::CommandPool) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if !self.face_cmds.is_empty() {
                 device.free_command_buffers(command_pool, &self.face_cmds);
@@ -1119,6 +1148,8 @@ impl BakeResources {
             .width(size)
             .height(size)
             .layers(1);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }
             .map_err(|e| format!("probe framebuffer: {e}"))?;
 
@@ -1198,6 +1229,8 @@ impl BakeResources {
         if ctx.cull.bindless_update_after_bind || ctx.descriptors.global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("probe descriptor pool: {e}"))?;
 
@@ -1243,6 +1276,8 @@ impl BakeResources {
                         .buffer_info(std::slice::from_ref(&obj_info))
                 })
                 .collect();
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
 
@@ -1278,6 +1313,8 @@ impl BakeResources {
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(std::slice::from_ref(&ubo_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
             hiz_ubo = Some(ubo);
             Some(set)
@@ -1328,6 +1365,8 @@ impl BakeResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&probe_cube_sky),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
             // Binding 9: the shared static per-scene local-light SSBO.
             write_storage(
@@ -1349,6 +1388,8 @@ impl BakeResources {
                 .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(std::slice::from_ref(&cluster_params_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&cluster_write), &[]) };
             write_storage(
                 device,
@@ -1365,6 +1406,8 @@ impl BakeResources {
                 super::descriptor_layout::SPOT_SHADOW_MAP_BINDING,
                 &spot_img,
             );
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&spot_write), &[]) };
             write_storage(
                 device,
@@ -1387,6 +1430,8 @@ impl BakeResources {
                 sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
                 sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&ltc_writes, &[]) };
         }
 
@@ -1428,6 +1473,8 @@ impl BakeResources {
         // The images and pooled buffers retire through the allocator when this
         // drops; only the framebuffer and the descriptor pool are destroyed by
         // hand (the pool frees every set allocated from it).
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_framebuffer(self.framebuffer, None);
             device.destroy_descriptor_pool(self.pool, None);
@@ -1446,11 +1493,17 @@ fn make_ubo_bytes(
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         host,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.mapped_ptr(), bytes.len()) };
     Ok(buf)
 }
 
 fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {
+    // SAFETY: `LightUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
+    // it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // it.
     unsafe {
         std::slice::from_raw_parts(
             u as *const _ as *const u8,
@@ -1460,6 +1513,9 @@ fn light_bytes(u: &crate::gfx::render_types::LightUniforms) -> &[u8] {
 }
 
 fn shadow_bytes(u: &crate::gfx::render_types::ShadowUniforms) -> &[u8] {
+    // SAFETY: `ShadowUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them,
+    // so it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // it.
     unsafe {
         std::slice::from_raw_parts(
             u as *const _ as *const u8,
@@ -1473,6 +1529,9 @@ fn probeset_bytes(p: &ProbeSet) -> &[u8] {
 }
 
 fn hiz_params_bytes(p: &CullHizParams) -> &[u8] {
+    // SAFETY: `CullHizParams` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
+    // it has no padding and every byte is initialised; the slice borrows it and does not outlive
+    // it.
     unsafe {
         std::slice::from_raw_parts(
             p as *const _ as *const u8,
@@ -1532,6 +1591,8 @@ fn write_storage(
         .dst_binding(binding)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 

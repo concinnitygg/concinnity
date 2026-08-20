@@ -399,6 +399,7 @@ fn prim_desc_for(
         MTLIndexType::UInt16 => 2,
         _ => 4,
     };
+    // SAFETY: plain descriptor property setters, all values in range.
     let geo = unsafe {
         let g = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
         g.setVertexBuffer(Some(vertex_buffer));
@@ -533,6 +534,8 @@ fn attach_async_fault_logger(
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let handler = block2::RcBlock::new(
         move |cb: NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
+            // SAFETY: Metal hands the completion handler a live command buffer, and the borrow does
+            // not escape the block.
             let cb = unsafe { cb.as_ref() };
             if cb.status() == MTLCommandBufferStatus::Error
                 && !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -630,6 +633,9 @@ fn encode_skin_dispatch(
             target_count: 0,
         };
         let zero_weight = [0.0f32];
+        // SAFETY: every bound buffer outlives the encoder, and each `setBytes` pointer is derived
+        // from a live borrow with that type's `size_of` as the length; the indices are the slots
+        // the skinning kernel declares.
         unsafe {
             cenc.setBuffer_offset_atIndex(Some(skinned.vertex_buffer.as_ref()), 0, 0);
             cenc.setBuffer_offset_atIndex(Some(deformed_verts), 0, 1);
@@ -725,6 +731,9 @@ impl crate::metal::context::MtlContext {
                 Some(w) if !w.is_empty() => w.as_slice(),
                 _ => &zero_weight,
             };
+            // SAFETY: every bound buffer outlives the encoder, and each `setBytes` pointer is
+            // derived from a live borrow with that type's `size_of` as the length; the indices are
+            // the slots the skinning kernel declares.
             unsafe {
                 cenc.setBuffer_offset_atIndex(Some(svb.as_ref()), 0, 0);
                 cenc.setBuffer_offset_atIndex(Some(deformed), 0, 1);
@@ -1733,14 +1742,20 @@ fn upload_buffer<T: Copy>(
     what: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
     let bytes = std::mem::size_of_val(data);
+    if bytes == 0 {
+        // Metal rejects a zero-length buffer, and `data.as_ptr()` on an empty
+        // slice is dangling, so there is no byte to copy from. Hand back a
+        // 1-byte buffer the GPU never reads instead.
+        return device
+            .newBufferWithLength_options(1, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| format!("failed to allocate buffer for {what}"));
+    }
     let ptr = std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void)
         .ok_or_else(|| format!("{what}: null data pointer"))?;
+    // SAFETY: `ptr`/`bytes` describe the live, non-empty `data` slice, and
+    // Metal copies those bytes into the new buffer before the call returns.
     unsafe {
-        device.newBufferWithBytes_length_options(
-            ptr,
-            bytes.max(1),
-            MTLResourceOptions::StorageModeShared,
-        )
+        device.newBufferWithBytes_length_options(ptr, bytes, MTLResourceOptions::StorageModeShared)
     }
     .ok_or_else(|| format!("failed to allocate buffer for {what}"))
 }

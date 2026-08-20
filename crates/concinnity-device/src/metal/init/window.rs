@@ -182,6 +182,8 @@ pub(crate) fn setup_window_and_view(
         // Embedded mode: attach an MTKView as a subview of the provided NSView.
         // The host caller owns the parent NSView and keeps it alive for the
         // preview lifetime; we borrow a raw reference here only during init.
+        // SAFETY: the host caller owns the parent NSView and keeps it alive for the whole preview
+        // lifetime, which covers this borrow; `embedded_ptr` is non-null on this branch.
         let parent: &NSView = unsafe { &*(embedded_ptr as *const NSView) };
         let bounds = parent.bounds();
         let mtk_view = MTKView::initWithFrame_device(MTKView::alloc(mtm), bounds, Some(device));
@@ -356,10 +358,14 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: crate::gfx::hdr_output::Hdr
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
         crate::gfx::hdr_output::HdrEncoding::ExtendedLinear => (
+            // SAFETY: the CoreGraphics colour-space name is a framework-owned static that outlives
+            // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
         crate::gfx::hdr_output::HdrEncoding::Pq => (
+            // SAFETY: the CoreGraphics colour-space name is a framework-owned static that outlives
+            // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },
             "kCGColorSpaceDisplayP3_PQ",
         ),

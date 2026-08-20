@@ -93,6 +93,8 @@ impl AutoExposureResources {
             .size(AUTO_EXPOSURE_PUSH_BYTES);
 
         let build_layouts = [build_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let build_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -103,6 +105,8 @@ impl AutoExposureResources {
         }
         .map_err(|e| format!("auto-exposure build pipeline layout: {e}"))?;
         let average_layouts = [average_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let average_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -153,6 +157,8 @@ impl AutoExposureResources {
                 descriptor_count: (frames + 2) as u32,
             },
         ];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -165,6 +171,8 @@ impl AutoExposureResources {
 
         // Allocate build sets (one per frame) + average set.
         let build_set_layouts: Vec<_> = (0..frames).map(|_| build_set_layout).collect();
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let build_sets = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
@@ -174,6 +182,8 @@ impl AutoExposureResources {
         }
         .map_err(|e| format!("auto-exposure build sets: {e}"))?;
         let avg_layouts_single = [average_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let average_set = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
@@ -233,6 +243,8 @@ impl AutoExposureResources {
         build_pipeline: vk::Pipeline,
         average_pipeline: vk::Pipeline,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.build_pipeline, None);
             device.destroy_pipeline(self.average_pipeline, None);
@@ -280,6 +292,8 @@ impl AutoExposureResources {
     // Free every owned handle. Called from `Drop for VkContext` after
     // `device_wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_pipeline(self.build_pipeline, None);
@@ -309,6 +323,8 @@ fn create_build_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, S
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("auto-exposure build set layout: {e}"))
 }
@@ -327,6 +343,8 @@ fn create_average_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout,
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("auto-exposure average set layout: {e}"))
 }
@@ -358,6 +376,8 @@ fn write_build_set(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&hist)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -387,6 +407,8 @@ fn write_average_set(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&out)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -404,10 +426,14 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create auto-exposure pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
@@ -455,6 +481,8 @@ impl VkContext {
         // Read the previous frame's average log-luminance for this slot. The
         // fence wait above this call already gated the GPU work that wrote
         // it, so the HOST_COHERENT mapping reflects the committed value.
+        // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
+        // f32; the fence wait above gated the GPU write, so the value is committed and initialised.
         let avg_log_lum = unsafe { ptr.read() };
         let avg_log_lum = if avg_log_lum.is_finite() {
             avg_log_lum
@@ -499,6 +527,8 @@ impl VkContext {
             return;
         }
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             // Order Main pass's resolve color writes before our compute
             // shader sample of the HDR resolve image. The render pass's

@@ -668,6 +668,8 @@ pub(crate) fn build_decal_resources_for_runtime(
         0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                         +X
         0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
     ];
+    // SAFETY: the pointer and length describe the live `CUBE_VERTS` allocation, and Metal copies
+    // those bytes into the new buffer before the call returns.
     let vbuf = unsafe {
         let ptr = std::ptr::NonNull::new(CUBE_VERTS.as_ptr() as *mut _)
             .ok_or("decal cube vertex slice is null")?;
@@ -679,6 +681,8 @@ pub(crate) fn build_decal_resources_for_runtime(
             )
             .ok_or("failed to create decal cube vertex buffer")?
     };
+    // SAFETY: the pointer and length describe the live `CUBE_INDICES` allocation, and Metal copies
+    // those bytes into the new buffer before the call returns.
     let ibuf = unsafe {
         let ptr = std::ptr::NonNull::new(CUBE_INDICES.as_ptr() as *mut _)
             .ok_or("decal cube index slice is null")?;
@@ -710,6 +714,8 @@ fn make_auto_exposure_histogram(
 ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
     let hist_bytes =
         vec![0u8; std::mem::size_of::<u32>() * crate::gfx::auto_exposure::HISTOGRAM_BINS];
+    // SAFETY: the pointer and length describe the live `hist_bytes` allocation, and Metal copies
+    // those bytes into the new buffer before the call returns.
     unsafe {
         let ptr = std::ptr::NonNull::new(hist_bytes.as_ptr() as *mut _)
             .ok_or("auto-exposure histogram allocation failed")?;
@@ -727,6 +733,8 @@ fn make_auto_exposure_output(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
     let out_bytes = vec![0u8; std::mem::size_of::<f32>()];
+    // SAFETY: the pointer and length describe the live `out_bytes` allocation, and Metal copies
+    // those bytes into the new buffer before the call returns.
     unsafe {
         let ptr = std::ptr::NonNull::new(out_bytes.as_ptr() as *mut _)
             .ok_or("auto-exposure output allocation failed")?;

@@ -82,7 +82,7 @@ fn display_mode_of(v: &glfw::VidMode) -> DisplayMode {
     }
 }
 
-// GlfwWindow is only ever used on the thread that created it.
+// SAFETY: GlfwWindow is only ever used on the thread that created it.
 unsafe impl Send for GlfwWindow {}
 
 // Resolve the GLFW cursor mode from the two independent intents. A captured
@@ -727,6 +727,8 @@ impl GlfwWindow {
     ) -> Result<ash::vk::SurfaceKHR, String> {
         use ash::vk::Handle;
         let mut raw_surface: usize = 0;
+        // SAFETY: `instance.handle()` is the live Vulkan instance and `raw_surface` is a live local
+        // GLFW writes the surface handle into; the allocator argument is null.
         let result = unsafe {
             self.window.create_window_surface(
                 instance.handle().as_raw() as usize as *mut _,

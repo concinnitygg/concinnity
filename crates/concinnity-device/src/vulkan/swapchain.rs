@@ -30,9 +30,15 @@ impl VkContext {
     pub(super) fn destroy_swapchain_resources(&mut self) {
         let device = &self.device;
         for fb in &self.framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(*fb, None) };
         }
         for fb in &self.composite_framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(*fb, None) };
         }
         for frame_fbs in self
@@ -41,10 +47,16 @@ impl VkContext {
             .chain(&self.bloom_blend_framebuffers)
         {
             for &fb in frame_fbs {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { device.destroy_framebuffer(fb, None) };
             }
         }
         for iv in &self.swapchain_image_views {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_image_view(*iv, None) };
         }
         // On a `reload_world` the successor context inherits this swapchain
@@ -53,6 +65,9 @@ impl VkContext {
         // itself alive. Always false during a normal resize rebuild (the only
         // other caller), so a resize still recreates the swapchain as before.
         if !self.reused_by_successor {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe {
                 self.swapchain_loader
                     .destroy_swapchain(self.swapchain, None)
@@ -76,6 +91,7 @@ impl VkContext {
     // instead of the window. See `rebuild_swapchain` for why the distinction
     // matters.
     pub(super) fn surface_extent(&self) -> Result<vk::Extent2D, String> {
+        // SAFETY: a property query on a live handle; it only reads.
         let caps = unsafe {
             self.surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, self.surface)
@@ -289,6 +305,8 @@ impl VkContext {
         // The bloom input sets reference the destroyed mips; reset the pool
         // (the octave count may have changed) and re-allocate. wait_idle()
         // above guarantees none are still in flight.
+        // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
+        // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
             self.device
                 .reset_descriptor_pool(
@@ -754,6 +772,8 @@ impl VkContext {
                     .dst_binding(6)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&info));
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe {
                     self.device
                         .update_descriptor_sets(std::slice::from_ref(&write), &[])
@@ -807,10 +827,15 @@ impl VkContext {
         // wait_idle() above guarantees none are still in flight.
         if self.frame_sync.render_finished.len() != self.swapchain_images.len() {
             for &s in &self.frame_sync.render_finished {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { self.device.destroy_semaphore(s, None) };
             }
             let sem_info = vk::SemaphoreCreateInfo::default();
             self.frame_sync.render_finished = (0..self.swapchain_images.len())
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 .map(|_| unsafe { self.device.create_semaphore(&sem_info, None) })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("semaphore: {e}"))?;
@@ -915,11 +940,14 @@ pub(super) fn create_swapchain_inner(
         vsync,
     } = config;
     use crate::gfx::hdr_output::{HdrEncoding, HdrOutputMode};
+    // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| format!("surface caps: {e}"))?;
+    // SAFETY: a property query on a live handle; it only reads.
     let formats = unsafe { surface_loader.get_physical_device_surface_formats(pd, surface) }
         .map_err(|e| format!("surface formats: {e}"))?;
     let present_modes =
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe { surface_loader.get_physical_device_surface_present_modes(pd, surface) }
             .map_err(|e| format!("present modes: {e}"))?;
 
@@ -1019,13 +1047,19 @@ pub(super) fn create_swapchain_inner(
         .clipped(true)
         .old_swapchain(old_swapchain);
 
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let swapchain = unsafe { swapchain_loader.create_swapchain(&sc_info, None) }
         .map_err(|e| format!("create swapchain: {e}"))?;
 
     if old_swapchain != vk::SwapchainKHR::null() {
+        // SAFETY: `old_swapchain` was created from this device and was retired into the new
+        // swapchain's create-info, which is what makes destroying it here legal; it is destroyed
+        // exactly once.
         unsafe { swapchain_loader.destroy_swapchain(old_swapchain, None) };
     }
 
+    // SAFETY: a property query on a live handle; it only reads.
     let images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }
         .map_err(|e| format!("get swapchain images: {e}"))?;
 
@@ -1123,6 +1157,8 @@ pub(super) fn create_main_framebuffers(
                 .width(extent.width)
                 .height(extent.height)
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("framebuffer[{i}]: {e}"))
         })
@@ -1146,6 +1182,8 @@ pub(super) fn create_composite_framebuffers(
                 .width(extent.width)
                 .height(extent.height)
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("composite framebuffer[{i}]: {e}"))
         })
@@ -1192,6 +1230,8 @@ pub(super) fn write_composite_set(
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(std::slice::from_ref(&lut_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -1226,6 +1266,8 @@ pub(super) fn write_composite_channel_set(
                 .image_info(std::slice::from_ref(info))
         })
         .collect();
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -1246,6 +1288,8 @@ pub(super) fn create_shadow_framebuffers(
             .width(size)
             .height(size)
             .layers(1);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let fb = unsafe { device.create_framebuffer(&fb_info, None) }
             .map_err(|e| format!("shadow framebuffer: {e}"))?;
         fbs.push(fb);

@@ -46,3 +46,6 @@ concinnity-toolchain = { path = "../concinnity-toolchain" }
 # The binary FBX writer builds synthetic .fbx fixtures for the importer tests.
 fbxcel = { version = "0.9.0", default-features = false, features = ["tree", "writer"] }
 tempfile = "3.25.0"
+
+[lints]
+workspace = true

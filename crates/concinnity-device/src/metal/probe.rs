@@ -662,6 +662,7 @@ fn make_msaa_color(
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2DMultisample);
         desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -683,6 +684,7 @@ fn make_msaa_depth(
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2DMultisample);
         desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -704,6 +706,7 @@ fn make_resolve_shared(
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(MTLPixelFormat::RGBA16Float);

@@ -68,7 +68,7 @@ pub(in crate::vulkan) struct ReflectionCompositeResources {
     blur_scale: u32,
 }
 
-// Raw per-frame sets are render-thread-only; the struct lives inside `VkContext`,
+// SAFETY: Raw per-frame sets are render-thread-only; the struct lives inside `VkContext`,
 // already `unsafe impl Send`.
 unsafe impl Send for ReflectionCompositeResources {}
 
@@ -162,6 +162,8 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("reflection composite render pass: {e}"))
 }
@@ -279,6 +281,8 @@ fn create_composite_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -286,6 +290,8 @@ fn create_composite_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create reflection composite pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -336,6 +342,8 @@ impl ReflectionCompositeResources {
 
         let make_layout = |set_layout: vk::DescriptorSetLayout, name: &str| -> Result<_, String> {
             let layouts = [set_layout];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe {
                 device.create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
@@ -369,6 +377,8 @@ impl ReflectionCompositeResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(f * 7)];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -430,6 +440,8 @@ impl ReflectionCompositeResources {
         };
 
         let make_fb = |view: vk::ImageView, fw: u32, fh: u32| -> Result<vk::Framebuffer, String> {
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -471,6 +483,8 @@ impl ReflectionCompositeResources {
                 .dst_binding(binding)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&w), &[]) };
         };
         let pick = |views: &[vk::ImageView], i: usize| views[i % views.len().max(1)];
@@ -494,6 +508,8 @@ impl ReflectionCompositeResources {
     }
 
     fn destroy_targets(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if self.output_framebuffer != vk::Framebuffer::null() {
                 device.destroy_framebuffer(self.output_framebuffer, None);
@@ -530,6 +546,8 @@ impl ReflectionCompositeResources {
         device: &Device,
         rebuilt: RebuiltReflectionComposite,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.blur_pso, None);
             device.destroy_pipeline(self.composite_pso, None);
@@ -541,6 +559,8 @@ impl ReflectionCompositeResources {
     // Destroy every composite resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
@@ -594,10 +614,14 @@ impl VkContext {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&refl)),
         ];
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(&repoint, &[]) };
 
         // Pass 1: roughness blur into the reduced-resolution blur target.
         self.begin_fullscreen_pass_sized(cmd, rc.render_pass, rc.blur_framebuffer, rc.blur_extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, rc.blur_pso);
             device.cmd_bind_descriptor_sets(
@@ -614,6 +638,8 @@ impl VkContext {
 
         // Pass 2: lerp sharp vs upsampled blur by roughness, composite over scene.
         self.begin_fullscreen_pass(cmd, rc.render_pass, rc.output_framebuffer);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, rc.composite_pso);
             device.cmd_bind_descriptor_sets(

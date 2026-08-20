@@ -57,13 +57,19 @@ impl DxContext {
     // failed `ResizeBuffers` never leaves `back_buffers` empty.
     fn populate_back_buffers(&mut self) -> Result<(), String> {
         self.back_buffers.clear();
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { self.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         for i in 0..FRAMES {
+            // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
+            // it fills are live locals that outlive the call.
             let buf: ID3D12Resource = unsafe { self.swapchain.GetBuffer(i as u32) }
                 .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr + i * self.rtv_descriptor_size,
             };
+            // SAFETY: the view descriptor and the resource it names are live for the call, and the
+            // destination handle addresses a slot this context reserved for the view in a heap it
+            // owns.
             unsafe { self.device.CreateRenderTargetView(&buf, None, rtv_handle) };
             self.back_buffers.push(buf);
         }
@@ -129,6 +135,8 @@ impl DxContext {
         //    the clear. Without this, `ResizeBuffers` fails with
         //    DXGI_ERROR_INVALID_CALL and the window can never be resized.
         for i in 0..FRAMES {
+            // SAFETY: the fence for this frame slot was already waited on, so no submission still
+            // references what is being reset.
             unsafe {
                 let _ = self.commands.end_command_allocators[i].Reset();
                 if self.commands.end_command_lists[i]
@@ -147,6 +155,8 @@ impl DxContext {
         } else {
             DXGI_SWAP_CHAIN_FLAG(0)
         };
+        // SAFETY: the swapchain is live, every back-buffer reference this context held was dropped
+        // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {
             self.swapchain.ResizeBuffers(
                 FRAMES as u32,
@@ -194,6 +204,9 @@ impl DxContext {
                     ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
                     ..Default::default()
                 };
+                // SAFETY: the view descriptor and the resource it names are live for the call, and
+                // the destination handle addresses a slot this context reserved for the view in a
+                // heap it owns.
                 unsafe {
                     self.device
                         .CreateRenderTargetView(&resolve, Some(&rtv_desc), rtv)
@@ -215,11 +228,13 @@ impl DxContext {
         // Cache the SRV-heap CPU/GPU bases so the per-resource SRV rewrites
         // below can derive the CPU handle from each stored GPU handle without
         // borrowing `self` again (the per-effect rebuilds need `&mut self`).
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_cpu_base = unsafe {
             self.descriptors
                 .srv_heap
                 .GetCPUDescriptorHandleForHeapStart()
         };
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap

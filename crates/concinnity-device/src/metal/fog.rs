@@ -92,6 +92,8 @@ impl MtlContext {
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
@@ -110,6 +112,8 @@ impl MtlContext {
         );
         enc.setRenderPipelineState(pipeline);
 
+        // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
+        // length, at the buffer indices the fog shaders declare.
         unsafe {
             enc.setFragmentBytes_length_atIndex(
                 std::ptr::NonNull::from(params).cast(),
@@ -172,6 +176,9 @@ impl MtlContext {
         );
         enc.setComputePipelineState(pipeline);
 
+        // SAFETY: as in the render path -- pointers and lengths describe live borrows. The dispatch
+        // is sized from the froxel grid the same params describe, and the threadgroup size is
+        // within the pipeline's limit.
         unsafe {
             enc.setBytes_length_atIndex(
                 std::ptr::NonNull::from(params).cast(),
@@ -262,6 +269,7 @@ pub(super) fn build_fog_froxel_volume(
     let desc = MTLTextureDescriptor::new();
     desc.setTextureType(MTLTextureType::Type3D);
     desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setWidth(FOG_FROXEL_X as usize);
         desc.setHeight(FOG_FROXEL_Y as usize);

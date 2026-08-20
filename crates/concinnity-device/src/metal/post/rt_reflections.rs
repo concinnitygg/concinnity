@@ -101,6 +101,8 @@ impl MtlContext {
         };
 
         let desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(targets.reflection.as_ref()));
@@ -117,6 +119,9 @@ impl MtlContext {
             "rt reflections",
         );
         enc.setRenderPipelineState(pipeline);
+        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
+        // texture indices the shader declares; `probe_cube_or_sky` returns the sky for unbaked
+        // slots, so all MAX_PROBES slots are live.
         unsafe {
             // Textures + samplers mirror the SSR resolve.
             enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);

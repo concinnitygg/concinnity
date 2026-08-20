@@ -256,6 +256,8 @@ fn create_gbuffer_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -315,6 +317,8 @@ fn create_gbuffer_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create gbuffer prepass PSO: {e}"))
 }
@@ -630,6 +634,8 @@ impl GbufferResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map gbuffer view ubo: {e}"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
@@ -904,6 +910,9 @@ impl DxContext {
             prev_vp,
             view: self.view_matrix,
         };
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const GBufferView as *const u8,
@@ -911,6 +920,7 @@ impl DxContext {
                 std::mem::size_of::<GBufferView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { gb.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         let w = self.render_width;
@@ -921,6 +931,8 @@ impl DxContext {
         // and the consumers' barrier takes them back out. `gb.depth` is not part
         // of it and stays in DEPTH_WRITE throughout.
         let rtvs = [gb.normal_depth_rtv, gb.roughness_rtv, gb.velocity_rtv];
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&gb.depth_dsv));
             // Cleared alpha 0 marks "no geometry"; roughness 1.0 = non-reflective
@@ -1004,6 +1016,8 @@ impl DxContext {
             Some(g) => g,
             None => return,
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
             cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
@@ -1028,6 +1042,8 @@ impl DxContext {
                     prev_model,
                 };
                 let mat = [obj.material.roughness, 0.0_f32, 0.0, 0.0];
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRoot32BitConstants(
                         1,
@@ -1061,6 +1077,8 @@ impl DxContext {
             (gb.instanced_pso.as_ref(), gb.instanced_root_sig.as_ref())
             && !self.instanced.clusters.is_empty()
         {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(inst_pso);
                 cmd.SetGraphicsRootSignature(inst_root_sig);
@@ -1072,6 +1090,8 @@ impl DxContext {
                 cam_pos,
                 |_cluster_idx, cluster| {
                     let mat = [cluster.material.roughness, 0.0_f32, 0.0, 0.0];
+                    // SAFETY: the command list is in the recording state, and every resource,
+                    // descriptor and slice these commands name is live for the call.
                     unsafe {
                         cmd.SetGraphicsRoot32BitConstants(
                             2,
@@ -1081,6 +1101,8 @@ impl DxContext {
                         );
                     }
                 },
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 |bucket, inst_gva_base| unsafe {
                     cmd.SetGraphicsRootShaderResourceView(
                         1,
@@ -1108,6 +1130,8 @@ impl DxContext {
             && !self.skinned.draw_objects.is_empty()
         {
             let prev_frame_idx = (frame_idx + FRAMES - 1) % FRAMES;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(sk_pso);
                 cmd.SetGraphicsRootSignature(sk_root_sig);
@@ -1128,6 +1152,8 @@ impl DxContext {
                 } else {
                     frame_idx
                 };
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRoot32BitConstants(
                         1,
@@ -1147,6 +1173,8 @@ impl DxContext {
                 }
             });
             // Restore the static vertex/index buffers for later passes.
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
                 cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
@@ -1187,16 +1215,20 @@ impl DxContext {
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
         let prefix = self.skinned_record_base();
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Build this frame's previous-frame model buffer (static + skinned regions;
         // the instance region is init-written + immutable). Honours velocity_active.
         self.build_gbuffer_prev_models(frame_idx, velocity_active);
+        // SAFETY: a property query on a live resource; it only reads.
         let prev_model_gva = unsafe { prev_model_res.GetGPUVirtualAddress() };
 
         // Static + instance prefix: bind the static VB to BOTH vertex streams
         // (prev_pos == cur_pos) + the static u32 IB, then one `ExecuteIndirect`
         // over `[0, skinned_record_base())`.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(pso);
             cmd.SetGraphicsRootSignature(root_sig);
@@ -1264,6 +1296,8 @@ impl DxContext {
                 .get(prev_frame_idx)
                 .copied()
                 .unwrap_or(*cur_vbv);
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv]));
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
@@ -1311,6 +1345,8 @@ impl DxContext {
             Some(g) => g,
             None => return,
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&gb.pso);
             cmd.SetGraphicsRootSignature(&gb.root_sig);
@@ -1336,6 +1372,8 @@ impl DxContext {
                 prev_model,
             };
             let mat = [obj.material.roughness, 0.0_f32, 0.0, 0.0];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetGraphicsRoot32BitConstants(
                     1,

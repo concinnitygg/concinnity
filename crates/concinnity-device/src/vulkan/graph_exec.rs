@@ -138,6 +138,8 @@ fn emit_one(
                 .size(vk::WHOLE_SIZE)
                 .src_access_mask(src_access)
                 .dst_access_mask(dst_access);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
@@ -174,6 +176,8 @@ fn emit_one(
                 })
                 .src_access_mask(src_access)
                 .dst_access_mask(dst_access);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
@@ -238,6 +242,8 @@ fn emit_alias_barriers(device: &ash::Device, cmd: vk::CommandBuffer, images: &[v
             })
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -488,6 +494,9 @@ impl VkContext {
                         };
                         // Reset + begin this pass's own buffer (its own pool, so
                         // no cross-worker pool contention), encode, end.
+                        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited
+                        // on, so it is not in flight; reset then begin puts it in the recording
+                        // state, which is what the subsequent recording requires.
                         let begin = unsafe {
                             device_ref
                                 .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
@@ -511,6 +520,8 @@ impl VkContext {
                         // `WITH_AVAILABILITY` reports those as 0.
                         if let Some(pool) = ctx.timestamp_query_pool {
                             let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            // SAFETY: `cmd` is a command buffer in the recording state, and every
+                            // handle and slice these commands name is live for the call.
                             unsafe {
                                 device_ref.cmd_write_timestamp(
                                     buf,
@@ -533,6 +544,8 @@ impl VkContext {
                         }
                         if let Some(pool) = ctx.timestamp_query_pool {
                             let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            // SAFETY: `cmd` is a command buffer in the recording state, and every
+                            // handle and slice these commands name is live for the call.
                             unsafe {
                                 device_ref.cmd_write_timestamp(
                                     buf,
@@ -542,6 +555,8 @@ impl VkContext {
                                 );
                             }
                         }
+                        // SAFETY: `cmd` is in the recording state, which is what
+                        // `end_command_buffer` requires.
                         if let Err(e) = unsafe { device_ref.end_command_buffer(buf) } {
                             set_err(format!("end pass cmd buf ({}): {e}", pass_id.name()));
                             return;
@@ -562,6 +577,8 @@ impl VkContext {
         if let Some(idx) = composite_idx {
             if let Some(pool) = self.timestamp_query_pool {
                 let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     self.device.cmd_write_timestamp(
                         params.cmd,
@@ -586,6 +603,8 @@ impl VkContext {
             )?;
             if let Some(pool) = self.timestamp_query_pool {
                 let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     self.device.cmd_write_timestamp(
                         params.cmd,

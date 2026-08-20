@@ -231,6 +231,8 @@ fn create_ssr_resolve_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -280,6 +282,8 @@ fn create_ssr_resolve_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create ssr resolve PSO: {e}"))
 }
@@ -366,6 +370,8 @@ impl SsrResources {
                     D3D12_RESOURCE_STATE_GENERIC_READ,
                 )?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
+                // live local that receives the mapping.
                 unsafe { buf.Map(0, None, Some(&mut ptr)) }
                     .map_err(|e| format!("map ssr params ubo: {e}"))?;
                 params_ubo_ptrs.push(ptr as *mut u8);
@@ -534,6 +540,7 @@ impl DxContext {
     // fallback. With no `EnvironmentMap` declared, the slot holds a 1×1 grey
     // fallback cube and `prefilter_mip_count == 0` tells the resolve to skip it.
     pub(in crate::directx) fn prefilter_cube_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -625,6 +632,9 @@ impl FullscreenPass for SsrResolvePass<'_> {
             self.cam_pos,
             self.ctx.env_map.prefilter_mip_count as f32,
         );
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const SsrParams as *const u8,
@@ -633,7 +643,10 @@ impl FullscreenPass for SsrResolvePass<'_> {
             );
         }
         let params_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.resolve.params_ubo_resources[self.frame_idx].GetGPUVirtualAddress() };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&self.resolve.resolve_pso);
             cmd.SetGraphicsRootSignature(&self.resolve.resolve_root_sig);

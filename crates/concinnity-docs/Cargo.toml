@@ -16,3 +16,6 @@ doctest = false
 [build-dependencies]
 syn = { version = "2", features = ["full", "parsing"] }
 concinnity-world = { path = "../concinnity-world" }
+
+[lints]
+workspace = true

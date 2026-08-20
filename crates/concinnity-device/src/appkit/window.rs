@@ -241,6 +241,8 @@ impl AppKitWindow {
         // pure hardware deltas and the OS cursor stays frozen where the user
         // last left it. release_cursor reads that frozen position back, so the
         // menu cursor reappears there instead of snapping on the first move.
+        // SAFETY: a plain CoreGraphics call taking an integer by value; the
+        // paired re-association lives in `release_cursor`.
         unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
         // Drop any deltas already accumulated before capture, and arm a
         // one-shot discard so the first motion event pumped after capture
@@ -326,6 +328,8 @@ impl AppKitWindow {
                     sf.size.height
                 };
                 let warp = NSPoint::new(cx, primary_h - cy);
+                // SAFETY: a plain CoreGraphics call taking an NSPoint by
+                // value; out-of-range coordinates are clamped, not unsound.
                 unsafe { CGWarpMouseCursorPosition(warp) };
             }
             self.keys.cursor_outside_window = false;
@@ -348,6 +352,8 @@ impl AppKitWindow {
         }
         self.cursor_captured = false;
         self.recapture_on_click = true;
+        // SAFETY: as in `capture_cursor` -- a plain CoreGraphics call taking
+        // an integer by value.
         unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
         NSCursor::unhide();
         // Seed the tracked UI cursor from the OS cursor's real position (frozen

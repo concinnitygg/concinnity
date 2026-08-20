@@ -123,6 +123,8 @@ impl SsrResources {
         device: &Device,
         rebuilt: RebuiltSsrPipelines,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.resolve_pso, None);
         }
@@ -166,6 +168,8 @@ fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("SSR resolve render pass: {e}"))
 }
@@ -298,6 +302,8 @@ fn create_resolve_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -305,6 +311,8 @@ fn create_resolve_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create ssr resolve pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -400,6 +408,8 @@ impl SsrResources {
         // set 0 = the resolve set (scene/gbuffer/roughness/prefilter); set 1 = the
         // global set (probe set/cubes) for the missed-ray probe fallback.
         let resolve_set_layouts = [resolve_set_layout, global_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let resolve_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -424,6 +434,8 @@ impl SsrResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(frames as u32 * 4)];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -485,6 +497,8 @@ impl SsrResources {
             },
         )?;
 
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         self.resolve_framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -573,12 +587,17 @@ impl SsrResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&cube_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
 
     fn destroy_targets(&mut self, device: &Device) {
         if self.resolve_framebuffer != vk::Framebuffer::null() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe {
                 device.destroy_framebuffer(self.resolve_framebuffer, None);
             }
@@ -620,6 +639,8 @@ impl SsrResources {
     // Destroy every SSR resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
@@ -715,6 +736,8 @@ impl FullscreenPass for SsrResolvePass<'_> {
             self.cam_pos,
             self.ctx.prefilter_mip_count as f32,
         );
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.ssr.resolve_pso);
             device.cmd_bind_descriptor_sets(

@@ -69,9 +69,14 @@ fn compile_hlsl_dxc_uncached(source: &str, entry: &str, target: &str) -> Result<
     let lib = unsafe { libloading::Library::new("dxcompiler.dll") }
         .map_err(|e| format!("load dxcompiler.dll: {e} (DXC not bundled; RT falls back to SSR)"))?;
     let create: libloading::Symbol<DxcCreateInstanceFn> =
+        // SAFETY: `lib` is the DLL loaded on the line above, the symbol name is NUL-terminated, and
+        // `DxcCreateInstanceFn` is the prototype DXC documents for this export.
         unsafe { lib.get(b"DxcCreateInstance\0") }
             .map_err(|e| format!("resolve DxcCreateInstance: {e}"))?;
 
+    // SAFETY: `create` is the resolved export, both GUIDs are static constants, and `ptr` is a live
+    // local. `from_raw` adopts the reference the call wrote there, which the error check above
+    // proved was produced.
     let compiler: windows::Win32::Graphics::Direct3D::Dxc::IDxcCompiler3 = unsafe {
         let mut ptr = std::ptr::null_mut();
         let hr = create(
@@ -105,15 +110,20 @@ fn compile_hlsl_dxc_uncached(source: &str, entry: &str, target: &str) -> Result<
         Encoding: DXC_CP_UTF8.0,
     };
 
+    // SAFETY: `compiler` is live, and `buffer` and `args` (with the wide strings they point into)
+    // outlive the call.
     let result: IDxcResult = unsafe { compiler.Compile(&buffer, Some(&args), None) }
         .map_err(|e| format!("DXC compile {target}: {e}"))?;
 
     // A non-zero status means the shader failed to compile; surface the DXC
     // diagnostic text (the error blob), mirroring the FXC path's error dump.
     let status: HRESULT =
+        // SAFETY: a property query on the live compile result; it only reads.
         unsafe { result.GetStatus() }.map_err(|e| format!("DXC GetStatus {target}: {e}"))?;
     if status.is_err() {
         let mut errors: Option<IDxcBlobUtf8> = None;
+        // SAFETY: `result` is live, the out-parameter is a live local, and DXC accepts a null
+        // pointer for the shader-name output it is not asked for.
         let _ = unsafe {
             result.GetOutput::<IDxcBlobUtf8>(
                 windows::Win32::Graphics::Direct3D::Dxc::DXC_OUT_ERRORS,
@@ -123,10 +133,13 @@ fn compile_hlsl_dxc_uncached(source: &str, entry: &str, target: &str) -> Result<
         };
         let msg = errors
             .map(|b| {
+                // SAFETY: a property query on a live `IDxcBlobUtf8`; it only reads.
                 let ptr = unsafe { b.GetStringPointer() };
                 if ptr.is_null() {
                     String::new()
                 } else {
+                    // SAFETY: `ptr` is non-null (checked above) and points at the blob's NUL-
+                    // terminated text, which stays live while `b` is borrowed.
                     unsafe { std::ffi::CStr::from_ptr(ptr.0 as *const i8) }
                         .to_string_lossy()
                         .into_owned()
@@ -138,12 +151,19 @@ fn compile_hlsl_dxc_uncached(source: &str, entry: &str, target: &str) -> Result<
 
     // The object output is the signed DXIL container ready for D3D12.
     let object: IDxcBlob =
+        // SAFETY: a property query on the live compile result; it only reads.
         unsafe { result.GetResult() }.map_err(|e| format!("DXC GetResult {target}: {e}"))?;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
+    // SAFETY: a property query on a live `IDxcBlob`; it only reads.
     let ptr = unsafe { object.GetBufferPointer() } as *const u8;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
+    // SAFETY: a property query on a live `IDxcBlob`; it only reads.
     let len = unsafe { object.GetBufferSize() };
     if ptr.is_null() || len == 0 {
         return Err(format!("DXC compile {target}: empty object blob"));
     }
+    // SAFETY: `ptr` is non-null and `len` non-zero (both checked above), and the blob keeps those
+    // bytes live while `object` is held, which outlasts the copy.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
     // `lib` (declared first) drops last, after `object` / `result` / `compiler`
     // release their COM refs into the still-mapped DLL. Keep it owned until here.

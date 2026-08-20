@@ -46,6 +46,7 @@ impl VkContext {
 
         // The GPU must be idle: the last-presented image is then stable and no
         // in-flight command buffer still references the resources we touch.
+        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         unsafe { self.device.device_wait_idle() }
             .map_err(|e| format!("screenshot: wait idle: {e}"))?;
 
@@ -101,6 +102,8 @@ impl VkContext {
                     vk::AccessFlags::TRANSFER_READ,
                     vk::AccessFlags::empty(),
                 );
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_pipeline_barrier(
                         cmd,

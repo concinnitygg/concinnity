@@ -208,6 +208,8 @@ impl ParticleResources {
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("particle framebuffer: {e}"))?;
             framebuffers.push(fb);
@@ -241,6 +243,9 @@ impl ParticleResources {
         extent: vk::Extent2D,
     ) -> Result<(), String> {
         for &fb in &self.framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(fb, None) };
         }
         self.framebuffers.clear();
@@ -252,6 +257,8 @@ impl ParticleResources {
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("particle framebuffer (rebuild): {e}"))?;
             self.framebuffers.push(fb);
@@ -286,6 +293,8 @@ impl ParticleResources {
         compute: vk::Pipeline,
         render: vk::Pipeline,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.compute_pipeline, None);
             device.destroy_pipeline(self.render_pipeline, None);
@@ -299,6 +308,8 @@ impl ParticleResources {
     // `VkContext::particle_emitter_state`; their destruction is the
     // caller's responsibility.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -433,6 +444,8 @@ fn create_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderP
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("particle render pass: {e}"))
 }
@@ -451,6 +464,8 @@ fn create_compute_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout,
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("particle compute set layout: {e}"))
 }
@@ -465,6 +480,8 @@ fn create_render_set_layouts(
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::VERTEX)];
     let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let view_set_layout = unsafe { device.create_descriptor_set_layout(&view_info, None) }
         .map_err(|e| format!("particle view set layout: {e}"))?;
 
@@ -482,6 +499,8 @@ fn create_render_set_layouts(
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let emitter_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&emitter_bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let emitter_set_layout = unsafe { device.create_descriptor_set_layout(&emitter_info, None) }
         .map_err(|e| format!("particle emitter set layout: {e}"))?;
     Ok((view_set_layout, emitter_set_layout))
@@ -506,6 +525,8 @@ fn create_compute_pipeline_layout(
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_pipeline_layout(&info, None) }
         .map_err(|e| format!("particle compute pipeline layout: {e}"))
 }
@@ -523,6 +544,8 @@ fn create_render_pipeline_layout(
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_pipeline_layout(&info, None) }
         .map_err(|e| format!("particle render pipeline layout: {e}"))
 }
@@ -552,6 +575,8 @@ fn create_descriptor_pool(device: &Device, frames: usize) -> Result<vk::Descript
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames + 2 * max_emitters)
         .pool_sizes(&sizes);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_pool(&info, None) }
         .map_err(|e| format!("particle descriptor pool: {e}"))
 }
@@ -564,6 +589,8 @@ fn alloc_descriptor_sets(
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
         .map_err(|e| format!("particle descriptor sets: {e}"))
 }
@@ -578,6 +605,8 @@ fn write_view_set(device: &Device, set: vk::DescriptorSet, view_ubo: vk::Buffer)
         .dst_binding(0)
         .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -608,6 +637,8 @@ fn write_compute_set(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&counter_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -626,6 +657,8 @@ fn write_render_pool_binding(
         .dst_binding(0)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -639,6 +672,8 @@ fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_BLACK)
         .max_lod(vk::LOD_CLAMP_NONE);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("particle sampler: {e}"))
 }
 
@@ -656,10 +691,14 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create particle compute pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
@@ -731,6 +770,8 @@ fn create_render_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -738,6 +779,8 @@ fn create_render_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create particle render pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert, None);
         device.destroy_shader_module(frag, None);
@@ -758,6 +801,8 @@ fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> 
         ..
     } = gpu;
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_fill_buffer(cmd, target, 0, bytes, 0) };
     })
 }
@@ -863,6 +908,10 @@ impl VkContext {
             cam_up,
             _pad1: 0.0,
         };
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `ParticleView`, so `mapped_ptr()` is a live mapping of at least
+        // `size_of::<ParticleView>()` bytes; the source is a separate live borrow, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ParticleView as *const u8,
@@ -943,6 +992,8 @@ impl VkContext {
             // (4-byte aligned, ≤ 65536 bytes), perfect for a 4-byte
             // counter reset.
             let bytes = spawn_budget.to_ne_bytes();
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_update_buffer(cmd, gpu.counter_buffer.buffer(), 0, &bytes);
             }
@@ -950,6 +1001,8 @@ impl VkContext {
         // Barrier: TRANSFER_WRITE → SHADER_READ on every emitter's
         // counter so the upcoming compute dispatch sees the fresh value.
         // Use a single global memory barrier (cheaper than per-buffer).
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             let mem_barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -968,6 +1021,8 @@ impl VkContext {
         // Pass 2: compute dispatches. One per live emitter; resources
         // are disjoint between emitters so no inter-dispatch barrier is
         // needed.
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(
                 cmd,
@@ -985,6 +1040,8 @@ impl VkContext {
             let Some(rec) = self.particles[i].as_ref() else {
                 continue;
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -1017,6 +1074,8 @@ impl VkContext {
         if !any_visible {
             return;
         }
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             let mem_barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1059,6 +1118,8 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport));
@@ -1094,6 +1155,8 @@ impl VkContext {
             // Vertex stage reads only gradient + size fields; sending the
             // full struct keeps the push-constant range the same shape
             // across compute + render.
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -1117,6 +1180,8 @@ impl VkContext {
             }
             self.inc_draw_calls(1);
         }
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_end_render_pass(cmd);
         }
@@ -1340,6 +1405,8 @@ fn write_render_albedo_binding(
         .dst_binding(1)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .image_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 

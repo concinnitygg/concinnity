@@ -190,6 +190,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
 // handler); every worker spawned by `execute_graph` mints its own cmd buf.
 // All other fields are Sync (POD or thread-safe Apple Metal handles).
 unsafe impl<'a> Send for GraphFrameParams<'a> {}
+// SAFETY: as for `Send` above.
 unsafe impl<'a> Sync for GraphFrameParams<'a> {}
 
 impl MtlContext {
@@ -317,6 +318,8 @@ impl MtlContext {
                 let throttle = std::sync::Arc::clone(&pass_fault_count);
                 let handler = block2::RcBlock::new(
                     move |cbh: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                        // SAFETY: Metal hands the completion handler a live command buffer, and the
+                        // borrow does not escape the block.
                         let cbh = unsafe { cbh.as_ref() };
                         if cbh.status() == objc2_metal::MTLCommandBufferStatus::Error
                             && throttle.fetch_add(1, Ordering::Relaxed) < 8

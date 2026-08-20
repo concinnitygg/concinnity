@@ -148,6 +148,8 @@ fn create_skinned_pso_filled(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -203,6 +205,8 @@ fn create_skinned_pso_filled(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create skinned PSO: {e}"))
 }
@@ -220,6 +224,8 @@ fn create_skinned_shadow_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -260,6 +266,8 @@ fn create_skinned_shadow_pso(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create skinned shadow PSO: {e}"))
 }
@@ -267,6 +275,7 @@ fn create_skinned_shadow_pso(
 impl DxContext {
     // CPU descriptor handle for CBV/SRV/UAV heap `slot`.
     fn srv_slot_cpu(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let base = unsafe {
             self.descriptors
                 .srv_heap
@@ -569,6 +578,7 @@ impl DxContext {
     // The pair lives at `clone_srv_base_slot + clone_offset * 2`; the
     // 2-descriptor table the legacy main pass binds covers both slots.
     pub(super) fn clone_srv_gpu(&self, clone_offset: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let base = unsafe {
             self.descriptors
                 .srv_heap
@@ -742,12 +752,18 @@ impl DxContext {
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+        // that receives the mapping.
         unsafe { upload.Map(0, None, Some(&mut ptr)) }
             .map_err(|e| format!("mesh region map: {e}"))?;
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
             upload.Unmap(0, None);
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let to_dst = transition_barrier(dest, usage_state, D3D12_RESOURCE_STATE_COPY_DEST);
             cmd.ResourceBarrier(&[to_dst]);
@@ -1063,6 +1079,7 @@ impl DxContext {
     // GPU descriptor handle for the shared chunk (albedo, normal) SRV pair.
     // Valid only after `setup_chunk_streaming` has populated the two slots.
     pub(super) fn chunk_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let base = unsafe {
             self.descriptors
                 .srv_heap
@@ -1113,6 +1130,8 @@ impl DxContext {
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
                 &self.geometry.vertex_buffer,
@@ -1141,11 +1160,13 @@ impl DxContext {
         })?;
 
         self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
             SizeInBytes: new_v_len as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
             SizeInBytes: new_i_len as u32,
             // Static IB is u32 (matches the `Format` chosen in init/mod.rs).
@@ -1453,11 +1474,13 @@ impl DxContext {
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { skinned_vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vtx_bytes.len() as u32,
             StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { skinned_index_buffer.GetGPUVirtualAddress() },
             SizeInBytes: idx_bytes.len() as u32,
             Format: DXGI_FORMAT_R16_UINT,
@@ -1491,6 +1514,8 @@ impl DxContext {
                 )
                 .map_err(|e| format!("skinned joint buf: {e}"))?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
+                // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
                     buf.Map(0, None, Some(&mut ptr))
                         .map_err(|e| format!("map skinned joint buf: {e}"))?;
@@ -1568,6 +1593,7 @@ impl DxContext {
                 let buf =
                     create_uav_buffer(&self.device, deformed_bytes, D3D12_RESOURCE_STATE_COMMON)?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
+                    // SAFETY: a property query on a live resource; it only reads.
                     BufferLocation: unsafe { buf.GetGPUVirtualAddress() },
                     SizeInBytes: deformed_bytes as u32,
                     StrideInBytes: stride as u32,
@@ -1577,6 +1603,8 @@ impl DxContext {
             }
             // Move COMMON -> VERTEX_AND_CONSTANT_BUFFER so the per-frame skin
             // pass's VERTEX -> UAV -> VERTEX transition cycle is valid from frame 0.
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
                 let barriers: Vec<D3D12_RESOURCE_BARRIER> = deformed_buffers
                     .iter()
@@ -1834,6 +1862,8 @@ impl DxContext {
                 continue;
             };
             let n = mats.len().min(MAX_JOINTS);
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     mats.as_ptr() as *const u8,
@@ -1846,6 +1876,7 @@ impl DxContext {
 
     // GPU virtual address of skinned object `i`'s joint buffer for `frame_idx`.
     pub(super) fn skinned_joint_gva(&self, frame_idx: usize, i: usize) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.skinned.joint_buffers[frame_idx][i].GetGPUVirtualAddress() }
     }
 
@@ -1920,6 +1951,9 @@ impl DxContext {
                     )
                     .map_err(|e| format!("morph weight buf: {e}"))?;
                     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+                    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this
+                    // payload, and the source is a separate allocation, so the ranges cannot
+                    // overlap.
                     unsafe {
                         buf.Map(0, None, Some(&mut ptr))
                             .map_err(|e| format!("map morph weight buf: {e}"))?;
@@ -1962,6 +1996,8 @@ impl DxContext {
             let (Some(&dst), false) = (frame_ptrs.get(i), w.is_empty()) else {
                 continue;
             };
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     w.as_ptr() as *const u8,
@@ -1976,6 +2012,7 @@ impl DxContext {
     // `frame_idx`, or `None` when no weight buffers are allocated.
     pub(super) fn morph_weight_gva(&self, frame_idx: usize, i: usize) -> Option<u64> {
         let buf = self.skinned.morph_weight_buffers.get(frame_idx)?.get(i)?;
+        // SAFETY: a property query on a live resource; it only reads.
         Some(unsafe { buf.GetGPUVirtualAddress() })
     }
 }

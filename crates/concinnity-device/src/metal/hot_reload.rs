@@ -183,6 +183,8 @@ fn is_relevant(event: &Event) -> bool {
 // `Vertex` struct.
 fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     let vdesc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let set = |idx: usize, fmt: MTLVertexFormat, offset: usize| {
             let attr = vdesc.attributes().objectAtIndexedSubscript(idx);

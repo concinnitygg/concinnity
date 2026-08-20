@@ -87,6 +87,10 @@ impl MtlContext {
         // output buffer. Shared storage on Apple silicon means the CPU sees
         // the GPU's most recent write without an explicit sync; in the worst
         // case it sees a stale value, which the EMA smooths over.
+        // SAFETY: `output_buf` is shared storage of at least one f32 (the kernel's average
+        // log-luminance output), so `contents()` is a live CPU mapping of it. A torn read is
+        // impossible for a single aligned f32, and a stale value is handled by the `is_finite`
+        // check below.
         let avg_log_lum = unsafe {
             let ptr = output_buf.contents().as_ptr() as *const f32;
             ptr.read()
@@ -151,6 +155,9 @@ impl MtlContext {
 
         // Build kernel: 16x16 threadgroups, one thread per HDR pixel.
         enc.setComputePipelineState(&pipelines.build);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setTexture_atIndex(Some(hdr_tex), 0);
             enc.setBuffer_offset_atIndex(Some(histogram), 0, 0);
@@ -176,6 +183,9 @@ impl MtlContext {
         // histogram and clears it for the next frame. The output buffer at
         // buffer(1) receives the count-weighted average log-luminance.
         enc.setComputePipelineState(&pipelines.average);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setBuffer_offset_atIndex(Some(histogram), 0, 0);
             enc.setBuffer_offset_atIndex(Some(output), 0, 1);

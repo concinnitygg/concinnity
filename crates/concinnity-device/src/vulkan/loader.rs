@@ -26,11 +26,17 @@ const FALLBACK_PATHS: &[&str] = &[];
 // The error carries the dynamic linker's own message plus the paths tried, so a
 // missing SDK is diagnosable from the log alone.
 pub(super) fn load_entry() -> Result<ash::Entry, String> {
+    // SAFETY: loading the Vulkan loader shared library and resolving its entry points. The process
+    // must not already hold a conflicting loader; this runs once during init, before any Vulkan
+    // call.
     let err = match unsafe { ash::Entry::load() } {
         Ok(entry) => return Ok(entry),
         Err(e) => e,
     };
     for path in existing(FALLBACK_PATHS, |p| Path::new(p).exists()) {
+        // SAFETY: loading the Vulkan loader shared library and resolving its entry points. The
+        // process must not already hold a conflicting loader; this runs once during init, before
+        // any Vulkan call.
         match unsafe { ash::Entry::load_from(path) } {
             Ok(entry) => {
                 tracing::info!("Vulkan loader loaded from {path}");

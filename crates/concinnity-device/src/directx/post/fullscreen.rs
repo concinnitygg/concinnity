@@ -36,6 +36,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_rt]) };
         self.bind_fullscreen_rt(cmd, output, output_rtv);
     }
@@ -50,9 +52,12 @@ impl DxContext {
         output: &ID3D12Resource,
         output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
+        // SAFETY: a property query on a live COM object; it only reads.
         let desc = unsafe { output.GetDesc() };
         let w = desc.Width as u32;
         let h = desc.Height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&output_rtv), false, None);
             let vp = D3D12_VIEWPORT {
@@ -87,6 +92,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_psr]) };
     }
 }

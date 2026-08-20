@@ -25,11 +25,14 @@ use crate::gfx::display_mode::{DisplayMode, best_native_index};
 // on, the key the EnumDisplaySettings/ChangeDisplaySettings calls address a
 // monitor by. None if the monitor-info query fails.
 fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
+    // SAFETY: `hwnd` is the window's live handle, and the call only returns a monitor handle.
     let mon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     let mut info = MONITORINFOEXW::default();
     // GetMonitorInfoW fills the extended struct (device name included) when
     // cbSize says the buffer is the EXW size; the two structs share a prefix.
     info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: `mon` comes from the query above, and `info` is a live local whose `cbSize` was set
+    // to the extended size the call fills.
     unsafe { GetMonitorInfoW(mon, &mut info.monitorInfo) }
         .as_bool()
         .then_some(info.szDevice)
@@ -42,6 +45,8 @@ fn enum_mode(device: &[u16; 32], index: ENUM_DISPLAY_SETTINGS_MODE) -> Option<DE
         dmSize: std::mem::size_of::<DEVMODEW>() as u16,
         ..Default::default()
     };
+    // SAFETY: `device` is the OS-written, NUL-terminated device name held by the caller, and `dm`
+    // is a live local whose `dmSize` tells the call how much to fill.
     unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), index, &mut dm) }
         .as_bool()
         .then_some(dm)
@@ -167,6 +172,8 @@ impl FullscreenDisplayMode {
             self.original = enum_mode(&device, ENUM_CURRENT_SETTINGS);
         }
         let devmode = &modes[idx].1;
+        // SAFETY: `device` is the OS-written, NUL-terminated device name, and `devmode` borrows a
+        // mode this monitor enumerated; both outlive the call.
         let err = unsafe {
             ChangeDisplaySettingsExW(
                 PCWSTR(device.as_ptr()),
@@ -202,6 +209,8 @@ impl FullscreenDisplayMode {
         let Some(device) = self.device else {
             return false;
         };
+        // SAFETY: `device` is the OS-written, NUL-terminated device name, and `original` borrows
+        // the mode captured from this monitor before the first switch; both outlive the call.
         let err = unsafe {
             ChangeDisplaySettingsExW(
                 PCWSTR(device.as_ptr()),

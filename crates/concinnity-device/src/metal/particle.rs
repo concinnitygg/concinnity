@@ -137,6 +137,8 @@ impl MtlContext {
                     // Reset the atomic counter to this frame's budget.
                     // Shared storage means the kernel sees the write
                     // immediately.
+                    // SAFETY: `spawn_counter` is a shared-storage buffer holding exactly one u32,
+                    // so `contents()` is a live, aligned CPU mapping of it.
                     unsafe {
                         let dst = gpu.spawn_counter.contents().as_ptr() as *mut u32;
                         dst.write(spawn);
@@ -229,6 +231,9 @@ impl MtlContext {
                 };
                 let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
                 let params = rec.params(dt, spawn_budget, frame_index);
+                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+                // `size_of` as the length, and every bound resource outlives the encoder; the
+                // indices are the slots the shaders declare.
                 unsafe {
                     enc.setBuffer_offset_atIndex(Some(gpu.pool.as_ref()), 0, 0);
                     enc.setBuffer_offset_atIndex(Some(gpu.spawn_counter.as_ref()), 0, 1);
@@ -263,6 +268,8 @@ impl MtlContext {
             return Ok(0);
         }
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
@@ -280,6 +287,9 @@ impl MtlContext {
             "particles: draw",
         );
         enc.setRenderPipelineState(&pipelines.render);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(&view).cast(),
@@ -310,6 +320,9 @@ impl MtlContext {
             // (it reads `age` / `lifetime` straight from the pool).
             let params = rec.params(0.0, 0, frame_index);
             let slot = rec.texture_slot.min(last_tex);
+            // SAFETY: the pool buffer outlives the encoder, the params pointer is derived from a
+            // live borrow with its `size_of` as the length, and the four strip vertices are
+            // generated from `[[vertex_id]]` in the shader.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(gpu.pool.as_ref()), 0, 0);
                 enc.setVertexBytes_length_atIndex(
@@ -367,6 +380,8 @@ pub(super) fn build_particle_pipelines(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -413,6 +428,8 @@ pub(super) fn build_emitter_gpu_state(
         .newBufferWithLength_options(pool_bytes, MTLResourceOptions::StorageModeShared)
         .ok_or("failed to allocate particle pool buffer")?;
     // Zero-init: every slot starts dead (`lifetime = 0`).
+    // SAFETY: `pool` was just allocated with `pool_bytes` bytes of shared storage, so `contents()`
+    // is a live CPU mapping of exactly that many bytes.
     unsafe {
         let dst = pool.contents().as_ptr() as *mut u8;
         std::ptr::write_bytes(dst, 0, pool_bytes);
@@ -424,6 +441,8 @@ pub(super) fn build_emitter_gpu_state(
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or("failed to allocate particle spawn counter")?;
+    // SAFETY: `spawn_counter` was just allocated as one u32 of shared storage, so `contents()` is a
+    // live, aligned CPU mapping of it.
     unsafe {
         let dst = spawn_counter.contents().as_ptr() as *mut u32;
         dst.write(0);

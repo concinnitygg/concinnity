@@ -64,6 +64,9 @@ define_class!(
 impl WindowDelegate {
     fn new(mtm: objc2::MainThreadMarker, is_fullscreen: Arc<AtomicBool>) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(FullscreenIvars { is_fullscreen });
+        // SAFETY: `this` is a freshly allocated instance with its ivars set,
+        // and NSObject's `init` is the superclass designated initializer,
+        // which consumes the allocation and returns the same instance.
         unsafe { msg_send![super(this), init] }
     }
 }

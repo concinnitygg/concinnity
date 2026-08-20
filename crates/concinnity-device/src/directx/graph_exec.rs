@@ -110,6 +110,8 @@ unsafe impl Sync for DxAliasBarriers {}
 fn emit_alias_barriers(cmd: &ID3D12GraphicsCommandList, resources: &[ID3D12Resource]) {
     const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     for res in resources {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[aliasing_barrier(res)]);
             cmd.ResourceBarrier(&[transition_barrier(
@@ -160,6 +162,8 @@ fn emit_graph_barriers(
                 DxBarrier::Uav => uav_barrier(r),
             })
             .collect();
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&native);
         }
@@ -210,6 +214,8 @@ fn emit_graph_restores(
             .iter()
             .map(|r| transition_barrier(r, before, after))
             .collect();
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&native);
         }
@@ -470,6 +476,8 @@ impl DxContext {
                         // has already retired by the time we get here
                         // (the FRAMES-deep fence wait at the top of
                         // `draw_frame` gates the entire slot).
+                        // SAFETY: the fence for this frame slot was already waited on, so no
+                        // submission still references what is being reset.
                         if let Err(e) = unsafe { alloc.Reset() } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
@@ -480,6 +488,8 @@ impl DxContext {
                             }
                             return;
                         }
+                        // SAFETY: the fence for this frame slot was already waited on, so no
+                        // submission still references what is being reset.
                         if let Err(e) = unsafe { cmd.Reset(alloc, None) } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
@@ -500,6 +510,9 @@ impl DxContext {
                         // [`super::pass_timing`] for the slot layout.
                         if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
                             let (start_slot, _) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            // SAFETY: the command list is in the recording state, and every
+                            // resource, descriptor and slice these commands name is live for the
+                            // call.
                             unsafe {
                                 cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
                             }
@@ -511,11 +524,16 @@ impl DxContext {
 
                         if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
                             let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            // SAFETY: the command list is in the recording state, and every
+                            // resource, descriptor and slice these commands name is live for the
+                            // call.
                             unsafe {
                                 cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
                             }
                         }
 
+                        // SAFETY: the command list is live and in the recording state, which is
+                        // what `Close` requires.
                         if let Err(e) = unsafe { cmd.Close() } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
@@ -556,6 +574,8 @@ impl DxContext {
         if let Some(idx) = composite_idx {
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (start_slot, _) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     params
                         .cmd
@@ -590,6 +610,8 @@ impl DxContext {
             )?;
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     params
                         .cmd

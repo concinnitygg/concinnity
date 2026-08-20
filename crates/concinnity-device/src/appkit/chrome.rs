@@ -69,6 +69,9 @@ pub(crate) fn create_window(
         NSPoint::new(0.0, 0.0),
         NSSize::new(width as f64, height as f64),
     );
+    // SAFETY: `mtm` proves this is the main thread, which is where AppKit
+    // requires NSWindow to be created; the designated initializer consumes the
+    // fresh allocation exactly once.
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
             NSWindow::alloc(mtm),
@@ -85,6 +88,7 @@ pub(crate) fn create_window(
     // is YES for alloc/init-created windows, which causes AppKit to release
     // (and possibly deallocate) the window on close while Rust's Retained<NSWindow>
     // still holds a reference, leading to EXC_BAD_ACCESS in objc_release.
+    // SAFETY: main-thread AppKit property setter on a live NSWindow.
     unsafe { window.setReleasedWhenClosed(false) };
     // Receive mouse-moved events even when the cursor is outside the window
     // area (necessary when CGAssociateMouseAndMouseCursorPosition decouples

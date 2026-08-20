@@ -291,6 +291,9 @@ fn build_cube_buffers(alloc: &DeviceAllocator) -> Result<CubeBuffers, String> {
 
     let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
     let ib = alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             corners.as_ptr() as *const u8,
@@ -364,6 +367,8 @@ fn create_raymarch_render_pass_single(
         .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("raymarch render pass: {e}"))
 }
@@ -395,6 +400,8 @@ fn create_view_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, St
         tex(6),            // scene_color snapshot
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("raymarch view set layout: {e}"))
 }
@@ -407,6 +414,8 @@ fn create_volume_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, 
         .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
     let info =
         vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("raymarch volume set layout: {e}"))
 }
@@ -437,6 +446,8 @@ fn create_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f + v + shadow_sets)
         .pool_sizes(&sizes);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_pool(&info, None) }
         .map_err(|e| format!("raymarch descriptor pool: {e}"))
 }
@@ -461,6 +472,8 @@ fn create_shadow_view_set_layout(device: &Device) -> Result<vk::DescriptorSetLay
         ubo(2, vert_frag), // RaymarchShadow (light VPs)
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("raymarch shadow view set layout: {e}"))
 }
@@ -495,6 +508,8 @@ fn write_shadow_view_set(
         ubo(1).buffer_info(std::slice::from_ref(&light_info)),
         ubo(2).buffer_info(std::slice::from_ref(&shadow_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -506,6 +521,8 @@ fn alloc_sets(
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
         .map_err(|e| format!("raymarch descriptor sets: {e}"))
 }
@@ -600,6 +617,8 @@ fn write_view_set(
         tex(5).image_info(std::slice::from_ref(&prefilter_info)),
         tex(6).image_info(std::slice::from_ref(&snapshot_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -613,6 +632,8 @@ fn write_volume_set(device: &Device, set: vk::DescriptorSet, volume_ubo: vk::Buf
         .dst_binding(0)
         .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
         .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -700,6 +721,8 @@ fn create_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -707,6 +730,8 @@ fn create_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create raymarch pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert, None);
         device.destroy_shader_module(frag, None);
@@ -802,6 +827,8 @@ fn create_volumetric_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -809,6 +836,8 @@ fn create_volumetric_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create raymarch volumetric pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert, None);
         device.destroy_shader_module(frag, None);
@@ -890,6 +919,8 @@ fn create_shadow_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(shadow_render_pass);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -897,6 +928,8 @@ fn create_shadow_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create raymarch shadow pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert, None);
         device.destroy_shader_module(frag, None);
@@ -1070,6 +1103,8 @@ impl RaymarchResources {
         let set_layouts = [view_set_layout, volume_set_layout];
         let pipeline_layout = {
             let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             unsafe { device.create_pipeline_layout(&info, None) }
                 .map_err(|e| format!("raymarch pipeline layout: {e}"))?
         };
@@ -1132,6 +1167,8 @@ impl RaymarchResources {
             let info = vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&push));
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             shadow_pipeline_layout = unsafe { device.create_pipeline_layout(&info, None) }
                 .map_err(|e| format!("raymarch shadow pipeline layout: {e}"))?;
 
@@ -1215,6 +1252,10 @@ impl RaymarchResources {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
+            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
+            // hold a `RaymarchVolumeUniforms`, so `mapped_ptr()` is a live mapping of at least
+            // `size_of::<RaymarchVolumeUniforms>()` bytes; the source is a separate live borrow, so
+            // the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &uniforms as *const RaymarchVolumeUniforms as *const u8,
@@ -1300,6 +1341,8 @@ impl RaymarchResources {
                 .dst_binding(6)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
         Ok(())
@@ -1340,6 +1383,8 @@ impl RaymarchResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&pre_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -1347,6 +1392,8 @@ impl RaymarchResources {
     // Destroy every owned GPU resource. The `scene_sampler` is borrowed from
     // `VkContext` and is not destroyed here.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for vol in &self.volumes {
                 device.destroy_pipeline(vol.pipeline, None);
@@ -1426,6 +1473,9 @@ impl VkContext {
             time: elapsed,
             prefilter_mip_count: 0.0,
         };
+        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+        // `RaymarchView`, so the mapped pointer is a live mapping of at least that many bytes; the
+        // source is a separate live borrow, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view as *const RaymarchView as *const u8,
@@ -1458,6 +1508,8 @@ impl VkContext {
         let push = ShadowCascadePush {
             cascade_idx: cascade_idx as u32,
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
             device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
@@ -1535,6 +1587,9 @@ impl VkContext {
             .get(frame_idx)
             .map(|b| b.mapped_ptr())
             .ok_or("raymarch: view_ubos index OOB")?;
+        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+        // `RaymarchView`, so the mapped pointer is a live mapping of at least that many bytes; the
+        // source is a separate live borrow, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const RaymarchView as *const u8,
@@ -1583,6 +1638,8 @@ impl VkContext {
             vk::AccessFlags::SHADER_READ,
             vk::AccessFlags::TRANSFER_WRITE,
         );
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -1662,6 +1719,8 @@ impl VkContext {
         } else {
             &image_barriers[..]
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -1695,6 +1754,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));

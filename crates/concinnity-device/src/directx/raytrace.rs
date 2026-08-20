@@ -61,6 +61,8 @@ pub(in crate::directx) use crate::directx::uniforms::SkinParams;
 // expose. Mirrors `metal::raytrace::raytracing_supported`.
 pub(super) fn raytracing_supported(device: &ID3D12Device) -> bool {
     let mut opts5 = D3D12_FEATURE_DATA_D3D12_OPTIONS5::default();
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS5,
@@ -212,7 +214,11 @@ fn upload_slice<T: Copy>(
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { buf.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map {label}: {e}"))?;
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             data.as_ptr() as *const u8,
@@ -245,6 +251,8 @@ fn prebuild_info(
     inputs: &D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS,
 ) -> D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO {
     let mut info = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe { device.GetRaytracingAccelerationStructurePrebuildInfo(inputs, &mut info) };
     info
 }
@@ -393,6 +401,8 @@ fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPi
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. `root_sig` outlives the synchronous
         // pipeline-state creation (it is moved into `SkinPipeline` afterwards).
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(&root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -400,6 +410,8 @@ fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPi
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     let pso = unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create rt skin PSO: {e}"))?;
     Ok(SkinPipeline { root_sig, pso })
@@ -532,6 +544,8 @@ fn write_upload_ring<T: Copy>(
         .as_ref()
         .expect("the upload buffer was just allocated or already met the capacity");
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         buf.Map(0, None, Some(&mut ptr))
             .map_err(|e| format!("{label} map: {e}"))?;
@@ -647,12 +661,14 @@ pub(super) struct RtAccelData {
 impl RtAccelData {
     // GPU virtual address of the TLAS (bound as a root SRV for inline tracing).
     pub(super) fn tlas_gva(&self) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.tlas.GetGPUVirtualAddress() }
     }
 
     // GPU virtual address of the geometry table (bound as a `StructuredBuffer`
     // root SRV).
     pub(super) fn geom_table_gva(&self) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.geom_table.GetGPUVirtualAddress() }
     }
 
@@ -660,12 +676,14 @@ impl RtAccelData {
     // the trace's t8 root SRV). A valid 1-element dummy GVA when the scene has no
     // skinned geometry, so the binding is always live.
     pub(super) fn deformed_verts_gva(&self) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.deformed_verts.GetGPUVirtualAddress() }
     }
 
     // GPU virtual address of the u16 skinned index buffer (bound as the trace's
     // t9 root SRV). A valid 1-element dummy GVA when there is no skinned geometry.
     pub(super) fn skinned_index_gva(&self) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.skinned_indices.GetGPUVirtualAddress() }
     }
 
@@ -773,7 +791,9 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         return Ok(None);
     }
 
+    // SAFETY: a property query on a live resource; it only reads.
     let vbuf_gva = unsafe { vertex_buffer.GetGPUVirtualAddress() };
+    // SAFETY: a property query on a live resource; it only reads.
     let ibuf_gva = unsafe { index_buffer.GetGPUVirtualAddress() };
 
     // One geometry desc per BLAS: participating objects first, then clusters.
@@ -818,6 +838,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(object_indices.len());
     for (slot, &i) in object_indices.iter().enumerate() {
         let obj = &draw_objects[i];
+        // SAFETY: a property query on a live resource; it only reads.
         instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
             blas[slot].GetGPUVirtualAddress()
         }));
@@ -826,6 +847,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let mut cluster_instances: Vec<D3D12_RAYTRACING_INSTANCE_DESC> = Vec::new();
     let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
     for (ci, (_cluster_idx, c)) in cluster_list.iter().enumerate() {
+        // SAFETY: a property query on a live resource; it only reads.
         let blas_gva = unsafe { blas[draw_blas_count + ci].GetGPUVirtualAddress() };
         for model in &c.instances {
             let id = (instance_descs.len() + cluster_instances.len()) as u32;
@@ -844,11 +866,14 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
     let tlas = create_as_buffer(device, tlas_pre.ResultDataMaxSizeInBytes)?;
     let scratch = create_scratch(device, max_scratch)?;
+    // SAFETY: a property query on a live resource; it only reads.
     let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
 
     // Record every BLAS build (UAV-barrier-serialised over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
     // ready before the first trace.
+    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
+    // these commands name is live for the call.
     record_builds(alloc, queue, |cmd4| unsafe {
         for (slot, geo) in geo_descs.iter().enumerate() {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -957,9 +982,13 @@ where
 {
     let device = alloc.device();
     let alloc: ID3D12CommandAllocator =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .map_err(|e| format!("RT build allocator: {e}"))?;
     let cmd: ID3D12GraphicsCommandList =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None) }
             .map_err(|e| format!("RT build cmd list: {e}"))?;
     let cmd4: ID3D12GraphicsCommandList4 = cmd
@@ -968,21 +997,34 @@ where
 
     record(&cmd4);
 
+    // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
     unsafe { cmd.Close() }.map_err(|e| format!("RT build close: {e}"))?;
     let list: ID3D12CommandList = cmd.cast().map_err(|e| format!("RT build cast: {e}"))?;
+    // SAFETY: every command list in the submission is live and closed, and the slice outlives the
+    // call.
     unsafe { queue.ExecuteCommandLists(&[Some(list)]) };
 
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("RT build fence: {e}"))?;
     let event =
+        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("RT build event: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("RT build signal: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
             .map_err(|e| format!("RT build set event: {e}"))?;
+        // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
+    // SAFETY: `event` was created above, every wait on it has returned, and it is closed exactly
+    // once.
     unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
     Ok(())
 }
@@ -1259,6 +1301,7 @@ impl RtAccelData {
         let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(instance_descs.capacity());
         for (slot, &idx) in new_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
+            // SAFETY: a property query on a live resource; it only reads.
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 new_blas[slot].GetGPUVirtualAddress()
             }));
@@ -1273,6 +1316,7 @@ impl RtAccelData {
         // A single dedicated scratch covers every fresh BLAS build + the TLAS build;
         // retired below (the async builds keep reading it after this returns).
         let scratch = create_scratch(device, max_scratch.max(256))?;
+        // SAFETY: a property query on a live resource; it only reads.
         let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
 
         // Recycle the next static ring slot (last live a full cycle ago, so its
@@ -1312,6 +1356,8 @@ impl RtAccelData {
 
         // Record the fresh draw-BLAS builds (UAV-barrier-serialised over the shared
         // scratch), then the TLAS build. Infallible from here on.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             for (geo, dest) in &fresh_builds {
                 let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -1380,6 +1426,7 @@ impl RtAccelData {
         let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(instance_descs.capacity());
         for (slot, &idx) in self.object_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
+            // SAFETY: a property query on a live resource; it only reads.
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 self.blas[slot].GetGPUVirtualAddress()
             }));
@@ -1429,13 +1476,18 @@ impl RtAccelData {
             .cast()
             .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (rebuild): {e}"))?;
         let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            // SAFETY: a property query on a live resource; it only reads.
             DestAccelerationStructureData: unsafe { tlas.GetGPUVirtualAddress() },
+            // SAFETY: a property query on a live resource; it only reads.
             Inputs: tlas_inputs(instance_descs.len() as u32, unsafe {
                 instance_buffer.GetGPUVirtualAddress()
             }),
             SourceAccelerationStructureData: 0,
+            // SAFETY: a property query on a live resource; it only reads.
             ScratchAccelerationStructureData: unsafe { self.scratch.GetGPUVirtualAddress() },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd4.BuildRaytracingAccelerationStructure(&desc, None);
             // Order the build before this frame's trace reads the TLAS / table.
@@ -1537,6 +1589,7 @@ impl RtAccelData {
             .deformed
             .clone()
             .expect("deformed vertex buffer was sized above");
+        // SAFETY: a property query on a live resource; it only reads.
         let deformed_gva = unsafe { deformed_verts.GetGPUVirtualAddress() };
 
         // A freshly (re)allocated buffer rests in COMMON; a reused one rests in
@@ -1547,6 +1600,8 @@ impl RtAccelData {
         } else {
             read_state
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 &deformed_verts,
@@ -1561,6 +1616,8 @@ impl RtAccelData {
                 .skin
                 .as_ref()
                 .ok_or("rebuild_skinned called without a skin pipeline")?;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetComputeRootSignature(&skin.root_sig);
                 cmd.SetPipelineState(&skin.pso);
@@ -1581,6 +1638,8 @@ impl RtAccelData {
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: 0,
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetComputeRoot32BitConstants(
                     0,
@@ -1602,6 +1661,8 @@ impl RtAccelData {
         // (PIXEL_SHADER_RESOURCE: the trace samples it as the t8 root SRV in a
         // pixel shader) accept. The combined read state satisfies both and is the
         // resting state of the deformed buffer thereafter.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[uav_barrier()]);
             cmd.ResourceBarrier(&[transition_barrier(
@@ -1650,6 +1711,7 @@ impl RtAccelData {
         let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(instance_descs.capacity());
         for (slot, &idx) in self.object_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
+            // SAFETY: a property query on a live resource; it only reads.
             instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
                 self.blas[slot].GetGPUVirtualAddress()
             }));
@@ -1659,6 +1721,7 @@ impl RtAccelData {
         geom_entries.extend_from_slice(&self.cluster_geom);
         for (si, (_obj_idx, obj)) in skinned_objects.iter().enumerate() {
             let id = instance_descs.len() as u32;
+            // SAFETY: a property query on a live resource; it only reads.
             let blas_gva = unsafe { ring.blas[si].0.GetGPUVirtualAddress() };
             instance_descs.push(instance_desc(obj.model, id, blas_gva));
             // Albedo / normal resolve through the shared flat pool by the skinned
@@ -1709,12 +1772,15 @@ impl RtAccelData {
             .scratch
             .clone()
             .expect("RT scratch buffer was sized above");
+        // SAFETY: a property query on a live resource; it only reads.
         let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
 
         // Record the skinned BLAS builds (UAV-barrier-serialised over the shared
         // scratch), then the TLAS build, on `cmd`. Each build is a full rebuild
         // (`SourceAccelerationStructureData = 0`) into the ring buffer, overwriting
         // the prior frame's AS in place.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             for (si, geo) in skinned_geo.iter().enumerate() {
                 let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -1786,9 +1852,13 @@ impl super::context::DxContext {
         if self.skinned.draw_objects.is_empty() {
             return;
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let src_gva = unsafe { vb.GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let dst_gva = unsafe { deformed.GetGPUVirtualAddress() };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 deformed,
@@ -1819,9 +1889,12 @@ impl super::context::DxContext {
                 .morph_delta_buffers
                 .get(i)
                 .and_then(|b| b.as_ref())
+                // SAFETY: a property query on a live resource; it only reads.
                 .map(|b| unsafe { b.GetGPUVirtualAddress() })
                 .unwrap_or(src_gva);
             let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetComputeRoot32BitConstants(
                     0,
@@ -1840,6 +1913,8 @@ impl super::context::DxContext {
         // Orders the skin writes before the main pass's vertex fetch and returns
         // the buffer to its resting VERTEX_AND_CONSTANT_BUFFER state (read by both
         // Main and Main2's skinned ExecuteIndirect this frame).
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
                 deformed,
@@ -1886,7 +1961,9 @@ impl super::context::DxContext {
             self.skinned.index_buffer.as_ref(),
         ) {
             (Some(vb), Some(ib)) if !self.skinned.draw_objects.is_empty() => {
+                // SAFETY: a property query on a live resource; it only reads.
                 let vertex_gva = unsafe { vb.GetGPUVirtualAddress() };
+                // SAFETY: a property query on a live resource; it only reads.
                 let index_gva = unsafe { ib.GetGPUVirtualAddress() };
                 let joint_gvas: Vec<u64> = (0..self.skinned.draw_objects.len())
                     .map(|i| self.skinned_joint_gva(frame_idx, i))

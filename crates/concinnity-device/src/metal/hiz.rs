@@ -123,6 +123,7 @@ fn create_hiz_texture_and_views(
     mip_count: u32,
 ) -> Result<HizTextureAndViews, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(MTLPixelFormat::R32Float);
@@ -245,6 +246,9 @@ impl MtlContext {
             sample_count: HDR_SAMPLE_COUNT,
         };
         enc.setComputePipelineState(&hiz.init_pipeline);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setBytes_length_atIndex(
                 std::ptr::NonNull::from(&init_params).cast(),
@@ -271,6 +275,9 @@ impl MtlContext {
                 sample_count: 0,
             };
             enc.setComputePipelineState(&hiz.downsample_pipeline);
+            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+            // `size_of` as the length, and every bound resource outlives the encoder; the indices
+            // are the slots the shaders declare.
             unsafe {
                 enc.setBytes_length_atIndex(
                     std::ptr::NonNull::from(&params).cast(),

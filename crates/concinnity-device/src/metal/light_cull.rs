@@ -56,6 +56,9 @@ impl MtlContext {
         );
         enc.setComputePipelineState(pipeline);
 
+        // SAFETY: the pointer is derived from the live `cluster_params` with its `size_of` as the
+        // length, both buffers outlive the encoder, and the dispatch covers exactly the cluster
+        // count those params describe.
         unsafe {
             enc.setBytes_length_atIndex(
                 std::ptr::NonNull::from(cluster_params).cast(),

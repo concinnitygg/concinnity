@@ -137,6 +137,9 @@ impl DxContext {
         // the Main pass samples each cascade consistently); upload the carried
         // set to this frame's shadow UBO (persistent mapping). It is the empty
         // (identity VP / infinite split) set when shadows are disabled.
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.shadow.uniforms as *const ShadowUniforms as *const u8,
@@ -145,11 +148,15 @@ impl DxContext {
             );
         }
         let shadow_ubo_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.uniforms.shadow_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Reflection-probe set (parallax boxes + live count) into this frame's ring
         // CBV; the bindless main pass binds it at root param [11]. A ring (one CBV per
         // frame) so this write never races a prior frame's in-flight GPU read.
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
@@ -399,6 +406,9 @@ impl DxContext {
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
         };
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ViewUniforms as *const u8,
@@ -424,6 +434,7 @@ impl DxContext {
             visible.extend_from_slice(&self.always_draw);
         }
 
+        // SAFETY: a property query on a live resource; it only reads.
         let (view_gva, light_gva, local_lights_gva) = unsafe {
             (
                 self.uniforms.view_ubo_resources[frame_idx].GetGPUVirtualAddress(),
@@ -552,7 +563,11 @@ pub(super) fn upload_light_uniforms(
 ) -> Result<(), String> {
     let size = std::mem::size_of::<LightUniforms>();
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { light_ubo.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map light ubo: {e}"))?;
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             lu as *const LightUniforms as *const u8,
@@ -613,8 +628,12 @@ pub(super) fn upload_static_records<T: Copy>(
 ) -> Result<(), String> {
     let bytes = std::mem::size_of_val(records);
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { buffer.Map(0, None, Some(&mut ptr)) }
         .map_err(|e| format!("map {label} buffer: {e}"))?;
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr as *mut u8, bytes);
         buffer.Unmap(0, None);

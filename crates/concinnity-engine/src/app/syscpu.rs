@@ -68,6 +68,8 @@ mod imp {
     // getrusage(RUSAGE_SELF) sums user + kernel time over every thread in the
     // process on both macOS and Linux, so the two share one implementation.
     pub(super) fn process_cpu_time() -> Option<Duration> {
+        // SAFETY: `rusage` is a plain C struct of integer fields, so all-zero
+        // is a valid inhabitant.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         // SAFETY: `usage` is a correctly sized rusage output buffer and
         // RUSAGE_SELF is a valid `who` value.

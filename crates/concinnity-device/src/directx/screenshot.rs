@@ -73,6 +73,8 @@ impl DxContext {
         let mut row_count: u32 = 0;
         let mut row_size: u64 = 0;
         let mut total_size: u64 = 0;
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         unsafe {
             self.device.GetCopyableFootprints(
                 &tex_desc,
@@ -105,6 +107,8 @@ impl DxContext {
         // outlive the synchronous `one_shot_submit` below, so the raw pointers
         // stay valid.
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&readback) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -112,12 +116,16 @@ impl DxContext {
             },
         };
         let src_loc = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&back_buffer) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
             },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
             let to_src = transition_barrier(
                 &back_buffer,
@@ -139,18 +147,24 @@ impl DxContext {
         let row_pitch = layout.Footprint.RowPitch as usize;
         let tight_row = row_size as usize;
         let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+        // that receives the mapping.
         unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
             .map_err(|e| format!("screenshot: map readback: {e}"))?;
-        // SAFETY: the buffer is `total_size` bytes long and the copy completed
-        // (one_shot_submit waits its fence). Read each row's tight span out of
-        // the padded footprint into a contiguous source image.
+        // The copy completed (one_shot_submit waits its fence). Read each row's
+        // tight span out of the padded footprint into a contiguous source image.
         let mut packed = vec![0u8; tight_row * height as usize];
         for row in 0..height as usize {
+            // SAFETY: the readback buffer holds `row_pitch * height` bytes (the padded footprint
+            // the copy was sized from), so `row * row_pitch` addresses the start of a row inside
+            // it.
             let src = unsafe { (map_ptr as *const u8).add(row * row_pitch) };
             // SAFETY: `tight_row` bytes are valid within each padded row.
             let src_slice = unsafe { std::slice::from_raw_parts(src, tight_row) };
             packed[row * tight_row..(row + 1) * tight_row].copy_from_slice(src_slice);
         }
+        // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past
+        // this call.
         unsafe { readback.Unmap(0, None) };
 
         let rgba =

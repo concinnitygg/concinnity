@@ -46,6 +46,8 @@ pub(in crate::vulkan) fn create_descriptor_set_layout(
         })
         .collect();
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&vk_bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("descriptor set layout: {e}"))
 }
@@ -61,6 +63,8 @@ pub(in crate::vulkan) fn alloc_descriptor_sets(
     let alloc = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&alloc) }
         .map_err(|e| format!("allocate descriptor sets: {e}"))
 }
@@ -126,12 +130,17 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), size as usize);
     }
     let buf = alloc.create_buffer(size, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
     texture::one_shot_submit(device, command_pool, queue, |cmd| {
         let copy = vk::BufferCopy::default().size(size);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_copy_buffer(
                 cmd,

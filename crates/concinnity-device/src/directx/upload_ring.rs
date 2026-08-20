@@ -106,7 +106,10 @@ impl UploadRing {
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let mut base = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+        // that receives the mapping.
         unsafe { buffer.Map(0, None, Some(&mut base)) }.map_err(|e| format!("upload map: {e}"))?;
+        // SAFETY: a property query on a live resource; it only reads.
         let gpu_va = unsafe { buffer.GetGPUVirtualAddress() };
         // Replacing `buffer` drops the old resource (and unmaps it); the frame
         // fence already proved the GPU finished reading it.

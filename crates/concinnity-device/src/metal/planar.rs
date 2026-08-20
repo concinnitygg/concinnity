@@ -83,6 +83,7 @@ pub(in crate::metal) fn create_planar_targets(
 ) -> Result<PlanarReflectionTargets, String> {
     let color = {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2DMultisample);
             desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -98,6 +99,7 @@ pub(in crate::metal) fn create_planar_targets(
     };
     let depth = {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2DMultisample);
             desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -113,6 +115,7 @@ pub(in crate::metal) fn create_planar_targets(
     };
     let resolve = {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(MTLPixelFormat::RGBA16Float);

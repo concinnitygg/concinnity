@@ -53,7 +53,11 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             D3D12_RESOURCE_STATE_PRESENT,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&args.back_buffer_rtv), false, None);
             let vp = D3D12_VIEWPORT {
@@ -76,6 +80,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
     }
 
     fn composite_draw(&self, cmd: &Self::Rec, args: &Self::Args) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&self.composite_pso);
             cmd.SetGraphicsRootSignature(&self.composite_root_sig);
@@ -141,6 +147,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             win_height: args.height as f32,
             _pad: [0.0; 2],
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(text_pso);
             cmd.SetGraphicsRootSignature(&self.text_root_sig);
@@ -197,6 +205,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
                 bottom: args.height as i32,
             },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
         let atlas_idx = call
@@ -223,6 +233,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             Format: DXGI_FORMAT_R16_UINT,
         };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetGraphicsRootDescriptorTable(1, self.descriptors.text_atlas_srv_gpus[atlas_idx]);
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
@@ -239,6 +251,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PRESENT,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_present]) };
     }
 }

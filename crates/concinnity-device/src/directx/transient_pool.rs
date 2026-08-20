@@ -108,6 +108,8 @@ impl TransientResourcePool {
                 .iter()
                 .map(|m| {
                     let desc = rt_desc(m);
+                    // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+                    // parameters it fills are live locals that outlive the call.
                     let info = unsafe { device.GetResourceAllocationInfo(0, &[desc]) };
                     slot_size = slot_size.max(info.SizeInBytes);
                     slot_align = slot_align.max(info.Alignment);
@@ -129,6 +131,8 @@ impl TransientResourcePool {
             };
             allocated_bytes += slot_size;
             let mut heap: Option<ID3D12Heap> = None;
+            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
+            // the new COM object lands in a binding that owns it.
             unsafe { device.CreateHeap(&heap_desc, &mut heap) }
                 .map_err(|e| format!("transient pool heap: {e}"))?;
             let heap = heap.ok_or("transient pool heap returned None")?;
@@ -136,6 +140,8 @@ impl TransientResourcePool {
             for (m, desc) in &descs {
                 let clear = clear_value(m);
                 let mut res: Option<ID3D12Resource> = None;
+                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
+                // and the new COM object lands in a binding that owns it.
                 unsafe {
                     device.CreatePlacedResource(
                         &heap,
@@ -173,6 +179,8 @@ impl TransientResourcePool {
         if !to_init.is_empty() {
             one_shot_submit(device, queue, |cmd| {
                 for (res, resting) in &to_init {
+                    // SAFETY: the command list is in the recording state, and every resource,
+                    // descriptor and slice these commands name is live for the call.
                     unsafe {
                         cmd.ResourceBarrier(&[transition_barrier(
                             res,
@@ -567,9 +575,9 @@ mod tests {
         assert_eq!(resting_state(&depth), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         // A depth target's optimized clear must be the depth arm: handing
         // D3D12 a colour for a D32 resource is a creation failure.
-        // SAFETY: the union arm is the one `clear_value` just wrote for a
-        // `ClearValue::Depth`, which the assertion above pins.
         assert_eq!(
+            // SAFETY: the union arm is the one `clear_value` just wrote for a `ClearValue::Depth`,
+            // which the assertion above pins.
             unsafe { clear_value(&depth).Anonymous.DepthStencil.Depth },
             1.0
         );

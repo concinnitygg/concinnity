@@ -161,10 +161,14 @@ pub(super) fn create_cull_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create cull pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
@@ -294,8 +298,12 @@ pub(in crate::vulkan) fn spv_module(
     // ash requires 4-byte aligned SPIR-V; copy into aligned Vec<u32>.
     let len = spv.len() / 4;
     let mut code = vec![0u32; len];
+    // SAFETY: `code` was just allocated with `spv.len() / 4` u32s, so it holds at least `spv.len()`
+    // bytes rounded down to a multiple of four; source and destination are distinct allocations.
     unsafe { std::ptr::copy_nonoverlapping(spv.as_ptr(), code.as_mut_ptr() as *mut u8, spv.len()) };
     let info = vk::ShaderModuleCreateInfo::default().code(&code);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_shader_module(&info, None) }.map_err(|e| format!("shader module: {e}"))
 }
 
@@ -745,6 +753,8 @@ fn create_main_pipeline_filled(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -753,6 +763,8 @@ fn create_main_pipeline_filled(
     }
     .map_err(|(_, e)| format!("create main pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -850,6 +862,8 @@ pub(super) fn create_shadow_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -858,6 +872,8 @@ pub(super) fn create_shadow_pipeline(
     }
     .map_err(|(_, e)| format!("create shadow pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(vert_mod, None) };
     Ok(pipeline)
 }
@@ -973,6 +989,8 @@ fn create_skinned_pipeline_filled(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -981,6 +999,8 @@ fn create_skinned_pipeline_filled(
     }
     .map_err(|(_, e)| format!("create skinned pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -1061,6 +1081,8 @@ pub(super) fn create_skinned_shadow_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -1069,6 +1091,8 @@ pub(super) fn create_skinned_shadow_pipeline(
     }
     .map_err(|(_, e)| format!("create skinned shadow pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(vert_mod, None) };
     Ok(pipeline)
 }
@@ -1160,6 +1184,8 @@ pub(super) fn create_text_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -1168,6 +1194,8 @@ pub(super) fn create_text_pipeline(
     }
     .map_err(|(_, e)| format!("create text pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -1255,6 +1283,8 @@ pub(super) fn create_composite_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -1263,6 +1293,8 @@ pub(super) fn create_composite_pipeline(
     }
     .map_err(|(_, e)| format!("create composite pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);

@@ -36,6 +36,7 @@ pub(super) fn upload_texture(
     let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
 
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
@@ -49,6 +50,9 @@ pub(super) fn upload_texture(
     let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in chain.iter().enumerate() {
+        // SAFETY: `region` covers exactly mip `mip` of `texture`, and `level.pixels` is `width *
+        // height * 4` bytes -- the size `generate_mip_chain` produced for that level -- so the copy
+        // stays in bounds of both.
         unsafe {
             use objc2_metal::MTLRegion;
             let region = MTLRegion {
@@ -104,6 +108,7 @@ pub(super) fn upload_texture_image(
         .ok_or("compressed texture image has no mip level")?;
 
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(pixel_format);
@@ -130,6 +135,8 @@ pub(super) fn upload_texture_image(
                 needed
             ));
         }
+        // SAFETY: `region` covers exactly mip `mip` of `texture`, and the length check above proved
+        // `level.data` holds at least `bytes_per_row * blocks_y` bytes.
         unsafe {
             use objc2_metal::MTLRegion;
             let region = MTLRegion {
@@ -168,6 +175,7 @@ pub(super) fn create_shadow_map_fallback(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2DArray);
         desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -181,6 +189,8 @@ pub(super) fn create_shadow_map_fallback(
         .newTextureWithDescriptor(&desc)
         .ok_or("failed to create shadow map fallback texture")?;
     let depth: f32 = 1.0;
+    // SAFETY: `region` is the texture's single 1x1 texel and `depth` is one f32, matching the
+    // Depth32Float format's 4-byte row stride.
     unsafe {
         use objc2_metal::MTLRegion;
         let region = MTLRegion {
@@ -225,6 +235,7 @@ pub(super) fn upload_cubemap(
     }
 
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::TypeCube);
         desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
@@ -238,6 +249,8 @@ pub(super) fn upload_cubemap(
 
     let bytes_per_row = (face_size as usize) * 4 * 4;
     let bytes_per_image = bytes_per_row * (face_size as usize);
+    // SAFETY: `region` covers one cube face and the caller-side length check proved `data` holds
+    // all six faces at `bytes_per_image` each.
     unsafe {
         use objc2_metal::MTLRegion;
         let region = MTLRegion {
@@ -283,6 +296,7 @@ pub(super) fn create_fallback_cubemap(
     value: [f32; 4],
 ) -> Result<PooledTexture, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::TypeCube);
         desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
@@ -294,6 +308,8 @@ pub(super) fn create_fallback_cubemap(
     let texture = alloc.alloc_texture(&desc)?;
     let bytes_per_row = 4 * 4;
     let bytes_per_image = bytes_per_row;
+    // SAFETY: `region` is one 1x1 face and `value` is four f32s, exactly the RGBA32Float texel
+    // size.
     unsafe {
         use objc2_metal::MTLRegion;
         let region = MTLRegion {
@@ -340,6 +356,7 @@ pub(super) fn upload_color_lut(
     }
 
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type3D);
         desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
@@ -351,6 +368,8 @@ pub(super) fn upload_color_lut(
     }
     let texture = alloc.alloc_texture(&desc)?;
 
+    // SAFETY: `region` covers the whole n^3 volume and the length check above proved `data` holds
+    // `n * n * n * 4` bytes.
     unsafe {
         use objc2_metal::MTLRegion;
         let region = MTLRegion {
@@ -429,6 +448,7 @@ fn upload_prefilter_cube(
 ) -> Result<PooledTexture, String> {
     let mip_count = mip_bytes.len() as u32;
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::TypeCube);
         desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
@@ -459,6 +479,8 @@ fn upload_prefilter_cube(
         }
         let bytes_per_row = (mip_face_size as usize) * 4 * 4;
         let bytes_per_image = bytes_per_row * (mip_face_size as usize);
+        // SAFETY: `region` covers one face of mip `mip`, and the length check above proved that
+        // face's slice holds `bytes_per_image` bytes.
         unsafe {
             use objc2_metal::MTLRegion;
             let region = MTLRegion {
@@ -496,6 +518,7 @@ pub(super) fn create_shadow_map_array(
     layers: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2DArray);
         desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -571,6 +594,7 @@ pub(super) fn create_hdr_targets(
 
     // MSAA HDR color: RGBA16Float, multi-sample 2D, render-target only.
     let color_desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         color_desc.setTextureType(MTLTextureType::Type2DMultisample);
         color_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -586,6 +610,7 @@ pub(super) fn create_hdr_targets(
 
     // Single-sample resolve target: same RGBA16Float; sampled by the post pass.
     let resolve_desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         resolve_desc.setTextureType(MTLTextureType::Type2D);
         resolve_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -621,6 +646,7 @@ pub(super) fn create_hdr_targets(
     // the decal pass (and any future post-pass that needs scene depth) can
     // sample it as a `depth2d_ms<float>` after the main pass stores it.
     let depth_desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         depth_desc.setTextureType(MTLTextureType::Type2DMultisample);
         depth_desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -642,6 +668,7 @@ pub(super) fn create_hdr_targets(
     // decal / fog sample it so they see raymarched surface depth alongside
     // rasterised depth.
     let depth_resolve_desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         depth_resolve_desc.setTextureType(MTLTextureType::Type2D);
         depth_resolve_desc.setPixelFormat(MTLPixelFormat::Depth32Float);
@@ -692,6 +719,7 @@ pub(super) fn create_lut_texture(
     };
 
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(format);
@@ -703,6 +731,8 @@ pub(super) fn create_lut_texture(
     let texture = alloc.alloc_texture(&desc)?;
 
     let bytes_per_row = (size as usize) * components * 4;
+    // SAFETY: `region` covers the whole texture and the length check above proved `texels` holds
+    // `size * size * components` f32s, matching `bytes_per_row * size`.
     unsafe {
         use objc2_metal::MTLRegion;
         let region = MTLRegion {

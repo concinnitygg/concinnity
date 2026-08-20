@@ -54,6 +54,8 @@ impl VkContext {
             |cmd| {
                 let vcopy = vk::BufferCopy::default().size(old_v);
                 let icopy = vk::BufferCopy::default().size(old_i);
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     self.device.cmd_copy_buffer(
                         cmd,
@@ -89,6 +91,8 @@ impl VkContext {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
             .pool_sizes(&pool_sizes);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let pool = unsafe { self.device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("chunk descriptor pool: {e}"))?;
         let set = alloc_descriptor_sets(&self.device, pool, &[self.descriptors.object_set_layout])?
@@ -121,6 +125,8 @@ impl VkContext {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&nm_info)),
         ];
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { self.device.update_descriptor_sets(&writes, &[]) };
         self.chunk_stream.descriptor_pool = Some(pool);
         self.chunk_stream.object_set = Some(set);

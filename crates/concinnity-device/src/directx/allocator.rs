@@ -456,6 +456,8 @@ impl DeviceAllocator {
         let reservation = self.reserve(key, info.SizeInBytes, info.Alignment)?;
 
         let mut placed: Option<ID3D12Resource> = None;
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let result = unsafe {
             self.device.CreatePlacedResource(
                 &reservation.heap,
@@ -495,6 +497,8 @@ impl DeviceAllocator {
     ) -> Result<(D3D12_RESOURCE_DESC, D3D12_RESOURCE_ALLOCATION_INFO), String> {
         let mut standard = *desc;
         standard.Alignment = 0;
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         let info = unsafe { self.device.GetResourceAllocationInfo(0, &[standard]) };
         if info.SizeInBytes == u64::MAX {
             return Err("allocator: resource has no valid allocation size".to_string());
@@ -505,6 +509,8 @@ impl DeviceAllocator {
         if small_alignment_eligible(desc) && info.SizeInBytes <= HEAP_GRANULARITY {
             let mut small = *desc;
             small.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64;
+            // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
+            // it fills are live locals that outlive the call.
             let small_info = unsafe { self.device.GetResourceAllocationInfo(0, &[small]) };
             if small_info.Alignment == D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64
                 && small_info.SizeInBytes != u64::MAX
@@ -562,6 +568,8 @@ impl DeviceAllocator {
     // queue. The list is parked until the GPU retires it.
     fn activate(&self, resource: &ID3D12Resource) -> Result<(), String> {
         let (allocator, cmd) =
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             super::texture::one_shot_submit_nowait(&self.device, &self.queue, |cmd| unsafe {
                 cmd.ResourceBarrier(&[super::texture::aliasing_barrier(resource)]);
             })?;
@@ -635,6 +643,8 @@ fn small_alignment_eligible(desc: &D3D12_RESOURCE_DESC) -> bool {
 // restrictive case.
 fn resource_heap_tier(device: &ID3D12Device) -> D3D12_RESOURCE_HEAP_TIER {
     let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS::default();
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
@@ -661,6 +671,8 @@ fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> Result<ID3D12Heap
         Flags: key.class.heap_flags(),
     };
     let mut heap: Option<ID3D12Heap> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateHeap(&desc, &mut heap) }
         .map_err(|e| format!("allocator: create a {size}-byte heap: {e}"))?;
     heap.ok_or_else(|| "allocator: CreateHeap returned None".to_string())
@@ -673,6 +685,8 @@ mod tests {
 
     fn device() -> Option<ID3D12Device> {
         let mut device: Option<ID3D12Device> = None;
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.ok()?;
         device
     }
@@ -683,6 +697,8 @@ mod tests {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
             ..Default::default()
         };
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
         Some(DeviceAllocator::new(&device, &queue, 3))
     }
@@ -903,12 +919,16 @@ mod tests {
         };
         let write = |buffer: &PooledBuffer, byte: u8| {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
             // SAFETY: the map covers the whole 256-byte buffer.
             unsafe { std::ptr::write_bytes(ptr as *mut u8, byte, 256) };
         };
         let read = |buffer: &PooledBuffer| {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
             // SAFETY: as above.
             unsafe { std::slice::from_raw_parts(ptr as *const u8, 256).to_vec() }

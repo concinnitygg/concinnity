@@ -63,4 +63,5 @@ impl<T> Copy for ParallelCtxRef<'_, T> {}
 // read-only `&T` access across the encode fan-out is sound. The wrapper only
 // ever hands out `&T` (via `as_ctx`), so Send + Sync follow from that claim.
 unsafe impl<T: ParallelEncodeCtx> Send for ParallelCtxRef<'_, T> {}
+// SAFETY: as for `Send` above -- the wrapper only ever hands out `&T`.
 unsafe impl<T: ParallelEncodeCtx> Sync for ParallelCtxRef<'_, T> {}

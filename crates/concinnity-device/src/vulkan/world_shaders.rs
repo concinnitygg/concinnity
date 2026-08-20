@@ -60,6 +60,7 @@ impl VkContext {
         let Some(pipeline) = self.cull.world_pipelines[slot].take() else {
             return;
         };
+        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.destroy_pipeline(pipeline, None);
@@ -96,6 +97,8 @@ impl VkContext {
             let Some(pipeline) = self.world_pipeline(bucket) else {
                 return;
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 self.device
                     .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
@@ -143,6 +146,8 @@ impl VkContext {
         draw_count: u32,
         bucket: usize,
     ) {
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.device.cmd_draw_indexed_indirect(
                 cmd,

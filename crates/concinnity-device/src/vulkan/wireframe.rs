@@ -41,6 +41,9 @@ impl VkWireframe {
             .into_iter()
             .flatten()
         {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline(p, None) };
         }
         *self = VkWireframe::default();
@@ -60,6 +63,7 @@ impl VkContext {
         self.wireframe.built = true;
         // `VK_POLYGON_MODE_LINE` is only legal with `fillModeNonSolid`; without
         // it the mode falls back to solid fill rather than failing the frame.
+        // SAFETY: a property query on a live handle; it only reads.
         let supported = unsafe {
             self.instance
                 .get_physical_device_features(self.physical_device)

@@ -53,6 +53,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(*cmd, &composite_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(*cmd, 0, std::slice::from_ref(&composite_vp));
@@ -62,6 +64,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
 
     fn composite_draw(&self, cmd: &Self::Rec, args: &Self::Args) {
         let device = &self.device;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(
                 *cmd,
@@ -114,6 +118,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         if self.text_atlas_textures.is_empty() {
             return false;
         }
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.device
                 .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::GRAPHICS, text_pipeline);
@@ -191,6 +197,10 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             )
             .map_err(|e| format!("text idx buf: {e}"))?;
 
+        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+        // `TextUniforms`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
+        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
+        // slice the commands name is live for the call.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 call.vertices.as_ptr() as *const u8,
@@ -234,6 +244,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     }
 
     fn end_composite(&self, cmd: &Self::Rec, _args: &Self::Args) {
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { self.device.cmd_end_render_pass(*cmd) };
     }
 }

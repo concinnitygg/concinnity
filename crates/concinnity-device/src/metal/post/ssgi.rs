@@ -108,6 +108,7 @@ pub(crate) fn create_ssgi_targets(
     let h = height.max(1) as usize;
     let usage = MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(MTLTextureType::Type2D);
         desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -159,6 +160,9 @@ impl MtlContext {
                 pipeline: gather_ps,
                 label: "SSGI gather",
             },
+            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+            // `size_of` as the length, and every bound resource outlives the encoder; the indices
+            // are the slots the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
@@ -183,6 +187,9 @@ impl MtlContext {
                 pipeline: composite_ps,
                 label: "SSGI composite",
             },
+            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+            // `size_of` as the length, and every bound resource outlives the encoder; the indices
+            // are the slots the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.gi.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);

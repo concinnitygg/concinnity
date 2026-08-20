@@ -10,3 +10,6 @@ publish = false
 name = "concinnity_slang"
 path = "src/lib.rs"
 doctest = false
+
+[lints]
+workspace = true

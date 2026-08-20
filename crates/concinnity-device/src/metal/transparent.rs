@@ -108,6 +108,8 @@ impl MtlContext {
             .blitCommandEncoder()
             .ok_or("failed to get transparent scene-copy blit encoder")?;
         blit.pushDebugGroup(&NSString::from_str("transparent_scene_copy"));
+        // SAFETY: both textures are HDR scene targets created with the same format and dimensions,
+        // which is what a whole-texture blit copy requires.
         unsafe {
             blit.copyFromTexture_toTexture(
                 scene_pre_taa.as_ref(),
@@ -118,6 +120,8 @@ impl MtlContext {
         blit.endEncoding();
 
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(scene_pre_taa.as_ref()));
@@ -143,6 +147,9 @@ impl MtlContext {
         // depth attachment (translucents are not hardware depth-tested;
         // depth-aware effects sample `depth_resolve` instead), so no
         // depth-stencil state is bound.
+        // SAFETY: each pointer is derived from a live borrow and paired with that type's `size_of`
+        // as the length, so the encoder copies exactly the bytes it was handed; the buffer indices
+        // are the slots the shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(view).cast(),
@@ -164,6 +171,9 @@ impl MtlContext {
         // count of 0 keeps the sky-only fallback. `probe_cube_or_sky` returns the
         // sky for unbaked slots, so binding all MAX_PROBES is always valid. The
         // per-draw bindings below never touch these slots, so the state persists.
+        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
+        // texture indices the shader declares; `probe_cube_or_sky` returns the sky for unbaked
+        // slots, so all MAX_PROBES slots are live.
         unsafe {
             enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 2);
             for i in 0..concinnity_render::uniforms::MAX_PROBES {
@@ -234,6 +244,9 @@ impl MtlContext {
             }),
             rt_params,
         ) {
+            // SAFETY: the params pointer is derived from a live borrow with its `size_of` as the
+            // length, and every geometry / acceleration-structure buffer bound here is owned by
+            // `self` or `accel` and outlives the encoder.
             unsafe {
                 enc.setFragmentBytes_length_atIndex(
                     std::ptr::NonNull::from(rt_params).cast(),
@@ -266,6 +279,9 @@ impl MtlContext {
         for &i in &order {
             let d = &draws[i];
             enc.setRenderPipelineState(&d.pipeline);
+            // SAFETY: every buffer, texture, and sampler in this draw record outlives the encoder;
+            // `params_ptr`/`d.params.len()` describe the record own parameter blob, and the index
+            // range is that record own slice of `d.index_buffer`.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(&d.vertex_buffer), 0, 1);
                 let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)

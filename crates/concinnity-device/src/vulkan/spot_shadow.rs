@@ -81,6 +81,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
     // `light_vps[0]`, so the shared shadow vertex shader renders a spot slice by
     // pushing cascade_idx = 0. Slots are padded to the device's minimum uniform
     // buffer offset alignment so each slice's descriptor can point at its own.
+    // SAFETY: a property query on a live handle; it only reads.
     let align = unsafe { instance.get_physical_device_properties(physical_device) }
         .limits
         .min_uniform_buffer_offset_alignment
@@ -112,6 +113,8 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
     let pool_sizes = [vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::UNIFORM_BUFFER)
         .descriptor_count(set_count)];
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let descriptor_pool = unsafe {
         device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -134,6 +137,8 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(std::slice::from_ref(&info));
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
 
@@ -154,6 +159,9 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
 // buffer.
 fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
     let size = std::mem::size_of_val(records);
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
     }
@@ -162,6 +170,9 @@ fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
 // As `upload_records`, but places record `i` at `i * stride` so each slot can
 // back its own uniform-buffer descriptor.
 fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
+    // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+    // `T`, so `mapped_ptr()` is a live mapping of at least `size_of::<T>()` bytes; the source is a
+    // separate live borrow, so the ranges cannot overlap.
     unsafe {
         let base = buffer.mapped_ptr();
         for (i, r) in records.iter().enumerate() {
@@ -229,6 +240,8 @@ impl VkContext {
                     extent,
                 })
                 .clear_values(&clear);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 self.device
                     .cmd_begin_render_pass(cmd, &begin, vk::SubpassContents::INLINE);
@@ -269,6 +282,8 @@ impl VkContext {
                 cam_pos,
             );
 
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe { self.device.cmd_end_render_pass(cmd) };
         }
     }

@@ -115,7 +115,13 @@ pub(in crate::directx) struct PlanarReflectionSet {
 // The mapped view-ring pointers are POD raw pointers; the upload buffers stay
 // alive through the `Vec<ID3D12Resource>` field and the pointers are written on
 // the render thread only. Mirrors `GlassResources`.
+// SAFETY: the raw pointers `PlanarReflectionSet` holds are the mappings of upload buffers the
+// struct also owns, so they stay valid for as long as it does. They are only values here: every
+// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
+// on the render thread.
 unsafe impl Send for PlanarReflectionSet {}
+// SAFETY: sharing `&PlanarReflectionSet` hands out the pointer values but no way to dereference
+// them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for PlanarReflectionSet {}
 
 // Render-target build config for the planar set: MSAA sample count, render
@@ -169,7 +175,9 @@ impl PlanarReflectionSet {
         } = targets;
         let rtv_heap = create_rtv_heap(device)?;
         let dsv_heap = create_dsv_heap(device)?;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let color_rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let depth_dsv = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
 
         let color = create_hdr_color_target(
@@ -201,8 +209,11 @@ impl PlanarReflectionSet {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("planar: map view cbv: {e}"))?;
+            // SAFETY: a property query on a live resource; it only reads.
             view_gvas.push(unsafe { cbv.GetGPUVirtualAddress() });
             view_ptrs.push(ptr as *mut u8);
             view_cbvs.push(cbv);
@@ -298,6 +309,7 @@ impl PlanarReflectionSet {
 
     // GPU address of this frame's never-read mirror-cull status scratch.
     fn status_gva(&self, frame: usize) -> u64 {
+        // SAFETY: a property query on a live resource; it only reads.
         unsafe { self.planar_status[frame].GetGPUVirtualAddress() }
     }
 
@@ -314,6 +326,8 @@ impl PlanarReflectionSet {
     fn resolve_into(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
         let resolve = &self.resolves[slot];
         if self.sample_count > 1 {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[
                     transition_barrier(
@@ -342,6 +356,8 @@ impl PlanarReflectionSet {
                 ]);
             }
         } else {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[
                     transition_barrier(
@@ -462,6 +478,7 @@ impl DxContext {
         // Per plane: render the culled region from the reflected view into the
         // shared colour + depth (against the frame's object buffer), then resolve.
         let frame_object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[params.frame_idx].GetGPUVirtualAddress() };
         let indirect = set.indirect(params.frame_idx);
         for slot in 0..set.plane_count() {
@@ -501,6 +518,8 @@ fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("planar: rtv heap: {e}"))
 }
 
@@ -512,6 +531,8 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("planar: dsv heap: {e}"))
 }
 
@@ -554,6 +575,8 @@ fn create_planar_depth(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -576,6 +599,8 @@ fn create_planar_depth(
         Flags: D3D12_DSV_FLAG_NONE,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
     Ok(texture)
 }

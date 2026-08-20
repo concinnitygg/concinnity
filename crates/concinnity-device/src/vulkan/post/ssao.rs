@@ -152,6 +152,8 @@ impl SsaoResources {
         device: &Device,
         rebuilt: RebuiltSsaoPipelines,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.kernel_pso, None);
             device.destroy_pipeline(self.blur_pso, None);
@@ -194,6 +196,8 @@ fn create_fullscreen_render_pass(device: &Device) -> Result<vk::RenderPass, Stri
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("SSAO fullscreen render pass: {e}"))
 }
@@ -235,6 +239,8 @@ fn create_blur_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("SSAO blur render pass: {e}"))
 }
@@ -331,6 +337,8 @@ fn create_fullscreen_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -338,6 +346,8 @@ fn create_fullscreen_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create ssao fullscreen pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -400,6 +410,8 @@ impl SsaoResources {
             .offset(0)
             .size(std::mem::size_of::<SsaoParams>() as u32);
         let kernel_set_layouts = [kernel_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let kernel_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -411,6 +423,8 @@ impl SsaoResources {
         .map_err(|e| format!("ssao kernel layout: {e}"))?;
 
         let blur_set_layouts = [blur_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let blur_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&blur_set_layouts),
@@ -442,6 +456,8 @@ impl SsaoResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(frames as u32 * 3)];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -505,6 +521,8 @@ impl SsaoResources {
         let h = height.max(1);
         self.ao_raw = create_ao_target(alloc, device, w, h)?;
 
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         self.kernel_framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -521,6 +539,8 @@ impl SsaoResources {
         // pooled `ao_output` view.
         let mut blur_framebuffers = Vec::with_capacity(ao_views.len());
         for &ao_view in ao_views {
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -580,6 +600,8 @@ impl SsaoResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&gb_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -598,6 +620,9 @@ impl SsaoResources {
 
     fn destroy_targets(&mut self, device: &Device) {
         if self.kernel_framebuffer != vk::Framebuffer::null() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe {
                 device.destroy_framebuffer(self.kernel_framebuffer, None);
                 for &fb in &self.blur_framebuffers {
@@ -632,6 +657,8 @@ impl SsaoResources {
     // Destroy every SSAO resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
@@ -676,6 +703,8 @@ impl VkContext {
             .render_pass(ssao.fullscreen_render_pass)
             .framebuffer(ssao.kernel_framebuffer)
             .render_area(vk::Rect2D::default().extent(extent));
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             // Fullscreen kernel uses a positive-height viewport; the kernel
@@ -722,6 +751,8 @@ impl VkContext {
             .render_pass(ssao.blur_render_pass)
             .framebuffer(ssao.blur_framebuffers[frame_idx])
             .render_area(vk::Rect2D::default().extent(extent));
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             let fs_vp = vk::Viewport {

@@ -214,6 +214,7 @@ impl DxContext {
     // GPU descriptor handle of the reflection-probe cube array table base (root param
     // [10] of the bindless main pass). The MAX_PROBES contiguous cube SRVs start here.
     pub(in crate::directx) fn probe_cube_table_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let base = unsafe {
             self.descriptors
                 .srv_heap
@@ -229,6 +230,7 @@ impl DxContext {
     // CPU descriptor handle of probe cube array slot `i` (for writing a baked cube's
     // SRV into the array at install time).
     fn probe_cube_slot_cpu(&self, i: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let base = unsafe {
             self.descriptors
                 .srv_heap
@@ -315,6 +317,8 @@ impl DxContext {
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
         let done = self.probe_rendering.as_ref().is_some_and(|r| {
             r.cursor >= PROBE_FACE_COUNT
+                // SAFETY: the fence and the event were created from this device and are live for
+                // the call.
                 && unsafe { self.frame_sync.fence.GetCompletedValue() } >= r.last_fence_value
         });
         // Transient ineligibility: geometry may still be streaming. A zero cull keeps
@@ -397,7 +401,9 @@ impl DxContext {
         // One MSAA (or single-sample) colour + depth pair, reused across the six faces.
         let rtv_heap = create_rtv_heap(device)?;
         let dsv_heap = create_dsv_heap(device)?;
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let dsv = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
         let color =
             create_hdr_color_target(device, size, size, sample_count, rtv, self.clear_color)?;
@@ -414,6 +420,9 @@ impl DxContext {
         // not read `light_ubo` / `shadow_ubo[frame]` while `record_frame` (which runs
         // after this) overwrites them on the same frame -- a CPU/GPU race on a mapped
         // buffer. The capture's lighting is the env live when it started.
+        // SAFETY: `LightUniforms` is `#[repr(C)]` with explicit pad fields and no implicit padding
+        // (pinned by the layout tests in `render_types.rs`), so all `size_of` bytes are
+        // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
                 &self.uniforms.light_uniforms as *const crate::gfx::render_types::LightUniforms
@@ -422,6 +431,9 @@ impl DxContext {
             )
         };
         let (light_cbv, light_gva) = make_snapshot_cbv(alloc, light_bytes)?;
+        // SAFETY: `ShadowUniforms` is `#[repr(C)]` with an explicit trailing pad and no implicit
+        // padding (pinned by the layout tests in `render_types.rs`), so all `size_of` bytes are
+        // initialized, and the borrow keeps them live for the snapshot copy below.
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
                 &self.shadow.uniforms as *const crate::gfx::render_types::ShadowUniforms
@@ -460,6 +472,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("probe: map view cbv: {e}"))?;
             // SAFETY: the buffer is 256 bytes; ViewUniforms is 160.
@@ -470,6 +484,7 @@ impl DxContext {
                     std::mem::size_of::<super::draw::ViewUniforms>(),
                 );
             }
+            // SAFETY: a property query on a live resource; it only reads.
             view_gvas.push(unsafe { cbv.GetGPUVirtualAddress() });
             view_cbvs.push(cbv);
         }
@@ -490,6 +505,8 @@ impl DxContext {
         };
         let mut readback_layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut readback_total: u64 = 0;
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         unsafe {
             device.GetCopyableFootprints(
                 &face_desc,
@@ -571,11 +588,15 @@ impl DxContext {
 
         // A fresh allocator + list per face (held until readback, so no reset of an
         // in-flight allocator).
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let alloc: ID3D12CommandAllocator = unsafe {
             self.device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
         .map_err(|e| format!("probe: face allocator: {e}"))?;
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         let cmd: ID3D12GraphicsCommandList = unsafe {
             self.device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
@@ -592,6 +613,7 @@ impl DxContext {
             (bake.rtv, bake.dsv)
         };
         let indirect = &self.cull.indirect_cmd_buffers[slot];
+        // SAFETY: a property query on a live resource; it only reads.
         let object_gva = unsafe { self.cull.object_buffer_resources[slot].GetGPUVirtualAddress() };
         self.encode_main_into_face(
             &cmd,
@@ -615,14 +637,19 @@ impl DxContext {
         // Resolve (MSAA) + copy the face into its readback buffer.
         self.copy_face_to_readback(&cmd, face, sample_count)?;
 
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
         unsafe { cmd.Close() }.map_err(|e| format!("probe: face close: {e}"))?;
         let list: ID3D12CommandList =
             windows::core::Interface::cast(&cmd).map_err(|e| format!("probe: face cast: {e}"))?;
+        // SAFETY: every command list in the submission is live and closed, and the slice outlives
+        // the call.
         unsafe { self.command_queue.ExecuteCommandLists(&[Some(list)]) };
 
         // Signal a unique fence value on the shared fence; the readback waits for it.
         let fence_val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(fence_val + 1);
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { self.command_queue.Signal(&self.frame_sync.fence, fence_val) }
             .map_err(|e| format!("probe: face signal: {e}"))?;
 
@@ -650,6 +677,8 @@ impl DxContext {
             .expect("probe bake targets are live while a bake is recording");
         let layout = bake.readback_layout;
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&bake.readbacks[face]) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -661,6 +690,8 @@ impl DxContext {
                 .resolve
                 .as_ref()
                 .expect("a multisampled probe bake has a resolve image");
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[
                     transition_barrier(
@@ -702,6 +733,8 @@ impl DxContext {
                 )]);
             }
         } else {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[transition_barrier(
                     &bake.color,
@@ -873,8 +906,11 @@ impl DxContext {
             .cull_command_signature
             .as_ref()
             .expect("cull command signature is live alongside the bindless PSO");
+        // SAFETY: a property query on a live resource; it only reads.
         let local_lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
             cmd.ClearRenderTargetView(rtv, &self.clear_color, None);
@@ -973,17 +1009,22 @@ fn read_face_rgba_f32(
     let h = PROBE_FACE_SIZE as usize;
     let w = PROBE_FACE_SIZE as usize;
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("probe: map readback: {e}"))?;
     let mut out = vec![0.0f32; w * h * 4];
     for row in 0..h {
-        // SAFETY: the buffer holds `row_pitch * h` (padded) bytes; each row's tight
-        // span of `tight_row` bytes is valid within it. The fence reached the face's
-        // value, so the copy completed.
+        // SAFETY: the readback buffer holds `row_pitch * h` padded bytes, so
+        // `row * row_pitch` addresses the start of a row inside it, and the fence
+        // reached the face's value, so the copy completed.
         let src = unsafe { (map_ptr as *const u8).add(row * row_pitch) };
         for col in 0..w {
+            // SAFETY: the face is RGBA16F, so a row holds `w` eight-byte pixels within `row_pitch`,
+            // and `col < w`.
             let px = unsafe { src.add(col * 8) };
             let half =
+                // SAFETY: `o` is at most 6, so both reads stay inside this pixel's eight bytes.
                 |o: usize| unsafe { f16_to_f32(u16::from_le_bytes([*px.add(o), *px.add(o + 1)])) };
             let base = (row * w + col) * 4;
             out[base] = half(0);
@@ -992,6 +1033,8 @@ fn read_face_rgba_f32(
             out[base + 3] = half(6);
         }
     }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { readback.Unmap(0, None) };
     let _ = tight_row;
     Ok(out)
@@ -1010,12 +1053,15 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuf
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { cbv.Map(0, None, Some(&mut ptr)) }
         .map_err(|e| format!("probe: map snapshot cbv: {e}"))?;
     // SAFETY: the buffer is at least `bytes.len()` bytes (256-aligned).
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
     }
+    // SAFETY: a property query on a live resource; it only reads.
     let gva = unsafe { cbv.GetGPUVirtualAddress() };
     Ok((cbv, gva))
 }
@@ -1028,6 +1074,8 @@ fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("probe: rtv heap: {e}"))
 }
 
@@ -1039,6 +1087,8 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("probe: dsv heap: {e}"))
 }
 
@@ -1079,6 +1129,8 @@ fn create_bake_depth(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -1101,6 +1153,8 @@ fn create_bake_depth(
         Flags: D3D12_DSV_FLAG_NONE,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
     Ok(texture)
 }

@@ -123,6 +123,8 @@ pub(crate) struct MorphBinding {
 // so both produce byte-for-byte identical descriptors.
 pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     let vdesc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let set = |idx: usize, fmt: MTLVertexFormat, offset: usize| {
             let attr = vdesc.attributes().objectAtIndexedSubscript(idx);
@@ -173,6 +175,8 @@ pub(crate) fn build_skinned_main_pipeline(
     desc.setVertexFunction(Some(&skinned_vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         desc.colorAttachments()
             .objectAtIndexedSubscript(0)
@@ -252,11 +256,17 @@ impl MtlContext {
             changes.into_iter().map(|c| (c.skinned_index, c)).collect();
 
         let old_v_len = v_buf.length() / std::mem::size_of::<SkinnedVertex>();
+        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
+        // bytes, and the length was derived from that buffer's own byte length divided by the
+        // element size. The preceding `wait_idle` means the GPU is not writing it.
         let old_v_slice: &[SkinnedVertex] = unsafe {
             let ptr = v_buf.contents().as_ptr() as *const SkinnedVertex;
             std::slice::from_raw_parts(ptr, old_v_len)
         };
         let old_i_len = i_buf.length() / std::mem::size_of::<u16>();
+        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
+        // bytes, and the length was derived from that buffer's own byte length divided by the
+        // element size. The preceding `wait_idle` means the GPU is not writing it.
         let old_i_slice: &[u16] = unsafe {
             let ptr = i_buf.contents().as_ptr() as *const u16;
             std::slice::from_raw_parts(ptr, old_i_len)
@@ -408,6 +418,8 @@ impl MtlContext {
         }
 
         // Create new MTL buffers sized to the rebuilt layout.
+        // SAFETY: the pointer and length describe the live `new_vertices` allocation, and Metal
+        // copies those bytes into the new buffer before the call returns.
         let new_vertex_buffer = unsafe {
             let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
             let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _)
@@ -588,6 +600,8 @@ impl MtlContext {
             )?);
         }
 
+        // SAFETY: the pointer and length describe the live `vertices` allocation, and Metal copies
+        // those bytes into the new buffer before the call returns.
         let skinned_vertex_buffer = unsafe {
             let ptr = std::ptr::NonNull::new(vertices.as_ptr() as *mut _)
                 .ok_or("skinned vertex slice is empty")?;
@@ -685,6 +699,9 @@ impl MtlContext {
                         Some(b) => b.clone(),
                         None => {
                             let bytes = bytes_of_slice(&data.deltas);
+                            // SAFETY: the pointer and length describe the live `bytes` allocation,
+                            // and Metal copies those bytes into the new buffer before the call
+                            // returns.
                             let buffer = unsafe {
                                 let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
                                     .ok_or("morph delta slice is empty")?;

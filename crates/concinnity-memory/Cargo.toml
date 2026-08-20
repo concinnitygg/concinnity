@@ -16,3 +16,6 @@ doctest = false
 detail = []
 
 [dependencies]
+
+[lints]
+workspace = true

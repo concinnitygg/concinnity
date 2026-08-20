@@ -128,6 +128,8 @@ impl VkContext {
                 .render_area(vk::Rect2D::default().extent(shadow_extent))
                 .clear_values(std::slice::from_ref(&clear_depth));
 
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
 
@@ -164,6 +166,8 @@ impl VkContext {
             // Raymarched SDF shadow casters into this cascade's DSV, after the
             // rasterised casters and within the same render pass (no re-clear);
             // the LESS depth test keeps the nearer occluder.
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 self.encode_sdf_shadow_cascade(cmd, frame_idx, cascade_idx);
                 device.cmd_end_render_pass(cmd);
@@ -208,6 +212,8 @@ impl VkContext {
         let prefix = self.skinned_record_base() as u32;
         let cascade = cascade_idx as u32;
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sb_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -295,6 +301,8 @@ impl VkContext {
         else {
             return;
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -367,6 +375,8 @@ impl VkContext {
             set: shadow_set,
             slice_idx,
         } = bind;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
 

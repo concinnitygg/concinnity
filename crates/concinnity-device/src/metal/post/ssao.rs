@@ -86,6 +86,7 @@ pub(crate) fn create_ssao_targets(
     let sampled = MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
     let make = |label: &str| -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
         let desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             desc.setTextureType(MTLTextureType::Type2D);
             desc.setPixelFormat(SSAO_OCCLUSION_FORMAT);
@@ -150,6 +151,9 @@ impl MtlContext {
                 pipeline: kernel_ps,
                 label: "SSAO kernel",
             },
+            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
+            // `size_of` as the length, and every bound resource outlives the encoder; the indices
+            // are the slots the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 0);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 1);
@@ -171,6 +175,8 @@ impl MtlContext {
                 pipeline: blur_ps,
                 label: "SSAO blur",
             },
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             |enc| unsafe {
                 enc.setFragmentTexture_atIndex(Some(targets.ao_raw.as_ref()), 0);
                 enc.setFragmentTexture_atIndex(Some(gbuffer), 1);

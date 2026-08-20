@@ -334,6 +334,9 @@ impl VkContext {
         // before the per-pass buffers. The query-pool reset must precede every
         // pass, hence it lives here at the head of the batch.
         let start_cmd = self.commands.start_command_buffers[frame_idx];
+        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
+        // in flight; reset then begin puts it in the recording state, which is what the subsequent
+        // recording requires.
         unsafe {
             device
                 .reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty())
@@ -355,6 +358,8 @@ impl VkContext {
             // is the block's second slot, written in the end buffer below.
             let block_base = super::pass_timing::frame_block_base(frame_idx);
             let (wf_start, _) = super::pass_timing::whole_frame_pair(frame_idx);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_reset_query_pool(
                     start_cmd,
@@ -377,6 +382,7 @@ impl VkContext {
         // off. Recorded here (not on a per-pass worker) because it needs
         // `&mut self`; the start buffer carries it within the frame's submit batch.
         self.rt_dynamic_update(start_cmd, frame_idx);
+        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe {
             device
                 .end_command_buffer(start_cmd)
@@ -660,6 +666,10 @@ impl VkContext {
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
         };
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `ViewUniforms`, so `mapped_ptr()` is a live mapping of at least
+        // `size_of::<ViewUniforms>()` bytes; the source is a separate live borrow, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ViewUniforms as *const u8,
@@ -671,6 +681,9 @@ impl VkContext {
         // Reflection-probe set (global set 0 binding 7): EMPTY (count 0 = sky
         // reflection) until a probe bakes, so the forward shader keeps the sky
         // path. Uploaded every frame so a later install is picked up immediately.
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `ProbeSet`, so `mapped_ptr()` is a live mapping of at least `size_of::<ProbeSet>()`
+        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
@@ -823,6 +836,8 @@ impl VkContext {
         // TOP_OF_PIPE write near the top of the function (the block's first pair).
         if let Some(pool) = self.timestamp_query_pool {
             let (_, wf_end) = super::pass_timing::whole_frame_pair(frame_idx);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_write_timestamp(
                     cmd,
@@ -866,6 +881,9 @@ pub(super) fn upload_light_uniforms(
     lu: &LightUniforms,
 ) {
     let size = std::mem::size_of::<LightUniforms>();
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             lu as *const LightUniforms as *const u8,
@@ -887,6 +905,9 @@ pub(super) fn upload_static_records<T: Copy>(
         return;
     }
     let size = std::mem::size_of_val(records);
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
     }

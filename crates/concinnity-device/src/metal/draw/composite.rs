@@ -32,6 +32,8 @@ impl MtlContext {
             .mtk_view
             .currentRenderPassDescriptor()
             .ok_or("no current render pass descriptor")?;
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = composite_pass_desc
                 .colorAttachments()
@@ -63,6 +65,8 @@ impl MtlContext {
         } else {
             0
         };
+        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
+        // texture indices the composite shader declares.
         unsafe {
             post_encoder.setFragmentTexture_atIndex(Some(scene_color.as_ref()), 0);
             // Bloom mip 0 at texture(1). Always bound so the binding resolves;
@@ -129,6 +133,8 @@ impl MtlContext {
             // shader's divide by win_width/height); the scissor is in framebuffer
             // pixels. Recover the drawable's pixel size from the composite color
             // attachment so a per-call clip rect scales from points to pixels.
+            // SAFETY: attachment 0 is the only colour attachment this pass declares, and the
+            // accessors only read it.
             let (fb_w, fb_h) = unsafe {
                 match composite_pass_desc
                     .colorAttachments()
@@ -177,6 +183,8 @@ impl MtlContext {
                     }
                 }
                 let atlas_idx = call.atlas_slot.min(self.text_atlas_textures.len() - 1);
+                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
+                // the buffer/texture indices the shaders declare.
                 unsafe {
                     post_encoder.setFragmentTexture_atIndex(
                         Some(self.text_atlas_textures[atlas_idx].as_ref()),
@@ -185,6 +193,9 @@ impl MtlContext {
                     post_encoder.setFragmentSamplerState_atIndex(Some(&self.text_sampler), 0);
                 }
 
+                // SAFETY: each pointer is derived from a live borrow and paired with that type's
+                // `size_of` as the length, so the encoder copies exactly the bytes it was handed;
+                // the buffer indices are the slots the shaders declare.
                 unsafe {
                     post_encoder.setVertexBytes_length_atIndex(
                         std::ptr::NonNull::from(&text_uniforms).cast(),
@@ -195,6 +206,8 @@ impl MtlContext {
 
                 let vert_bytes_slice: &[u8] = bytemuck::cast_slice(&call.vertices);
                 let idx_bytes_slice: &[u8] = bytemuck::cast_slice(&call.indices);
+                // SAFETY: the pointer and length describe the live `vert_bytes_slice` allocation,
+                // and Metal copies those bytes into the new buffer before the call returns.
                 let text_vbuf = unsafe {
                     let ptr = std::ptr::NonNull::new(vert_bytes_slice.as_ptr() as *mut _)
                         .ok_or("text vertex slice is empty")?;
@@ -206,6 +219,8 @@ impl MtlContext {
                         )
                         .ok_or("failed to create text vertex buffer")?
                 };
+                // SAFETY: the pointer and length describe the live `idx_bytes_slice` allocation,
+                // and Metal copies those bytes into the new buffer before the call returns.
                 let text_ibuf = unsafe {
                     let ptr = std::ptr::NonNull::new(idx_bytes_slice.as_ptr() as *mut _)
                         .ok_or("text index slice is empty")?;
@@ -218,6 +233,9 @@ impl MtlContext {
                         .ok_or("failed to create text index buffer")?
                 };
 
+                // SAFETY: `text_vbuf` and `text_ibuf` were just built from this call's own
+                // vertex/index data and outlive the encoder, so the index count is exactly the
+                // range they cover.
                 unsafe {
                     post_encoder.setVertexBuffer_offset_atIndex(Some(&text_vbuf), 0, 1);
                     post_encoder

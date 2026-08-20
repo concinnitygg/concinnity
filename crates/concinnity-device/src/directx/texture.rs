@@ -38,18 +38,25 @@ where
     F: FnOnce(&ID3D12GraphicsCommandList),
 {
     let allocator: ID3D12CommandAllocator =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .map_err(|e| format!("one_shot allocator: {e}"))?;
 
     let cmd: ID3D12GraphicsCommandList =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
             .map_err(|e| format!("one_shot cmd list: {e}"))?;
 
     f(&cmd);
 
+    // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
     unsafe { cmd.Close() }.map_err(|e| format!("one_shot close: {e}"))?;
 
     let cmd_list: ID3D12CommandList = cmd.cast().map_err(|e| format!("one_shot cast: {e}"))?;
+    // SAFETY: every command list in the submission is live and closed, and the slice outlives the
+    // call.
     unsafe { queue.ExecuteCommandLists(&[Some(cmd_list)]) };
     Ok((allocator, cmd))
 }
@@ -66,17 +73,27 @@ where
     let _keep_alive = one_shot_submit_nowait(device, queue, f)?;
 
     // Fence-wait for completion.
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("one_shot fence: {e}"))?;
     let event =
+        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("one_shot event: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("one_shot signal: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
             .map_err(|e| format!("one_shot set event: {e}"))?;
+        // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
+    // SAFETY: `event` was created above, every wait on it has returned, and it is closed exactly
+    // once.
     unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
     Ok(())
 }
@@ -122,6 +139,8 @@ pub(super) fn create_uav_buffer(
         ..Default::default()
     };
     let mut resource: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -168,6 +187,8 @@ pub(super) fn upload_buffer_padded(
 
     // Map and copy.
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("upload map: {e}"))?;
     // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte
     // upload buffer, `data` is a distinct live allocation of `data.len()` bytes,
@@ -191,6 +212,8 @@ pub(super) fn upload_buffer_padded(
         D3D12_RESOURCE_STATE_COMMON,
     )?;
 
+    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
+    // these commands name is live for the call.
     one_shot_submit(alloc.device(), alloc.queue(), |cmd| unsafe {
         cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size);
         // CopyBufferRegion implicitly promotes the buffer COMMON -> COPY_DEST,
@@ -368,6 +391,8 @@ fn upload_texture_levels_deferred(
     let mut row_counts = vec![0u32; mip_count as usize];
     let mut row_sizes = vec![0u64; mip_count as usize];
     let mut total_size: u64 = 0;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
             &desc,
@@ -389,6 +414,8 @@ fn upload_texture_levels_deferred(
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("upload tex map: {e}"))?;
     for (m, level) in levels.iter().enumerate() {
@@ -396,6 +423,8 @@ fn upload_texture_levels_deferred(
         let rows = row_counts[m] as usize;
         let needed = src_row * rows;
         if level.data.len() < needed {
+            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+            // past this call.
             unsafe { upload.Unmap(0, None) };
             return Err(format!(
                 "texture mip {} ({}x{}) is {} bytes, need {}",
@@ -410,10 +439,17 @@ fn upload_texture_levels_deferred(
         let base_off = layouts[m].Offset as usize;
         for row in 0..rows {
             let src = &level.data[row * src_row..(row + 1) * src_row];
+            // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by `GetCopyableFootprints`
+            // for every mip, and `base_off + row * dst_pitch` is the start of a row inside this
+            // mip's footprint, so the offset stays in bounds.
             let dst = unsafe { (map_ptr as *mut u8).add(base_off + row * dst_pitch) };
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
         }
     }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { upload.Unmap(0, None) };
 
     // Copy each mip subresource, then transition all subresources to shader-read.
@@ -427,6 +463,8 @@ fn upload_texture_levels_deferred(
     // handle until the GPU retires the copy).
     let (allocator, cmd) = one_shot_submit_nowait(device, alloc.queue(), |cmd| {
         let mut src = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -434,6 +472,8 @@ fn upload_texture_levels_deferred(
             },
         };
         let mut dst = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -447,6 +487,8 @@ fn upload_texture_levels_deferred(
             dst.Anonymous = D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: m,
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
         }
         let barrier = transition_barrier(
@@ -454,6 +496,8 @@ fn upload_texture_levels_deferred(
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
@@ -484,17 +528,27 @@ pub(super) fn upload_texture_resource(
 // Block until the upload queue drains, so a synchronous upload's transient
 // staging resources can be released.
 fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> Result<(), String> {
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("upload fence: {e}"))?;
     let event =
+        // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+        // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
             .map_err(|e| format!("upload event: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("upload signal: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
             .map_err(|e| format!("upload set event: {e}"))?;
+        // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
+    // SAFETY: `event` was created above, every wait on it has returned, and it is closed exactly
+    // once.
     unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
     Ok(())
 }
@@ -508,6 +562,7 @@ pub(super) fn write_texture_srv(
     resource: &ID3D12Resource,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
+    // SAFETY: a property query on a live COM object; it only reads.
     let desc = unsafe { resource.GetDesc() };
     let mip_levels = desc.MipLevels as u32;
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -521,6 +576,8 @@ pub(super) fn write_texture_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -588,6 +645,8 @@ pub(super) fn create_fallback_shadow_array(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -603,6 +662,8 @@ pub(super) fn create_fallback_shadow_array(
         tex_opt.ok_or_else(|| "create fallback shadow array returned None".to_string())?;
 
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut layout), None, None, None);
     }
@@ -615,8 +676,12 @@ pub(super) fn create_fallback_shadow_array(
     )?;
 
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("map fallback shadow array: {e}"))?;
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe {
         *(map_ptr as *mut f32) = 0.0f32;
         upload.Unmap(0, None);
@@ -628,6 +693,8 @@ pub(super) fn create_fallback_shadow_array(
     // on every upload. Both outlive the synchronous `CopyTextureRegion` call.
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -635,12 +702,16 @@ pub(super) fn create_fallback_shadow_array(
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
             },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
             let barrier = transition_barrier(
@@ -667,6 +738,8 @@ pub(super) fn create_fallback_shadow_array(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
 
     Ok(GpuResource {
@@ -722,6 +795,8 @@ pub(super) fn create_main_depth_texture(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -747,6 +822,8 @@ pub(super) fn create_main_depth_texture(
             Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
 
     Ok(texture)
@@ -799,6 +876,8 @@ pub(super) fn create_shadow_map_array(
         ..Default::default()
     };
     let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -835,6 +914,8 @@ pub(super) fn create_shadow_map_array(
                 },
             },
         };
+        // SAFETY: the view descriptor and the resource it names are live for the call, and the
+        // destination handle addresses a slot this context reserved for the view in a heap it owns.
         unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
         dsvs.push(dsv_cpu);
     }
@@ -854,6 +935,8 @@ pub(super) fn create_shadow_map_array(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
 
     Ok((
@@ -906,6 +989,8 @@ pub(super) fn create_hdr_color_target(
         ..Default::default()
     };
     let mut res_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -928,6 +1013,8 @@ pub(super) fn create_hdr_color_target(
         },
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateRenderTargetView(&res, Some(&rtv_desc), rtv_cpu) };
 
     Ok(res)
@@ -968,6 +1055,8 @@ pub(super) fn create_hdr_resolve_target(
         ..Default::default()
     };
     let mut res_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -1000,6 +1089,8 @@ pub(super) fn write_hdr_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -1059,6 +1150,8 @@ pub(super) fn create_rt_target_with_clear(
         ..Default::default()
     };
     let mut res_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
             &heap_props,
@@ -1085,6 +1178,8 @@ pub(super) fn write_format_rtv(
         ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateRenderTargetView(resource, Some(&rtv_desc), rtv_cpu) };
 }
 
@@ -1106,6 +1201,8 @@ pub(super) fn write_format_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -1130,6 +1227,8 @@ pub(super) fn transition_barrier(
                 // `&resource` outlives the `ResourceBarrier` call, so copying
                 // the raw pointer (no refcount change) is sound, and the
                 // `ManuallyDrop` guarantees it is never released.
+                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
+                // outlives the call, and the `ManuallyDrop` field never releases it.
                 pResource: unsafe { std::mem::transmute_copy(resource) },
                 StateBefore: before,
                 StateAfter: after,
@@ -1181,6 +1280,8 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
                 // Borrow the resource pointer without an AddRef, same rationale
                 // as `transition_barrier`: the caller's `&after` outlives the
                 // `ResourceBarrier` call and the `ManuallyDrop` never releases it.
+                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
+                // outlives the call, and the `ManuallyDrop` field never releases it.
                 pResourceAfter: unsafe { std::mem::transmute_copy(after) },
             }),
         },
@@ -1219,6 +1320,8 @@ fn write_cube_srv_single_mip(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -1243,6 +1346,8 @@ pub(super) fn write_cube_srv_mips(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -1474,6 +1579,8 @@ fn upload_face_major_into_cube(
     let mut row_counts: Vec<u32> = vec![0; num_subresources as usize];
     let mut row_sizes: Vec<u64> = vec![0; num_subresources as usize];
     let mut total_bytes: u64 = 0;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
             desc,
@@ -1495,6 +1602,8 @@ fn upload_face_major_into_cube(
     )?;
 
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("cube upload map: {e}"))?;
 
@@ -1505,6 +1614,8 @@ fn upload_face_major_into_cube(
         let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 16;
         let slab = mip_bytes[mip as usize];
         if slab.len() < 6 * face_bytes {
+            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+            // past this call.
             unsafe { upload.Unmap(0, None) };
             return Err(format!(
                 "cube upload mip {} too short: {} bytes, need {}",
@@ -1523,11 +1634,19 @@ fn upload_face_major_into_cube(
                 let src =
                     &slab[face_src_offset + row * src_row..face_src_offset + (row + 1) * src_row];
                 let dst =
+                    // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by
+                    // `GetCopyableFootprints` for every cube subresource, and `layout.Offset + row
+                    // * row_pitch` is the start of a row inside this face's footprint, so the
+                    // offset stays in bounds.
                     unsafe { (map_ptr as *mut u8).add(layout.Offset as usize + row * row_pitch) };
+                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
+                // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
             }
         }
     }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { upload.Unmap(0, None) };
 
     // `pResource` borrows the upload / texture pointer without an AddRef: the
@@ -1538,6 +1657,8 @@ fn upload_face_major_into_cube(
     one_shot_submit(device, alloc.queue(), |cmd| {
         for subres in 0..num_subresources {
             let src = D3D12_TEXTURE_COPY_LOCATION {
+                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
+                // outlives the call, and the `ManuallyDrop` field never releases it.
                 pResource: unsafe { std::mem::transmute_copy(&*upload) },
                 Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -1545,12 +1666,16 @@ fn upload_face_major_into_cube(
                 },
             };
             let dst = D3D12_TEXTURE_COPY_LOCATION {
+                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
+                // outlives the call, and the `ManuallyDrop` field never releases it.
                 pResource: unsafe { std::mem::transmute_copy(texture) },
                 Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     SubresourceIndex: subres,
                 },
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
         }
         let barrier = transition_barrier(
@@ -1558,6 +1683,8 @@ fn upload_face_major_into_cube(
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
@@ -1584,6 +1711,8 @@ fn write_lut_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
@@ -1634,6 +1763,8 @@ pub(super) fn upload_color_lut(
     // Query upload size/layout. A 3D texture is one subresource.
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
     let mut total_size: u64 = 0;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
             &desc,
@@ -1658,6 +1789,8 @@ pub(super) fn upload_color_lut(
     // 3D footprint is `n` depth slices, each `n` rows of `RowPitch` bytes, so
     // the slice pitch is `RowPitch * n`.
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("color LUT upload map: {e}"))?;
     let src_row = n * 4;
@@ -1667,12 +1800,19 @@ pub(super) fn upload_color_lut(
         for y in 0..n {
             let src_off = (z * n + y) * src_row;
             let src = &data[src_off..src_off + src_row];
+            // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by `GetCopyableFootprints`
+            // for the whole volume, and `layout.Offset + z * slice_pitch + y * dst_pitch` is the
+            // start of a row inside its footprint, so the offset stays in bounds.
             let dst = unsafe {
                 (map_ptr as *mut u8).add(layout.Offset as usize + z * slice_pitch + y * dst_pitch)
             };
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
         }
     }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { upload.Unmap(0, None) };
 
     // Copy upload → texture, then transition to shader-read. `pResource` borrows
@@ -1682,6 +1822,8 @@ pub(super) fn upload_color_lut(
     // outlive the synchronous `CopyTextureRegion` call.
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -1689,12 +1831,16 @@ pub(super) fn upload_color_lut(
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
             },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
             let barrier = transition_barrier(
@@ -1762,6 +1908,8 @@ pub(super) fn upload_float_lut(
 
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
     let mut total_size: u64 = 0;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
             &desc,
@@ -1784,6 +1932,8 @@ pub(super) fn upload_float_lut(
 
     // Row-by-row to honour D3D12's row-pitch alignment.
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
         .map_err(|e| format!("float LUT upload map: {e}"))?;
     let src_row = n * comp;
@@ -1791,15 +1941,25 @@ pub(super) fn upload_float_lut(
     for y in 0..n {
         let src = &texels[y * src_row..y * src_row + src_row];
         let dst =
+            // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by `GetCopyableFootprints`
+            // for the whole LUT, and `layout.Offset + y * dst_pitch` is the start of a row inside
+            // its footprint. D3D12 hands back a page-aligned mapping and both the footprint offset
+            // and the row pitch are multiples of four, so the `f32` cast is aligned.
             unsafe { (map_ptr as *mut u8).add(layout.Offset as usize + y * dst_pitch) as *mut f32 };
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
     }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { upload.Unmap(0, None) };
 
     // `pResource` borrows without an AddRef; both resources outlive the
     // synchronous copy (see `upload_color_lut`).
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*upload) },
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
@@ -1807,12 +1967,16 @@ pub(super) fn upload_float_lut(
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
+            // the call, and the `ManuallyDrop` field never releases it.
             pResource: unsafe { std::mem::transmute_copy(&*texture) },
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
             },
         };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
             let barrier = transition_barrier(
@@ -1835,6 +1999,8 @@ pub(super) fn upload_float_lut(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(&*texture, Some(&srv_desc), srv_cpu) };
     Ok(GpuResource {
         resource: texture,

@@ -50,6 +50,8 @@ impl DxContext {
         };
 
         let sz = self.spot_shadow.slice_size;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -81,6 +83,8 @@ impl DxContext {
             // no slots for these slices.
             let ubo_gva = self.spot_shadow.slice_ubo_gva(slice);
             let dsv = self.spot_shadow.dsvs[slice as usize];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);

@@ -184,6 +184,8 @@ extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
             p = p.add(1);
         }
     }
+    // SAFETY: the loop above walked `message` to its NUL terminator, so `len` u16s starting at
+    // `message` are all initialised and in bounds.
     let slice = unsafe { std::slice::from_raw_parts(message, len) };
     let text = String::from_utf16_lossy(slice);
     match ty {
@@ -361,7 +363,7 @@ pub(in crate::vulkan) struct FsrUpscaler {
     reset_pending: Cell<bool>,
 }
 
-// The FFX context handle + loaded function pointers are raw C pointers used only
+// SAFETY: The FFX context handle + loaded function pointers are raw C pointers used only
 // on the render thread (the upscale pass is recorded by exactly one
 // parallel-encoder worker per frame); the `Send` bound is satisfied unsafely,
 // same as the rest of `VkContext`.
@@ -441,6 +443,9 @@ impl FsrUpscaler {
         };
 
         let mut ctx: ffxContext = ptr::null_mut();
+        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+        // matches the SDK's declared signature; the context and every descriptor / out-param it is
+        // handed are live for the call.
         let rc = unsafe {
             (ffx.create_context)(
                 &mut ctx,
@@ -467,6 +472,9 @@ impl FsrUpscaler {
             debug_level: FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE,
         };
         let rc_dbg =
+            // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+            // matches the SDK's declared signature; the context and every descriptor / out-param it
+            // is handed are live for the call.
             unsafe { (ffx.configure)(&mut ctx, &global_debug.header as *const ffxApiHeader) };
         let _ = &mut global_debug;
         if rc_dbg != FFX_API_RETURN_OK {
@@ -494,6 +502,9 @@ impl FsrUpscaler {
             display_width: output_width,
             out_phase_count: &mut phase_count,
         };
+        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+        // matches the SDK's declared signature; the context and every descriptor / out-param it is
+        // handed are live for the call.
         let rc = unsafe { (ffx.query)(&mut ctx, &mut jpc_desc.header as *mut ffxApiHeader) };
         if rc != FFX_API_RETURN_OK || phase_count <= 0 {
             tracing::warn!(
@@ -513,6 +524,9 @@ impl FsrUpscaler {
         ) {
             Ok(img) => img,
             Err(e) => {
+                // SAFETY: the entry point was resolved from the loaded FidelityFX library at init
+                // and matches the SDK's declared signature; the context and every descriptor /
+                // out-param it is handed are live for the call.
                 unsafe {
                     let _ = (ffx.destroy_context)(&mut ctx, ptr::null());
                 }
@@ -579,6 +593,9 @@ impl VkUpscaleBackend for FsrUpscaler {
             out_x: &mut jx,
             out_y: &mut jy,
         };
+        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+        // matches the SDK's declared signature; the context and every descriptor / out-param it is
+        // handed are live for the call.
         let rc = unsafe {
             (self.ffx.query)(
                 &self.ctx as *const ffxContext as *mut ffxContext,
@@ -710,6 +727,9 @@ impl VkUpscaleBackend for FsrUpscaler {
             flags: 0,
         };
 
+        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+        // matches the SDK's declared signature; the context and every descriptor / out-param it is
+        // handed are live for the call.
         let rc = unsafe {
             (self.ffx.dispatch)(
                 &self.ctx as *const ffxContext as *mut ffxContext,
@@ -725,6 +745,9 @@ impl VkUpscaleBackend for FsrUpscaler {
 
     fn destroy(&mut self, _device: &Device) {
         if !self.ctx.is_null() {
+            // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
+            // matches the SDK's declared signature; the context and every descriptor / out-param it
+            // is handed are live for the call.
             unsafe {
                 let _ = (self.ffx.destroy_context)(&mut self.ctx, ptr::null());
             }

@@ -19,3 +19,6 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 concinnity-store = { path = "../concinnity-store" }
+
+[lints]
+workspace = true

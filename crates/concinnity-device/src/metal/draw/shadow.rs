@@ -200,6 +200,9 @@ impl MtlContext {
         enc.setRenderPipelineState(bind.pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
         enc.setDepthBias_slopeScale_clamp(0.005, bind.slope_bias, 0.01);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             enc.setVertexBytes_length_atIndex(
                 std::ptr::NonNull::from(bind.uniforms).cast(),
@@ -245,6 +248,9 @@ impl MtlContext {
         enc.setRenderPipelineState(pipeline);
         enc.setDepthStencilState(Some(&self.depth_state));
         enc.setDepthBias_slopeScale_clamp(0.005, slope_bias, 0.01);
+        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
+        // as the length, and every bound resource outlives the encoder; the indices are the slots
+        // the shaders declare.
         unsafe {
             // ShadowUniforms (vbuf 0), cascade push (vbuf 7), object buffer
             // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
@@ -292,6 +298,8 @@ impl MtlContext {
 
         // Folded skinned tail: deformed VB at binding 1, skinned u16 IB resident.
         if let (Some(deformed), Some(tail)) = (deformed_skinned, counts.skinned_tail(cascade_off)) {
+            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+            // buffer/texture indices the shaders declare.
             unsafe {
                 enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
             }
@@ -331,6 +339,9 @@ impl MtlContext {
                 continue;
             }
             let model_uniforms = ModelUniforms { model: obj.model };
+            // SAFETY: each pointer is derived from a live borrow and paired with that type's
+            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
+            // buffer indices are the slots the shaders declare.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model_uniforms).cast(),
@@ -344,6 +355,9 @@ impl MtlContext {
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u32>();
+            // SAFETY: `index_byte_offset` and `index_count` come from `active_lod`, which returns a
+            // range inside this object's own slice of `self.index_buffer`, and `base_vertex` is
+            // that object's own base.
             unsafe {
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
                     MTLPrimitiveType::Triangle,
@@ -388,6 +402,9 @@ impl MtlContext {
                 let index_byte_offset = index_offset * std::mem::size_of::<u32>();
                 for &model in instances {
                     let model_uniforms = ModelUniforms { model };
+                    // SAFETY: the pointer is derived from the live `model_uniforms` with its
+                    // `size_of` as the length, and the index range comes from `active_lod` on this
+                    // object's own slice of `self.index_buffer`.
                     unsafe {
                         enc.setVertexBytes_length_atIndex(
                             std::ptr::NonNull::from(&model_uniforms).cast(),
@@ -441,6 +458,8 @@ impl MtlContext {
                 ..*bind
             },
         );
+        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+        // buffer/texture indices the shaders declare.
         unsafe {
             enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
         }
@@ -452,6 +471,9 @@ impl MtlContext {
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u16>();
+            // SAFETY: as above, over the skinned buffers -- pointer and length describe the live
+            // `model_uniforms`, `skinned_joint_bufs[i]` outlives the encoder, and the index range
+            // is this object's own slice.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&model_uniforms).cast(),

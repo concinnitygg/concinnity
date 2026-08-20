@@ -40,6 +40,8 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         params: super::LocalLightParams,
     ) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 params.spot_buffer,
@@ -236,6 +238,8 @@ impl DxContext {
         } = gpu;
         let depth_dsv = self.depth_dsv;
 
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&depth_dsv));
             cmd.ClearRenderTargetView(self.hdr.color_rtv, &self.clear_color, None);
@@ -270,6 +274,8 @@ impl DxContext {
         // Pipeline-independent main-pass state: topology, geometry buffers,
         // and the shader-visible descriptor heaps. Survives root-signature
         // changes, so it is set once before either sub-pass binds its pipeline.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -334,11 +340,14 @@ impl DxContext {
                 .expect("cull command signature is live alongside the bindless PSO");
             let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
             let object_gva =
+                // SAFETY: a property query on a live resource; it only reads.
                 unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
 
             // Main bindless pass: issue the GPU-culled command buffer. The b0
             // object-id root constant is set per command by the command
             // signature, so it is not bound here.
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(bindless_pso);
                 cmd.SetGraphicsRootSignature(bindless_root);
@@ -405,6 +414,8 @@ impl DxContext {
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe { cmd.SetPipelineState(bindless_pso) };
             }
         }
@@ -416,6 +427,8 @@ impl DxContext {
         // the instanced + skinned passes below.
         let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
         if legacy_needed {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(
                     self.wireframe_or(&self.main_pso, self.wireframe.main.as_ref()),
@@ -461,6 +474,8 @@ impl DxContext {
                 } else {
                     self.object_srv_gpu(i.min(last_obj))
                 };
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRootDescriptorTable(5, obj_srv_gpu);
 
@@ -504,6 +519,8 @@ impl DxContext {
         ) && !self.instanced.clusters.is_empty()
             && !use_bindless
         {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(
                     self.wireframe_or(inst_pso, self.wireframe.instanced.as_ref()),
@@ -543,6 +560,8 @@ impl DxContext {
                 |cluster_idx, cluster| {
                     // Per-cluster (albedo, normal) SRV pair allocated at init.
                     let cluster_srv_gpu = self.cluster_srv_gpu(cluster_idx);
+                    // SAFETY: the command list is in the recording state, and every resource,
+                    // descriptor and slice these commands name is live for the call.
                     unsafe {
                         cmd.SetGraphicsRootDescriptorTable(5, cluster_srv_gpu);
 
@@ -566,6 +585,8 @@ impl DxContext {
                     }
                 },
                 |bucket, inst_gva_base| {
+                    // SAFETY: the command list is in the recording state, and every resource,
+                    // descriptor and slice these commands name is live for the call.
                     unsafe {
                         // Root SRV at param [8]: per-instance matrices.
                         // Bumping the GVA past prior buckets points the
@@ -608,7 +629,10 @@ impl DxContext {
                 let bindless_pso =
                     self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
                 let object_gva =
+                    // SAFETY: a property query on a live resource; it only reads.
                     unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetPipelineState(bindless_pso);
                     cmd.SetGraphicsRootSignature(bindless_root);
@@ -671,6 +695,8 @@ impl DxContext {
             (self.skinned.pso.as_ref(), self.skinned.root_sig.as_ref())
             && !self.skinned.draw_objects.is_empty()
         {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(
                     self.wireframe_or(skinned_pso, self.wireframe.skinned.as_ref()),
@@ -707,6 +733,8 @@ impl DxContext {
             // the per-object joint SRV + draw. Skinned meshes with no
             // authored alternates collapse to LOD0.
             self.draw_skinned_objects(cam_pos, |obj, i, index_offset, index_count| {
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRootDescriptorTable(5, self.skinned_srv_gpu(i));
                     let push = MainPush {
@@ -768,7 +796,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.hdr.color, 0, HDR_FORMAT) };
         let resolve_to_rt = transition_barrier(
             self.hdr_scene_target(),
@@ -780,6 +812,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[resolve_to_rt, color_to_rt]) };
     }
 
@@ -815,6 +849,8 @@ impl DxContext {
 
         // Load (do not clear) the phase-1 colour + depth: Main2 composites the
         // disoccluded geometry on top.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&depth_dsv));
 
@@ -858,7 +894,10 @@ impl DxContext {
         {
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
             let object_gva =
+                // SAFETY: a property query on a live resource; it only reads.
                 unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(bindless_pso);
                 cmd.SetGraphicsRootSignature(bindless_root);
@@ -912,6 +951,8 @@ impl DxContext {
             if self.n_skinned > 0
                 && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
             {
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetPipelineState(bindless_pso);
                     cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));

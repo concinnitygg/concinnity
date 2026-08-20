@@ -173,6 +173,8 @@ fn create_ssgi_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -218,6 +220,8 @@ fn create_ssgi_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create ssgi PSO: {e}"))
 }
@@ -298,6 +302,8 @@ impl SsgiResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map ssgi params ubo: {e}"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
@@ -437,6 +443,9 @@ impl DxContext {
         // Build + upload this frame's SsgiParams; both sub-passes read the same
         // block via its GPU virtual address.
         let params = ssgi.settings.params(fov_y_radians, aspect);
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const SsgiParams as *const u8,
@@ -444,6 +453,7 @@ impl DxContext {
                 std::mem::size_of::<SsgiParams>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let params_gva = unsafe { ssgi.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // The gather samples the scene spine while the composite blends into it,
@@ -456,6 +466,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[gather_read]) };
 
         // Gather: hemisphere ray-march over the G-buffer -> gi target. t0 = lit
@@ -480,6 +492,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[gather_done]) };
 
         // Composite: depth-aware blur of gi, additively blended into the scene
@@ -540,6 +554,8 @@ impl FullscreenPass for SsgiPass<'_> {
     }
 
     fn draw(&self, cmd: &Self::Rec) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(self.pso);
             cmd.SetGraphicsRootSignature(&self.ssgi.root_sig);

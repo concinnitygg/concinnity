@@ -249,6 +249,8 @@ impl FogResources {
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("fog framebuffer: {e}"))?;
             framebuffers.push(fb);
@@ -288,6 +290,9 @@ impl FogResources {
         extent: vk::Extent2D,
     ) -> Result<(), String> {
         for &fb in &self.framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(fb, None) };
         }
         self.framebuffers.clear();
@@ -299,6 +304,8 @@ impl FogResources {
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let fb = unsafe { device.create_framebuffer(&fb_info, None) }
                 .map_err(|e| format!("fog framebuffer (rebuild): {e}"))?;
             self.framebuffers.push(fb);
@@ -314,6 +321,8 @@ impl FogResources {
                 .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&depth_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
         Ok(())
@@ -323,6 +332,8 @@ impl FogResources {
     // UBO rings and the volume + its views retire through the allocator).
     // Called from `VkContext::drop` after `wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -411,6 +422,8 @@ fn create_fog_render_pass(device: &Device, format: vk::Format) -> Result<vk::Ren
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }.map_err(|e| format!("fog render pass: {e}"))
 }
 
@@ -442,6 +455,8 @@ fn create_fog_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, Str
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("fog set layout: {e}"))
 }
@@ -480,6 +495,8 @@ fn create_froxel_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, 
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("fog froxel set layout: {e}"))
 }
@@ -490,6 +507,8 @@ fn create_fog_pipeline_layout(
 ) -> Result<vk::PipelineLayout, String> {
     let set_layouts = [view_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_pipeline_layout(&info, None) }
         .map_err(|e| format!("fog pipeline layout: {e}"))
 }
@@ -500,6 +519,8 @@ fn create_froxel_pipeline_layout(
 ) -> Result<vk::PipelineLayout, String> {
     let set_layouts = [froxel_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_pipeline_layout(&info, None) }
         .map_err(|e| format!("fog froxel pipeline layout: {e}"))
 }
@@ -530,6 +551,8 @@ fn create_fog_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(2 * f)
         .pool_sizes(&sizes);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_pool(&info, None) }
         .map_err(|e| format!("fog descriptor pool: {e}"))
 }
@@ -542,6 +565,8 @@ fn alloc_descriptor_sets(
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
         .map_err(|e| format!("fog descriptor sets: {e}"))
 }
@@ -605,6 +630,8 @@ fn write_view_set(device: &Device, set: vk::DescriptorSet, bindings: FogViewBind
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(std::slice::from_ref(&volume_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -676,6 +703,8 @@ fn write_froxel_set(device: &Device, set: vk::DescriptorSet, bindings: FogFroxel
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(std::slice::from_ref(&volume_info)),
     ];
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
@@ -715,6 +744,8 @@ fn create_volume_view(device: &Device, image: vk::Image) -> Result<vk::ImageView
             base_array_layer: 0,
             layer_count: 1,
         });
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("fog volume view: {e}"))
 }
 
@@ -727,6 +758,8 @@ fn create_volume_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("fog volume sampler: {e}"))
 }
 
@@ -790,10 +823,14 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create fog froxel pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
@@ -868,6 +905,8 @@ fn create_fog_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -875,6 +914,8 @@ fn create_fog_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create fog pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert, None);
         device.destroy_shader_module(frag, None);
@@ -967,6 +1008,9 @@ impl VkContext {
             z_far: fog_settings.max_distance,
             _pad: [0.0; 2],
         };
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `FogParams`, so `mapped_ptr()` is a live mapping of at least `size_of::<FogParams>()`
+        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const FogParams as *const u8,
@@ -986,6 +1030,8 @@ impl VkContext {
         // fragment read before this write; the shadow map's cascade tap is a
         // declared read of this pass, so the Shadow consumer barrier's stage union
         // carries the compute stage.
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, fog.froxel_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -1058,6 +1104,8 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));

@@ -88,6 +88,8 @@ impl VkShadow {
     // `wait_idle`. The per-frame `global_sets` are freed with the shared
     // descriptor pool, so they are not destroyed here.
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -162,6 +164,8 @@ impl VkSpotShadow {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`; `sets` are freed with `descriptor_pool`.
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &fb in &self.framebuffers {
                 device.destroy_framebuffer(fb, None);
@@ -194,6 +198,8 @@ impl VkAreaLight {
         self.ltc_matrix = GpuImage::null();
         self.ltc_magnitude = GpuImage::null();
         self.buffer = PooledBuffer::null();
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.sampler, None);
         }
@@ -270,6 +276,8 @@ impl VkSkinned {
     // `wait_idle`. The per-object `object_sets` and per-frame `joint_sets` are
     // freed with `descriptor_pool`, so they are not destroyed here.
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -362,6 +370,8 @@ impl VkDescriptors {
     // it: global_sets / object_sets / text_atlas_sets) and the three set
     // layouts. Called from `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.global_set_layout, None);
@@ -408,6 +418,8 @@ impl VkInstanced {
     // `sets`) are freed with the shared descriptor pool, so they are not
     // destroyed here; `clusters` / `lod_buckets` are plain CPU state.
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -451,6 +463,9 @@ impl VkChunkStream {
     // material slots are plain CPU state with nothing to free.
     pub(super) fn destroy(&self, device: &Device) {
         if let Some(pool) = self.descriptor_pool {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_descriptor_pool(pool, None) };
         }
     }
@@ -602,6 +617,9 @@ impl VkCull {
         if let Some(hiz) = &mut self.hiz {
             hiz.destroy(device);
         }
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             if let Some(p) = self.bindless_pipeline {
                 device.destroy_pipeline(p, None);
@@ -698,6 +716,8 @@ impl VkFrameSync {
     // Destroy every owned semaphore + fence. Called from `VkContext::drop`
     // after `wait_idle`, so none are still in flight.
     pub(super) fn destroy(&self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for &s in &self.image_available {
                 device.destroy_semaphore(s, None);
@@ -751,6 +771,8 @@ impl VkCommands {
     // Destroy every command pool, which frees the buffers allocated from it.
     // Called from `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             // The shared pool (also frees the per-frame "end" buffers).
             device.destroy_command_pool(self.command_pool, None);
@@ -1443,7 +1465,7 @@ pub struct VkContext {
     pub(super) world_content_destroyed: bool,
 }
 
-// The host-mapped uniform pointers and the RefCell device allocator behind
+// SAFETY: The host-mapped uniform pointers and the RefCell device allocator behind
 // every pooled resource are used only on this thread; see
 // `debug_assert_main_thread` below.
 unsafe impl Send for VkContext {}
@@ -1546,6 +1568,8 @@ impl VkContext {
         let device = &device;
 
         // Wait for this frame's slot to finish.
+        // SAFETY: the fence belongs to this frame slot and was created from this device; the slice
+        // borrows it for the call.
         unsafe {
             device
                 .wait_for_fences(
@@ -1622,6 +1646,7 @@ impl VkContext {
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
             // the stride and the slice length as the query count).
             let mut results = vec![[0u64; 2]; super::pass_timing::SLOTS_PER_FRAME];
+            // SAFETY: a property query on a live handle; it only reads.
             let res = unsafe {
                 device.get_query_pool_results(
                     pool,
@@ -1695,6 +1720,8 @@ impl VkContext {
         });
 
         // Acquire swapchain image.
+        // SAFETY: `self.swapchain` is the live swapchain and `image_available[frame]` is an
+        // unsignalled semaphore from this device's own pool for this frame slot.
         let acquire = unsafe {
             self.swapchain_loader.acquire_next_image(
                 self.swapchain,
@@ -1718,6 +1745,8 @@ impl VkContext {
             Err(e) => return Err(super::error::map_vk_result(e, "acquire swapchain image")),
         };
 
+        // SAFETY: the fence belongs to this frame slot and was just waited on, so it is signalled
+        // and not in use by a pending submission.
         unsafe { device.reset_fences(std::slice::from_ref(&self.frame_sync.in_flight[frame])) }
             .map_err(|e| format!("reset fences: {e}"))?;
 
@@ -1727,6 +1756,9 @@ impl VkContext {
         // into `cmd` (the outer "end" buffer begun here). It returns the
         // ordered `[start, ...pass buffers]` to submit before `end`.
         let cmd = self.commands.command_buffers[frame];
+        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
+        // in flight; reset then begin puts it in the recording state, which is what the subsequent
+        // recording requires.
         unsafe {
             device
                 .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
@@ -1758,6 +1790,7 @@ impl VkContext {
             world_hidden,
         )?;
 
+        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe { device.end_command_buffer(cmd) }.map_err(|e| format!("end cmd buf: {e}"))?;
         // The outer "end" buffer (Composite + post-graph work + trailing
         // timestamp) submits last, after every per-pass buffer.
@@ -1775,6 +1808,9 @@ impl VkContext {
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(&submit_bufs)
             .signal_semaphores(&signal_sems);
+        // SAFETY: every command buffer in `submit_bufs` was ended and belongs to this frame slot,
+        // the semaphores and fence were created from this device, and `submit_info` borrows all of
+        // them for the call.
         unsafe {
             device
                 .queue_submit(
@@ -1792,6 +1828,8 @@ impl VkContext {
             .wait_semaphores(&signal_sems)
             .swapchains(&swapchains)
             .image_indices(&image_indices);
+        // SAFETY: `present_info` borrows the swapchain, image index, and wait semaphore for the
+        // call; the semaphore is signalled by the submission above.
         let present_result = unsafe {
             self.swapchain_loader
                 .queue_present(self.present_queue, &present_info)
@@ -1933,6 +1971,7 @@ impl VkContext {
     }
 
     pub fn wait_idle(&self) {
+        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         let _ = unsafe { self.device.device_wait_idle() };
     }
 
@@ -1957,6 +1996,7 @@ impl VkContext {
         }
         let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
         let mut props2 = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe {
             self.instance
                 .get_physical_device_memory_properties2(self.physical_device, &mut props2);
@@ -2185,6 +2225,7 @@ impl VkContext {
         use crate::gfx::backend::{
             GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
         };
+        // SAFETY: a property query on a live handle; it only reads.
         let props = unsafe {
             self.instance
                 .get_physical_device_properties(self.physical_device)
@@ -2198,6 +2239,7 @@ impl VkContext {
         };
         let discrete = props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
         let unified = props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU;
+        // SAFETY: a property query on a live handle; it only reads.
         let mem = unsafe {
             self.instance
                 .get_physical_device_memory_properties(self.physical_device)
@@ -2282,18 +2324,29 @@ impl VkContext {
         // IBL cubes + cube sampler.
         self.env_map.irradiance = GpuImage::null();
         self.env_map.prefilter = GpuImage::null();
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe { device.destroy_sampler(self.cube_sampler, None) };
 
         // Pipelines.
         self.wireframe.destroy(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe { device.destroy_pipeline(self.main_pipeline, None) };
         if let Some(p) = self.text_pipeline {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline(p, None) };
         }
         // Instanced-prop pipeline + per-frame instance buffers (see
         // `VkInstanced::destroy`).
         self.instanced.destroy(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe { device.destroy_pipeline_layout(self.main_pipeline_layout, None) };
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe { device.destroy_pipeline_layout(self.text_pipeline_layout, None) };
 
         // GPU-driven cull + bindless static pass resources, including the Hi-Z
@@ -2305,6 +2358,8 @@ impl VkContext {
 
         // Composite pass resources (the LUT retires through the allocator).
         self.color_lut = GpuImage::null();
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.composite_pipeline, None);
             device.destroy_pipeline_layout(self.composite_pipeline_layout, None);
@@ -2314,6 +2369,8 @@ impl VkContext {
 
         // Bloom resources (mips + framebuffers freed by
         // destroy_swapchain_resources above).
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.bloom_pipeline_prefilter, None);
             device.destroy_pipeline(self.bloom_pipeline_downsample, None);
@@ -2431,10 +2488,15 @@ impl VkContext {
 
         // Profiler-overlay timestamp pool.
         if let Some(pool) = self.timestamp_query_pool.take() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_query_pool(pool, None) };
         }
 
         // Render passes.
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_render_pass(self.main_render_pass, None);
             device.destroy_render_pass(self.composite_render_pass, None);
@@ -2445,6 +2507,9 @@ impl VkContext {
         // `self.descriptors.destroy` below.
         self.chunk_stream.destroy(device);
         if let Some(pool) = self.clone_descriptor_pool {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_descriptor_pool(pool, None) };
         }
 
@@ -2462,6 +2527,8 @@ impl VkContext {
         self.uniforms.destroy();
 
         // Samplers.
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_sampler(self.linear_sampler, None);
             device.destroy_sampler(self.text_sampler, None);
@@ -2500,12 +2567,18 @@ impl Drop for VkContext {
         // everything down. The swapchain is likewise skipped inside
         // `destroy_swapchain_resources` (called above) when reused.
         if !self.reused_by_successor {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { self.surface_loader.destroy_surface(self.surface, None) };
         }
 
         // Debug. `None` on the outgoing context of a reload (moved to the
         // successor), so this is naturally skipped there.
         if let (Some(du), Some(dm)) = (&self.debug_utils, self.debug_messenger) {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { du.destroy_debug_utils_messenger(dm, None) };
         }
 
@@ -2514,7 +2587,13 @@ impl Drop for VkContext {
             // device goes away. On a lost device the serialize inside is
             // skipped and the previous blob stays valid.
             super::pipeline_cache::shutdown(&self.device);
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { self.device.destroy_device(None) };
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { self.instance.destroy_instance(None) };
         }
     }

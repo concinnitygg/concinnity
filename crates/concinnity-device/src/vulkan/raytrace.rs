@@ -129,6 +129,8 @@ impl AccelBuffer {
     // The backing buffer retires through the allocator when the value drops;
     // only the acceleration-structure handle is destroyed by hand.
     fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             as_loader.destroy_acceleration_structure(self.accel, None);
         }
@@ -182,6 +184,8 @@ pub(super) struct SkinPipeline {
 
 impl SkinPipeline {
     pub(super) fn destroy(&self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.pipeline_layout, None);
@@ -416,7 +420,7 @@ pub(super) struct RtAccelData {
     frames_in_flight_usize: usize,
 }
 
-// Raw pointers in `HostBuffer` are host-mapped and only touched on the render
+// SAFETY: Raw pointers in `HostBuffer` are host-mapped and only touched on the render
 // thread; the acceleration-structure loader holds plain fn pointers. The whole
 // struct lives inside `VkContext`, which is already `unsafe impl Send`.
 unsafe impl Send for RtAccelData {}
@@ -517,6 +521,8 @@ fn tlas_geometry(instance_address: u64) -> vk::AccelerationStructureGeometryKHR<
 // Device address of a buffer (core in Vulkan 1.2; the device enables
 // `bufferDeviceAddress` for the RT path).
 fn buffer_address(device: &Device, buffer: vk::Buffer) -> u64 {
+    // SAFETY: `buffer` was created from this device with SHADER_DEVICE_ADDRESS usage and the info
+    // struct borrows it for the call; the query only reads.
     unsafe {
         device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
     }
@@ -542,6 +548,8 @@ fn create_accel(
         .offset(0)
         .size(size)
         .ty(ty);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let accel = unsafe { as_loader.create_acceleration_structure(&info, None) }
         .map_err(|e| format!("create acceleration structure: {e}"))?;
     Ok(AccelBuffer {
@@ -566,6 +574,9 @@ fn create_host_buffer<T: Copy>(
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     let buffer = pooled.buffer();
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
+    // the source is a separate live allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             data.as_ptr() as *const u8,
@@ -596,6 +607,9 @@ fn write_or_recreate_host<T: Copy>(
     if let Some(buf) = existing
         && buf.size >= needed
     {
+        // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
+        // which is at least the source length, so `mapped_ptr()` is a live mapping of that many
+        // bytes; the source is a separate live allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 data.as_ptr() as *const u8,
@@ -661,6 +675,8 @@ pub(super) fn build_skin_pipeline(
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
         })
         .collect();
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let set_layout = unsafe {
         device.create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
@@ -668,6 +684,8 @@ pub(super) fn build_skin_pipeline(
         )
     }
     .map_err(|e| {
+        // SAFETY: the shader module was created from this device, and a module may be destroyed as
+        // soon as the pipelines that consumed it exist.
         unsafe { device.destroy_shader_module(module, None) };
         format!("rt skin descriptor set layout: {e}")
     })?;
@@ -677,6 +695,8 @@ pub(super) fn build_skin_pipeline(
         .offset(0)
         .size(std::mem::size_of::<SkinParams>() as u32);
     let set_layouts = [set_layout];
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let pipeline_layout = unsafe {
         device.create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default()
@@ -686,6 +706,8 @@ pub(super) fn build_skin_pipeline(
         )
     }
     .map_err(|e| {
+        // SAFETY: the shader module was created from this device, and a module may be destroyed as
+        // soon as the pipelines that consumed it exist.
         unsafe {
             device.destroy_shader_module(module, None);
             device.destroy_descriptor_set_layout(set_layout, None);
@@ -701,11 +723,18 @@ pub(super) fn build_skin_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(pipeline_layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     };
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
     let pipeline = pipeline.map_err(|(_, e)| {
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             device.destroy_pipeline_layout(pipeline_layout, None);
             device.destroy_descriptor_set_layout(set_layout, None);
@@ -722,6 +751,9 @@ pub(super) fn build_skin_pipeline(
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )
         .map_err(|e| {
+            // SAFETY: every handle here was created from this device and is destroyed exactly once;
+            // the caller has already waited for the device to go idle, so no submission still
+            // references them.
             unsafe {
                 device.destroy_pipeline(pipeline, None);
                 device.destroy_pipeline_layout(pipeline_layout, None);
@@ -751,6 +783,8 @@ fn build_barrier(device: &Device, cmd: vk::CommandBuffer) {
             vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
                 | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
         );
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
+    // commands name is live for the call.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -768,6 +802,7 @@ fn build_barrier(device: &Device, cmd: vk::CommandBuffer) {
 fn scratch_alignment(instance: &ash::Instance, pd: vk::PhysicalDevice) -> u64 {
     let mut as_props = vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
     let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut as_props);
+    // SAFETY: a property query on a live handle; it only reads.
     unsafe { instance.get_physical_device_properties2(pd, &mut props2) };
     (as_props.min_acceleration_structure_scratch_offset_alignment as u64).max(1)
 }
@@ -890,6 +925,7 @@ pub(super) fn build_rt_accel(
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
             .geometries(std::slice::from_ref(&geo));
         let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe {
             as_loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -908,6 +944,8 @@ pub(super) fn build_rt_accel(
     }
     let blas_addresses: Vec<u64> = blas
         .iter()
+        // SAFETY: the acceleration structure was created from this device and the info struct
+        // borrows its handle for the call; the query only reads.
         .map(|b| unsafe {
             as_loader.get_acceleration_structure_device_address(
                 &vk::AccelerationStructureDeviceAddressInfoKHR::default()
@@ -964,6 +1002,7 @@ pub(super) fn build_rt_accel(
         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
         .geometries(std::slice::from_ref(&tlas_geo));
     let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+    // SAFETY: a property query on a live handle; it only reads.
     unsafe {
         as_loader.get_acceleration_structure_build_sizes(
             vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -1011,6 +1050,8 @@ pub(super) fn build_rt_accel(
                 .primitive_offset(p.index_byte_offset)
                 .first_vertex(0)
                 .transform_offset(0);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 as_loader.cmd_build_acceleration_structures(
                     cmd,
@@ -1035,6 +1076,8 @@ pub(super) fn build_rt_accel(
             .primitive_offset(0)
             .first_vertex(0)
             .transform_offset(0);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             as_loader.cmd_build_acceleration_structures(
                 cmd,
@@ -1266,6 +1309,8 @@ impl RtAccelData {
 
     // Device address of a BLAS handle (for the instance descriptors).
     fn blas_device_address(&self, accel: vk::AccelerationStructureKHR) -> u64 {
+        // SAFETY: the acceleration structure was created from this device and the info struct
+        // borrows its handle for the call; the query only reads.
         unsafe {
             self.as_loader.get_acceleration_structure_device_address(
                 &vk::AccelerationStructureDeviceAddressInfoKHR::default()
@@ -1384,6 +1429,7 @@ impl RtAccelData {
                         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
                         .geometries(std::slice::from_ref(&geo));
                     let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+                    // SAFETY: a property query on a live handle; it only reads.
                     unsafe {
                         self.as_loader.get_acceleration_structure_build_sizes(
                             vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -1457,6 +1503,7 @@ impl RtAccelData {
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
             .geometries(std::slice::from_ref(&tlas_geo));
         let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe {
             self.as_loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -1511,6 +1558,8 @@ impl RtAccelData {
                 .primitive_offset(p.index_byte_offset)
                 .first_vertex(0)
                 .transform_offset(0);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 self.as_loader.cmd_build_acceleration_structures(
                     cmd,
@@ -1535,6 +1584,8 @@ impl RtAccelData {
             .primitive_offset(0)
             .first_vertex(0)
             .transform_offset(0);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.as_loader.cmd_build_acceleration_structures(
                 cmd,
@@ -1714,6 +1765,8 @@ impl RtAccelData {
             .primitive_offset(0)
             .first_vertex(0)
             .transform_offset(0);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.as_loader.cmd_build_acceleration_structures(
                 cmd,
@@ -1889,12 +1942,16 @@ impl RtAccelData {
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&dummy_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
 
         // Stage 1: skin dispatch per visible skinned object onto `cmd`.
         let skin = self.skin.as_ref().expect("skin pipeline present");
         let frame_sets = &skin.sets[frame_idx];
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
         }
@@ -1913,12 +1970,17 @@ impl RtAccelData {
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: 0,
             };
+            // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
+            // padding and all 16 of its bytes are initialised; the slice borrows it and does not
+            // outlive it.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
                     &params as *const SkinParams as *const u8,
                     std::mem::size_of::<SkinParams>(),
                 )
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -1945,6 +2007,8 @@ impl RtAccelData {
         // against a prior compute write to its input vertex buffer, so this
         // cross-pass residency barrier is required (Metal / DirectX document the
         // same).
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1996,6 +2060,7 @@ impl RtAccelData {
                 .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
                 .geometries(std::slice::from_ref(&geo));
             let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+            // SAFETY: a property query on a live handle; it only reads.
             unsafe {
                 self.as_loader.get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -2031,6 +2096,8 @@ impl RtAccelData {
         }
         let skinned_blas_addresses: Vec<u64> = skinned_blas
             .iter()
+            // SAFETY: the acceleration structure was created from this device and the info struct
+            // borrows its handle for the call; the query only reads.
             .map(|b| unsafe {
                 self.as_loader.get_acceleration_structure_device_address(
                     &vk::AccelerationStructureDeviceAddressInfoKHR::default()
@@ -2094,6 +2161,7 @@ impl RtAccelData {
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
             .geometries(std::slice::from_ref(&tlas_geo));
         let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        // SAFETY: a property query on a live handle; it only reads.
         unsafe {
             self.as_loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
@@ -2149,6 +2217,8 @@ impl RtAccelData {
                 .primitive_offset(p.index_byte_offset)
                 .first_vertex(0)
                 .transform_offset(0);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 self.as_loader.cmd_build_acceleration_structures(
                     cmd,
@@ -2173,6 +2243,8 @@ impl RtAccelData {
             .primitive_offset(0)
             .first_vertex(0)
             .transform_offset(0);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             self.as_loader.cmd_build_acceleration_structures(
                 cmd,
@@ -2309,6 +2381,8 @@ pub(super) fn ensure_skin_sets(
     // old pool's sets are only ever bound on the frame's own command buffer, which
     // has completed (the per-frame fence gated the frame at the top of
     // `draw_frame`), so freeing the old pool here is safe.
+    // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+    // caller has already waited for the device to go idle, so no submission still references them.
     unsafe {
         if skin.descriptor_pool != vk::DescriptorPool::null() {
             device.destroy_descriptor_pool(skin.descriptor_pool, None);
@@ -2318,6 +2392,8 @@ pub(super) fn ensure_skin_sets(
     let pool_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(total * 5);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let pool = unsafe {
         device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -2331,6 +2407,8 @@ pub(super) fn ensure_skin_sets(
     for _ in 0..frames {
         let layouts: Vec<vk::DescriptorSetLayout> =
             (0..object_count).map(|_| skin.set_layout).collect();
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let alloc = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
@@ -2482,6 +2560,8 @@ impl super::context::VkContext {
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&dummy_info)),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { device.update_descriptor_sets(&writes, &[]) };
             }
         }
@@ -2556,6 +2636,8 @@ impl super::context::VkContext {
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(&dst_info)),
                 ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
                 unsafe { self.device.update_descriptor_sets(&writes, &[]) };
             }
         }
@@ -2582,6 +2664,8 @@ impl super::context::VkContext {
         }
         let device = &self.device;
         let frame_sets = &skin.sets[frame_idx];
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, skin.pipeline);
         }
@@ -2603,12 +2687,17 @@ impl super::context::VkContext {
                     .copied()
                     .unwrap_or(0),
             };
+            // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
+            // padding and all 16 of its bytes are initialised; the slice borrows it and does not
+            // outlive it.
             let bytes = unsafe {
                 std::slice::from_raw_parts(
                     &params as *const SkinParams as *const u8,
                     std::mem::size_of::<SkinParams>(),
                 )
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -2633,6 +2722,8 @@ impl super::context::VkContext {
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -2716,6 +2807,8 @@ mod tests {
         assert_eq!(d.instance_custom_index_and_mask.low_24(), 7);
         assert_eq!(d.instance_custom_index_and_mask.high_8(), 0xFF);
         assert_eq!(
+            // SAFETY: the union was built from `device_handle` two lines above, so that is the live
+            // variant.
             unsafe { d.acceleration_structure_reference.device_handle },
             0xDEAD_BEEF
         );

@@ -47,6 +47,8 @@ pub(crate) struct MainPipelineBundle {
 //   stride = sizeof(Vertex) = 56 bytes
 pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         // attribute 0: pos, float3, offset 0
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
@@ -151,6 +153,8 @@ pub(crate) fn build_main_pipeline(
     // Off-screen HDR pass: RGBA16Float colour + 4x MSAA. Output is linear
     // light; ACES tonemap + gamma + FXAA run in the composite pass.
     pipeline_desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         pipeline_desc
             .colorAttachments()
@@ -313,6 +317,8 @@ pub(crate) fn build_bucket_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         desc.colorAttachments()
             .objectAtIndexedSubscript(0)
@@ -360,6 +366,8 @@ pub(crate) fn build_instanced_pipeline(
     inst_pipeline_desc.setVertexFunction(Some(&inst_vert_fn));
     inst_pipeline_desc.setFragmentFunction(Some(&frag_fn));
     inst_pipeline_desc.setRasterSampleCount(HDR_SAMPLE_COUNT as usize);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         inst_pipeline_desc
             .colorAttachments()

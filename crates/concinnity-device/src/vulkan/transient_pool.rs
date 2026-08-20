@@ -122,6 +122,7 @@ impl TransientImagePool {
                 let mut slot_size: vk::DeviceSize = 0;
                 for m in &slot.members {
                     let image = create_image_unbound(device, m)?;
+                    // SAFETY: a property query on a live handle; it only reads.
                     let reqs = unsafe { device.get_image_memory_requirements(image) };
                     type_bits &= reqs.memory_type_bits;
                     slot_size = slot_size.max(reqs.size);
@@ -133,6 +134,8 @@ impl TransientImagePool {
                 // One device-local allocation backs every member of this slot
                 // for this frame; bind each member at offset 0 (their disjoint
                 // lifetimes make the overlap safe).
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 let memory = unsafe {
                     device.allocate_memory(
                         &vk::MemoryAllocateInfo::default()
@@ -150,6 +153,9 @@ impl TransientImagePool {
                 slot_memories.push(memory);
 
                 for (spec, image) in member_images {
+                    // SAFETY: the resource and the memory were both created from this device, the
+                    // reservation's offset satisfies the alignment its memory requirements
+                    // reported, and nothing is bound to the resource yet.
                     unsafe { device.bind_image_memory(image, memory, 0) }
                         .map_err(|e| format!("transient pool bind {}: {e}", spec.label))?;
                     let aspect = image_aspect(spec.format);
@@ -298,6 +304,8 @@ impl TransientImagePool {
     // already idled the device and destroyed any framebuffer that referenced
     // these views.
     pub(super) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for p in &self.images {
                 device.destroy_image_view(p.view, None);
@@ -338,6 +346,8 @@ fn create_image_unbound(device: &Device, spec: &TransientTexture) -> Result<vk::
         .usage(image_usage(spec.usage))
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(sample_count(spec.sample_count));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_image(&info, None) }.map_err(|e| format!("transient pool image: {e}"))
 }
 

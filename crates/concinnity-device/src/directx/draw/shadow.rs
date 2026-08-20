@@ -96,6 +96,8 @@ impl DxContext {
 
         // Viewport + scissor + topology are common to both the GPU-driven and the
         // legacy raster paths.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -194,6 +196,7 @@ impl DxContext {
         let prefix = self.skinned_record_base();
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
         let object_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Per-cascade GPU cull -> per-cascade indirect command regions. Runs as a
@@ -202,6 +205,8 @@ impl DxContext {
 
         // Static + instance prefix: clear each re-rendered cascade's depth then
         // issue its `[0, skinned_record_base())` region against the static VB/IB.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(sb_pso);
             cmd.SetGraphicsRootSignature(sb_root);
@@ -217,6 +222,8 @@ impl DxContext {
             }
             let dsv = self.shadow.dsvs[cascade_idx];
             let c = cascade_idx as u32;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
@@ -246,6 +253,8 @@ impl DxContext {
         if self.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
@@ -256,6 +265,8 @@ impl DxContext {
                 }
                 let dsv = self.shadow.dsvs[cascade_idx];
                 let c = cascade_idx as u32;
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                     cmd.SetGraphicsRoot32BitConstants(
@@ -311,6 +322,8 @@ impl DxContext {
         if self.clone.slot_by_draw_idx.is_empty() {
             return;
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(shadow_pso);
             cmd.SetGraphicsRootSignature(shadow_root_sig);
@@ -323,6 +336,8 @@ impl DxContext {
                 continue;
             }
             let dsv = self.shadow.dsvs[cascade_idx];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 // Append to the GPU-driven cascade depth (no re-clear).
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
@@ -341,6 +356,8 @@ impl DxContext {
                 };
                 let d = crate::gfx::lod::camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRoot32BitConstants(
                         0,
@@ -372,6 +389,8 @@ impl DxContext {
         bind: ShadowPassBinding<'_>,
         cam_pos: [f32; 3],
     ) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(bind.pso);
             cmd.SetGraphicsRootSignature(bind.root_sig);
@@ -468,6 +487,8 @@ impl DxContext {
         if self.skinned.draw_objects.is_empty() {
             return;
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(pso);
             cmd.SetGraphicsRootSignature(root_sig);
@@ -527,6 +548,8 @@ impl DxContext {
                 continue;
             }
             let dsv = self.shadow.dsvs[cascade_idx];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
@@ -548,6 +571,8 @@ impl DxContext {
                 continue;
             }
             let dsv = self.shadow.dsvs[cascade_idx];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
             }

@@ -222,6 +222,8 @@ fn create_simulate_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
@@ -229,6 +231,8 @@ fn create_simulate_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
         .map_err(|e| format!("create particle simulate PSO: {e}"))
 }
@@ -244,6 +248,8 @@ fn create_render_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -301,6 +307,8 @@ fn create_render_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create particle render PSO: {e}"))
 }
@@ -372,6 +380,8 @@ impl ParticleResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map particle view ubo: {e}"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
@@ -392,6 +402,8 @@ impl ParticleResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map particle params ubo: {e}"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
@@ -413,6 +425,8 @@ impl ParticleResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map particle budget upload: {e}"))?;
             budget_upload_ptrs.push(ptr as *mut u8);
@@ -488,16 +502,26 @@ fn zero_default_buffer(
     )?;
     // Zero the upload buffer via its persistent mapping.
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut ptr)) }
         .map_err(|e| format!("zero_default_buffer: map upload: {e}"))?;
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize) };
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
+    // call.
     unsafe { upload.Unmap(0, None) };
 
     // One-shot copy command list. Pattern matches `upload_buffer` in texture.rs.
     let cmd_alloc: ID3D12CommandAllocator =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .map_err(|e| format!("zero_default_buffer: alloc: {e}"))?;
     let list: ID3D12GraphicsCommandList =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &cmd_alloc, None) }
             .map_err(|e| format!("zero_default_buffer: list: {e}"))?;
 
@@ -506,33 +530,51 @@ fn zero_default_buffer(
         D3D12_RESOURCE_STATE_COMMON,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
+    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
+    // these commands name is live for the call.
     unsafe { list.ResourceBarrier(&[to_copy_dest]) };
+    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
+    // these commands name is live for the call.
     unsafe { list.CopyBufferRegion(target, 0, &*upload, 0, bytes) };
     let back_to_uav = transition_barrier(
         target,
         D3D12_RESOURCE_STATE_COPY_DEST,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
     );
+    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
+    // these commands name is live for the call.
     unsafe { list.ResourceBarrier(&[back_to_uav]) };
+    // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
     unsafe { list.Close() }.map_err(|e| format!("zero_default_buffer: close: {e}"))?;
     let cmd: ID3D12CommandList = windows::core::Interface::cast(&list)
         .map_err(|e| format!("zero_default_buffer: cast: {e}"))?;
+    // SAFETY: every command list in the submission is live and closed, and the slice outlives the
+    // call.
     unsafe { alloc.queue().ExecuteCommandLists(&[Some(cmd)]) };
 
     // Wait for completion before returning so the upload buffer (about to go
     // out of scope) is not freed while still referenced. One-shot init only,
     // not on the hot path.
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
         .map_err(|e| format!("zero_default_buffer: fence: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     unsafe { alloc.queue().Signal(&fence, 1) }
         .map_err(|e| format!("zero_default_buffer: signal: {e}"))?;
+    // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
         let event =
+            // SAFETY: an auto-reset, initially unsignalled event with no name and no security
+            // attributes; the call borrows nothing.
             unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
                 .map_err(|e| format!("zero_default_buffer: event: {e}"))?;
+        // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
             .map_err(|e| format!("zero_default_buffer: set event: {e}"))?;
+        // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
+        // SAFETY: `event` was created above, the wait has returned, and it is closed exactly once.
         unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
     }
 
@@ -551,6 +593,7 @@ impl DxContext {
             .as_ref()
             .map(|s| s.emitter_srv_base_slot)
             .unwrap_or(0);
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -618,6 +661,9 @@ impl DxContext {
             cam_up,
             _pad1: 0.0,
         };
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const ParticleView as *const u8,
@@ -625,8 +671,10 @@ impl DxContext {
                 std::mem::size_of::<ParticleView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { resources.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
         let params_base_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { resources.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
         let budget_upload = &resources.budget_upload_resources[frame_idx];
 
@@ -665,6 +713,9 @@ impl DxContext {
             gpu.spawn_state.set(spawn_state);
 
             // Write this frame's spawn budget into the per-emitter upload slot.
+            // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
+            // that init sized for this payload, and the source is a separate live value, so the
+            // ranges cannot overlap.
             unsafe {
                 let dst = resources.budget_upload_ptrs[frame_idx]
                     .add((i as u64 * resources.budget_stride) as usize);
@@ -677,6 +728,9 @@ impl DxContext {
 
             // Write this frame's ParticleParams into the per-emitter params slot.
             let params = rec.params(dt, spawn_budget, frame_index);
+            // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
+            // that init sized for this payload, and the source is a separate live value, so the
+            // ranges cannot overlap.
             unsafe {
                 let dst = resources.params_ubo_ptrs[frame_idx]
                     .add((i as u64 * resources.params_stride) as usize);
@@ -689,7 +743,9 @@ impl DxContext {
 
             frame_data.push(Some(EmitterFrameData {
                 params_gva: params_base_gva + i as u64 * resources.params_stride,
+                // SAFETY: a property query on a live resource; it only reads.
                 pool_gva: unsafe { gpu.pool.GetGPUVirtualAddress() },
+                // SAFETY: a property query on a live resource; it only reads.
                 counter_gva: unsafe { gpu.spawn_counter.GetGPUVirtualAddress() },
             }));
         }
@@ -712,6 +768,8 @@ impl DxContext {
             }
         }
         if !to_copy.is_empty() {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&to_copy) };
         }
         for (i, slot) in self.particle.emitter_state.iter().enumerate() {
@@ -719,6 +777,8 @@ impl DxContext {
                 continue;
             }
             if let Some(gpu) = slot.as_ref() {
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.CopyBufferRegion(
                         &gpu.spawn_counter,
@@ -744,6 +804,8 @@ impl DxContext {
             }
         }
         if !to_uav.is_empty() {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&to_uav) };
         }
 
@@ -751,6 +813,8 @@ impl DxContext {
         // UNORDERED_ACCESS state already; the kernel reads + writes through
         // its root UAVs. Each emitter is independent so no UAV barrier is
         // needed between dispatches (resources are disjoint).
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetComputeRootSignature(&resources.simulate_root_sig);
             cmd.SetPipelineState(&resources.simulate_pso);
@@ -762,6 +826,8 @@ impl DxContext {
             let Some(rec) = self.particle.records[i].as_ref() else {
                 continue;
             };
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetComputeRootConstantBufferView(0, data.params_gva);
                 cmd.SetComputeRootUnorderedAccessView(1, data.pool_gva);
@@ -789,6 +855,8 @@ impl DxContext {
         }
         let any_visible = !to_srv.is_empty();
         if any_visible {
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&to_srv) };
         }
 
@@ -799,6 +867,8 @@ impl DxContext {
 
             let w = self.render_width;
             let h = self.render_height;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
                 let viewport = D3D12_VIEWPORT {
@@ -837,6 +907,8 @@ impl DxContext {
                     continue;
                 };
                 let albedo_srv_gpu = self.emitter_albedo_srv_gpu(i);
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetGraphicsRootConstantBufferView(1, data.params_gva);
                     cmd.SetGraphicsRootShaderResourceView(2, data.pool_gva);
@@ -865,6 +937,8 @@ impl DxContext {
                 }
             }
             if !to_uav.is_empty() {
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe { cmd.ResourceBarrier(&to_uav) };
             }
         }
@@ -924,6 +998,7 @@ impl DxContext {
         };
 
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
                 self.descriptors
                     .srv_heap

@@ -165,6 +165,8 @@ fn create_prepass_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("gbuffer prepass render pass: {e}"))
 }
@@ -266,6 +268,8 @@ fn create_prepass_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -273,6 +277,8 @@ fn create_prepass_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create gbuffer prepass pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -488,6 +494,8 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         ],
     )?;
     let layouts = [set_layout, bindless_set_layout];
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let pipeline_layout = unsafe {
         device.create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
@@ -566,6 +574,8 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(std::slice::from_ref(&pm_info)),
         ];
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
@@ -802,6 +812,8 @@ impl GbufferResources {
             .offset(0)
             .size(GBUFFER_PREPASS_PUSH_BYTES);
         let static_layouts = [prepass_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let prepass_layout_static = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -815,6 +827,8 @@ impl GbufferResources {
         let prepass_layout_instanced = if let Some(isl) = instance_ssbo_set_layout {
             let layouts = [prepass_set_layout, isl];
             Some(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe {
                     device.create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
@@ -834,6 +848,8 @@ impl GbufferResources {
             // Both reuse the single main-pass joint set layout.
             let layouts = [prepass_set_layout, jsl, jsl];
             Some(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe {
                     device.create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
@@ -917,6 +933,8 @@ impl GbufferResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(frames as u32)];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -939,6 +957,8 @@ impl GbufferResources {
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(std::slice::from_ref(&buf_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
 
@@ -1015,6 +1035,8 @@ impl GbufferResources {
                 vk::SampleCountFlags::TYPE_1,
             )?;
             let attachments = [normal_depth.view, roughness.view, velocity.view, depth.view];
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let framebuffer = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -1093,6 +1115,9 @@ impl GbufferResources {
 
     fn destroy_targets(&mut self, device: &Device) {
         for &fb in &self.framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(fb, None) };
         }
         self.framebuffers.clear();
@@ -1131,9 +1156,15 @@ impl GbufferResources {
         joint_set_layout: vk::DescriptorSetLayout,
     ) -> Result<(), String> {
         if let Some(p) = self.prepass_pso_skinned.take() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline(p, None) };
         }
         if let Some(l) = self.prepass_layout_skinned.take() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_pipeline_layout(l, None) };
         }
         let prepass_push = vk::PushConstantRange::default()
@@ -1144,6 +1175,8 @@ impl GbufferResources {
         // skinned VS deforms both poses to emit a real deformation motion
         // vector. Both reuse the single main-pass joint set layout.
         let layouts = [self.prepass_set_layout, joint_set_layout, joint_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -1185,6 +1218,9 @@ impl GbufferResources {
         device: &Device,
         rebuilt: RebuiltGbufferPipelines,
     ) {
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             device.destroy_pipeline(self.prepass_pso_static, None);
             if let Some(p) = self.prepass_pso_instanced.take() {
@@ -1203,6 +1239,9 @@ impl GbufferResources {
     // device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_pipeline(self.prepass_pso_static, None);
@@ -1279,6 +1318,10 @@ impl VkContext {
             prev_vp,
             view: self.view_matrix,
         };
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `GBufferView`, so `mapped_ptr()` is a live mapping of at least
+        // `size_of::<GBufferView>()` bytes; the source is a separate live borrow, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const GBufferView as *const u8,
@@ -1315,6 +1358,8 @@ impl VkContext {
             .framebuffer(gb.framebuffers[frame_idx])
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(&clears);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
 
         // Negative-height viewport: matches the main pass so the G-buffer lines
@@ -1329,6 +1374,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
@@ -1350,10 +1397,14 @@ impl VkContext {
                 cam_pos,
                 velocity_active,
             );
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe { device.cmd_end_render_pass(cmd) };
             return;
         }
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
             device.cmd_bind_index_buffer(
@@ -1398,6 +1449,8 @@ impl VkContext {
                 roughness: obj.material.roughness,
                 _pad: [0.0; 3],
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_push_constants(
                     cmd,
@@ -1429,6 +1482,8 @@ impl VkContext {
             && !self.instanced.clusters.is_empty()
             && !self.instanced.sets.is_empty()
         {
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, inst_pso);
                 device.cmd_bind_descriptor_sets(
@@ -1469,6 +1524,8 @@ impl VkContext {
                     roughness: cluster.material.roughness,
                     _pad: [0.0; 3],
                 };
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     device.cmd_bind_descriptor_sets(
                         cmd,
@@ -1526,6 +1583,8 @@ impl VkContext {
                 frame_idx
             };
             let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pso);
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
@@ -1556,6 +1615,8 @@ impl VkContext {
                     roughness: obj.material.roughness,
                     _pad: [0.0; 3],
                 };
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
                 unsafe {
                     // Set 1 = current palette, set 2 = previous-frame palette.
                     device.cmd_bind_descriptor_sets(
@@ -1589,6 +1650,8 @@ impl VkContext {
             }
             // Restore the static vertex/index buffers for any later pass that
             // does not rebind them itself.
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_vertex_buffers(
                     cmd,
@@ -1605,6 +1668,8 @@ impl VkContext {
             }
         }
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe { device.cmd_end_render_pass(cmd) };
     }
 
@@ -1652,6 +1717,8 @@ impl VkContext {
         // the instance region is init-written + immutable). Honours velocity_active.
         self.build_gbuffer_prev_models(gb, frame_idx, velocity_active);
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
             // set 0 = GbView UBO + prev_model SSBO; set 1 = bindless GpuObjectData.
@@ -1716,6 +1783,8 @@ impl VkContext {
                 frame_idx
             };
             let prev = self.skinned.deformed.get(prev_idx).unwrap_or(cur);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]);
                 device.cmd_bind_index_buffer(
@@ -1764,6 +1833,8 @@ impl VkContext {
             return;
         }
         let device = &self.device;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, gb.prepass_pso_static);
             device.cmd_bind_descriptor_sets(
@@ -1809,6 +1880,8 @@ impl VkContext {
                 roughness: obj.material.roughness,
                 _pad: [0.0; 3],
             };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
             unsafe {
                 device.cmd_push_constants(
                     cmd,

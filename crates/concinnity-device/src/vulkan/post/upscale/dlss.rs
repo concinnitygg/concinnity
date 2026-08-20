@@ -212,6 +212,8 @@ fn create_cleared_input(
                 dst_access: vk::AccessFlags::TRANSFER_WRITE,
             },
         );
+        // SAFETY: `cmd` is a command buffer in the recording state, `image` was just transitioned
+        // to TRANSFER_DST_OPTIMAL by the barrier above, and `range` names its only mip and layer.
         unsafe {
             device.cmd_clear_color_image(
                 cmd,
@@ -303,6 +305,8 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     let mut inst_exts: *const *const c_char = ptr::null();
     let mut dev_count: u32 = 0;
     let mut dev_exts: *const *const c_char = ptr::null();
+    // SAFETY: the NGX entry point is statically linked and matches the SDK's declared signature;
+    // every pointer it is handed points at a live local that outlives the call.
     let rc = unsafe {
         NVSDK_NGX_VULKAN_RequiredExtensions(
             &mut inst_count,
@@ -315,7 +319,10 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
         tracing::warn!("DLSS: NVSDK_NGX_VULKAN_RequiredExtensions returned {rc:#x}");
         return None;
     }
+    // SAFETY: `inst_count`/`inst_exts` are the pair NGX just wrote on the success path above, and
+    // the SDK owns that array.
     let inst = unsafe { super::copy_ext_names(inst_count, inst_exts) };
+    // SAFETY: as above, for the device extension pair.
     let dev = unsafe { super::copy_ext_names(dev_count, dev_exts) };
     Some((inst, dev))
 }
@@ -362,8 +369,10 @@ pub(in crate::vulkan) struct DlssUpscaler {
     reset_pending: Cell<bool>,
 }
 
-// The NGX handle / parameter bag are render-thread-only raw pointers; the
-// trait's `Send` bound is satisfied unsafely, same as the rest of `VkContext`.
+// SAFETY: the NGX feature handle and parameter bag this owns are not shared:
+// every entry point runs on the render thread that built them, under the same
+// main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands
+// over exclusive ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for DlssUpscaler {}
 
 impl DlssUpscaler {
@@ -391,6 +400,8 @@ impl DlssUpscaler {
 
         // NGX writes logs / data into the app-data path; use the working dir.
         let app_path: Vec<u16> = ".".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: the NGX entry point is statically linked and matches the SDK's declared
+        // signature; every pointer it is handed points at a live local that outlives the call.
         let rc = unsafe {
             NVSDK_NGX_VULKAN_Init_with_ProjectID(
                 PROJECT_ID.as_ptr(),
@@ -415,17 +426,23 @@ impl DlssUpscaler {
         }
 
         let mut params: *mut c_void = ptr::null_mut();
+        // SAFETY: NGX was initialised above and writes the out-param; `params` is a live local.
         let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut params) };
         if !ngx_succeeded(rc) || params.is_null() {
             tracing::warn!(
                 "DLSS (Vulkan): GetCapabilityParameters returned {rc:#x}; trying next backend"
             );
+            // SAFETY: each handle was created by the NGX calls above and is released exactly once
+            // here, innermost first, before the device it was created against goes away.
             unsafe { NVSDK_NGX_VULKAN_Shutdown1(device.handle()) };
             return Ok(None);
         }
 
         // Authoritative DLSS-support gate for this GPU + driver.
         let mut available: u32 = 0;
+        // SAFETY: `params` is the live NGX parameter block returned by GetCapabilityParameters, and
+        // each name is a static NUL-terminated key; the values are read/written by the SDK before
+        // the call returns.
         let rc = unsafe {
             NVSDK_NGX_Parameter_GetUI(params, P_SUPERSAMPLING_AVAILABLE.as_ptr(), &mut available)
         };
@@ -433,6 +450,8 @@ impl DlssUpscaler {
             tracing::warn!(
                 "DLSS (Vulkan): SuperSampling not available on this GPU; trying next backend"
             );
+            // SAFETY: each handle was created by the NGX calls above and is released exactly once
+            // here, innermost first, before the device it was created against goes away.
             unsafe {
                 NVSDK_NGX_VULKAN_DestroyParameters(params);
                 NVSDK_NGX_VULKAN_Shutdown1(device.handle());
@@ -441,6 +460,9 @@ impl DlssUpscaler {
         }
 
         // Feature-create parameters.
+        // SAFETY: `params` is the live NGX parameter block returned by GetCapabilityParameters, and
+        // each name is a static NUL-terminated key; the values are read/written by the SDK before
+        // the call returns.
         unsafe {
             NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), render_width);
             NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), render_height);
@@ -463,6 +485,8 @@ impl DlssUpscaler {
         let mut handle: *mut c_void = ptr::null_mut();
         let mut create_rc: u32 = NVSDK_NGX_RESULT_FAIL;
         one_shot_submit(device, command_pool, queue, |cmd| {
+            // SAFETY: `cmd` is in the recording state, `params` is the live parameter block filled
+            // above, and `handle` is a live local NGX writes the new feature into.
             create_rc = unsafe {
                 NVSDK_NGX_VULKAN_CreateFeature1(
                     device.handle(),
@@ -477,6 +501,8 @@ impl DlssUpscaler {
             tracing::warn!(
                 "DLSS (Vulkan): CreateFeature returned {create_rc:#x}; trying next backend"
             );
+            // SAFETY: each handle was created by the NGX calls above and is released exactly once
+            // here, innermost first, before the device it was created against goes away.
             unsafe {
                 NVSDK_NGX_VULKAN_DestroyParameters(params);
                 NVSDK_NGX_VULKAN_Shutdown1(device.handle());
@@ -494,6 +520,8 @@ impl DlssUpscaler {
         ) {
             Ok(img) => img,
             Err(e) => {
+                // SAFETY: each handle was created by the NGX calls above and is released exactly
+                // once here, innermost first, before the device it was created against goes away.
                 unsafe {
                     NVSDK_NGX_VULKAN_ReleaseFeature(handle);
                     NVSDK_NGX_VULKAN_DestroyParameters(params);
@@ -526,6 +554,8 @@ impl DlssUpscaler {
         ) {
             Ok(img) => img,
             Err(e) => {
+                // SAFETY: each handle was created by the NGX calls above and is released exactly
+                // once here, innermost first, before the device it was created against goes away.
                 unsafe {
                     NVSDK_NGX_VULKAN_ReleaseFeature(handle);
                     NVSDK_NGX_VULKAN_DestroyParameters(params);
@@ -651,6 +681,9 @@ impl VkUpscaleBackend for DlssUpscaler {
             1,
             false,
         );
+        // SAFETY: `self.params` is the live parameter block, each name is a static NUL-terminated
+        // key, and every resource descriptor pointer points at a local that outlives the evaluate
+        // below.
         unsafe {
             let p = self.params;
             NVSDK_NGX_Parameter_SetVoidPointer(
@@ -689,6 +722,8 @@ impl VkUpscaleBackend for DlssUpscaler {
             NVSDK_NGX_Parameter_SetUI(p, P_SUBRECT_HEIGHT.as_ptr(), self.render_height);
             NVSDK_NGX_Parameter_SetF(p, P_SHARPNESS.as_ptr(), 0.0);
         }
+        // SAFETY: `cmd` is in the recording state and `self.handle` / `self.params` are the live
+        // feature and parameter block created in `new`.
         let rc = unsafe {
             NVSDK_NGX_VULKAN_EvaluateFeature_C(cmd, self.handle, self.params, ptr::null())
         };
@@ -699,6 +734,8 @@ impl VkUpscaleBackend for DlssUpscaler {
     }
 
     fn destroy(&mut self, _device: &Device) {
+        // SAFETY: each handle is released exactly once (guarded by its null check) and nulled
+        // afterwards, innermost first, so a second `destroy` is a no-op.
         unsafe {
             if !self.handle.is_null() {
                 NVSDK_NGX_VULKAN_ReleaseFeature(self.handle);

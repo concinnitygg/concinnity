@@ -199,6 +199,8 @@ fn create_decal_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -262,6 +264,8 @@ fn create_decal_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create decal PSO: {e}"))
 }
@@ -330,11 +334,13 @@ impl DecalResources {
         )?;
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
             SizeInBytes: vbytes.len() as u32,
             StrideInBytes: 12,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            // SAFETY: a property query on a live resource; it only reads.
             BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
             SizeInBytes: ibytes.len() as u32,
             Format: DXGI_FORMAT_R16_UINT,
@@ -352,6 +358,8 @@ impl DecalResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map decal view ubo: {e}"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
@@ -372,6 +380,8 @@ impl DecalResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("map decal params ubo: {e}"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
@@ -432,6 +442,8 @@ pub(in crate::directx) fn write_main_depth_srv(
             },
         }
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(depth, Some(&srv_desc), srv_cpu) };
 }
 
@@ -488,6 +500,9 @@ impl DxContext {
             viewport,
             _pad: [0.0; 2],
         };
+        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
+        // init sized for this payload, and the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &view_uni as *const DecalView as *const u8,
@@ -495,8 +510,10 @@ impl DxContext {
                 std::mem::size_of::<DecalView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { decals.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
         let params_base_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { decals.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // Main depth is already in a shader-resource state for the fragment's
@@ -510,6 +527,8 @@ impl DxContext {
 
         let w = self.render_width;
         let h = self.render_height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
             let vp = D3D12_VIEWPORT {
@@ -561,9 +580,13 @@ impl DxContext {
                 _pad2: 0.0,
             };
             // Upload into this frame's per-decal slot.
+            // SAFETY: each ring slot is `params_stride * MAX_DECALS` bytes and `add_decal` refuses
+            // records past `MAX_DECALS`, so `i * params_stride` stays inside this frame's mapping.
             let dst = unsafe {
                 decals.params_ubo_ptrs[frame_idx].add((i as u64 * decals.params_stride) as usize)
             };
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &params as *const DecalParams as *const u8,
@@ -584,6 +607,8 @@ impl DxContext {
             // texture eviction). Drop tex_slot from the iteration since the
             // SRV already encodes the right resource.
             let _ = tex_slot;
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetGraphicsRootConstantBufferView(1, params_gva);
                 cmd.SetGraphicsRootDescriptorTable(3, albedo_srv_gpu);
@@ -602,6 +627,7 @@ impl DxContext {
             .as_ref()
             .map(|s| s.decal_srv_base_slot)
             .unwrap_or(0);
+        // SAFETY: a property query on a live descriptor heap; it only reads.
         let srv_gpu_base = unsafe {
             self.descriptors
                 .srv_heap
@@ -657,6 +683,7 @@ impl DxContext {
             self.decal.records.len() - 1
         };
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
+            // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
                 self.descriptors
                     .srv_heap

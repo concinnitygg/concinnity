@@ -95,3 +95,6 @@ serde_json = "1"
 [build-dependencies]
 concinnity-slang = { path = "../concinnity-slang" }
 concinnity-toolchain = { path = "../concinnity-toolchain" }
+
+[lints]
+workspace = true

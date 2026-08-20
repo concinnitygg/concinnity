@@ -130,7 +130,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     probe_cube_count: u32,
 }
 
-// The params UBOs' mapped pointers are host-mapped, render-thread-only; the
+// SAFETY: The params UBOs' mapped pointers are host-mapped, render-thread-only; the
 // whole struct lives inside `VkContext`, which is already `unsafe impl Send`.
 unsafe impl Send for RtReflectionsResources {}
 
@@ -175,6 +175,8 @@ fn create_rt_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|e| format!("RT reflections render pass: {e}"))
 }
@@ -241,6 +243,8 @@ fn create_rt_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -248,6 +252,8 @@ fn create_rt_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create rt reflections pso: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -459,6 +465,8 @@ impl RtReflectionsResources {
         // textured variant adds the bindless pool as set 2 (kept past the global set
         // so probe_common's set index stays a fixed 1 across both variants).
         let flat_layouts = [set_layout, global_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let layout_flat = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts),
@@ -469,6 +477,8 @@ impl RtReflectionsResources {
         let layout_textured = if let Some(bsl) = bindless_set_layout {
             let layouts = [set_layout, global_set_layout, bsl];
             Some(
+                // SAFETY: the create-info and every slice it borrows are live for the call, and
+                // each handle it names belongs to this device.
                 unsafe {
                     device.create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
@@ -529,6 +539,8 @@ impl RtReflectionsResources {
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(f * 4),
         ];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -628,6 +640,8 @@ impl RtReflectionsResources {
         let image = pooled.image();
         let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         self.output = GpuImage::from_pooled(pooled, view);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         self.framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
@@ -674,6 +688,8 @@ impl RtReflectionsResources {
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .buffer_info(std::slice::from_ref(&indices_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -747,6 +763,8 @@ impl RtReflectionsResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&cube_info)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -817,6 +835,8 @@ impl RtReflectionsResources {
             .dst_binding(10)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&sidx_info));
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe {
             device
                 .update_descriptor_sets(&[tlas_write, geom_write, deformed_write, sidx_write], &[])
@@ -844,12 +864,17 @@ impl RtReflectionsResources {
                 .dst_binding(8)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&cube_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
     }
 
     fn destroy_targets(&mut self, device: &Device) {
         if self.framebuffer != vk::Framebuffer::null() {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(self.framebuffer, None) };
             self.framebuffer = vk::Framebuffer::null();
         }
@@ -882,6 +907,9 @@ impl RtReflectionsResources {
         device: &Device,
         rebuilt: RebuiltRtPipelines,
     ) {
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             device.destroy_pipeline(self.flat_pso, None);
             if let Some(p) = self.textured_pso.take() {
@@ -895,6 +923,9 @@ impl RtReflectionsResources {
     // Destroy every RT resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
+        // caller has already waited for the device to go idle, so no submission still references
+        // them.
         unsafe {
             device.destroy_pipeline(self.flat_pso, None);
             if let Some(p) = self.textured_pso.take() {
@@ -1094,6 +1125,9 @@ impl VkContext {
             sun_color: self.fog_sun_color,
             prefilter_mip_count: self.prefilter_mip_count as f32,
         });
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `RtParams`, so `mapped_ptr()` is a live mapping of at least `size_of::<RtParams>()`
+        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &params as *const RtParams as *const u8,
@@ -1124,6 +1158,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));

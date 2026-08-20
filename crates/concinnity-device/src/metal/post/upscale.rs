@@ -81,6 +81,7 @@ pub(crate) struct MetalFXUpscaler {
 pub(crate) fn temporal_scaler_supported(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> bool {
+    // SAFETY: a device-capability query taking a live MTLDevice; it only reads.
     unsafe { MTLFXTemporalScalerDescriptor::supportsDevice(device) }
 }
 
@@ -122,16 +123,21 @@ impl MetalFXUpscaler {
         // a 3.0 maximum means "the largest upscale is 3× per axis". Our
         // user-facing `scale` is the inverse (input/output, ≤ 1.0), so flip
         // it to the device's units, clamp, and flip back.
+        // SAFETY: a device-capability query taking a live MTLDevice; it only reads.
         let min_ratio = unsafe {
             MTLFXTemporalScalerDescriptor::supportedInputContentMinScaleForDevice(device)
         };
+        // SAFETY: a device-capability query taking a live MTLDevice; it only reads.
         let max_ratio = unsafe {
             MTLFXTemporalScalerDescriptor::supportedInputContentMaxScaleForDevice(device)
         };
         let (input_width, input_height) =
             scaler_input_size((output_width, output_height), scale, (min_ratio, max_ratio));
 
+        // SAFETY: the designated initializer for a fresh MTLFXTemporalScalerDescriptor, which takes
+        // no arguments.
         let descriptor = unsafe { MTLFXTemporalScalerDescriptor::new() };
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             // Color: matches the engine's pre-TAA scene format (RGBA16Float
             // single-sample, written by the SSR resolve or the HDR resolve
@@ -160,14 +166,18 @@ impl MetalFXUpscaler {
             descriptor.setAutoExposureEnabled(false);
         }
 
+        // SAFETY: `descriptor` is fully configured above and `device` is live; MetalFX returns None
+        // rather than faulting when the configuration is unsupported.
         let scaler = unsafe { descriptor.newTemporalScalerWithDevice(device) }
             .ok_or_else(|| "MetalFX: failed to create temporal scaler".to_string())?;
 
         // The scaler enforces a minimum texture-usage set on the output
         // texture; query it and union with the bloom + composite read
         // requirement so the post stack can sample the result.
+        // SAFETY: a property read on the live scaler just created above.
         let required_output_usage = unsafe { scaler.outputTextureUsage() };
         let output_desc = MTLTextureDescriptor::new();
+        // SAFETY: plain descriptor property setters, all values in range.
         unsafe {
             output_desc.setTextureType(MTLTextureType::Type2D);
             output_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -233,6 +243,8 @@ impl MtlContext {
             .gbuffer_velocity()
             .ok_or("Upscale enabled but the pooled G-buffer velocity is missing")?;
 
+        // SAFETY: every texture set here is owned by `self` or the upscaler and outlives the encode
+        // below, and each matches the format the descriptor declared for that slot.
         unsafe {
             upscaler
                 .scaler
@@ -284,6 +296,8 @@ impl MtlContext {
         // Upscale stays at zero until Apple exposes a sampling hook; the chip
         // simply omits the row.
 
+        // SAFETY: the scaler's input, output, and parameter slots were all set above, and `cmd_buf`
+        // is the live command buffer for this frame.
         unsafe {
             upscaler.scaler.encodeToCommandBuffer(cmd_buf);
         }

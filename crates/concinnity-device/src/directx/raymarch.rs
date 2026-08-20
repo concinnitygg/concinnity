@@ -325,6 +325,8 @@ fn create_raymarch_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -352,6 +354,8 @@ fn create_raymarch_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch PSO: {e}"))
 }
@@ -460,6 +464,8 @@ fn create_raymarch_volumetric_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -487,6 +493,8 @@ fn create_raymarch_volumetric_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch volumetric PSO: {e}"))
 }
@@ -627,6 +635,8 @@ fn create_raymarch_shadow_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -654,6 +664,8 @@ fn create_raymarch_shadow_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
         .map_err(|e| format!("create raymarch shadow PSO: {e}"))
 }
@@ -743,6 +755,8 @@ fn build_cube_buffers(
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
+    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
+    // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         let mut p = std::ptr::null_mut::<c_void>();
         vb.Map(0, None, Some(&mut p))
@@ -766,11 +780,13 @@ fn build_cube_buffers(
     }
 
     let vbv = D3D12_VERTEX_BUFFER_VIEW {
+        // SAFETY: a property query on a live resource; it only reads.
         BufferLocation: unsafe { vb.GetGPUVirtualAddress() },
         SizeInBytes: vb_bytes as u32,
         StrideInBytes: std::mem::size_of::<Vertex>() as u32,
     };
     let ibv = D3D12_INDEX_BUFFER_VIEW {
+        // SAFETY: a property query on a live resource; it only reads.
         BufferLocation: unsafe { ib.GetGPUVirtualAddress() },
         SizeInBytes: ib_bytes as u32,
         Format: DXGI_FORMAT_R16_UINT,
@@ -832,6 +848,8 @@ fn write_raymarch_srvs(
                 },
             },
         };
+        // SAFETY: the view descriptor and the resource it names are live for the call, and the
+        // destination handle addresses a slot this context reserved for the view in a heap it owns.
         unsafe { device.CreateShaderResourceView(shadow, Some(&desc), slot_cpu(0)) };
     }
 
@@ -851,6 +869,8 @@ fn write_raymarch_srvs(
                 },
             },
         };
+        // SAFETY: the view descriptor and the resource it names are live for the call, and the
+        // destination handle addresses a slot this context reserved for the view in a heap it owns.
         unsafe { device.CreateShaderResourceView(*res, Some(&desc), slot_cpu(1 + i)) };
     }
     // scene_color at +3, written by `write_scene_color_srv` from the
@@ -879,6 +899,8 @@ fn write_scene_color_srv(
             },
         },
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(scene_resource, Some(&desc), srv_cpu) };
 }
 
@@ -905,6 +927,8 @@ fn write_raymarch_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateSampler(&shadow, slot_cpu(0)) };
 
     let cube = D3D12_SAMPLER_DESC {
@@ -916,6 +940,8 @@ fn write_raymarch_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateSampler(&cube, slot_cpu(1)) };
 
     let scene = D3D12_SAMPLER_DESC {
@@ -927,6 +953,8 @@ fn write_raymarch_samplers(
         MaxLOD: f32::MAX,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateSampler(&scene, slot_cpu(2)) };
 }
 
@@ -1046,6 +1074,8 @@ impl RaymarchResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut p = std::ptr::null_mut::<c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut p)) }
                 .map_err(|e| format!("raymarch view ubo map: {e}"))?;
             view_ptrs.push(p as *mut u8);
@@ -1108,8 +1138,12 @@ impl RaymarchResources {
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut p = std::ptr::null_mut::<c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
             unsafe { cb.Map(0, None, Some(&mut p)) }
                 .map_err(|e| format!("raymarch volume cb map: {e}"))?;
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &uniforms as *const RaymarchVolumeUniforms as *const u8,
@@ -1118,6 +1152,7 @@ impl RaymarchResources {
                 );
                 // Persistently mapped, never unmap.
             }
+            // SAFETY: a property query on a live resource; it only reads.
             let gva = unsafe { cb.GetGPUVirtualAddress() };
             volumes.push(RaymarchVolumeRecord {
                 pso,
@@ -1194,7 +1229,13 @@ impl RaymarchResources {
 // Pointer drops in the resources struct are POD-style raw pointers; the
 // underlying mapped upload buffers stay alive through the `Vec<ID3D12Resource>`
 // fields, and the pointers are read on the render thread only.
+// SAFETY: the raw pointers `RaymarchResources` holds are the mappings of upload buffers the struct
+// also owns, so they stay valid for as long as it does. They are only values here: every
+// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
+// on the render thread.
 unsafe impl Send for RaymarchResources {}
+// SAFETY: sharing `&RaymarchResources` hands out the pointer values but no way to dereference them;
+// every write goes through a `&mut self` method on the context.
 unsafe impl Sync for RaymarchResources {}
 
 impl DxContext {
@@ -1224,6 +1265,8 @@ impl DxContext {
             .get(frame_idx)
             .copied()
             .ok_or("raymarch: view_ptrs index OOB")?;
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const RaymarchView as *const u8,
@@ -1231,9 +1274,12 @@ impl DxContext {
                 std::mem::size_of::<RaymarchView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { rm.view_cbuffers[frame_idx].GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let light_gva = unsafe { self.uniforms.light_ubo.GetGPUVirtualAddress() };
         let shadow_gva =
+            // SAFETY: a property query on a live resource; it only reads.
             unsafe { self.uniforms.shadow_ubo_resources[frame_idx].GetGPUVirtualAddress() };
 
         // State entering this pass (post-Main, post-AutoExposure):
@@ -1272,7 +1318,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]) };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target()) };
         let snapshot_src_back = transition_barrier(
             self.hdr_scene_target(),
@@ -1284,6 +1334,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]) };
 
         // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
@@ -1293,6 +1345,8 @@ impl DxContext {
 
         let w = self.render_width;
         let h = self.render_height;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&self.depth_dsv));
             let vp = D3D12_VIEWPORT {
@@ -1331,6 +1385,8 @@ impl DxContext {
             if !vol.visible {
                 continue;
             }
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetPipelineState(&vol.pso);
                 cmd.SetGraphicsRootConstantBufferView(1, vol.volume_cbuffer_gva);
@@ -1360,6 +1416,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_RESOLVE_DEST,
             );
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[hdr_color_to_resolve_src, resolve_to_dst]);
                 cmd.ResolveSubresource(self.hdr_scene_target(), 0, &self.hdr.color, 0, HDR_FORMAT);
@@ -1374,6 +1432,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
             );
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&[resolve_back, hdr_color_back_to_rt]) };
         }
         Ok(())
@@ -1434,6 +1494,8 @@ impl DxContext {
             .get(frame_idx)
             .copied()
             .ok_or("raymarch shadow: view_ptrs index OOB")?;
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 view as *const RaymarchView as *const u8,
@@ -1441,10 +1503,14 @@ impl DxContext {
                 std::mem::size_of::<RaymarchView>(),
             );
         }
+        // SAFETY: a property query on a live resource; it only reads.
         let view_gva = unsafe { rm.view_cbuffers[frame_idx].GetGPUVirtualAddress() };
+        // SAFETY: a property query on a live resource; it only reads.
         let light_gva = unsafe { self.uniforms.light_ubo.GetGPUVirtualAddress() };
 
         let sm = self.shadow.map_size;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1492,6 +1558,8 @@ impl DxContext {
                 continue;
             }
             let dsv = self.shadow.dsvs[cascade_idx];
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 let constants = [cascade_idx as u32, 0u32, 0u32, 0u32];
@@ -1509,6 +1577,8 @@ impl DxContext {
                 let Some(pso) = vol.shadow_pso.as_ref() else {
                     continue;
                 };
+                // SAFETY: the command list is in the recording state, and every resource,
+                // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.SetPipelineState(pso);
                     cmd.SetGraphicsRootConstantBufferView(1, vol.volume_cbuffer_gva);

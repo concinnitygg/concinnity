@@ -79,6 +79,8 @@ pub(crate) fn build_fullscreen_pipeline_split(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(format);
@@ -146,6 +148,8 @@ pub(in crate::metal) fn set_fragment_sampler_range(
     count: usize,
 ) {
     for i in first..first + count {
+        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
+        // buffer/texture indices the shaders declare.
         unsafe { enc.setFragmentSamplerState_atIndex(Some(sampler), i) };
     }
 }
@@ -198,6 +202,8 @@ impl MtlContext {
             label,
         } = pass;
         let desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(target));
@@ -217,6 +223,8 @@ impl MtlContext {
             .ok_or_else(|| format!("failed to get {} encoder", label))?;
         enc.setRenderPipelineState(pipeline);
         bind(&enc);
+        // SAFETY: the fullscreen triangle's three vertices are generated from `[[vertex_id]]` in
+        // the shader, so the draw reads no vertex buffer.
         unsafe {
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }

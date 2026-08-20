@@ -157,6 +157,10 @@ pub(in crate::directx) struct DlssUpscaler {
 
 // The NGX handle / parameter bag / device are render-thread-only; the trait's
 // `Send` bound is satisfied unsafely, same as the rest of `DxContext`.
+// SAFETY: `DlssUpscaler` owns an NGX feature handle, its parameter bag and a COM device reference,
+// none of which are shared: every entry point runs on the render thread that built them, under the
+// same main-thread guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive
+// ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for DlssUpscaler {}
 
 // GPU device + queue plus output resolution and upscale ratio for NGX feature
@@ -212,6 +216,9 @@ impl DlssUpscaler {
 
         // NGX writes logs / data into the app-data path; use the working dir.
         let app_path: Vec<u16> = ".".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: an NGX entry point from the linked SDK. `PROJECT_ID`, `ENGINE_VERSION` and
+        // `app_path` are NUL-terminated buffers live for the call, and `device_raw` borrows the
+        // live D3D12 device.
         let rc = unsafe {
             NVSDK_NGX_D3D12_Init_with_ProjectID(
                 PROJECT_ID.as_ptr(),
@@ -232,17 +239,23 @@ impl DlssUpscaler {
         }
 
         let mut params: *mut c_void = ptr::null_mut();
+        // SAFETY: NGX was initialized above, and `params` is a live local that receives the
+        // parameter-bag pointer.
         let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&mut params) };
         if !ngx_succeeded(rc) || params.is_null() {
             tracing::warn!(
                 "DLSS: GetCapabilityParameters returned {rc:#x}; trying the next upscaler"
             );
+            // SAFETY: NGX was initialized above and is shut down exactly once on this path; the
+            // device it names is still live.
             unsafe { NVSDK_NGX_D3D12_Shutdown1(device_raw(device)) };
             return Ok(None);
         }
 
         // Authoritative DLSS-support gate for this GPU + driver.
         let mut available: u32 = 0;
+        // SAFETY: `params` is the non-null bag NGX just handed back, the name is a NUL-terminated
+        // constant, and `available` is a live local.
         let rc = unsafe {
             NVSDK_NGX_Parameter_GetUI(params, P_SUPERSAMPLING_AVAILABLE.as_ptr(), &mut available)
         };
@@ -250,6 +263,8 @@ impl DlssUpscaler {
             tracing::warn!(
                 "DLSS: SuperSampling not available on this GPU; trying the next upscaler"
             );
+            // SAFETY: `params` is the bag NGX handed back and is destroyed exactly once on this
+            // path, and the device the shutdown names is still live.
             unsafe {
                 NVSDK_NGX_D3D12_DestroyParameters(params);
                 NVSDK_NGX_D3D12_Shutdown1(device_raw(device));
@@ -258,6 +273,7 @@ impl DlssUpscaler {
         }
 
         // Feature-create parameters.
+        // SAFETY: `params` is the live parameter bag and every name is a NUL-terminated constant.
         unsafe {
             NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), render_width);
             NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), render_height);
@@ -282,6 +298,8 @@ impl DlssUpscaler {
         let mut handle: *mut c_void = ptr::null_mut();
         let mut create_rc: u32 = NVSDK_NGX_RESULT_FAIL;
         crate::directx::texture::one_shot_submit(device, command_queue, |cmd| {
+            // SAFETY: `cmd` is the one-shot init list in the recording state, `params` is the live
+            // parameter bag, and `handle` is a live local the SDK fills.
             create_rc = unsafe {
                 NVSDK_NGX_D3D12_CreateFeature(
                     cmd_list_raw(cmd),
@@ -293,6 +311,8 @@ impl DlssUpscaler {
         })?;
         if !ngx_succeeded(create_rc) || handle.is_null() {
             tracing::warn!("DLSS: CreateFeature returned {create_rc:#x}; trying the next upscaler");
+            // SAFETY: `params` is the bag NGX handed back and is destroyed exactly once on this
+            // path, and the device the shutdown names is still live.
             unsafe {
                 NVSDK_NGX_D3D12_DestroyParameters(params);
                 NVSDK_NGX_D3D12_Shutdown1(device_raw(device));
@@ -383,6 +403,8 @@ impl super::UpscaleBackend for DlssUpscaler {
         } = inputs;
         let super::UpscaleCamera { jitter_offset, .. } = camera;
         let reset = self.reset_pending.replace(false);
+        // SAFETY: `self.params` is the live parameter bag, every name is a NUL-terminated constant,
+        // and each resource pointer borrows a COM object the caller keeps alive for the frame.
         unsafe {
             NVSDK_NGX_Parameter_SetD3d12Resource(
                 self.params,
@@ -419,6 +441,8 @@ impl super::UpscaleBackend for DlssUpscaler {
             NVSDK_NGX_Parameter_SetUI(self.params, P_SUBRECT_HEIGHT.as_ptr(), self.render_height);
             NVSDK_NGX_Parameter_SetF(self.params, P_SHARPNESS.as_ptr(), 0.0);
         }
+        // SAFETY: `cmd` is the frame's command list in the recording state, and the feature handle
+        // and parameter bag are the live ones created in `new`.
         let rc = unsafe {
             NVSDK_NGX_D3D12_EvaluateFeature_C(
                 cmd_list_raw(cmd),
@@ -436,6 +460,8 @@ impl super::UpscaleBackend for DlssUpscaler {
 
 impl Drop for DlssUpscaler {
     fn drop(&mut self) {
+        // SAFETY: the feature handle and the parameter bag are each released exactly once (both
+        // nulled straight after), and the device the shutdown names is still owned by this struct.
         unsafe {
             if !self.handle.is_null() {
                 NVSDK_NGX_D3D12_ReleaseFeature(self.handle);

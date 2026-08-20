@@ -84,6 +84,8 @@ fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_render_pass(&rp_info, None) }
         .map_err(|e| format!("TAA render pass: {e}"))
 }
@@ -150,6 +152,8 @@ impl TaaResources {
             .offset(0)
             .size(4);
         let taa_layouts = [taa_set_layout];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let taa_pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
@@ -174,6 +178,8 @@ impl TaaResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(frames as u32 * 3)];
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -224,6 +230,8 @@ impl TaaResources {
             )?);
         }
         for f in 0..frames {
+            // SAFETY: the create-info and every slice it borrows are live for the call, and each
+            // handle it names belongs to this device.
             let taa_fb = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -286,6 +294,8 @@ impl TaaResources {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(std::slice::from_ref(&history)),
             ];
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(&writes, &[]) };
         }
     }
@@ -315,6 +325,8 @@ impl TaaResources {
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&scene));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
     }
@@ -340,6 +352,8 @@ impl TaaResources {
                 .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&velocity));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
     }
@@ -349,10 +363,15 @@ impl TaaResources {
     // `destroy` at teardown.
     fn destroy_targets(&mut self, device: &Device) {
         for &fb in &self.taa_framebuffers {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe { device.destroy_framebuffer(fb, None) };
         }
         self.taa_framebuffers.clear();
         self.taa_out_images.clear();
+        // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
+        // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
             let _ = device
                 .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty());
@@ -382,6 +401,8 @@ impl TaaResources {
     // Destroy every TAA resource. The caller has already idled the device.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
         self.destroy_targets(device);
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_pipeline(self.taa_pipeline, None);
@@ -443,6 +464,8 @@ impl FullscreenPass for TaaResolvePass<'_> {
         let push = TaaParams {
             history_valid: if self.taa.taa_frame > 0 { 1.0 } else { 0.0 },
         };
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.taa.taa_pipeline);
             device.cmd_bind_descriptor_sets(
@@ -519,6 +542,8 @@ impl TaaResources {
         device: &Device,
         rebuilt: RebuiltTaaPipelines,
     ) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             device.destroy_pipeline(self.taa_pipeline, None);
         }
@@ -600,6 +625,8 @@ fn create_taa_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -608,6 +635,8 @@ fn create_taa_pipeline(
     }
     .map_err(|(_, e)| format!("create TAA pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);

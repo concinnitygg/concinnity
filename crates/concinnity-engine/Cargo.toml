@@ -82,3 +82,6 @@ concinnity-memory = { path = "../concinnity-memory" }
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }
 concinnity-font = { path = "../concinnity-font" }
+
+[lints]
+workspace = true

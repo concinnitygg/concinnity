@@ -131,6 +131,8 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_graphics_pipelines(
             device,
@@ -139,6 +141,8 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
     }
     .map_err(|(_, e)| format!("create bloom pipeline: {e}"))?[0];
 
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe {
         device.destroy_shader_module(vert_mod, None);
         device.destroy_shader_module(frag_mod, None);
@@ -290,6 +294,8 @@ pub(in crate::vulkan) fn create_bloom_framebuffers(
             .width(ext.width)
             .height(ext.height)
             .layers(1);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         unsafe { device.create_framebuffer(&fb_info, None) }
             .map_err(|e| format!("bloom framebuffer: {e}"))
     };
@@ -328,6 +334,8 @@ pub(in crate::vulkan) fn rebind_bloom_input0(
         .dst_binding(0)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .image_info(std::slice::from_ref(&img_info));
+    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -361,6 +369,8 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&img_info));
+            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+            // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
         }
         out.push(sets);
@@ -447,6 +457,9 @@ impl VkContext {
     ) {
         let device = &self.device;
         let push = self.post_process;
+        // SAFETY: `PostProcessParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
+        // padding and all 36 of its bytes are initialised; the slice borrows it and does not
+        // outlive it.
         let push_bytes = unsafe {
             std::slice::from_raw_parts(
                 &push as *const PostProcessParams as *const u8,
@@ -466,6 +479,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(ext);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));

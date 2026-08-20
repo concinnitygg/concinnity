@@ -51,6 +51,8 @@ impl VkLightCull {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             if let Some(p) = self.pipeline {
                 device.destroy_pipeline(p, None);
@@ -92,6 +94,8 @@ fn create_light_cull_set_layout(device: &Device) -> Result<vk::DescriptorSetLayo
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     unsafe { device.create_descriptor_set_layout(&info, None) }
         .map_err(|e| format!("light cull set layout: {e}"))
 }
@@ -134,6 +138,9 @@ pub(in crate::vulkan) fn build_light_cull(
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
+    // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+    // `ClusterParams`, so `mapped_ptr()` is a live mapping of at least `size_of::<ClusterParams>()`
+    // bytes; the source is a separate live borrow, so the ranges cannot overlap.
     unsafe {
         let zero = ClusterParams::ZERO;
         std::ptr::copy_nonoverlapping(
@@ -159,6 +166,8 @@ pub(in crate::vulkan) fn build_light_cull(
     let set_layout = create_light_cull_set_layout(device)?;
     let set_layouts = [set_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("light cull pipeline layout: {e}"))?;
 
@@ -173,6 +182,8 @@ pub(in crate::vulkan) fn build_light_cull(
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(pipeline_layout);
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(
             device,
@@ -180,6 +191,8 @@ pub(in crate::vulkan) fn build_light_cull(
         )
     }
     .map_err(|(_, e)| format!("light cull pipeline: {e}"))?[0];
+    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
+    // as the pipelines that consumed it exist.
     unsafe { device.destroy_shader_module(module, None) };
 
     // One compute set per frame, each pointing at that frame's params UBO.
@@ -197,12 +210,16 @@ pub(in crate::vulkan) fn build_light_cull(
     let pool_info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f)
         .pool_sizes(&sizes);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
         .map_err(|e| format!("light cull descriptor pool: {e}"))?;
     let layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&layouts);
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
+    // names belongs to this device.
     let sets = unsafe { device.allocate_descriptor_sets(&alloc_info) }
         .map_err(|e| format!("light cull descriptor sets: {e}"))?;
 
@@ -236,6 +253,8 @@ pub(in crate::vulkan) fn build_light_cull(
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(std::slice::from_ref(&list_info)),
         ];
+        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
+        // set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
 
@@ -255,6 +274,10 @@ impl VkContext {
     // Write this frame's live `ClusterParams` into its UBO. The `use_clusters = 0`
     // copy the planar / probe passes bind was filled once at init.
     pub(in crate::vulkan) fn write_cluster_params(&self, frame_idx: usize, params: &ClusterParams) {
+        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
+        // a `ClusterParams`, so `mapped_ptr()` is a live mapping of at least
+        // `size_of::<ClusterParams>()` bytes; the source is a separate live borrow, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 params as *const ClusterParams as *const u8,
@@ -278,6 +301,8 @@ impl VkContext {
             return;
         };
         let device = &self.device;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(

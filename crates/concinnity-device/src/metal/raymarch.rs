@@ -177,6 +177,8 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     // vertex descriptor: keeps the pass compatible with the same
     // mesh format the rest of the engine uses.
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
+    // vertex descriptor declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -213,6 +215,8 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment this
+    // pipeline declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -277,6 +281,8 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
 
     // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
+    // vertex descriptor declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -367,6 +373,8 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
 
     // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
     let vert_desc = MTLVertexDescriptor::new();
+    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
+    // vertex descriptor declares.
     unsafe {
         let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
         attr0.setFormat(MTLVertexFormat::Float3);
@@ -403,6 +411,8 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     desc.setVertexFunction(Some(&vert_fn));
     desc.setFragmentFunction(Some(&frag_fn));
     desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment this
+    // pipeline declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
@@ -546,6 +556,8 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
     let vb_bytes = std::mem::size_of_val(&corners);
     let ib_bytes = std::mem::size_of_val(&indices);
 
+    // SAFETY: `ptr`/`vb_bytes` describe the live `corners` array, and Metal copies those bytes into
+    // the new buffer before the call returns.
     let vb = unsafe {
         let ptr = std::ptr::NonNull::new(corners.as_ptr() as *mut _)
             .ok_or("raymarch cube vertex pointer null")?;
@@ -553,6 +565,7 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
             .newBufferWithBytes_length_options(ptr, vb_bytes, MTLResourceOptions::StorageModeShared)
             .ok_or("failed to allocate raymarch cube vertex buffer")?
     };
+    // SAFETY: as above -- `ptr`/`ib_bytes` describe the live `indices` array.
     let ib = unsafe {
         let ptr = std::ptr::NonNull::new(indices.as_ptr() as *mut _)
             .ok_or("raymarch cube index pointer null")?;
@@ -626,6 +639,8 @@ impl MtlContext {
             .blitCommandEncoder()
             .ok_or("failed to get raymarch scene-copy blit encoder")?;
         blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
+        // SAFETY: both textures are `hdr_targets`-owned and were created with the same format and
+        // dimensions, which is what a whole-texture blit copy requires.
         unsafe {
             blit.copyFromTexture_toTexture(
                 self.hdr_targets.hdr_resolve.as_ref(),
@@ -636,6 +651,8 @@ impl MtlContext {
         blit.endEncoding();
 
         let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; attachment 0 is the only colour attachment
+        // this pass declares, and every texture set is owned by `self`.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
             ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
@@ -678,6 +695,9 @@ impl MtlContext {
         // existing value to commit.
         enc.setDepthStencilState(Some(self.depth_state.as_ref()));
 
+        // SAFETY: the pointer is derived from the live `view` borrow and the length is that type's
+        // size, so the encoder copies exactly the bytes it was handed; the buffer indices match the
+        // slots the raymarch shaders declare.
         unsafe {
             // Per-frame view at buffer(0); same value for vertex + fragment.
             enc.setVertexBytes_length_atIndex(
@@ -760,6 +780,8 @@ impl MtlContext {
             } else {
                 enc.setDepthStencilState(Some(self.depth_state.as_ref()));
             }
+            // SAFETY: as in `encode` -- pointer and length describe the live `vol.uniforms`, at the
+            // buffer index the shaders declare.
             unsafe {
                 enc.setVertexBytes_length_atIndex(
                     std::ptr::NonNull::from(&vol.uniforms).cast(),
@@ -865,6 +887,8 @@ impl MtlContext {
                 cascade_idx: cascade_idx as u32,
                 _pad: [0; 3],
             };
+            // SAFETY: every pointer is derived from a live borrow with a matching `size_of` length,
+            // at the buffer indices the shadow shaders declare.
             unsafe {
                 // Per-cascade shared bindings: view@0 (fragment reads
                 // view.time), lights@2 (fragment), shadow uniforms@3 (vertex
@@ -911,6 +935,7 @@ impl MtlContext {
                     continue;
                 };
                 enc.setRenderPipelineState(pso);
+                // SAFETY: as above -- pointer and length describe the live `vol.uniforms`.
                 unsafe {
                     enc.setVertexBytes_length_atIndex(
                         std::ptr::NonNull::from(&vol.uniforms).cast(),

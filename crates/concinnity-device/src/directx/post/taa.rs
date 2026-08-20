@@ -333,6 +333,8 @@ impl FullscreenPass for TaaResolvePass<'_> {
         // History is invalid on the first frame; the scene then passes straight
         // through.
         let history_valid: f32 = if self.taa.frame.get() > 0 { 1.0 } else { 0.0 };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(&self.taa.taa_pso);
             cmd.SetGraphicsRootSignature(&self.taa.taa_root_sig);

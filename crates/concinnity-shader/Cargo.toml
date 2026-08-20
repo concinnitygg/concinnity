@@ -45,3 +45,6 @@ tempfile = "3.25.0"
 
 [build-dependencies]
 concinnity-toolchain = { path = "../concinnity-toolchain" }
+
+[lints]
+workspace = true

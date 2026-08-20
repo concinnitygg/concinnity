@@ -129,6 +129,9 @@ fn compile_hlsl_uncached(
     let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
     let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
 
+    // SAFETY: `src_c`, `entry_c`, `target_c` and the source-name literal are NUL-terminated buffers
+    // live for the call, `source.len()` is exactly the byte length behind `src_c`, and `blob` /
+    // `error` are live locals that receive the results.
     let result = unsafe {
         D3DCompile(
             src_c.as_ptr() as *const std::ffi::c_void,
@@ -149,8 +152,12 @@ fn compile_hlsl_uncached(
         let msg = error
             .as_ref()
             .map(|e| {
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let ptr = unsafe { e.GetBufferPointer() } as *const u8;
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let len = unsafe { e.GetBufferSize() };
+                // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
+                // live while `e` is held, and the text is copied out before the blob is released.
                 String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
                     .into_owned()
             })
@@ -159,8 +166,12 @@ fn compile_hlsl_uncached(
     }
 
     let b = blob.ok_or_else(|| format!("compile {target}: no blob"))?;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let ptr = unsafe { b.GetBufferPointer() } as *const u8;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let len = unsafe { b.GetBufferSize() };
+    // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays live while
+    // `b` is held, and the bytes are copied out before the blob is released.
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
 }
 
@@ -185,6 +196,8 @@ pub(super) fn serialize_desc_and_create(
 ) -> Result<ID3D12RootSignature, String> {
     let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
     let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe {
         windows::Win32::Graphics::Direct3D12::D3D12SerializeRootSignature(
             desc,
@@ -197,8 +210,12 @@ pub(super) fn serialize_desc_and_create(
         let msg = error
             .as_ref()
             .map(|b| {
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let p = unsafe { b.GetBufferPointer() } as *const u8;
+                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
                 let n = unsafe { b.GetBufferSize() };
+                // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
+                // live while `b` is held, and the text is copied out before the blob is released.
                 String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p, n) }).into_owned()
             })
             .unwrap_or_default();
@@ -206,10 +223,16 @@ pub(super) fn serialize_desc_and_create(
     })?;
 
     let b = blob.ok_or_else(|| format!("{label}: no blob after serialize"))?;
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let ptr = unsafe { b.GetBufferPointer() };
+    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let len = unsafe { b.GetBufferSize() };
+    // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays live while
+    // `b` is held, and `b` outlives the `CreateRootSignature` call that reads the slice.
     let sig_bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
 
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { device.CreateRootSignature(0, sig_bytes) }.map_err(|e| format!("create {label}: {e}"))
 }
 
@@ -540,6 +563,8 @@ pub(super) fn create_composite_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -593,6 +618,8 @@ pub(super) fn create_composite_pso(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create composite PSO: {e}"))
 }
@@ -682,6 +709,8 @@ pub(super) fn create_text_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -743,6 +772,8 @@ pub(super) fn create_text_pso(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create text PSO: {e}"))
 }

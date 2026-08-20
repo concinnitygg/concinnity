@@ -133,6 +133,8 @@ pub(in crate::directx) fn create_bloom_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -180,6 +182,8 @@ pub(in crate::directx) fn create_bloom_pso(
         ..Default::default()
     };
 
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create bloom PSO: {e}"))
 }
@@ -268,6 +272,8 @@ pub(in crate::directx) fn create_bloom_mips_at(
             ..Default::default()
         };
         let mut res_opt: Option<ID3D12Resource> = None;
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe {
             device.CreateCommittedResource(
                 &heap_props,
@@ -297,6 +303,8 @@ pub(in crate::directx) fn write_color_rtv(
         ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
         ..Default::default()
     };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateRenderTargetView(resource, Some(&rtv_desc), rtv_cpu) };
 }
 
@@ -317,6 +325,8 @@ impl crate::gfx::fullscreen::BloomEncoder for DxContext {
     }
 
     fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) {
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetGraphicsRootSignature(&self.bloom.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
@@ -431,8 +441,12 @@ impl DxContext {
                 before,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
             );
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&[to_rt]) };
         }
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.bloom.mip_rtvs[dst]), false, None);
             let vp = D3D12_VIEWPORT {
@@ -467,6 +481,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
                 after,
             );
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
             unsafe { cmd.ResourceBarrier(&[from_rt]) };
         }
     }

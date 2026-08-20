@@ -176,6 +176,10 @@ impl VkContext {
                 std::mem::size_of::<CullParams>(),
             )
         };
+        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+        // `CullHizParams`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
+        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
+        // slice the commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
@@ -251,6 +255,8 @@ impl VkContext {
         let device = &self.device;
         let object_count = self.cull_count() as u32;
 
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             // `sets` has one entry per cascade (NUM_SHADOW_CASCADES), allocated in
@@ -370,6 +376,10 @@ impl VkContext {
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
         };
+        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
+        // `CullHizParams`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
+        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
+        // slice the commands name is live for the call.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &hiz_params as *const CullHizParams as *const u8,

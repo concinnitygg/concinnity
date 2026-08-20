@@ -75,12 +75,16 @@ pub(super) fn setup(
     // one happened: a verification pass that reports "0 errors" needs to know
     // the layer was there to report them.
     if validation {
+        // SAFETY: `d` is a live local the call fills with the debug interface when one is
+        // available.
         let debug = unsafe {
             let mut d: Option<ID3D12Debug> = None;
             D3D12GetDebugInterface(&mut d).ok().and(d)
         };
         match debug {
             Some(d) => {
+                // SAFETY: `d` is the live debug interface the query above produced, and enabling
+                // the layer borrows nothing.
                 unsafe { d.EnableDebugLayer() };
                 tracing::info!("d3d12 debug layer: enabled");
             }
@@ -99,10 +103,16 @@ pub(super) fn setup(
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional
     // feature; fall back silently if it isn't installed.
     let factory: IDXGIFactory4 = if validation {
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG) }
+            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
+            // the new COM object lands in a binding that owns it.
             .or_else(|_| unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) })
             .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
     } else {
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
             .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
     };
@@ -114,6 +124,8 @@ pub(super) fn setup(
     let adapter3: Option<IDXGIAdapter3> = adapter.cast().ok();
 
     let mut device_opt: Option<ID3D12Device> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }
         .map_err(|e| format!("D3D12CreateDevice: {e}"))?;
     let device = device_opt.ok_or("D3D12CreateDevice returned None")?;
@@ -122,6 +134,9 @@ pub(super) fn setup(
     // Disable break-on-error so the debug layer doesn't terminate the process
     // before we can log the message via tracing.
     let info_queue: Option<ID3D12InfoQueue> = if validation {
+        // SAFETY: `iq` is the live info queue this closure was handed, and `filter` (with the
+        // `denied` array it points into) outlives the `AddStorageFilterEntries` call at the end of
+        // the block.
         let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false);
             let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false);
@@ -155,6 +170,8 @@ pub(super) fn setup(
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         ..Default::default()
     };
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
     let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
         .map_err(|e| format!("CreateCommandQueue: {e}"))?;
 
@@ -211,6 +228,8 @@ pub(super) fn setup(
                 // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
                 // its layout without pulling in the BOOL type.
                 let mut data: i32 = 0;
+                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+                // parameters it fills are live locals that outlive the call.
                 unsafe {
                     f5.CheckFeatureSupport(
                         DXGI_FEATURE_PRESENT_ALLOW_TEARING,
@@ -241,6 +260,8 @@ pub(super) fn setup(
         ..Default::default()
     };
     let sc_base: IDXGISwapChain1 =
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &sc_desc, None, None) }
             .map_err(|e| format!("CreateSwapChain: {e}"))?;
     let swapchain: IDXGISwapChain3 = sc_base
@@ -282,11 +303,14 @@ pub(super) fn setup(
             HDR_LINEAR_COLOR_SPACE
         };
         let primary_label = if want_pq { "HDR10 PQ" } else { "scRGB linear" };
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         let primary_support = unsafe { swapchain.CheckColorSpaceSupport(primary) }.unwrap_or(0);
         let primary_ok =
             (primary_support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) != 0;
         let mut applied = false;
         if primary_ok {
+            // SAFETY: the swapchain is live and the colour space is a plain enum value.
             if let Err(e) = unsafe { swapchain.SetColorSpace1(primary) } {
                 tracing::warn!(
                     "HDR display enabled but SetColorSpace1({primary_label}) failed ({e}); \
@@ -302,6 +326,8 @@ pub(super) fn setup(
             // the renderer still drives the panel's HDR headroom (the
             // shader's `pq_output` flag is cleared below).
             let fallback_support =
+                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+                // parameters it fills are live locals that outlive the call.
                 unsafe { swapchain.CheckColorSpaceSupport(HDR_LINEAR_COLOR_SPACE) }.unwrap_or(0);
             if (fallback_support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) != 0 {
                 tracing::warn!(
@@ -309,6 +335,7 @@ pub(super) fn setup(
                      HDR10 PQ support (CheckColorSpaceSupport flags = {primary_support:#x}); \
                      falling back to scRGB linear extended-range output"
                 );
+                // SAFETY: the swapchain is live and the colour space is a plain enum value.
                 if let Err(e) = unsafe { swapchain.SetColorSpace1(HDR_LINEAR_COLOR_SPACE) } {
                     tracing::warn!(
                         "scRGB linear fallback also failed ({e}); leaving the swapchain at \
@@ -344,6 +371,8 @@ pub(super) fn setup(
     }
 
     // Disable Alt+Enter fullscreen toggle.
+    // SAFETY: `factory` and `hwnd` are both live, and the association takes no other borrowed
+    // state.
     unsafe { factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER) }.ok();
 
     Ok(DeviceAndWindow {
@@ -387,6 +416,8 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
     let mut best: f32 = 1.0;
     let mut i: u32 = 0;
     loop {
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         let output: IDXGIOutput = match unsafe { adapter.EnumOutputs(i) } {
             Ok(o) => o,
             Err(_) => break,
@@ -396,6 +427,7 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
             Ok(o) => o,
             Err(_) => continue, // pre-Windows-10 output, no HDR info
         };
+        // SAFETY: a property query on a live COM object; it only reads.
         let desc1 = match unsafe { output6.GetDesc1() } {
             Ok(d) => d,
             Err(_) => continue,
@@ -419,7 +451,10 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
 
 fn pick_adapter(factory: &IDXGIFactory4) -> Result<IDXGIAdapter1, String> {
     let mut i = 0u32;
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
+    // are live locals that outlive the call.
     while let Ok(adapter) = unsafe { factory.EnumAdapters1(i) } {
+        // SAFETY: a property query on a live COM object; it only reads.
         let desc = unsafe { adapter.GetDesc1() }.map_err(|e| format!("GetDesc1: {e}"))?;
         // Skip the software (WARP) adapter.
         if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
@@ -427,6 +462,8 @@ fn pick_adapter(factory: &IDXGIFactory4) -> Result<IDXGIAdapter1, String> {
             continue;
         }
         // Check D3D12 support.
+        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+        // new COM object lands in a binding that owns it.
         if unsafe {
             D3D12CreateDevice(
                 &adapter,
@@ -453,6 +490,8 @@ fn query_msaa_samples(device: &ID3D12Device) -> u32 {
             Flags: D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE,
             NumQualityLevels: 0,
         };
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+        // fills are live locals that outlive the call.
         if unsafe {
             device.CheckFeatureSupport(
                 D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,

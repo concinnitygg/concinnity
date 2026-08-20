@@ -104,6 +104,8 @@ impl TransientTexturePool {
                 // Placement heap at offset 0: in bounds because the heap is
                 // sized to the largest member, and aligned because every
                 // alignment divides 0.
+                // SAFETY: the heap is sized to its largest member, so offset 0 is in bounds, and
+                // every alignment divides 0.
                 let texture = unsafe { heap.newTextureWithDescriptor_offset(&desc, 0) }
                     .ok_or_else(|| format!("failed to place transient texture {label}"))?;
                 textures.push(PooledTexture { label, texture });
@@ -197,6 +199,7 @@ fn new_slot_heap(
 // that could disagree with it. GPU-private to match its heap's storage mode.
 fn texture_descriptor(spec: &TransientTexture) -> Retained<MTLTextureDescriptor> {
     let desc = MTLTextureDescriptor::new();
+    // SAFETY: plain descriptor property setters, all values in range.
     unsafe {
         desc.setTextureType(texture_type(spec));
         desc.setPixelFormat(pixel_format(spec.format));

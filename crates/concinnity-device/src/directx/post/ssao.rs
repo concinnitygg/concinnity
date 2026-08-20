@@ -190,6 +190,8 @@ fn create_ssao_fullscreen_pso(
         // `ManuallyDrop`, so a `clone()` here is never released and leaks one
         // reference per PSO creation. The caller's `&root_sig` outlives the
         // synchronous pipeline-state creation, so copying the raw pointer is sound.
+        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
+        // call, and the `ManuallyDrop` field never releases it.
         pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
@@ -239,6 +241,8 @@ fn create_ssao_fullscreen_pso(
         },
         ..Default::default()
     };
+    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
+    // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
         .map_err(|e| format!("create ssao {label} PSO: {e}"))
 }
@@ -491,6 +495,8 @@ impl DxContext {
         // scissor / primitive topology the (now removed) geometry pre-pass used
         // to leave bound. This pass records into its own command list, where the
         // topology starts UNDEFINED, so it must be set here for the draws below.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -519,7 +525,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_raw_rtv), false, None);
             cmd.SetPipelineState(&ssao.kernel_pso);
@@ -541,6 +551,8 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[raw_to_psr]) };
 
         // Blur: depth-aware smoothing of raw occlusion → final AO. The blurred
@@ -549,6 +561,8 @@ impl DxContext {
         // the main pass is graph-driven (the executor emits ao_output's
         // `barriers_before` around the SsaoBlur and Main passes), so no inline
         // barrier on `ao` is issued here. `ao_raw` stays inline above.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_rtv), false, None);
             cmd.SetPipelineState(&ssao.blur_pso);
@@ -561,6 +575,8 @@ impl DxContext {
         }
 
         // Restore the SRV + sampler heaps the main pass expects.
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
         unsafe {
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),

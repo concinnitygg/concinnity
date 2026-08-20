@@ -333,7 +333,9 @@ impl DeviceAllocator {
         frames_in_flight: usize,
     ) -> Self {
         let memory_props =
+            // SAFETY: a property query on a live handle; it only reads.
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        // SAFETY: a property query on a live handle; it only reads.
         let max_allocations = unsafe { instance.get_physical_device_properties(physical_device) }
             .limits
             .max_memory_allocation_count;
@@ -368,21 +370,31 @@ impl DeviceAllocator {
             .size(size.max(1))
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let buffer = unsafe { self.device.create_buffer(&info, None) }
             .map_err(|e| super::error::map_vk_result(e, "create_buffer"))?;
+        // SAFETY: a property query on a live handle; it only reads.
         let reqs = unsafe { self.device.get_buffer_memory_requirements(buffer) };
         let device_address = usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS);
         let reservation = match self.reserve(reqs, props, ResourceKind::Linear, device_address) {
             Ok(r) => r,
             Err(e) => {
+                // SAFETY: the handle was created from this device moments ago and never submitted,
+                // so this cleanup is its only remaining use.
                 unsafe { self.device.destroy_buffer(buffer, None) };
                 return Err(e);
             }
         };
+        // SAFETY: the resource and the memory were both created from this device, the reservation's
+        // offset satisfies the alignment its memory requirements reported, and nothing is bound to
+        // the resource yet.
         if let Err(e) = unsafe {
             self.device
                 .bind_buffer_memory(buffer, reservation.memory, reservation.placement.offset)
         } {
+            // SAFETY: the handle was created from this device moments ago and never submitted, so
+            // this cleanup is its only remaining use.
             unsafe { self.device.destroy_buffer(buffer, None) };
             self.release(reservation);
             return Err(super::error::map_vk_result(e, "bind_buffer_memory"));
@@ -405,8 +417,11 @@ impl DeviceAllocator {
         info: &vk::ImageCreateInfo,
         props: vk::MemoryPropertyFlags,
     ) -> crate::gfx::error::RenderResult<PooledImage> {
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let image = unsafe { self.device.create_image(info, None) }
             .map_err(|e| super::error::map_vk_result(e, "create_image"))?;
+        // SAFETY: a property query on a live handle; it only reads.
         let reqs = unsafe { self.device.get_image_memory_requirements(image) };
         let kind = if info.tiling == vk::ImageTiling::LINEAR {
             ResourceKind::Linear
@@ -416,14 +431,21 @@ impl DeviceAllocator {
         let reservation = match self.reserve(reqs, props, kind, false) {
             Ok(r) => r,
             Err(e) => {
+                // SAFETY: the handle was created from this device moments ago and never submitted,
+                // so this cleanup is its only remaining use.
                 unsafe { self.device.destroy_image(image, None) };
                 return Err(e);
             }
         };
+        // SAFETY: the resource and the memory were both created from this device, the reservation's
+        // offset satisfies the alignment its memory requirements reported, and nothing is bound to
+        // the resource yet.
         if let Err(e) = unsafe {
             self.device
                 .bind_image_memory(image, reservation.memory, reservation.placement.offset)
         } {
+            // SAFETY: the handle was created from this device moments ago and never submitted, so
+            // this cleanup is its only remaining use.
             unsafe { self.device.destroy_image(image, None) };
             self.release(reservation);
             return Err(super::error::map_vk_result(e, "bind_image_memory"));
@@ -483,6 +505,9 @@ impl DeviceAllocator {
             for block_index in pool.placement.take_empty_blocks() {
                 if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
                     tracing::debug!("allocator: released empty block {block_index}");
+                    // SAFETY: the handle was created from this device and is destroyed exactly
+                    // once; the caller has already waited for the device to go idle, so no
+                    // submission still references it.
                     unsafe { self.device.free_memory(block.memory, None) };
                 }
             }
@@ -516,6 +541,9 @@ impl DeviceAllocator {
         }
         for pool in inner.pools.values_mut() {
             for block in pool.blocks.iter_mut().filter_map(Option::take) {
+                // SAFETY: the handle was created from this device and is destroyed exactly once;
+                // the caller has already waited for the device to go idle, so no submission still
+                // references it.
                 unsafe { self.device.free_memory(block.memory, None) };
             }
         }
@@ -523,6 +551,8 @@ impl DeviceAllocator {
     }
 
     fn destroy_retired(&self, retired: Retired) {
+        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
+        // has already waited for the device to go idle, so no submission still references it.
         unsafe {
             for view in retired.views {
                 self.device.destroy_image_view(view, None);
@@ -650,6 +680,8 @@ impl DeviceAllocator {
         if device_address {
             info = info.push_next(&mut flags_info);
         }
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let memory = unsafe { device.allocate_memory(&info, None) }.map_err(|e| {
             super::error::map_vk_result(e, &format!("allocator: block of {size} bytes"))
         })?;
@@ -662,11 +694,15 @@ impl DeviceAllocator {
             .property_flags
             .contains(vk::MemoryPropertyFlags::HOST_VISIBLE);
         let mapped = if host_visible {
+            // SAFETY: `memory` was allocated from this device and is not already mapped; the
+            // whole-size range is in bounds by construction.
             match unsafe {
                 device.map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
             } {
                 Ok(ptr) => ptr as *mut u8,
                 Err(e) => {
+                    // SAFETY: the handle was created from this device moments ago and never
+                    // submitted, so this cleanup is its only remaining use.
                     unsafe { device.free_memory(memory, None) };
                     return Err(super::error::map_vk_result(e, "allocator: map block"));
                 }
@@ -684,6 +720,8 @@ fn resource_ptr(reservation: &Reservation) -> *mut u8 {
     if reservation.mapped.is_null() {
         std::ptr::null_mut()
     } else {
+        // SAFETY: `mapped` is the block's whole-size mapping and `placement.offset` is this
+        // reservation's offset inside that same block, so the result stays within the mapping.
         unsafe {
             reservation
                 .mapped
@@ -743,6 +781,9 @@ mod tests {
 
     impl Drop for TestGpu {
         fn drop(&mut self) {
+            // SAFETY: the handle was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission still
+            // references it.
             unsafe {
                 self.device.destroy_device(None);
                 self.instance.destroy_instance(None);
@@ -775,6 +816,8 @@ mod tests {
         } else {
             vk::API_VERSION_1_0
         });
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let instance = unsafe {
             entry.create_instance(
                 &vk::InstanceCreateInfo::default().application_info(&app),
@@ -783,21 +826,26 @@ mod tests {
         }
         .ok()?;
         let destroy_instance = |instance: ash::Instance| {
+            // SAFETY: `instance` was created here and nothing derived from it outlives this call.
             unsafe { instance.destroy_instance(None) };
             None
         };
+        // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+        // output vector from the count the driver reports.
         let physical_device = match unsafe { instance.enumerate_physical_devices() } {
             Ok(devices) if !devices.is_empty() => devices[0],
             _ => return destroy_instance(instance),
         };
         let mut enable = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
         if device_address {
+            // SAFETY: a property query on a live handle; it only reads.
             let props = unsafe { instance.get_physical_device_properties(physical_device) };
             if props.api_version < vk::API_VERSION_1_2 {
                 return destroy_instance(instance);
             }
             let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
             let mut feats = vk::PhysicalDeviceFeatures2::default().push_next(&mut bda);
+            // SAFETY: a property query on a live handle; it only reads.
             unsafe { instance.get_physical_device_features2(physical_device, &mut feats) };
             if bda.buffer_device_address == 0 {
                 return destroy_instance(instance);
@@ -811,6 +859,8 @@ mod tests {
         if device_address {
             device_info = device_info.push_next(&mut enable);
         }
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
             Ok(device) => device,
             Err(_) => return destroy_instance(instance),
@@ -850,6 +900,8 @@ mod tests {
         // Each maps at its own offset, and the ranges do not overlap.
         assert!(!a.mapped_ptr().is_null());
         assert!(!b.mapped_ptr().is_null());
+        // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at least the cull
+        // count's worth of records, so each mapped pointer covers the range being zeroed.
         unsafe {
             std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024);
             std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024);
@@ -944,6 +996,8 @@ mod tests {
                 base_array_layer: 0,
                 layer_count: 1,
             });
+        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+        // it names belongs to this device.
         let view = unsafe { gpu.device.create_image_view(&view_info, None) }.unwrap();
         image.attach_view(view);
 
@@ -1148,6 +1202,8 @@ mod tests {
 
         // `get_buffer_device_address` must be valid for a pooled buffer at any
         // offset; `b` sits at a non-zero offset behind `a`.
+        // SAFETY: `buffer` was created from this device with SHADER_DEVICE_ADDRESS usage and the
+        // info struct borrows it for the call; the query only reads.
         let address = |buffer: vk::Buffer| unsafe {
             gpu.device
                 .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
