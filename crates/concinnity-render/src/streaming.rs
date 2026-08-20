@@ -261,11 +261,14 @@ impl StreamPlanner {
         if candidates.is_empty() {
             return plan;
         }
-        candidates.sort_by(|&a, &b| {
+        // Unstable sort (the stable one heap-allocates scratch); the id
+        // tiebreak reproduces the id-ascending tie order stability gave.
+        candidates.sort_unstable_by(|&a, &b| {
             self.items[a]
                 .score
                 .partial_cmp(&self.items[b].score)
                 .unwrap_or(core::cmp::Ordering::Equal)
+                .then(a.cmp(&b))
         });
 
         // Residents in eviction order (worst first): highest score, then
@@ -286,7 +289,7 @@ impl StreamPlanner {
                 .filter(|(_, it)| it.state == StreamState::Resident)
                 .map(|(id, _)| id),
         );
-        residents.sort_by(|&a, &b| {
+        residents.sort_unstable_by(|&a, &b| {
             let (ia, ib) = (&self.items[a], &self.items[b]);
             ib.score
                 .partial_cmp(&ia.score)

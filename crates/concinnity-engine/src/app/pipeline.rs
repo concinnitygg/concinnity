@@ -110,10 +110,10 @@ fn render_half(
             return RenderHalfOutcome::stopped(submitted);
         }
         let mut snapshot = match wait_for_snapshot(&snapshot_rx) {
-            SnapshotWait::Snapshot(snapshot) => *snapshot,
+            Ok(snapshot) => snapshot,
             #[cfg(target_os = "macos")]
-            SnapshotWait::Empty => continue,
-            SnapshotWait::Closed => return RenderHalfOutcome::stopped(submitted),
+            Err(SnapshotWaitEnd::Empty) => continue,
+            Err(SnapshotWaitEnd::Closed) => return RenderHalfOutcome::stopped(submitted),
         };
 
         let mut outcome = submit(&mut policy, &mut snapshot, backend);
@@ -156,8 +156,9 @@ impl RenderHalfOutcome {
     }
 }
 
-enum SnapshotWait {
-    Snapshot(Box<RenderSnapshot>),
+// Why a wait returned without a snapshot. The snapshot itself travels as the
+// `Ok` value so the per-frame path never boxes it.
+enum SnapshotWaitEnd {
     // Only the macOS wait is sliced (to keep the Cocoa run loop draining);
     // elsewhere the receive blocks until a snapshot or disconnect.
     #[cfg(target_os = "macos")]
@@ -170,20 +171,20 @@ enum SnapshotWait {
 // responsive); elsewhere the event pumps live inside the draw itself, so a
 // plain blocking receive is right.
 #[cfg(target_os = "macos")]
-fn wait_for_snapshot(rx: &Receiver<RenderSnapshot>) -> SnapshotWait {
+fn wait_for_snapshot(rx: &Receiver<RenderSnapshot>) -> Result<RenderSnapshot, SnapshotWaitEnd> {
     use std::sync::mpsc::RecvTimeoutError;
     crate::app::runloop::drain_cocoa_events();
     match rx.recv_timeout(std::time::Duration::from_millis(2)) {
-        Ok(snapshot) => SnapshotWait::Snapshot(Box::new(snapshot)),
-        Err(RecvTimeoutError::Timeout) => SnapshotWait::Empty,
-        Err(RecvTimeoutError::Disconnected) => SnapshotWait::Closed,
+        Ok(snapshot) => Ok(snapshot),
+        Err(RecvTimeoutError::Timeout) => Err(SnapshotWaitEnd::Empty),
+        Err(RecvTimeoutError::Disconnected) => Err(SnapshotWaitEnd::Closed),
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn wait_for_snapshot(rx: &Receiver<RenderSnapshot>) -> SnapshotWait {
+fn wait_for_snapshot(rx: &Receiver<RenderSnapshot>) -> Result<RenderSnapshot, SnapshotWaitEnd> {
     match rx.recv() {
-        Ok(snapshot) => SnapshotWait::Snapshot(Box::new(snapshot)),
-        Err(_) => SnapshotWait::Closed,
+        Ok(snapshot) => Ok(snapshot),
+        Err(_) => Err(SnapshotWaitEnd::Closed),
     }
 }

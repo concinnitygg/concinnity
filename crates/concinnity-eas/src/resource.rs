@@ -24,11 +24,17 @@ impl Resources {
     }
 
     // Insert a resource, returning the previous instance of the same type if
-    // one was present.
+    // one was present. Replaces in place when the type is already present, so
+    // a per-frame republish reuses the existing allocation.
     pub fn insert<T: Any + Send>(&mut self, value: T) -> Option<T> {
-        self.map
-            .insert(TypeId::of::<T>(), Box::new(value))
-            .and_then(downcast::<T>)
+        if let Some(slot) = self.map.get_mut(&TypeId::of::<T>()) {
+            let existing = (slot.as_mut() as &mut dyn Any)
+                .downcast_mut::<T>()
+                .expect("resource slot type matches its TypeId key");
+            return Some(core::mem::replace(existing, value));
+        }
+        self.map.insert(TypeId::of::<T>(), Box::new(value));
+        None
     }
 
     pub fn get<T: Any>(&self) -> Option<&T> {
@@ -47,6 +53,13 @@ impl Resources {
         self.map.remove(&TypeId::of::<T>()).and_then(downcast::<T>)
     }
 
+    // Take the resource value, leaving `T::default()` parked in its slot so a
+    // later `insert` republish reuses the allocation. `None` when the type was
+    // never inserted; a per-frame take/put cycle never re-boxes.
+    pub fn take<T: Any + Send + Default>(&mut self) -> Option<T> {
+        self.get_mut::<T>().map(core::mem::take)
+    }
+
     pub fn contains<T: Any>(&self) -> bool {
         self.map.contains_key(&TypeId::of::<T>())
     }
@@ -60,7 +73,7 @@ fn downcast<T: Any>(boxed: Box<dyn Any + Send>) -> Option<T> {
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Default)]
     struct FrameTime(f32);
 
     #[test]
@@ -87,6 +100,28 @@ mod tests {
         resources.insert(FrameTime(1.0));
         resources.get_mut::<FrameTime>().unwrap().0 = 5.0;
         assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(5.0)));
+    }
+
+    #[test]
+    fn insert_replaces_in_place_without_reboxing() {
+        let mut resources = Resources::new();
+        resources.insert(FrameTime(1.0));
+        let before = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        assert_eq!(resources.insert(FrameTime(2.0)), Some(FrameTime(1.0)));
+        let after = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        assert_eq!(before, after, "republish must reuse the existing box");
+    }
+
+    #[test]
+    fn take_leaves_a_default_parked_in_the_slot() {
+        let mut resources = Resources::new();
+        assert_eq!(resources.take::<FrameTime>(), None);
+        resources.insert(FrameTime(3.0));
+        let before = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        assert_eq!(resources.take::<FrameTime>(), Some(FrameTime(3.0)));
+        let after = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        assert_eq!(before, after, "take must leave the box parked");
+        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(0.0)));
     }
 
     #[test]

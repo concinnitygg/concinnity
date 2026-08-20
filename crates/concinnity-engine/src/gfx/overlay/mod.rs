@@ -37,7 +37,9 @@ const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 // Everything the overlay build needs from GraphicsSystem's init: the loaded
 // font atlases, the sprite-texture slot map, the HUD chip id lists, and the
 // scroll-panel clip bands. Parked as a resource at the end of graphics init;
-// the build takes it for the duration of each step and puts it back.
+// the build takes it for the duration of each step and puts it back (the
+// `Default` left behind exists only within that step).
+#[derive(Default)]
 pub struct OverlayAssets {
     pub fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     pub sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
@@ -114,7 +116,7 @@ impl System for OverlaySystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // No parked assets: graphics init has not succeeded (or not run), so
         // there is nothing to build against and nothing will be drawn.
-        let Some(assets) = ctx.remove_resource::<OverlayAssets>() else {
+        let Some(assets) = ctx.take_resource::<OverlayAssets>() else {
             return StepResult::Continue;
         };
         let elapsed = self
@@ -159,7 +161,7 @@ impl OverlaySystem {
     ) -> OverlayFrame {
         // Recycle the previous frame's spent draw list (handed back by
         // graphics extraction), so this build reuses its allocations.
-        if let Some(spent) = ctx.remove_resource::<OverlayRecycle>() {
+        if let Some(spent) = ctx.take_resource::<OverlayRecycle>() {
             self.buffer.recycle(spent.0);
         }
         // The viewport InputSystem sampled at the end of the previous tick, or
@@ -764,7 +766,9 @@ mod tests {
         assert_eq!(frame.calls.as_ptr(), spent_ptr, "list backing reused");
         assert_eq!(frame.calls.len(), 1);
         assert!(
-            w.resources.get::<OverlayRecycle>().is_none(),
+            w.resources
+                .get::<OverlayRecycle>()
+                .is_none_or(|r| r.0.is_empty()),
             "the spent list was consumed"
         );
     }

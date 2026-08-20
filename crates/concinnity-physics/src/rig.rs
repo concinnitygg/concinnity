@@ -78,11 +78,16 @@ pub(crate) fn init_rigs(
 
 // Read the root-motion displacements published since last frame (by
 // AnimationSystem, which runs after physics; the events queue holds them for
-// one cycle).
-pub(crate) fn drain_motions(ctx: &PipelineContext, cursor: &mut EventCursor) -> Vec<RootMotion> {
-    ctx.events::<RootMotion>()
-        .map(|ev| ev.read(cursor).copied().collect())
-        .unwrap_or_default()
+// one cycle) into `out`, cleared first so the caller's buffer is reused.
+pub(crate) fn drain_motions_into(
+    ctx: &PipelineContext,
+    cursor: &mut EventCursor,
+    out: &mut Vec<RootMotion>,
+) {
+    out.clear();
+    if let Some(ev) = ctx.events::<RootMotion>() {
+        out.extend(ev.read(cursor).copied());
+    }
 }
 
 // Adopt externally moved rig components before the frame's ticks run: a

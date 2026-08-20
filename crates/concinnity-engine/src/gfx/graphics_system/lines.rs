@@ -7,7 +7,7 @@
 // applied.
 
 use crate::ecs::PipelineContext;
-use crate::gfx::lines::{Line, LineCamera, build_vertices};
+use crate::gfx::lines::{Line, LineCamera, build_vertices_into};
 use crate::gfx::render_types::LineVertex;
 
 // The camera + space this frame draws with.
@@ -23,15 +23,16 @@ pub(super) struct LineFrame {
     pub viewport: (f32, f32),
 }
 
-// Expand this frame's published lines. Empty (no allocation past the
-// resource lookup) when nothing published any, which is every frame of a
-// shipped runtime.
-pub(super) fn build(ctx: &PipelineContext<'_>, frame: LineFrame) -> Vec<LineVertex> {
+// Expand this frame's published lines into `out` (cleared first, capacity
+// retained). A no-op past the resource lookup when nothing published any,
+// which is every frame of a shipped runtime.
+pub(super) fn build_into(ctx: &PipelineContext<'_>, frame: LineFrame, out: &mut Vec<LineVertex>) {
+    out.clear();
     let Some(lines) = ctx.resource::<crate::ecs::WorldLines>() else {
-        return Vec::new();
+        return;
     };
     if lines.0.is_empty() {
-        return Vec::new();
+        return;
     }
     let cam = LineCamera {
         view: frame.view,
@@ -40,16 +41,12 @@ pub(super) fn build(ctx: &PipelineContext<'_>, frame: LineFrame) -> Vec<LineVert
         viewport: [frame.viewport.0, frame.viewport.1],
         near: frame.near,
     };
-    let rebased: Vec<Line> = lines
-        .0
-        .iter()
-        .map(|l| Line {
-            start: offset(l.start, frame.rebase),
-            end: offset(l.end, frame.rebase),
-            ..*l
-        })
-        .collect();
-    build_vertices(&rebased, &cam)
+    let rebased = lines.0.iter().map(|l| Line {
+        start: offset(l.start, frame.rebase),
+        end: offset(l.end, frame.rebase),
+        ..*l
+    });
+    build_vertices_into(rebased, &cam, out);
 }
 
 fn offset(p: [f32; 3], by: [f32; 3]) -> [f32; 3] {
@@ -118,6 +115,13 @@ mod tests {
             end_color: [1.0, 0.2, 0.2, 0.0],
             width_px: 2.0,
         }
+    }
+
+    // Test shim over `build_into`, so the assertions stay value-shaped.
+    fn build(ctx: &PipelineContext<'_>, frame: LineFrame) -> Vec<LineVertex> {
+        let mut out = Vec::new();
+        build_into(ctx, frame, &mut out);
+        out
     }
 
     #[test]

@@ -112,6 +112,11 @@ pub struct AnimationSystem {
     // One entry per file-backed Animation, captured at init under
     // `cn debug`. Empty when hot-reload is off or every clip is inline.
     reload_entries: Vec<AnimationReloadEntry>,
+    // Per-target IK solve inputs, refreshed in place each frame so the pin
+    // buffers persist across frames.
+    ik_frames: std::collections::HashMap<SkinnedMeshHandle, ik::IkFrame>,
+    // Foot-position scratch for the probe-ray refresh, reused across targets.
+    ik_feet_scratch: Vec<[f32; 3]>,
 }
 
 impl std::fmt::Debug for AnimationSystem {
@@ -140,6 +145,8 @@ impl AnimationSystem {
             last_step_secs: None,
             pause_anchor: None,
             reload_entries: Vec::new(),
+            ik_frames: std::collections::HashMap::new(),
+            ik_feet_scratch: Vec::new(),
         }
     }
 
@@ -397,7 +404,8 @@ impl System for AnimationSystem {
         // Foot-pinning inputs for this frame: per graph target with IK
         // chains, the rig transform and each chain's ground pin (probe hits
         // answered by PhysicsSystem earlier this tick).
-        let ik_frames = ik::frame_inputs(&self.targets, ctx);
+        ik::frame_inputs(&self.targets, ctx, &mut self.ik_frames);
+        let ik_frames = &self.ik_frames;
 
         // Each `SkeletonPose` is sampled and skinned independently, so the
         // per-pose work fans across the job pool and joins before returning.
@@ -502,7 +510,7 @@ impl System for AnimationSystem {
 
         // Refresh the ground-probe rays from the posed foot positions for
         // PhysicsSystem to answer next frame.
-        ik::refresh_rays(&self.targets, ctx);
+        ik::refresh_rays(&self.targets, ctx, &mut self.ik_feet_scratch);
 
         StepResult::Continue
     }

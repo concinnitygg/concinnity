@@ -7,31 +7,41 @@ use crate::gfx::scene_flow;
 
 use super::*;
 
-// Build the (draw-slots, scene) visibility pairs from the per-entity
+// The per-entity scene-visibility snapshot plus the scratch its refresh needs,
+// both reused across frames: a fade refreshes this every frame it runs, so
+// nothing here may allocate in steady state.
+#[derive(Default)]
+pub(crate) struct SceneVisibilityScratch {
+    pub(crate) visibility: scene_flow::SceneVisibility,
+    scene_of: std::collections::HashMap<crate::ecs::Entity, AssetId>,
+}
+
+// Rebuild the (draw-slots, scene) visibility pairs from the per-entity
 // components: every entity with a RenderHandle contributes its GPU draw slots,
 // tagged with the SceneMember scene it belongs to (None = always visible),
-// consumed by the scene_flow visibility functions. The two returned vectors are
-// index-aligned: pair i is one entity's draws and its scene.
-pub(crate) fn decomposed_visibility_snapshot(
+// consumed by the scene_flow visibility functions.
+pub(crate) fn refresh_visibility_snapshot(
     ctx: &PipelineContext,
-) -> (Vec<Vec<usize>>, Vec<Option<AssetId>>) {
-    let scene_of: std::collections::HashMap<crate::ecs::Entity, AssetId> = ctx
-        .join2::<SceneMember, RenderHandle>()
-        .map(|(entity, member, _)| (entity, member.0))
-        .collect();
-    let mut draws = Vec::new();
-    let mut scenes = Vec::new();
+    scratch: &mut SceneVisibilityScratch,
+) {
+    scratch.scene_of.clear();
+    scratch.scene_of.extend(
+        ctx.join2::<SceneMember, RenderHandle>()
+            .map(|(entity, member, _)| (entity, member.0)),
+    );
+    scratch.visibility.clear();
     for (entity, handle) in ctx.query_with_entity::<RenderHandle>() {
+        scratch
+            .visibility
+            .begin_prop(scratch.scene_of.get(&entity).copied());
         // A Hidden entity contributes no slots: its draws were switched off
         // by a hide request, and a scene switch must not relight them.
-        if ctx.get::<crate::assets::Hidden>(entity).is_some() {
-            draws.push(Vec::new());
-        } else {
-            draws.push(handle.draws.iter().map(|&slot| slot as usize).collect());
+        if ctx.get::<crate::assets::Hidden>(entity).is_none() {
+            for &slot in handle.draws.iter() {
+                scratch.visibility.push_draw(slot as usize);
+            }
         }
-        scenes.push(scene_of.get(&entity).copied());
     }
-    (draws, scenes)
 }
 
 impl GraphicsSystem {
@@ -60,9 +70,13 @@ impl GraphicsSystem {
         // Snapshot visibility from the per-entity components before borrowing the
         // backend, so the ctx borrow is released by the time set_scene_visibility
         // runs.
-        let (draws, scenes) = decomposed_visibility_snapshot(ctx);
+        refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
         if let Some(backend) = self.backend.as_deref_mut() {
-            scene_flow::set_scene_visibility(&draws, &scenes, active_scene, backend);
+            scene_flow::set_scene_visibility(
+                &self.scene_visibility.visibility,
+                active_scene,
+                backend,
+            );
         }
     }
 }
@@ -73,6 +87,19 @@ mod tests {
     use crate::blob::BlobData;
     use crate::ecs::{ComponentStorage, Resources};
     use crate::gfx::profile::FrameProfile;
+
+    // Collect the snapshot's pairs for assertions.
+    fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<usize>>, Vec<Option<AssetId>>) {
+        let mut scratch = SceneVisibilityScratch::default();
+        refresh_visibility_snapshot(ctx, &mut scratch);
+        let mut draws = Vec::new();
+        let mut scenes = Vec::new();
+        for (d, s) in scratch.visibility.props() {
+            draws.push(d.to_vec());
+            scenes.push(s);
+        }
+        (draws, scenes)
+    }
 
     // The snapshot pairs each entity's draw slots with its scene; scene-less
     // entities are always visible.
@@ -108,7 +135,7 @@ mod tests {
         ctx.insert(c, RenderHandle { draws: [30].into() });
         ctx.insert(c, SceneMember(AssetId(8)));
 
-        let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
+        let (draws, scenes) = snapshot_pairs(&ctx);
 
         // Pairs follow RenderHandle column order (a, b, c).
         assert_eq!(draws, vec![vec![10usize, 11], vec![20], vec![30]]);
@@ -138,7 +165,7 @@ mod tests {
         ctx.insert(b, RenderHandle { draws: [20].into() });
         ctx.insert(b, crate::assets::Hidden);
 
-        let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
+        let (draws, scenes) = snapshot_pairs(&ctx);
         assert_eq!(draws, vec![vec![10usize], vec![]]);
         assert_eq!(scenes, vec![None, None]);
     }
@@ -165,7 +192,7 @@ mod tests {
         let rendered = ctx.components.spawn();
         ctx.insert(rendered, RenderHandle { draws: [5].into() });
 
-        let (draws, scenes) = decomposed_visibility_snapshot(&ctx);
+        let (draws, scenes) = snapshot_pairs(&ctx);
         assert_eq!(draws, vec![vec![5usize]]);
         assert_eq!(scenes, vec![None]);
     }

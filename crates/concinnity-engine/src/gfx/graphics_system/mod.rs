@@ -152,6 +152,9 @@ pub struct GraphicsSystem {
     // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
     // this system ticks it). None when no Scene assets were declared.
     scene_flow: Option<scene_flow::SceneFlow>,
+    // Per-entity scene-visibility snapshot, refreshed (buffers reused) every
+    // frame a fade runs and on scene-visibility applies.
+    scene_visibility: scene::SceneVisibilityScratch,
     // Overlay build inputs assembled during init() and handed to OverlaySystem
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
@@ -434,6 +437,7 @@ impl GraphicsSystem {
             upscale_backend: crate::assets::UpscalerBackend::default(),
             backend: None,
             scene_flow: None,
+            scene_visibility: Default::default(),
             loaded_fonts: std::collections::HashMap::new(),
             sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),

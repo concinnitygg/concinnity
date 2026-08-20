@@ -411,6 +411,15 @@ impl<'a> PipelineContext<'a> {
         self.resources.remove::<T>()
     }
 
+    // Take the singleton resource value of type T, leaving `T::default()`
+    // parked in its slot so a take/republish cycle reuses the allocation.
+    // `None` when the type was never inserted.
+    pub fn take_resource<T: core::any::Any + Send + Default>(&mut self) -> Option<T> {
+        #[cfg(debug_assertions)]
+        note_resource::<T>(true);
+        self.resources.take::<T>()
+    }
+
     // Borrow the event queue for event type E, if any events of that type have
     // been registered.
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {

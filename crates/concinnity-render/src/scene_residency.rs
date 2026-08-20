@@ -149,10 +149,20 @@ impl SceneResidency {
 
     // Every scene's `(id, state, progress)`, in declaration order.
     pub fn status(&self) -> Vec<(AssetId, SceneLoadState, f32)> {
-        self.sets
-            .iter()
-            .map(|s| (s.scene, derive_state(s), derive_progress(s)))
-            .collect()
+        let mut out = Vec::new();
+        self.status_into(&mut out);
+        out
+    }
+
+    // `status`, written into `out` (cleared first) so a per-frame poll reuses
+    // its buffer.
+    pub fn status_into(&self, out: &mut Vec<(AssetId, SceneLoadState, f32)>) {
+        out.clear();
+        out.extend(
+            self.sets
+                .iter()
+                .map(|s| (s.scene, derive_state(s), derive_progress(s))),
+        );
     }
 }
 

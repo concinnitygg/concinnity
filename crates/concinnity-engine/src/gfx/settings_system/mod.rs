@@ -130,7 +130,22 @@ impl SettingsSystem {
     pub fn new() -> Self {
         Self
     }
+
+    // Park the state back in its slot at the end of a step that took it.
+    fn park(ctx: &mut PipelineContext, state: SettingsState) {
+        match ctx.resources.get_mut::<SettingsSlot>() {
+            Some(slot) => slot.0 = Some(state),
+            None => {
+                ctx.resources.insert(SettingsSlot(Some(state)));
+            }
+        }
+    }
 }
+
+// The parked `SettingsState` slot: each step takes the value out (so `ctx`
+// stays freely borrowable) and puts it back, reusing the slot's allocation.
+// `None` only while a step has it taken.
+pub(crate) struct SettingsSlot(pub(crate) Option<SettingsState>);
 
 impl std::fmt::Debug for SettingsState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -144,18 +159,22 @@ impl System for SettingsSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // No parked state (graphics init has not succeeded) or op queue:
         // nothing to apply against; the queued commands wait in retention.
-        let Some(mut state) = ctx.resources.remove::<SettingsState>() else {
+        let Some(mut state) = ctx
+            .resources
+            .get_mut::<SettingsSlot>()
+            .and_then(|slot| slot.0.take())
+        else {
             return StepResult::Continue;
         };
         let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(ctx.resources) else {
-            ctx.resources.insert(state);
+            Self::park(ctx, state);
             return StepResult::Continue;
         };
         state.apply_scene_commands(ctx, &mut queues.ops);
         state.apply_setting_commands(ctx, &mut queues.ops);
         crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         state.publish_hud_state(ctx);
-        ctx.resources.insert(state);
+        Self::park(ctx, state);
         StepResult::Continue
     }
 }
@@ -176,9 +195,10 @@ impl SettingsState {
             return;
         }
         // Source scene-jump visibility from the per-entity components,
-        // snapshotting once for the whole command batch.
-        let (draws, scenes) =
-            crate::gfx::graphics_system::scene::decomposed_visibility_snapshot(ctx);
+        // snapshotting once for the whole command batch (jumps are rare edges,
+        // so a local snapshot is fine here).
+        let mut scratch = crate::gfx::graphics_system::scene::SceneVisibilityScratch::default();
+        crate::gfx::graphics_system::scene::refresh_visibility_snapshot(ctx, &mut scratch);
         let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() else {
             return;
         };
@@ -188,8 +208,7 @@ impl SettingsState {
             let mut recorder = crate::gfx::snapshot::SceneOpRecorder(&mut scene_ops);
             scene_flow::jump_to_scene(
                 &mut slot.flow,
-                &draws,
-                &scenes,
+                &scratch.visibility,
                 elapsed,
                 cmd.scene,
                 &cmd.transition,

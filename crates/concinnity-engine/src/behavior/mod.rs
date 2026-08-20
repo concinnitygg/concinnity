@@ -170,6 +170,10 @@ pub struct BehaviorSystem {
     // their capacity across ticks.
     jobs: Vec<(usize, Option<Entity>)>,
     bindings: Vec<Option<Val>>,
+    // The serial path's effect/record buffers, kept for their capacity like
+    // the parallel path's per-worker buckets.
+    serial_effects: Vec<Effect>,
+    serial_produced: Vec<(usize, Option<Entity>, usize)>,
     // The tick's resolved entity sets and the tag-intersection scratch, kept
     // for their capacity across ticks like the buffers above.
     snapshot: Snapshot,
@@ -197,6 +201,8 @@ impl Default for BehaviorSystem {
             eval_buckets: Vec::new(),
             jobs: Vec::new(),
             bindings: Vec::new(),
+            serial_effects: Vec::new(),
+            serial_produced: Vec::new(),
             snapshot: Snapshot::default(),
             tag_scratch: Vec::new(),
         }
@@ -600,8 +606,10 @@ impl BehaviorSystem {
         let parallel = jobs.len() >= PARALLEL_EVAL_MIN_JOBS
             && crate::ecs::ScheduleMode::current(ctx.resources)
                 == crate::ecs::ScheduleMode::Parallel;
-        let mut effects: Vec<Effect> = Vec::new();
-        let mut produced: Vec<(usize, Option<Entity>, usize)> = Vec::new();
+        let mut effects = std::mem::take(&mut self.serial_effects);
+        let mut produced = std::mem::take(&mut self.serial_produced);
+        effects.clear();
+        produced.clear();
         let mut buckets = std::mem::take(&mut self.eval_buckets);
         let mut serial_bindings = std::mem::take(&mut self.bindings);
         {
@@ -673,14 +681,16 @@ impl BehaviorSystem {
                 }
             }
         } else {
-            let mut recorded = effects.into_iter();
-            for (i, entity, count) in produced {
+            let mut recorded = effects.drain(..);
+            for &(i, entity, count) in &produced {
                 save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
             }
         }
         self.eval_buckets = buckets;
         self.jobs = jobs;
         self.bindings = serial_bindings;
+        self.serial_effects = effects;
+        self.serial_produced = produced;
         self.snapshot = snapshot;
 
         // One write per tick, after every effect has landed, so the file holds

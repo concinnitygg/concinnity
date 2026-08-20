@@ -103,6 +103,7 @@ pub(super) fn resolve_chains(
 // This frame's solve inputs for one target: the rig's model transform pair
 // and, per chain, the world-space pin height and weight (or `None` to leave
 // the chain animated).
+#[derive(Default)]
 pub(super) struct IkFrame {
     pub model: Mat4,
     pub inv_model: Mat4,
@@ -111,64 +112,72 @@ pub(super) struct IkFrame {
 }
 
 // Serial pre-pass: fold each target's probe answers, rig state, and weight
-// parameters into per-chain pins for the parallel sample loop.
+// parameters into per-chain pins for the parallel sample loop. `out` persists
+// across frames (a target absent from it gets no solve), so this refresh
+// allocates nothing in steady state.
 pub(super) fn frame_inputs(
     targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
-    ctx: &mut PipelineContext,
-) -> HashMap<SkinnedMeshHandle, IkFrame> {
-    let mut out = HashMap::new();
+    ctx: &PipelineContext,
+    out: &mut HashMap<SkinnedMeshHandle, IkFrame>,
+) {
+    out.retain(|target, _| targets.contains_key(target));
     for (&target, state) in targets {
-        let super::TargetMode::Graph(g) = &state.mode else {
-            continue;
-        };
-        if g.chains.is_empty() {
-            continue;
+        let refreshed = refresh_target(target, state, ctx, out);
+        if !refreshed {
+            out.remove(&target);
         }
-        // Pinning needs the rig: its transform maps mesh space to world, and
-        // an airborne capsule suspends the solve so jumps stay authored.
-        let Some((model, grounded)) = ctx
-            .query::<CharacterRig>()
-            .find(|r| r.target == target)
-            .map(|r| (r.model(), r.grounded))
-        else {
-            continue;
-        };
-        let params = ctx
-            .query::<AnimParams>()
-            .find(|p| p.target == target)
-            .map(|p| p.values.clone())
-            .unwrap_or_default();
-        let hits: Vec<Option<([f32; 3], [f32; 3])>> = ctx
-            .query::<GroundProbes>()
-            .find(|p| p.target == target)
-            .map(|p| p.probes.iter().map(|probe| probe.hit).collect())
-            .unwrap_or_default();
-        let pins = g
-            .chains
-            .iter()
-            .enumerate()
-            .map(|(i, chain)| {
-                if !grounded {
-                    return None;
-                }
-                let (point, _normal) = hits.get(i).copied().flatten()?;
-                let weight = match chain.weight_param {
-                    Some(p) => params.get(p).copied().unwrap_or(0.0).clamp(0.0, 1.0),
-                    None => 1.0,
-                };
-                (weight > 0.0).then_some((point[1] + chain.foot_height, weight))
-            })
-            .collect();
-        out.insert(
-            target,
-            IkFrame {
-                model,
-                inv_model: mat4_affine_inverse(model),
-                pins,
-            },
-        );
     }
-    out
+}
+
+// Refresh one target's `IkFrame` in place; `false` means the target has no
+// solve this frame and its entry must not survive.
+fn refresh_target(
+    target: SkinnedMeshHandle,
+    state: &super::TargetState,
+    ctx: &PipelineContext,
+    out: &mut HashMap<SkinnedMeshHandle, IkFrame>,
+) -> bool {
+    let super::TargetMode::Graph(g) = &state.mode else {
+        return false;
+    };
+    if g.chains.is_empty() {
+        return false;
+    }
+    // Pinning needs the rig: its transform maps mesh space to world, and
+    // an airborne capsule suspends the solve so jumps stay authored.
+    let Some((model, grounded)) = ctx
+        .query::<CharacterRig>()
+        .find(|r| r.target == target)
+        .map(|r| (r.model(), r.grounded))
+    else {
+        return false;
+    };
+    let params = ctx.query::<AnimParams>().find(|p| p.target == target);
+    let probes = ctx.query::<GroundProbes>().find(|p| p.target == target);
+    let frame = out.entry(target).or_default();
+    frame.model = model;
+    frame.inv_model = mat4_affine_inverse(model);
+    frame.pins.clear();
+    frame
+        .pins
+        .extend(g.chains.iter().enumerate().map(|(i, chain)| {
+            if !grounded {
+                return None;
+            }
+            let (point, _normal) = probes
+                .and_then(|p| p.probes.get(i))
+                .and_then(|probe| probe.hit)?;
+            let weight = match chain.weight_param {
+                Some(p) => params
+                    .and_then(|a| a.values.get(p))
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0),
+                None => 1.0,
+            };
+            (weight > 0.0).then_some((point[1] + chain.foot_height, weight))
+        }));
+    true
 }
 
 // Apply every pinned chain to the sampled locals in `scratch.locals` (runs
@@ -210,10 +219,12 @@ pub(super) fn apply_chains(
 // Serial post-pass: refresh each target's probe rays from the posed foot
 // positions, for PhysicsSystem to answer next frame. The skinning matrix
 // applied to a joint's bind position is its current mesh-space position, so
-// no extra hierarchy walk is needed.
+// no extra hierarchy walk is needed. `feet_scratch` is caller-owned so the
+// per-target foot list reuses one buffer across targets and frames.
 pub(super) fn refresh_rays(
     targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext,
+    feet_scratch: &mut Vec<[f32; 3]>,
 ) {
     for (&target, state) in targets {
         let super::TargetMode::Graph(g) = &state.mode else {
@@ -229,35 +240,34 @@ pub(super) fn refresh_rays(
         else {
             continue;
         };
-        let feet: Vec<[f32; 3]> = {
+        {
             let Some(pose) = ctx
                 .query::<crate::assets::SkeletonPose>()
                 .find(|p| p.mesh_id == target)
             else {
                 continue;
             };
-            g.chains
-                .iter()
-                .map(|c| {
-                    let end = c.chain.end;
-                    let mesh = pose
-                        .joint_matrices
-                        .get(end)
-                        .map(|m| transform_point(m, pose.skeleton.bind_position(end)))
-                        .unwrap_or([0.0; 3]);
-                    transform_point(&model, mesh)
-                })
-                .collect()
-        };
+            feet_scratch.clear();
+            feet_scratch.extend(g.chains.iter().map(|c| {
+                let end = c.chain.end;
+                let mesh = pose
+                    .joint_matrices
+                    .get(end)
+                    .map(|m| transform_point(m, pose.skeleton.bind_position(end)))
+                    .unwrap_or([0.0; 3]);
+                transform_point(&model, mesh)
+            }));
+        }
         if let Some(probes) = ctx.query_mut::<GroundProbes>().find(|p| p.target == target) {
-            probes.probes = feet
-                .into_iter()
-                .map(|foot| GroundProbe {
+            // Refill in place so the component's buffer capacity survives.
+            probes.probes.clear();
+            probes
+                .probes
+                .extend(feet_scratch.iter().map(|foot| GroundProbe {
                     origin: [foot[0], foot[1] + PROBE_UP, foot[2]],
                     max_dist: PROBE_UP + PROBE_DOWN,
                     hit: None,
-                })
-                .collect();
+                }));
         }
     }
 }

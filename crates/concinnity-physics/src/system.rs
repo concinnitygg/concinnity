@@ -67,6 +67,10 @@ pub struct PhysicsSystem {
     // Scratch for the per-tick scan for freshly spawned collider-bearing
     // entities, refilled every step.
     new_props: Vec<(Entity, PropCollSnap)>,
+    // Per-step drain scratch, reused so the event handoffs never reallocate.
+    motion_scratch: Vec<concinnity_core::assets::RootMotion>,
+    contact_scratch: Vec<crate::contacts::ContactHit>,
+    sensor_scratch: Vec<crate::SensorCrossing>,
     // Index into `props` of the prop currently being carried.
     held: Option<usize>,
     // Sensor tag -> the TriggerVolume it senses for, with its filter. Tags are
@@ -156,6 +160,9 @@ impl PhysicsSystem {
             props: PropBodies::default(),
             root_cursor: EventCursor::default(),
             new_props: Vec::new(),
+            motion_scratch: Vec::new(),
+            contact_scratch: Vec::new(),
+            sensor_scratch: Vec::new(),
             held: None,
             sensor_filters: HashMap::new(),
             layers: LayerTable::new(&config),
@@ -581,7 +588,7 @@ impl System for PhysicsSystem {
         // Root-motion displacements published since last frame, applied on the
         // frame's first tick. Rig capsules whose entity moved externally snap
         // before any tick runs.
-        let motions = super::rig::drain_motions(ctx, &mut self.root_cursor);
+        super::rig::drain_motions_into(ctx, &mut self.root_cursor, &mut self.motion_scratch);
         super::rig::sync_rigs(ctx, &mut self.rigs);
 
         // The solver's internal parallelism (rapier's rayon islands) runs
@@ -641,7 +648,7 @@ impl System for PhysicsSystem {
                 world,
                 ctx,
                 &mut self.rigs,
-                if tick == 0 { &motions } else { &[] },
+                if tick == 0 { &self.motion_scratch } else { &[] },
                 dt,
                 GRAVITY,
                 self.layers.mask(LAYER_CHARACTER),
@@ -652,7 +659,8 @@ impl System for PhysicsSystem {
 
             // batch the tick's contact hits (strongest per pair this frame)
             self.contact_gate.advance_tick();
-            for hit in world.drain_contact_hits() {
+            world.drain_contact_hits_into(&mut self.contact_scratch);
+            for hit in self.contact_scratch.drain(..) {
                 self.contact_batch.add(hit);
             }
 
@@ -699,8 +707,8 @@ impl System for PhysicsSystem {
         // publish the sensor boundary crossings that pass their volume's
         // filter. A crossing whose body was removed this same step has no
         // `other` to classify, so only an `any` volume reports it.
-        let crossings = world.drain_sensor_crossings();
-        for crossing in crossings {
+        world.drain_sensor_crossings_into(&mut self.sensor_scratch);
+        for crossing in self.sensor_scratch.drain(..) {
             let Some(&(volume, filter)) = self.sensor_filters.get(&crossing.tag) else {
                 continue;
             };

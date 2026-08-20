@@ -413,13 +413,32 @@ impl PhysicsWorld {
 
     // The sensor boundary crossings recorded by the last `step`, oldest first.
     pub fn drain_sensor_crossings(&mut self) -> Vec<SensorCrossing> {
-        std::mem::take(&mut *self.events.crossings.lock().unwrap())
+        let mut out = Vec::new();
+        self.drain_sensor_crossings_into(&mut out);
+        out
+    }
+
+    // `drain_sensor_crossings`, moved into `out` (cleared first). Both the
+    // queue and `out` keep their capacity, so a per-tick drain never
+    // reallocates.
+    pub fn drain_sensor_crossings_into(&mut self, out: &mut Vec<SensorCrossing>) {
+        out.clear();
+        out.append(&mut self.events.crossings.lock().unwrap());
     }
 
     // The contact hits recorded by the last `step`, oldest first. Only pairs
     // whose total force passed the world's contact threshold appear.
     pub fn drain_contact_hits(&mut self) -> Vec<ContactHit> {
-        std::mem::take(&mut *self.events.contacts.lock().unwrap())
+        let mut out = Vec::new();
+        self.drain_contact_hits_into(&mut out);
+        out
+    }
+
+    // `drain_contact_hits`, moved into `out` (cleared first) with both
+    // capacities retained.
+    pub fn drain_contact_hits_into(&mut self, out: &mut Vec<ContactHit>) {
+        out.clear();
+        out.append(&mut self.events.contacts.lock().unwrap());
     }
 
     // Add the player character capsule as a position-kinematic body. `center`

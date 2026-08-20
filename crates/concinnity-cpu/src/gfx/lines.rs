@@ -124,13 +124,27 @@ fn clip_to_near(line: &Line, cam: &LineCamera) -> Option<Clipped> {
 // segments contribute nothing, so an empty result means the pass can be
 // skipped entirely.
 pub fn build_vertices(lines: &[Line], cam: &LineCamera) -> Vec<LineVertex> {
+    let mut out = Vec::new();
+    build_vertices_into(lines.iter().copied(), cam, &mut out);
+    out
+}
+
+// `build_vertices`, writing into `out` (cleared first) so a per-frame caller
+// reuses its buffer.
+pub fn build_vertices_into(
+    lines: impl Iterator<Item = Line>,
+    cam: &LineCamera,
+    out: &mut Vec<LineVertex>,
+) {
+    out.clear();
     let tan_half = cam.tan_half_fov();
     if !cam.usable(tan_half) {
-        return Vec::new();
+        return;
     }
-    let mut out = Vec::with_capacity(lines.len() * VERTS_PER_SEGMENT);
+    out.reserve(lines.size_hint().0 * VERTS_PER_SEGMENT);
     let fwd = cam.forward();
     for line in lines {
+        let line = &line;
         if line.width_px <= 0.0 || (line.start_color[3] <= 0.0 && line.end_color[3] <= 0.0) {
             continue;
         }
@@ -166,7 +180,6 @@ pub fn build_vertices(lines: &[Line], cam: &LineCamera) -> Vec<LineVertex> {
         let d = corner(seg.end, seg.end_color, 1.0);
         out.extend_from_slice(&[a, b, c, c, b, d]);
     }
-    out
 }
 
 #[cfg(test)]

@@ -261,7 +261,7 @@ impl GraphicsSystem {
         // earlier this tick, taken so a stale build is never redrawn.
         let overlay = ctx
             .resources
-            .remove::<crate::gfx::overlay::OverlayFrame>()
+            .take::<crate::gfx::overlay::OverlayFrame>()
             .unwrap_or_default();
         let menu_active = overlay.menu_active;
         // The editor's menu-state override also drives the backend's menu mode
@@ -433,14 +433,13 @@ impl GraphicsSystem {
             .and_then(|f| f.flow.as_ref())
             .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
         if fading {
-            let (draws, scenes) = super::scene::decomposed_visibility_snapshot(ctx);
+            super::scene::refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
             if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
                 let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
                 let mut recorder = SceneOpRecorder(&mut snap.scene_ops);
                 scene_flow::tick_transitions(
                     &mut slot.flow,
-                    &draws,
-                    &scenes,
+                    &self.scene_visibility.visibility,
                     flow_elapsed,
                     &mut recorder,
                 );
@@ -461,7 +460,7 @@ impl GraphicsSystem {
         // axes), expanded into ribbon geometry against the same camera the
         // frame draws with. Empty when nothing published any, which keeps the
         // pass out of the render graph entirely.
-        snap.lines = super::lines::build(
+        super::lines::build_into(
             ctx,
             super::lines::LineFrame {
                 view: final_view,
@@ -478,6 +477,7 @@ impl GraphicsSystem {
                 near,
                 viewport: self.viewport,
             },
+            &mut snap.lines,
         );
 
         // The editor's view mode + show flags, when published; a shipped
@@ -888,8 +888,12 @@ mod tests {
         assert!(snap.frame.menu_active);
         assert!(snap.frame.world_hidden);
         assert!(snap.ui.cursor_hidden);
+        let parked = world
+            .resources
+            .get::<OverlayFrame>()
+            .expect("the slot stays parked after the take");
         assert!(
-            world.resources.get::<OverlayFrame>().is_none(),
+            parked.calls.is_empty() && !parked.menu_active && !parked.world_hidden,
             "the overlay build is consumed so a stale one is never redrawn"
         );
 

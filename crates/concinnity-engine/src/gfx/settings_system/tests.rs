@@ -1192,14 +1192,18 @@ fn step_without_a_parked_state_is_a_noop() {
 fn step_without_a_backend_puts_the_state_back() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
-    f.world.resources.insert(f.state);
+    f.world.resources.insert(super::SettingsSlot(Some(f.state)));
 
     assert_eq!(
         sys.step(&mut f.world.ctx()),
         crate::ecs::StepResult::Continue
     );
     assert!(
-        f.world.ctx().resources.get_mut::<SettingsState>().is_some(),
+        f.world
+            .ctx()
+            .resources
+            .get_mut::<super::SettingsSlot>()
+            .is_some_and(|slot| slot.0.is_some()),
         "the state is parked again for the next tick"
     );
 }
@@ -1224,7 +1228,7 @@ fn step_drains_into_the_op_queue_and_reparks() {
                 slots: crate::gfx::render_slots::RenderSlots::new(0, true, &[]),
             },
         )));
-    f.world.resources.insert(f.state);
+    f.world.resources.insert(super::SettingsSlot(Some(f.state)));
 
     assert_eq!(
         sys.step(&mut f.world.ctx()),
@@ -1232,7 +1236,13 @@ fn step_drains_into_the_op_queue_and_reparks() {
     );
 
     assert!(f.world.ctx().resource::<crate::ecs::HudPrefs>().is_some());
-    assert!(f.world.ctx().resources.get_mut::<SettingsState>().is_some());
+    assert!(
+        f.world
+            .ctx()
+            .resources
+            .get_mut::<super::SettingsSlot>()
+            .is_some_and(|slot| slot.0.is_some())
+    );
     let mut queues = crate::ecs::ActiveRenderQueues::take(&mut f.world.resources)
         .expect("the op queue is parked again");
     queues.ops.replay(&mut f.backend);

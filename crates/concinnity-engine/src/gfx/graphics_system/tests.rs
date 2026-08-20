@@ -1972,8 +1972,11 @@ fn post_config_scene(cfg: crate::assets::PostProcessConfig) -> WorldBuilder {
 fn settings_state(world: &TestWorld) -> &crate::gfx::settings_system::SettingsState {
     world
         .resources
-        .get::<crate::gfx::settings_system::SettingsState>()
-        .expect("SettingsState parked at init")
+        .get::<crate::gfx::settings_system::SettingsSlot>()
+        .expect("SettingsSlot parked at init")
+        .0
+        .as_ref()
+        .expect("SettingsState in its slot between steps")
 }
 
 // A GPU profile at a chosen tier, for the Auto-preset ceiling resolution.

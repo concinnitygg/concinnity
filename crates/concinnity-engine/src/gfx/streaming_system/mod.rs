@@ -176,11 +176,15 @@ impl std::fmt::Debug for StreamingState {
 }
 
 #[derive(Debug, Default)]
-pub struct StreamingSystem;
+pub struct StreamingSystem {
+    // Scene-status scratch reused across frames, compared against the
+    // published `SceneResidencyStatus` before republishing.
+    scene_status_scratch: Vec<(AssetId, crate::gfx::scene_residency::SceneLoadState, f32)>,
+}
 
 impl StreamingSystem {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
@@ -188,30 +192,16 @@ impl System for StreamingSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // No parked state (graphics init has not succeeded): nothing to drive,
         // and GraphicsSystem is not drawing either, so no view to publish.
-        let Some(mut state) = ctx.resources.remove::<StreamingState>() else {
+        if !ctx.resources.contains::<StreamingState>() {
             return StepResult::Continue;
-        };
-
-        // Throttled process-RAM back-off sample (~2x/sec). Reads the world's
-        // `MemoryBudget` ceiling and live RSS; when RSS nears the ceiling the
-        // valve engages (stage 1 gates new loads, stage 2 shrinks residency).
-        // Skipped entirely when no `MemoryBudget` is published or RSS is
-        // unavailable, leaving streaming on its byte-budget policy unchanged.
-        if state.frame_count.is_multiple_of(PRESSURE_SAMPLE_INTERVAL) {
-            let budget = ctx
-                .resource::<crate::app::budget::MemoryBudget>()
-                .map(|b| b.budget_bytes);
-            if let Some(budget) = budget {
-                let rss = crate::app::sysmem::process_resident_bytes();
-                if let Some(pressure) = state.sample_pressure(rss, budget) {
-                    ctx.insert_resource(pressure);
-                }
-                if let Some(drift) = state.sample_drift(rss, budget) {
-                    ctx.insert_resource(drift);
-                }
-            }
         }
 
+        // Everything the drive needs from the wider context, gathered first so
+        // the state below is borrowed in place instead of moved out of its
+        // resource slot (which would free and re-box it every frame).
+        let ram_budget = ctx
+            .resource::<crate::app::budget::MemoryBudget>()
+            .map(|b| b.budget_bytes);
         // The camera the draw will use (written by the camera controller last
         // tick) is the absolute fallback when no chunk streaming rebases it.
         let (view_matrix, cam_pos) = ctx
@@ -219,8 +209,8 @@ impl System for StreamingSystem {
             .next()
             .map(|c| (c.view_matrix, c.position))
             .unwrap_or((IDENTITY4, [0.0; 3]));
-        // Peek (not remove) the overlay's world-hidden flag: OverlaySystem
-        // published it first this tick and GraphicsSystem removes it later.
+        // Peek (not take) the overlay's world-hidden flag: OverlaySystem
+        // published it first this tick and GraphicsSystem takes it later.
         // Streaming pauses behind an opaque menu (the world is not drawn),
         // unless a pinned scene is still loading: a loading screen's opaque
         // backdrop must not starve the load it reports (see `drive`).
@@ -232,18 +222,49 @@ impl System for StreamingSystem {
         // Scene pins for streamed-content residency: the active scene, plus a
         // fade target mid-transition so the destination starts loading before
         // visibility flips.
-        let scene_pins: Option<Vec<AssetId>> = ctx
+        let pin_pair: Option<([AssetId; 2], usize)> = ctx
             .resource::<crate::ecs::ActiveSceneFlow>()
             .and_then(|slot| slot.flow.as_ref())
             .map(|flow| {
-                let mut pins = vec![flow.current];
+                let mut pins = [flow.current; 2];
+                let mut len = 1;
                 if let crate::gfx::scene_flow::FadePhase::ToBlack { next, .. } = flow.fade
-                    && !pins.contains(&next)
+                    && next != flow.current
                 {
-                    pins.push(next);
+                    pins[1] = next;
+                    len = 2;
                 }
-                pins
+                (pins, len)
             });
+        let scene_pins: Option<&[AssetId]> = pin_pair.as_ref().map(|(pins, len)| &pins[..*len]);
+        let transient_pool_bytes = ctx.profile.render.transient_pool_bytes;
+
+        // Throttled process-RAM back-off sample (~2x/sec). Reads the world's
+        // `MemoryBudget` ceiling and live RSS; when RSS nears the ceiling the
+        // valve engages (stage 1 gates new loads, stage 2 shrinks residency).
+        // Skipped entirely when no `MemoryBudget` is published or RSS is
+        // unavailable, leaving streaming on its byte-budget policy unchanged.
+        {
+            let mut pressure_sample = None;
+            let mut drift_sample = None;
+            let state = ctx
+                .resources
+                .get_mut::<StreamingState>()
+                .expect("presence checked above");
+            if state.frame_count.is_multiple_of(PRESSURE_SAMPLE_INTERVAL)
+                && let Some(budget) = ram_budget
+            {
+                let rss = crate::app::sysmem::process_resident_bytes();
+                pressure_sample = state.sample_pressure(rss, budget);
+                drift_sample = state.sample_drift(rss, budget);
+            }
+            if let Some(pressure) = pressure_sample {
+                ctx.insert_resource(pressure);
+            }
+            if let Some(drift) = drift_sample {
+                ctx.insert_resource(drift);
+            }
+        }
 
         // The recording surfaces graphics init published beside this state.
         // Taken out for the drive so `ctx` stays freely borrowable.
@@ -254,14 +275,19 @@ impl System for StreamingSystem {
                 view: view_matrix,
                 cam_pos,
             });
-            ctx.resources.insert(state);
             return StepResult::Continue;
         };
+        let failures = ctx.resources.remove::<RenderOpFailures>();
+
+        let state = ctx
+            .resources
+            .get_mut::<StreamingState>()
+            .expect("presence checked above");
 
         // Roll back the ops that failed at the previous frame's replay (a
         // refused streamed-mesh upload, a failed chunk add) before planning,
         // so this frame's dispatch sees the corrected residency.
-        if let Some(failures) = ctx.resources.remove::<RenderOpFailures>() {
+        if let Some(failures) = failures {
             state.apply_op_failures(&failures.0, &mut queues.slots);
         }
 
@@ -271,29 +297,43 @@ impl System for StreamingSystem {
             cam_pos,
             view_matrix,
             world_hidden,
-            scene_pins.as_deref(),
+            scene_pins,
         );
 
-        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
-        // Republish each pool's device footprint under the shared tags, so a
+        // Refresh each pool's device footprint under the shared tags, so a
         // readout can name what VRAM is holding.
         accounting::publish(
             concinnity_memory::ledger(),
-            state.pool_reports(ctx.profile.render.transient_pool_bytes),
+            state.pool_reports(transient_pool_bytes),
         );
+        // Per-scene load status into the reused scratch; published below once
+        // the state borrow has ended.
+        let have_residency = match state.scene_residency.as_ref() {
+            Some(residency) => {
+                residency.status_into(&mut self.scene_status_scratch);
+                true
+            }
+            None => false,
+        };
+
+        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         ctx.insert_resource(CameraRelativeView { view, cam_pos });
         // Republish the per-scene load status when it changed, so menus and
         // loading screens can read scene progress without touching the pools.
-        if let Some(residency) = state.scene_residency.as_ref() {
-            let scenes = residency.status();
-            let changed = ctx
-                .resource::<crate::ecs::SceneResidencyStatus>()
-                .is_none_or(|s| s.scenes != scenes);
-            if changed {
-                ctx.insert_resource(crate::ecs::SceneResidencyStatus { scenes });
+        if have_residency {
+            match ctx.resource_mut::<crate::ecs::SceneResidencyStatus>() {
+                Some(published) => {
+                    if published.scenes != self.scene_status_scratch {
+                        published.scenes.clone_from(&self.scene_status_scratch);
+                    }
+                }
+                None => {
+                    ctx.insert_resource(crate::ecs::SceneResidencyStatus {
+                        scenes: self.scene_status_scratch.clone(),
+                    });
+                }
             }
         }
-        ctx.resources.insert(state);
         StepResult::Continue
     }
 }
