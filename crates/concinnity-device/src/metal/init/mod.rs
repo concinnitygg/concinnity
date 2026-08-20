@@ -1082,6 +1082,7 @@ impl MtlContext {
                 super::raytrace::RtGpu {
                     device: &device,
                     command_queue: &command_queue,
+                    frames_in_flight,
                 },
                 super::raytrace::RtStaticGeometry {
                     vertex_buffer: &vertex_buffer,

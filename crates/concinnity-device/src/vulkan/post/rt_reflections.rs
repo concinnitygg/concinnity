@@ -991,25 +991,19 @@ impl VkContext {
         let mode = self.rt_dynamic_mode;
 
         // Assemble this frame's skinned-geometry inputs while `self` is still
-        // fully borrowable: the shared skinned VB/IB + each object's current-frame
-        // joint buffer. `None` when there is no skinned geometry resident (the
-        // static path runs). Collected up-front so the `&self` reads do not
-        // overlap the `rt_accel` mutable borrow below.
-        let skinned_inputs: Option<(vk::Buffer, vk::Buffer, Vec<vk::Buffer>)> =
+        // fully borrowable: the shared skinned VB/IB handles. `None` when there is
+        // no skinned geometry resident (the static path runs). Read up-front so
+        // they do not overlap the `rt_accel` mutable borrow below; the per-object
+        // joint palettes are borrowed straight out of this frame's slot instead of
+        // being collected into a per-frame list.
+        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> =
             if !self.skinned.draw_objects.is_empty()
                 && !self.skinned.vertex_buffer.is_null()
                 && !self.skinned.index_buffer.is_null()
             {
-                let joint_buffers: Vec<vk::Buffer> = self
-                    .skinned
-                    .joint_buffers
-                    .get(frame_idx)
-                    .map(|bufs| bufs.iter().map(|b| b.buffer()).collect())
-                    .unwrap_or_default();
                 Some((
                     self.skinned.vertex_buffer.buffer(),
                     self.skinned.index_buffer.buffer(),
-                    joint_buffers,
                 ))
             } else {
                 None
@@ -1019,13 +1013,17 @@ impl VkContext {
         // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
         // put it back immediately after.
         if let Some(mut accel) = self.rt_accel.take() {
-            let skinned = skinned_inputs.as_ref().map(|(vb, ib, jbs)| {
-                super::super::raytrace::SkinnedRtInputs {
-                    objects: &self.skinned.draw_objects,
-                    vertex_buffer: *vb,
-                    index_buffer: *ib,
-                    joint_buffers: jbs,
-                }
+            let joint_buffers = self
+                .skinned
+                .joint_buffers
+                .get(frame_idx)
+                .map(|b| b.as_slice())
+                .unwrap_or(&[]);
+            let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
+                objects: &self.skinned.draw_objects,
+                vertex_buffer: vb,
+                index_buffer: ib,
+                joint_buffers,
             });
             accel.dynamic_update(
                 super::super::raytrace::RtDeviceCtx {
@@ -1036,12 +1034,14 @@ impl VkContext {
                 },
                 cmd,
                 &self.draw_objects,
-                super::super::raytrace::RtRebuildPolicy {
-                    mode,
-                    topology_dirty,
+                super::super::raytrace::RtDynamicInputs {
+                    policy: super::super::raytrace::RtRebuildPolicy {
+                        mode,
+                        topology_dirty,
+                    },
+                    frame_idx,
+                    skinned,
                 },
-                frame_idx,
-                skinned,
             );
             self.rt_accel = Some(accel);
         }

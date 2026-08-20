@@ -54,7 +54,9 @@ pub(super) struct TransientResourcePool {
     // Empty when no slot is shared. Drives the executor's aliasing barriers.
     alias_pred: Vec<(&'static str, &'static str)>,
     // The member labels of each slot, in the order they reuse its heap region.
-    // Read back by the executor's per-frame soundness assertion.
+    // Read back by the executor's per-frame soundness assertion, which runs
+    // under `debug_assertions`, and so does its only source of truth.
+    #[cfg(debug_assertions)]
     slot_labels: Vec<Vec<&'static str>>,
     // The pool's aliased footprint: the sum of its slot heap sizes. Reported to
     // the memory ledger, which would otherwise not see this pool at all -- it
@@ -75,7 +77,6 @@ impl TransientResourcePool {
         let mut heaps = Vec::new();
         let mut resources = Vec::new();
         let mut alias_pred: Vec<(&'static str, &'static str)> = Vec::new();
-        let slot_labels: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
         // `allocated_bytes` is what the pool really reserves (one heap per slot,
         // sized to its largest member); `unaliased_bytes` is what the same
         // members would cost one heap each. Their difference is the aliasing
@@ -208,7 +209,8 @@ impl TransientResourcePool {
             heaps,
             resources,
             alias_pred,
-            slot_labels,
+            #[cfg(debug_assertions)]
+            slot_labels: slots.iter().map(|s| s.labels()).collect(),
             allocated_bytes,
         })
     }
@@ -254,6 +256,7 @@ impl TransientResourcePool {
 
     // The member labels of each slot, for the executor's per-frame check that
     // no slot has two resources live at once in the graph it is about to run.
+    #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
         &self.slot_labels
     }

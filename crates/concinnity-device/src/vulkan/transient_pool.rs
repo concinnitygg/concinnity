@@ -242,6 +242,9 @@ impl TransientImagePool {
 
     // The member labels of each slot, for the executor's per-frame check that
     // no slot has two resources live at once in the graph it is about to run.
+    // That check runs under `debug_assertions`, and so does this accessor; the
+    // field itself backs `alias_predecessor` in every build.
+    #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
         &self.slot_labels
     }

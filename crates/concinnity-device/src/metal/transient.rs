@@ -22,6 +22,19 @@ use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 
 use super::context::{bytes_of_slice, write_buffer_region};
 
+// The capacity a ring slot must be (re)allocated to in order to hold `needed`
+// bytes, or `None` when its current `have` bytes already do. Rounding up to a
+// power of two keeps a slowly-growing list from reallocating every frame; the
+// 256-byte floor keeps tiny buffers off the page-size floor. Pure so the growth
+// policy is unit-testable.
+pub(super) fn grow_to(have: usize, needed: usize) -> Option<usize> {
+    let needed = needed.max(1);
+    if have >= needed {
+        return None;
+    }
+    Some(needed.next_power_of_two().max(256))
+}
+
 // A frame-tagged deferred-free pool. A GPU resource an in-flight frame may
 // still read cannot be freed or overwritten the instant the CPU replaces it;
 // instead the old handle is parked here, tagged with the frame that retired it,
@@ -107,14 +120,8 @@ impl TransientRing {
         min_len: usize,
     ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
         let idx = slot % self.slots.len();
-        let needs_alloc = match &self.slots[idx] {
-            Some(buf) => buf.length() < min_len,
-            None => true,
-        };
-        if needs_alloc {
-            // Round up so a slowly-growing draw list does not reallocate every
-            // frame; `max(256)` keeps tiny buffers off the page-size floor.
-            let cap = min_len.next_power_of_two().max(256);
+        let have = self.slots[idx].as_ref().map_or(0, |buf| buf.length());
+        if let Some(cap) = grow_to(have, min_len) {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
                 .ok_or("failed to allocate transient ring buffer")?;
@@ -182,12 +189,8 @@ impl JointRing {
         let mut out = Vec::with_capacity(palettes.len());
         for (i, mats) in palettes.iter().enumerate() {
             let bytes = bytes_of_slice(mats.as_slice());
-            let needs_alloc = match &bufs[i] {
-                Some(buf) => buf.length() < bytes.len().max(1),
-                None => true,
-            };
-            if needs_alloc {
-                let cap = bytes.len().max(1).next_power_of_two().max(256);
+            let have = bufs[i].as_ref().map_or(0, |buf| buf.length());
+            if let Some(cap) = grow_to(have, bytes.len()) {
                 let buf = device
                     .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
                     .ok_or("failed to allocate joint ring buffer")?;
@@ -248,12 +251,8 @@ impl InstanceRing {
         let pool = &mut self.slots[idx];
         let i = pool.cursor;
         pool.cursor += 1;
-        let needs_alloc = match pool.buffers.get(i) {
-            Some(buf) => buf.length() < bytes.len().max(1),
-            None => true,
-        };
-        if needs_alloc {
-            let cap = bytes.len().max(1).next_power_of_two().max(256);
+        let have = pool.buffers.get(i).map_or(0, |buf| buf.length());
+        if let Some(cap) = grow_to(have, bytes.len()) {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
                 .ok_or("failed to allocate instance ring buffer")?;
@@ -271,7 +270,27 @@ impl InstanceRing {
 
 #[cfg(test)]
 mod tests {
-    use super::RetirePool;
+    use super::{RetirePool, grow_to};
+
+    #[test]
+    fn grow_to_keeps_a_slot_that_already_fits() {
+        assert_eq!(grow_to(256, 200), None);
+        assert_eq!(grow_to(256, 256), None);
+        // A zero-byte request still needs one byte of storage, which any
+        // existing slot has.
+        assert_eq!(grow_to(256, 0), None);
+    }
+
+    #[test]
+    fn grow_to_rounds_up_past_the_floor() {
+        // An empty slot always allocates, never below the 256-byte floor.
+        assert_eq!(grow_to(0, 1), Some(256));
+        assert_eq!(grow_to(0, 0), Some(256));
+        assert_eq!(grow_to(0, 300), Some(512));
+        // Growth is power-of-two so a slowly-growing list stops reallocating.
+        assert_eq!(grow_to(512, 513), Some(1024));
+        assert_eq!(grow_to(1024, 4096), Some(4096));
+    }
 
     #[test]
     fn retire_pool_holds_payloads_for_depth_frames() {

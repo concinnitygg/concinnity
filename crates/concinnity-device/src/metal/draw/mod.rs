@@ -21,8 +21,9 @@ pub(in crate::metal) mod main;
 mod shadow;
 mod spot_shadow;
 
+use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
+use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _};
 
 use crate::gfx::backend::FrameParams;
 use crate::gfx::render_graph::FrameGraphInputs;
@@ -447,7 +448,13 @@ impl MtlContext {
             // fully static scene pays just a matrix compare here. Non-fatal: a
             // transient rebuild failure keeps last frame's BVH rather than stopping
             // the renderer.
-            self.rt_dynamic_update(frame_id);
+            self.rt_dynamic_update(
+                super::raytrace::RtFrame {
+                    id: frame_id,
+                    ring_slot,
+                },
+                &skinned_joint_bufs,
+            );
 
             (
                 object_buffer,
@@ -1036,8 +1043,12 @@ impl MtlContext {
     // kept (the reflection is at most one frame stale, imperceptible) and the
     // failure is logged once per streak (and once on recovery), not at frame
     // rate. The actual work is in `rt_dynamic_update_inner`.
-    fn rt_dynamic_update(&mut self, frame_id: u64) {
-        match self.rt_dynamic_update_inner(frame_id) {
+    fn rt_dynamic_update(
+        &mut self,
+        frame: super::raytrace::RtFrame,
+        joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+    ) {
+        match self.rt_dynamic_update_inner(frame, joint_buffers) {
             Ok(()) => {
                 if self.rt.update_failed {
                     tracing::info!("ray-traced reflections: BVH update recovered");
@@ -1055,8 +1066,13 @@ impl MtlContext {
         }
     }
 
-    fn rt_dynamic_update_inner(&mut self, frame_id: u64) -> Result<(), String> {
+    fn rt_dynamic_update_inner(
+        &mut self,
+        frame: super::raytrace::RtFrame,
+        joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+    ) -> Result<(), String> {
         use super::raytrace::RtDynamicMode;
+        let frame_id = frame.id;
         if !self.rt.dynamic_mode.is_dynamic() {
             return Ok(());
         }
@@ -1103,7 +1119,7 @@ impl MtlContext {
             if topology_changed {
                 self.refresh_rt_topology(albedo_count, false, frame_id)?;
             }
-            return self.update_rt_skinned(albedo_count, frame_id);
+            return self.update_rt_skinned(albedo_count, frame, joint_buffers);
         }
         // No skinned geometry.
         if self.rt.accel.is_none() {
@@ -1185,6 +1201,7 @@ impl MtlContext {
                 super::raytrace::RtGpu {
                     device: &device,
                     command_queue: &queue,
+                    frames_in_flight: self.frames_in_flight,
                 },
                 super::raytrace::RtStaticGeometry {
                     vertex_buffer: &vbuf,
@@ -1234,6 +1251,7 @@ impl MtlContext {
             super::raytrace::RtGpu {
                 device: &self.device,
                 command_queue: &self.command_queue,
+                frames_in_flight: self.frames_in_flight,
             },
             super::raytrace::RtStaticGeometry {
                 vertex_buffer: &self.vertex_buffer,
@@ -1260,10 +1278,16 @@ impl MtlContext {
     // the draw list is lifted out (an O(1) `Vec` swap) to keep the borrows
     // disjoint, then restored. A no-op (keeps last frame's BVH) if the required
     // skinned resources are missing.
-    fn update_rt_skinned(&mut self, albedo_count: usize, frame_id: u64) -> Result<(), String> {
+    fn update_rt_skinned(
+        &mut self,
+        albedo_count: usize,
+        frame: super::raytrace::RtFrame,
+        joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
+    ) -> Result<(), String> {
         use super::raytrace::SkinnedRtInputs;
         let device = self.device.clone();
         let queue = self.command_queue.clone();
+        let frames_in_flight = self.frames_in_flight;
         let (Some(svb), Some(sib), Some(pipe)) = (
             self.skinned.vertex_buffer.clone(),
             self.skinned.index_buffer.clone(),
@@ -1288,11 +1312,13 @@ impl MtlContext {
                 super::raytrace::RtGpu {
                     device: &device,
                     command_queue: &queue,
+                    frames_in_flight,
                 },
                 &draw_objects,
                 skinned,
+                joint_buffers,
                 super::raytrace::RtTextureCounts { albedo_count },
-                frame_id,
+                frame,
             );
         self.draw_objects = draw_objects;
         res

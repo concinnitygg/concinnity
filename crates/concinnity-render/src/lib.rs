@@ -55,6 +55,7 @@ pub mod planar_reflection;
 pub mod reflection_probe;
 pub mod render_graph;
 pub mod rt_geom;
+pub mod rt_refit;
 pub mod rt_topology;
 pub mod scene_flow;
 pub mod scene_residency;

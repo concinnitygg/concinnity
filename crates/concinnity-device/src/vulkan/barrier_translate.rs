@@ -55,7 +55,8 @@ pub(super) enum VkResting {
 impl VkResting {
     // The layout alone, for the executor's per-frame check that the frame's
     // restores really do leave every driven resource where its next first use
-    // expects it.
+    // expects it. That check runs under `debug_assertions`, and so does this.
+    #[cfg(debug_assertions)]
     pub(super) fn layout(self) -> vk::ImageLayout {
         self.triple().0
     }

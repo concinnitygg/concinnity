@@ -66,7 +66,9 @@ pub(super) struct TransientTexturePool {
     textures: Vec<PooledTexture>,
     // The member labels of each slot, in the order they reuse its memory. Read
     // back by the executor's per-frame soundness assertion: members of one slot
-    // share bytes, so two live at once is silent corruption.
+    // share bytes, so two live at once is silent corruption. That assertion runs
+    // under `debug_assertions`, and so does its only source of truth.
+    #[cfg(debug_assertions)]
     slot_labels: Vec<Vec<&'static str>>,
 }
 
@@ -82,7 +84,6 @@ impl TransientTexturePool {
     ) -> Result<Self, String> {
         let mut heaps = Vec::with_capacity(slots.len());
         let mut textures = Vec::new();
-        let slot_labels: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
         // What the members would cost with one allocation each; the heaps' real
         // size is the aliased footprint. The difference is the VRAM aliasing
         // reclaims, reported below.
@@ -115,7 +116,8 @@ impl TransientTexturePool {
         let pool = Self {
             heaps,
             textures,
-            slot_labels,
+            #[cfg(debug_assertions)]
+            slot_labels: slots.iter().map(|s| s.labels()).collect(),
         };
         let aliased_bytes = pool.heap_bytes();
         tracing::info!(
@@ -150,6 +152,7 @@ impl TransientTexturePool {
 
     // The member labels of each slot, for the executor's per-frame check that
     // no slot has two resources live at once in the graph it is about to run.
+    #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {
         &self.slot_labels
     }

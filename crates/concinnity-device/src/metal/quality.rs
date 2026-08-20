@@ -236,6 +236,7 @@ impl MtlContext {
                     RtGpu {
                         device: &self.device,
                         command_queue: &self.command_queue,
+                        frames_in_flight: self.frames_in_flight,
                     },
                     RtStaticGeometry {
                         vertex_buffer: &self.vertex_buffer,

@@ -36,6 +36,7 @@ mod quality;
 mod raymarch;
 mod raytrace;
 mod resources;
+mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
 mod shader_reflect;
