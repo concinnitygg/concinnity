@@ -377,7 +377,7 @@ GbVertexOutBindless gbuffer_prepass_vertex_bindless(
     o.view_depth  = p.view_depth;
     o.cur_clip    = p.cur_clip;
     o.prev_clip   = p.prev_clip;
-    o.roughness   = obj.roughness;
+    o.roughness   = obj.tint_roughness.w;
     return o;
 }
 

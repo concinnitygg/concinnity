@@ -390,7 +390,7 @@ impl MtlContext {
         pass_id: PassId,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&(f32, u32, Vec<u32>)>,
+        particle_frame: Option<&super::particle::ParticleFrame>,
     ) -> Result<u32, String> {
         Ok(match pass_id {
             PassId::Cull => {
@@ -663,15 +663,8 @@ impl MtlContext {
                 // were run on `&mut self` before this loop via
                 // `prepare_particle_pass`; the read-only encode here
                 // consumes the precomputed tuple.
-                if let Some((dt, frame_index, budgets)) = particle_frame {
-                    self.encode_particles(
-                        cmd_buf,
-                        *dt,
-                        *frame_index,
-                        budgets,
-                        params.vp,
-                        params.frustum,
-                    )?
+                if let Some(frame) = particle_frame {
+                    self.encode_particles(cmd_buf, frame, params.vp, params.frustum)?
                 } else {
                     0
                 }

@@ -62,8 +62,8 @@ pub struct ParticleView {
 }
 
 // One particle slot in the pool the simulation kernel writes and the render
-// pair reads. Matches `Particle` in `shaders/particle_types.slang`: two
-// (float3, float) pairs, 32 bytes per slot.
+// pair reads. Matches `Particle` in `shaders/particle_types.slang`, which
+// spells the same 32 bytes as two float4 lanes.
 #[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub struct GpuParticle {

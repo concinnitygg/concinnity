@@ -1358,7 +1358,8 @@ impl MtlContext {
                 super::particle::build_particle_pipelines(&self.device, self.hot_reload)?;
             self.particle.pipelines = Some(pipelines);
         }
-        let gpu_state = super::particle::build_emitter_gpu_state(&self.device, &record)?;
+        let gpu_state =
+            super::particle::build_emitter_gpu_state(&self.device, &record, self.frames_in_flight)?;
         let idx = if let Some(slot) = self.particle.free_slots.pop() {
             self.particle.records[slot] = Some(record);
             self.particle.emitter_state[slot] = Some(gpu_state);

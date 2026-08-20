@@ -831,6 +831,7 @@ impl MtlContext {
                 fog_settings: &fog_settings,
                 decals: &decals,
                 particles: &particles,
+                frames_in_flight,
             },
         )?;
 
@@ -1327,6 +1328,7 @@ impl MtlContext {
                 pipelines: particle_pipelines,
                 last_elapsed: 0.0,
                 frame_index: 0,
+                counter_slot: 0,
             },
             auto_exposure: super::auto_exposure::AutoExposureGpu {
                 settings: auto_exposure_settings,

@@ -13,17 +13,24 @@
 // (the cull kernel, the legacy per-draw main pass) port.
 
 // Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (176 B).
+// Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
+// bytes in a structured buffer as well as in a constant buffer, so a literal
+// transcription pushes every following field four bytes late on Metal alone.
 struct GpuObjectData
 {
     float4x4 model;
-    float3 tint;     float roughness;
-    float3 emissive; float metallic;
+    // xyz = tint, w = roughness.
+    float4 tint_roughness;
+    // xyz = emissive, w = metallic.
+    float4 emissive_metallic;
     uint  albedo_index;
     uint  normal_index;
     float macro_variation;
     float terrain_blend;
-    float3 bb_min;   float cull_distance;
-    float3 bb_max;   float secondary_blend_sharpness;
+    // xyz = bounding-box minimum, w = cull distance.
+    float4 bb_min_cull_distance;
+    // xyz = bounding-box maximum, w = secondary blend sharpness.
+    float4 bb_max_blend_sharpness;
     uint  albedo_secondary_index;
     uint  normal_secondary_index;
     uint  emissive_map_index;

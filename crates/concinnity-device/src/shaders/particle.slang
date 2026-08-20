@@ -89,7 +89,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
     // Dead slot -> a degenerate quad clipped behind the near plane. The
     // fragment also discards on `discard_flag`, so any pixel that still
     // rasterises (the numerical edge case at exactly w = 0) draws nothing.
-    if (pt.lifetime <= 0.0)
+    if (pt.velocity_lifetime.w <= 0.0)
     {
         o.position = float4(0.0, 0.0, -2.0, 1.0);
         o.uv = float2(0.0, 0.0);
@@ -98,7 +98,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
         return o;
     }
 
-    float t = clamp(pt.age / pt.lifetime, 0.0, 1.0);
+    float t = clamp(pt.position_age.w / pt.velocity_lifetime.w, 0.0, 1.0);
     float size = lerp(params.size_start, params.size_end, t);
     float4 color = lerp(params.color_start, params.color_end, t);
 
@@ -109,7 +109,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
 
     float3 right = view.cam_right.xyz * (corner.x * 0.5 * size);
     float3 up = view.cam_up.xyz * (corner.y * 0.5 * size);
-    float3 world = pt.position + right + up;
+    float3 world = pt.position_age.xyz + right + up;
     o.position = mul(view.vp, float4(world, 1.0));
 
     // 0..1 in each axis; V is flipped at sample time to match the rest of the

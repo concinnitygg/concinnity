@@ -13,14 +13,17 @@
 static const uint CLUSTER_LIGHT_LIST_STRIDE = 64u;
 static const uint MAX_LIGHTS_PER_CLUSTER = 63u;
 
+// Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
+// bytes in a structured buffer as well as in a constant buffer, so a literal
+// transcription pushes every following field four bytes late on Metal alone.
 struct GpuLight
 {
-    float3 position;
-    float  range;
-    float3 color;
-    float  intensity;
-    float3 direction;
-    uint   kind;
+    // xyz = world-space position, w = range.
+    float4 position_range;
+    // xyz = linear RGB, w = intensity.
+    float4 color_intensity;
+    // xyz = direction, w = the LIGHT_KIND_* discriminant's bits.
+    float4 direction_kind;
     float  cos_inner;
     float  cos_outer;
     int    shadow_index;
@@ -117,8 +120,8 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
     uint count = 0u;
     for (uint li = 0u; li < cluster.num_lights; ++li)
     {
-        float3 lp = lights[li].position;
-        float  r  = lights[li].range;
+        float3 lp = lights[li].position_range.xyz;
+        float  r  = lights[li].position_range.w;
         // Sphere vs AABB: distance from the light centre to the clamped point.
         float3 d = lp - clamp(lp, aabb_min, aabb_max);
         if (dot(d, d) <= r * r)

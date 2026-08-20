@@ -92,6 +92,9 @@ pub(crate) struct WorldContentEffects<'a> {
     pub fog_settings: &'a Option<FogSettings>,
     pub decals: &'a [DecalRecord],
     pub particles: &'a [ParticleEmitterRecord],
+    // Depth of the frame-pacing ring, which sizes each emitter's spawn-counter
+    // buffer: one slot per frame the CPU may queue ahead of the GPU.
+    pub frames_in_flight: usize,
 }
 
 pub(crate) struct EffectsBundle {
@@ -501,6 +504,7 @@ pub(crate) fn build_effects(
         fog_settings,
         decals,
         particles,
+        frames_in_flight,
     } = world_content;
     // `flags` is Copy and moves intact into `build_quality_effects` below; this
     // local drives the bloom + world-content pipeline builds that stay here.
@@ -580,7 +584,7 @@ pub(crate) fn build_effects(
         let pipelines = build_particle_pipelines(device, hot_reload)?;
         let mut states = Vec::with_capacity(particles.len());
         for rec in particles {
-            states.push(build_emitter_gpu_state(device, rec)?);
+            states.push(build_emitter_gpu_state(device, rec, frames_in_flight)?);
         }
         (Some(pipelines), states)
     } else {

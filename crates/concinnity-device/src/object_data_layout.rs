@@ -38,13 +38,49 @@ impl Kind {
     }
 }
 
-// A fragment plus the type spellings its language uses for the record's members.
+// One four-component member that packs a (vec3, scalar) pair of the record, and
+// the two members it covers.
+struct Lane {
+    declared: &'static str,
+    vec3: &'static str,
+    scalar: &'static str,
+}
+
+// A fragment plus the type spellings its language uses for the record's
+// members. `vec4` and `lanes` are the Slang fragment's alone: slangc sizes a
+// `float3` at 16 bytes on the Metal target wherever it appears, so the one
+// declaration all three backends compile spells each pair as a single lane.
 struct Fragment {
     label: &'static str,
     source: &'static str,
     mat4: &'static str,
     vec3: &'static str,
+    vec4: Option<&'static str>,
+    lanes: &'static [Lane],
 }
+
+const SLANG_LANES: &[Lane] = &[
+    Lane {
+        declared: "tint_roughness",
+        vec3: "tint",
+        scalar: "roughness",
+    },
+    Lane {
+        declared: "emissive_metallic",
+        vec3: "emissive",
+        scalar: "metallic",
+    },
+    Lane {
+        declared: "bb_min_cull_distance",
+        vec3: "bb_min",
+        scalar: "cull_distance",
+    },
+    Lane {
+        declared: "bb_max_blend_sharpness",
+        vec3: "bb_max",
+        scalar: "secondary_blend_sharpness",
+    },
+];
 
 const FRAGMENTS: &[Fragment] = &[
     Fragment {
@@ -52,24 +88,32 @@ const FRAGMENTS: &[Fragment] = &[
         source: include_str!("vulkan/shaders/object_common.glsl"),
         mat4: "mat4",
         vec3: "vec3",
+        vec4: None,
+        lanes: &[],
     },
     Fragment {
         label: "object_common.hlsl",
         source: include_str!("directx/shaders/object_common.hlsl"),
         mat4: "float4x4",
         vec3: "float3",
+        vec4: None,
+        lanes: &[],
     },
     Fragment {
         label: "object_common.msl",
         source: include_str!("metal/shaders/object_common.msl"),
         mat4: "float4x4",
         vec3: "packed_float3",
+        vec4: None,
+        lanes: &[],
     },
     Fragment {
         label: "object_common.slang",
         source: include_str!("shaders/object_common.slang"),
         mat4: "float4x4",
         vec3: "float3",
+        vec4: Some("float4"),
+        lanes: SLANG_LANES,
     },
 ];
 
@@ -99,6 +143,27 @@ impl Fragment {
                 "{}: unexpected qualifier on `{decl}`",
                 self.label
             );
+            if self.vec4 == Some(*ty) {
+                let lane = self
+                    .lanes
+                    .iter()
+                    .find(|lane| lane.declared == *name)
+                    .unwrap_or_else(|| {
+                        panic!("{}: `{decl}` packs no declared pair", self.label);
+                    });
+                members.push(Member {
+                    name: lane.vec3.to_string(),
+                    kind: Kind::Vec3,
+                    offset,
+                });
+                members.push(Member {
+                    name: lane.scalar.to_string(),
+                    kind: Kind::Scalar,
+                    offset: offset + Kind::Vec3.size(),
+                });
+                offset += Kind::Vec3.size() + Kind::Scalar.size();
+                continue;
+            }
             let kind = if *ty == self.mat4 {
                 Kind::Mat4
             } else if *ty == self.vec3 {

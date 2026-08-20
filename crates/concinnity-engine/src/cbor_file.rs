@@ -35,7 +35,9 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips_through_a_created_directory() {
-        let dir = std::env::temp_dir().join("cn_cbor_file_round_trip/nested");
+        let dir = std::env::temp_dir()
+            .join(format!("cn_cbor_file_round_trip_{}", std::process::id()))
+            .join("nested");
         let path = dir.join("store");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
 
@@ -47,7 +49,7 @@ mod tests {
 
     #[test]
     fn a_missing_or_corrupt_file_reads_as_none() {
-        let dir = std::env::temp_dir().join("cn_cbor_file_corrupt");
+        let dir = std::env::temp_dir().join(format!("cn_cbor_file_corrupt_{}", std::process::id()));
         let path = dir.join("store");
         let _ = std::fs::remove_dir_all(&dir);
 

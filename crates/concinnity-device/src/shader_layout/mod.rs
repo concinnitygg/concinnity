@@ -13,13 +13,14 @@
 // slides straight past it.
 //
 // The reflection is taken per target because the three do not agree. MSL sizes
-// a constant-buffer `float3` at 16 bytes where SPIR-V and DXIL pack a scalar
-// after it, and SPIR-V rounds an array element stride up to 16 where neither of
-// the others does. The engine's `.slang` sources avoid both shapes on purpose
-// (`float4` lanes instead of `float3` + scalar), so today the three agree on
-// every mirrored struct -- which is itself worth asserting rather than
-// assuming. The block sizes already differ: DirectX reports a 276-byte
-// `ShadowUniforms` block where Metal and SPIR-V round it to 288.
+// a `float3` at 16 bytes -- in a structured buffer as much as in a constant
+// buffer -- where SPIR-V and DXIL pack a scalar after it at 12, and SPIR-V
+// aligns a following `float2` to 16 where neither of the others does. The
+// engine's `.slang` sources avoid both shapes on purpose (`float4` lanes
+// instead of `float3` + scalar), so today the three agree on every mirrored
+// struct -- which is itself worth asserting rather than assuming. The block
+// sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
+// Metal and SPIR-V round it to 288.
 //
 // Not every layout assert can move here. `cull`, `rt_skin`, the legacy per-draw
 // main pass and the raymarch templates are still hand-written per backend, and
@@ -48,15 +49,22 @@ use programs::{Program, Target};
 // mirrored `ProbeSet` array uses.
 const _: () = assert!(concinnity_render::uniforms::MAX_PROBES == 8);
 
-// Reflect `program` on every target and compare each mirror against what that
-// target's layout rules produced. Skipped when slangc is absent, the way
-// concinnity-slang's own round-trip tests are.
+// Reflect `program` on every target its mirrors name and compare each against
+// what that target's layout rules produced. Skipped when slangc is absent, the
+// way concinnity-slang's own round-trip tests are.
+//
+// A target no mirror names is not compiled at all. That is how a program opts
+// out of a target it cannot build on, which is otherwise indistinguishable from
+// a layout failure.
 fn check(program: &Program, cases: &[Case]) {
     if slang::slangc_path().is_none() {
         return;
     }
     let mut drift = Vec::new();
     for target in Target::ALL {
+        if !cases.iter().any(|case| case.targets.contains(&target)) {
+            continue;
+        }
         let layouts = match programs::layouts(program, target) {
             Ok(layouts) => layouts,
             Err(e) => {

@@ -26,8 +26,8 @@ use crate::slang_source;
 type Defines = &'static [(&'static str, &'static str)];
 
 // Which backend's layout rules slangc applies. The split is the point: MSL
-// sizes a constant-buffer `float3` at 16 bytes where SPIR-V and DXIL pack a
-// scalar after it, so a mirror has to be checked against each.
+// sizes a `float3` at 16 bytes where SPIR-V and DXIL pack a scalar after it,
+// so a mirror has to be checked against each.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Target {
     Metal,

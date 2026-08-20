@@ -4,9 +4,9 @@
 //
 // A `#[repr(C)]` mirror rarely names its fields the way the shader does: the
 // shader packs `cam_pos` and `z_near` into one `float4` lane because MSL sizes a
-// constant-buffer `float3` at 16 bytes, while the CPU keeps them as separate
-// members. So a mirror is described as a list of lanes, each pairing a run of
-// Rust fields with the run of shader fields covering the same bytes. Both runs
+// `float3` at 16 bytes, while the CPU keeps them as separate members. So a
+// mirror is described as a list of lanes, each pairing a run of Rust fields
+// with the run of shader fields covering the same bytes. Both runs
 // must start at the same offset and span the same number of bytes; the Rust
 // lanes together must tile the whole struct.
 //

@@ -7,15 +7,16 @@
 // reintroduce it into the assembled source.
 
 // One particle slot, 32 B. Matches `GpuParticle` in each backend's particle
-// module. `float3` packs to 12 bytes inside a structured buffer on every
-// target (unlike a constant buffer, where MSL pads it to 16), so the
-// (vec3, float) pairs need no rewriting here.
+// module. Both (vec3, float) pairs are spelled as float4: MSL sizes a float3
+// at 16 bytes inside a structured buffer as well as inside a constant buffer,
+// so a literal transcription would push the second pair sixteen bytes late on
+// Metal alone.
 struct Particle
 {
-    float3 position;
-    float age;
-    float3 velocity;
-    float lifetime;
+    // xyz = world-space position, w = seconds lived.
+    float4 position_age;
+    // xyz = world-space velocity, w = total lifetime in seconds.
+    float4 velocity_lifetime;
 };
 
 // Per-frame emitter uniform, 112 B. Mirrors `ParticleParams` in

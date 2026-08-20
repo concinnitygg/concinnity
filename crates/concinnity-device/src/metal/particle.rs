@@ -7,7 +7,8 @@
 //
 //   1. Computes the per-emitter spawn budget CPU-side (a fractional
 //      accumulator drives integer particle spawns per dispatch).
-//   2. Writes that budget into the atomic counter buffer.
+//   2. Writes that budget into this frame's slot of the atomic counter
+//      buffer.
 //   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //      respawn the pool.
 //   4. Dispatches the `particle_vertex`/`particle_fragment` render pipeline
@@ -41,14 +42,41 @@ use super::scoped_encoder::ScopedEncoder;
 use concinnity_render::uniforms::GpuParticle;
 use concinnity_render::uniforms::ParticleView;
 
+// Byte stride between an emitter's per-frame spawn-counter slots. The counter
+// itself is one `u32`; the padding buys the 256-byte buffer-offset alignment
+// `setBuffer:offset:atIndex:` requires on every Metal GPU family.
+const SPAWN_COUNTER_STRIDE: usize = 256;
+
+// Byte offset of spawn-counter slot `slot` inside an emitter's counter buffer.
+fn spawn_counter_offset(slot: usize) -> usize {
+    slot * SPAWN_COUNTER_STRIDE
+}
+
+// Size of an emitter's spawn-counter buffer: one slot per frame in flight.
+fn spawn_counter_bytes(frames_in_flight: usize) -> usize {
+    frames_in_flight.max(1) * SPAWN_COUNTER_STRIDE
+}
+
+// Slot the next frame writes. Rotating over the frames-in-flight depth is what
+// makes the CPU-side reset safe: the frame-pacing semaphore has already retired
+// the frame that last used this slot, so no in-flight `particle_simulate` is
+// still decrementing it. A depth of 1 pins every frame to slot 0, which is
+// equally safe -- the CPU waits on the previous frame's completion there.
+fn next_counter_slot(slot: usize, frames_in_flight: usize) -> usize {
+    (slot + 1) % frames_in_flight.max(1)
+}
+
 // Per-emitter persistent GPU state. The pool buffer lives in shared storage
-// so the CPU can zero-init it once; the atomic counter buffer is rewritten
-// per frame with the integer spawn budget.
+// so the CPU can zero-init it once; the counter buffer's slot for the frame
+// being built is rewritten with that frame's integer spawn budget.
 pub(super) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`.
     pub pool: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // One `u32` atomic counter; the compute kernel decrements it as threads
-    // claim spawn slots. Reset to `spawn_budget` at the start of each frame.
+    // One `u32` atomic counter per frame in flight, `SPAWN_COUNTER_STRIDE`
+    // apart. The compute kernel decrements the frame's slot as threads claim
+    // spawn slots; the CPU resets that slot to `spawn_budget` before the
+    // dispatch. Slots rotate so the reset never lands in a counter an
+    // in-flight dispatch is still claiming against.
     pub spawn_counter: Retained<ProtocolObject<dyn MTLBuffer>>,
     // Carry-over spawn fraction. Combined with `dt` and the emitter's
     // `spawn_rate` to produce the integer spawn budget for each dispatch.
@@ -85,6 +113,23 @@ pub(crate) struct ParticleState {
     pub last_elapsed: f32,
     // Frame counter mixed into the compute kernel's per-thread RNG seed.
     pub frame_index: u32,
+    // Spawn-counter slot the last prepared frame wrote; advanced by
+    // `next_counter_slot` once per prepared frame.
+    pub counter_slot: usize,
+}
+
+// The per-frame particle inputs `prepare_particle_pass` derives on `&mut self`
+// for the read-only `encode_particles` to consume.
+pub(in crate::metal) struct ParticleFrame {
+    // Seconds since the previous prepared frame; drives ageing + integration.
+    pub dt: f32,
+    // Monotonic frame counter, mixed into the kernel's per-thread RNG seed.
+    pub frame_index: u32,
+    // Spawn-counter slot this frame's budgets were written to. The compute
+    // dispatch binds each emitter's counter at this slot's byte offset.
+    pub counter_slot: usize,
+    // Integer spawn budget per emitter slot, parallel to `records`.
+    pub spawn_budgets: Vec<u32>,
 }
 
 impl MtlContext {
@@ -105,15 +150,16 @@ impl MtlContext {
     // Mutate the per-frame particle state (dt against
     // `particle_last_elapsed`, monotonic `particle_frame_index`,
     // per-emitter spawn budgets) and write each emitter's spawn-counter
-    // buffer in-place. Returns the per-frame `(dt, frame_index,
-    // per_emitter_budgets)` tuple the read-only `encode_particles` then
-    // consumes. Split out so `encode_particles` can take `&self` and run
-    // on a parallel-recording worker; the mutating prelude stays on the
-    // frame's main `&mut self` path inside `execute_graph`.
+    // slot in place. Returns the [`ParticleFrame`] the read-only
+    // `encode_particles` then consumes. Split out so `encode_particles` can
+    // take `&self` and run on a parallel-recording worker; the mutating
+    // prelude stays on the frame's main `&mut self` path inside
+    // `execute_graph`, which runs it exactly once per paced frame -- the
+    // counter-slot rotation depends on that.
     pub(in crate::metal) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
-    ) -> Option<(f32, u32, Vec<u32>)> {
+    ) -> Option<ParticleFrame> {
         self.particle.pipelines.as_ref()?;
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return None;
@@ -122,6 +168,9 @@ impl MtlContext {
         self.particle.last_elapsed = elapsed;
         self.particle.frame_index = self.particle.frame_index.wrapping_add(1);
         let frame_index = self.particle.frame_index;
+        let counter_slot = next_counter_slot(self.particle.counter_slot, self.frames_in_flight);
+        self.particle.counter_slot = counter_slot;
+        let offset = spawn_counter_offset(counter_slot);
         let mut budgets = Vec::with_capacity(self.particle.records.len());
         for (rec_slot, gpu_slot) in self
             .particle
@@ -134,13 +183,16 @@ impl MtlContext {
                     let spawn = gpu
                         .spawn_state
                         .take_budget(dt, rec.spawn_rate, rec.max_particles);
-                    // Reset the atomic counter to this frame's budget.
-                    // Shared storage means the kernel sees the write
-                    // immediately.
-                    // SAFETY: `spawn_counter` is a shared-storage buffer holding exactly one u32,
-                    // so `contents()` is a live, aligned CPU mapping of it.
+                    // Reset this frame's counter slot to its budget. Shared
+                    // storage means the kernel sees the write immediately;
+                    // the slot rotation is what keeps it clear of the
+                    // dispatches still in flight.
+                    // SAFETY: `spawn_counter` is a shared-storage buffer of
+                    // `spawn_counter_bytes(frames_in_flight)`, so `contents()` is a live CPU
+                    // mapping of it and `offset` -- a slot index below that depth, times the
+                    // stride -- keeps a whole `u32` in bounds and 4-byte aligned.
                     unsafe {
-                        let dst = gpu.spawn_counter.contents().as_ptr() as *mut u32;
+                        let dst = gpu.spawn_counter.contents().as_ptr().add(offset) as *mut u32;
                         dst.write(spawn);
                     }
                     spawn
@@ -149,15 +201,18 @@ impl MtlContext {
             };
             budgets.push(budget);
         }
-        Some((dt, frame_index, budgets))
+        Some(ParticleFrame {
+            dt,
+            frame_index,
+            counter_slot,
+            spawn_budgets: budgets,
+        })
     }
 
     pub(in crate::metal) fn encode_particles(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        dt: f32,
-        frame_index: u32,
-        spawn_budgets: &[u32],
+        frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &crate::gfx::frustum::Frustum,
     ) -> Result<u32, String> {
@@ -167,6 +222,14 @@ impl MtlContext {
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return Ok(0);
         }
+        let ParticleFrame {
+            dt,
+            frame_index,
+            counter_slot,
+            spawn_budgets,
+        } = frame;
+        let (dt, frame_index) = (*dt, *frame_index);
+        let counter_offset = spawn_counter_offset(*counter_slot);
         let last_tex = self.textures.len().saturating_sub(1);
 
         // Visibility-cull per emitter for the *render* pass only. The compute
@@ -236,7 +299,11 @@ impl MtlContext {
                 // indices are the slots the shaders declare.
                 unsafe {
                     enc.setBuffer_offset_atIndex(Some(gpu.pool.as_ref()), 0, 0);
-                    enc.setBuffer_offset_atIndex(Some(gpu.spawn_counter.as_ref()), 0, 1);
+                    enc.setBuffer_offset_atIndex(
+                        Some(gpu.spawn_counter.as_ref()),
+                        counter_offset,
+                        1,
+                    );
                     enc.setBytes_length_atIndex(
                         std::ptr::NonNull::from(&params).cast(),
                         std::mem::size_of::<ParticleParams>(),
@@ -415,12 +482,13 @@ pub(super) fn build_particle_pipelines(
 }
 
 // Allocate the per-emitter GPU state for one record: a zero-initialised
-// particle pool plus a one-`u32` atomic counter buffer. Both buffers use
-// shared storage so the CPU can reset the spawn counter each frame without
-// a staging copy.
+// particle pool plus an atomic counter buffer holding one `u32` slot per frame
+// in flight. Both buffers use shared storage so the CPU can reset the spawn
+// counter each frame without a staging copy.
 pub(super) fn build_emitter_gpu_state(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     record: &ParticleEmitterRecord,
+    frames_in_flight: usize,
 ) -> Result<ParticleEmitterGpuState, String> {
     let slots = record.max_particles as usize;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>();
@@ -435,17 +503,17 @@ pub(super) fn build_emitter_gpu_state(
         std::ptr::write_bytes(dst, 0, pool_bytes);
     }
 
+    let counter_bytes = spawn_counter_bytes(frames_in_flight);
     let spawn_counter = device
-        .newBufferWithLength_options(
-            std::mem::size_of::<u32>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        .newBufferWithLength_options(counter_bytes, MTLResourceOptions::StorageModeShared)
         .ok_or("failed to allocate particle spawn counter")?;
-    // SAFETY: `spawn_counter` was just allocated as one u32 of shared storage, so `contents()` is a
-    // live, aligned CPU mapping of it.
+    // Zero every slot: a frame that skips its dispatch leaves its slot at
+    // whatever the last dispatch decremented it to.
+    // SAFETY: `spawn_counter` was just allocated with `counter_bytes` bytes of shared storage, so
+    // `contents()` is a live CPU mapping of exactly that many bytes.
     unsafe {
-        let dst = spawn_counter.contents().as_ptr() as *mut u32;
-        dst.write(0);
+        let dst = spawn_counter.contents().as_ptr() as *mut u8;
+        std::ptr::write_bytes(dst, 0, counter_bytes);
     }
 
     Ok(ParticleEmitterGpuState {
@@ -453,4 +521,58 @@ pub(super) fn build_emitter_gpu_state(
         spawn_counter,
         spawn_state: ParticleSpawnState::default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counter_slots_are_stride_aligned_and_distinct() {
+        let offsets: Vec<usize> = (0..3).map(spawn_counter_offset).collect();
+        assert_eq!(offsets, vec![0, 256, 512]);
+        // Every slot must clear the 256-byte buffer-offset alignment Metal
+        // requires and leave a whole `u32` inside the allocation.
+        for (slot, offset) in offsets.iter().enumerate() {
+            assert_eq!(offset % SPAWN_COUNTER_STRIDE, 0, "slot {slot} misaligned");
+            assert!(offset + std::mem::size_of::<u32>() <= spawn_counter_bytes(3));
+        }
+    }
+
+    #[test]
+    fn counter_buffer_holds_one_slot_per_frame_in_flight() {
+        assert_eq!(spawn_counter_bytes(3), 3 * SPAWN_COUNTER_STRIDE);
+        assert_eq!(spawn_counter_bytes(1), SPAWN_COUNTER_STRIDE);
+        // A zero depth would otherwise allocate nothing and divide by zero in
+        // `next_counter_slot`; both clamp to a single slot.
+        assert_eq!(spawn_counter_bytes(0), SPAWN_COUNTER_STRIDE);
+        assert_eq!(next_counter_slot(0, 0), 0);
+    }
+
+    #[test]
+    fn counter_slot_cycles_over_the_frames_in_flight_depth() {
+        let depth = 3;
+        let mut slot = 0;
+        let mut seen = Vec::new();
+        for _ in 0..depth {
+            slot = next_counter_slot(slot, depth);
+            assert!(slot < depth, "slot {slot} outside the allocated depth");
+            seen.push(slot);
+        }
+        // And the cycle repeats rather than drifting.
+        let first = seen[0];
+        assert_eq!(next_counter_slot(slot, depth), first);
+        // A full cycle visits every slot exactly once, so a frame's reset is
+        // `depth` frames removed from the last dispatch that read the slot.
+        seen.sort_unstable();
+        assert_eq!(seen, (0..depth).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn single_frame_in_flight_pins_slot_zero() {
+        // Depth 1 means the CPU already waits on the previous frame's
+        // completion, so reusing one slot cannot race.
+        assert_eq!(next_counter_slot(0, 1), 0);
+        assert_eq!(next_counter_slot(5, 1), 0);
+    }
 }

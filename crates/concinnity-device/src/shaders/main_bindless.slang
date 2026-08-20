@@ -82,20 +82,25 @@ struct ShadowUniforms
 static const uint LIGHT_KIND_SPOT = 1u;
 static const uint LIGHT_KIND_AREA = 2u;
 
+// Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
+// bytes in a structured buffer as well as in a constant buffer, so a literal
+// transcription pushes every following field four bytes late on Metal alone.
 struct GpuLight
 {
-    float3 position;
-    float  range;
-    float3 color;
-    float  intensity;
-    float3 direction;
-    uint   kind;
+    // xyz = world-space position, w = range.
+    float4 position_range;
+    // xyz = linear RGB, w = intensity.
+    float4 color_intensity;
+    // xyz = direction, w = the LIGHT_KIND_* discriminant's bits.
+    float4 direction_kind;
     float  cos_inner;
     float  cos_outer;
     int    shadow_index;
     // Index into the AreaLightData table for an area light, else -1.
     int    data_index;
 };
+
+uint light_kind(GpuLight l) { return asuint(l.direction_kind.w); }
 
 // One shadowed spot's slice projection; indexed by GpuLight.shadow_index,
 // which doubles as the array layer.
@@ -112,10 +117,10 @@ struct SpotShadowData
 // centre +/- right +/- up.
 struct AreaLightData
 {
-    float3 right;
-    uint two_sided;
-    float3 up;
-    float _pad;
+    // xyz = right edge, w = the two-sided flag's bits.
+    float4 right_two_sided;
+    // xyz = up edge, w unused.
+    float4 up_pad;
 };
 
 struct ClusterParams
@@ -1003,10 +1008,10 @@ float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_x
 float4 fragment_main_bindless(VertexOut in) : SV_Target
 {
     GpuObjectData od = OBJECTS[in.object_id];
-    float roughness = od.roughness;
-    float metallic  = od.metallic;
-    float3 tint     = od.tint;
-    float3 emissive = od.emissive;
+    float roughness = od.tint_roughness.w;
+    float metallic  = od.emissive_metallic.w;
+    float3 tint     = od.tint_roughness.xyz;
+    float3 emissive = od.emissive_metallic.xyz;
 
     float3 cam_pos = float3(VIEW.cam_x, VIEW.cam_y, VIEW.cam_z);
     bool ibl_enabled = VIEW.prefilter_mip_count > 0.5;
@@ -1143,14 +1148,14 @@ float4 fragment_main_bindless(VertexOut in) : SV_Target
         int i = (CLUSTER.use_clusters != 0u)
               ? int(CLUSTER_LIST[cluster_base + 1u + uint(jj)])
               : jj;
-        float3 pos_w  = LOCAL_LIGHTS[i].position;
-        float  range  = LOCAL_LIGHTS[i].range;
-        float3 col    = LOCAL_LIGHTS[i].color;
-        float  intens = LOCAL_LIGHTS[i].intensity;
+        float3 pos_w  = LOCAL_LIGHTS[i].position_range.xyz;
+        float  range  = LOCAL_LIGHTS[i].position_range.w;
+        float3 col    = LOCAL_LIGHTS[i].color_intensity.xyz;
+        float  intens = LOCAL_LIGHTS[i].color_intensity.w;
 
         // Area lights integrate the whole panel rather than a single
         // direction, so they replace the point / spot BRDF evaluation.
-        if (LOCAL_LIGHTS[i].kind == LIGHT_KIND_AREA)
+        if (light_kind(LOCAL_LIGHTS[i]) == LIGHT_KIND_AREA)
         {
             int ai = LOCAL_LIGHTS[i].data_index;
             if (ai < 0)
@@ -1158,9 +1163,9 @@ float4 fragment_main_bindless(VertexOut in) : SV_Target
                 continue;
             }
             float3 centre = pos_w;
-            float3 right  = AREA_LIGHTS[ai].right;
-            float3 up     = AREA_LIGHTS[ai].up;
-            bool two_sided = AREA_LIGHTS[ai].two_sided != 0u;
+            float3 right  = AREA_LIGHTS[ai].right_two_sided.xyz;
+            float3 up     = AREA_LIGHTS[ai].up_pad.xyz;
+            bool two_sided = asuint(AREA_LIGHTS[ai].right_two_sided.w) != 0u;
 
             // Range is a cutoff measured from the panel centre, matching the
             // sphere the clustered cull bins this light with. The physical
@@ -1218,9 +1223,9 @@ float4 fragment_main_bindless(VertexOut in) : SV_Target
         atten *= atten;
         // Spot cone: full brightness inside cos_inner, squared fade to black
         // at cos_outer. Point lights leave both at zero and skip this.
-        if (LOCAL_LIGHTS[i].kind == LIGHT_KIND_SPOT)
+        if (light_kind(LOCAL_LIGHTS[i]) == LIGHT_KIND_SPOT)
         {
-            float cd = dot(LOCAL_LIGHTS[i].direction, -L);
+            float cd = dot(LOCAL_LIGHTS[i].direction_kind.xyz, -L);
             float ci = LOCAL_LIGHTS[i].cos_inner;
             float co = LOCAL_LIGHTS[i].cos_outer;
             float t  = clamp((cd - co) / max(ci - co, 1e-4), 0.0, 1.0);

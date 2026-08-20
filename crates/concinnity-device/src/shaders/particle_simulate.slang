@@ -67,17 +67,18 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
     Particle pt = pool[id];
 
     // Age the particle in this slot, if any. A lifetime of 0 flags a dead slot.
-    if (pt.lifetime > 0.0)
+    if (pt.velocity_lifetime.w > 0.0)
     {
-        pt.age += params.dt;
-        if (pt.age >= pt.lifetime)
+        pt.position_age.w += params.dt;
+        if (pt.position_age.w >= pt.velocity_lifetime.w)
         {
-            pt.lifetime = 0.0;
+            pt.velocity_lifetime.w = 0.0;
         }
         else
         {
-            pt.velocity = pt.velocity + params.gravity_speed_max.xyz * params.dt;
-            pt.position = pt.position + pt.velocity * params.dt;
+            pt.velocity_lifetime.xyz =
+                pt.velocity_lifetime.xyz + params.gravity_speed_max.xyz * params.dt;
+            pt.position_age.xyz = pt.position_age.xyz + pt.velocity_lifetime.xyz * params.dt;
         }
     }
 
@@ -85,7 +86,7 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
     // complement returns the pre-subtract value, so only threads that observed
     // a positive remaining count spawn; threads racing past zero see 0 or a
     // wrapped very large unsigned number.
-    if (pt.lifetime == 0.0 && params.spawn_budget > 0u)
+    if (pt.velocity_lifetime.w == 0.0 && params.spawn_budget > 0u)
     {
         uint claimed;
         InterlockedAdd(spawn_counter[0], 0xFFFFFFFFu, claimed);
@@ -101,10 +102,8 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
             float speed = lerp(
                 params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
             float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));
-            pt.position = params.position_spread.xyz;
-            pt.velocity = dir * speed;
-            pt.age = 0.0;
-            pt.lifetime = max(life, 0.001);
+            pt.position_age = float4(params.position_spread.xyz, 0.0);
+            pt.velocity_lifetime = float4(dir * speed, max(life, 0.001));
         }
     }
 

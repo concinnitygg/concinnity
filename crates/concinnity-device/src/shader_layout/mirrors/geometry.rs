@@ -114,7 +114,10 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             [cam_right, _pad0] => ["cam_right"],
             [cam_up, _pad1] => ["cam_up"],
         })),
-        everywhere(mirror!(GpuParticle => "Particle" { position, age, velocity, lifetime, })),
+        everywhere(mirror!(GpuParticle => "Particle" {
+            [position, age] => ["position_age"],
+            [velocity, lifetime] => ["velocity_lifetime"],
+        })),
         everywhere(mirror!(ParticleParams => "ParticleParams" {
             [position, spread_cos] => ["position_spread"],
             [direction, speed_min] => ["direction_speed_min"],
