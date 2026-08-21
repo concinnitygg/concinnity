@@ -68,18 +68,22 @@ fn measure_text_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
         .chars()
         .filter(|&ch| ch != '\n')
-        .map(|ch| {
-            font.metrics
-                .get(&(ch as u32))
-                .map(|m| m.advance_px * scale)
-                .unwrap_or_else(|| {
-                    font.metrics
-                        .get(&(b' ' as u32))
-                        .map(|m| m.advance_px * scale)
-                        .unwrap_or(0.0)
-                })
-        })
+        .map(|ch| advance_px(ch, font, scale))
         .sum()
+}
+
+// One glyph's advance in scaled pixels, substituting the space glyph's advance
+// for a missing metric.
+fn advance_px(ch: char, font: &LoadedFont, scale: f32) -> f32 {
+    font.metrics
+        .get(&(ch as u32))
+        .map(|m| m.advance_px * scale)
+        .unwrap_or_else(|| {
+            font.metrics
+                .get(&(b' ' as u32))
+                .map(|m| m.advance_px * scale)
+                .unwrap_or(0.0)
+        })
 }
 
 // The content a label actually draws: its text broken to `wrap_width` and
@@ -137,17 +141,7 @@ fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> Cow<'a, str> {
 // respect. Widths accumulate one glyph advance at a time in authored order,
 // matching a from-scratch measure of the same text.
 fn wrap_line<'a>(line: &'a str, font: &LoadedFont, scale: f32, width: f32, out: &mut Vec<&'a str>) {
-    let advance = |ch: char| {
-        font.metrics
-            .get(&(ch as u32))
-            .map(|m| m.advance_px * scale)
-            .unwrap_or_else(|| {
-                font.metrics
-                    .get(&(b' ' as u32))
-                    .map(|m| m.advance_px * scale)
-                    .unwrap_or(0.0)
-            })
-    };
+    let advance = |ch: char| advance_px(ch, font, scale);
     // The line under construction, `line[start..end]`, and its measured width.
     let (mut start, mut end) = (0usize, 0usize);
     let mut current_width = 0.0_f32;
@@ -209,21 +203,38 @@ fn wrap_line<'a>(line: &'a str, font: &LoadedFont, scale: f32, width: f32, out: 
     out.push(&line[start..end]);
 }
 
-// `line` shortened until it and a trailing ellipsis fit `width`. A zero width
-// (capping lines without wrapping them) leaves the line as it is.
+// `line` shortened until it and a trailing ellipsis fit `width`: the longest
+// prefix whose width plus the ellipsis fits, found in one forward scan. Prefix
+// widths accumulate one glyph advance at a time in authored order, with the
+// ellipsis advances added after, matching a from-scratch measure of the same
+// candidate. A zero width (capping lines without wrapping them) leaves the
+// line as it is.
 fn with_ellipsis(line: &str, font: &LoadedFont, scale: f32, width: f32) -> String {
     const ELLIPSIS: &str = "...";
-    if width <= 0.0 {
-        return format!("{line}{ELLIPSIS}");
-    }
-    let mut kept: Vec<char> = line.chars().collect();
-    loop {
-        let candidate: String = kept.iter().collect::<String>() + ELLIPSIS;
-        if kept.is_empty() || measure_text_width(&candidate, font, scale) <= width {
-            return candidate;
+    let mut out = String::with_capacity(line.len() + ELLIPSIS.len());
+    let mut end = line.len();
+    if width > 0.0 {
+        let fits = |prefix_w: f32| {
+            let mut w = prefix_w;
+            for ch in ELLIPSIS.chars() {
+                w += advance_px(ch, font, scale);
+            }
+            w <= width
+        };
+        end = 0;
+        let mut prefix_w = 0.0_f32;
+        for (i, ch) in line.char_indices() {
+            let w = prefix_w + advance_px(ch, font, scale);
+            if !fits(w) {
+                break;
+            }
+            prefix_w = w;
+            end = i + ch.len_utf8();
         }
-        kept.pop();
     }
+    out.push_str(&line[..end]);
+    out.push_str(ELLIPSIS);
+    out
 }
 
 // Baseline position relative to a label's top-left `y`, so the cap-height band

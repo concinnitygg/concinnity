@@ -123,11 +123,21 @@ struct SpriteUpdate {
 }
 
 // One label's accumulated scroll-layout write; only the set fields apply.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 struct LabelUpdate {
     y: Option<f32>,
     visible: Option<bool>,
-    content: Option<String>,
+    // `(panel, group)` of the collapsible group whose `+`/`-` prefixed title
+    // this label shows; the content is written in place at apply time.
+    header: Option<(usize, usize)>,
+}
+
+// One panel's solve output, kept for the region reflow and reused (the
+// placement buffer keeps its capacity) across frames.
+#[derive(Debug, Default)]
+struct PanelSolve {
+    active: bool,
+    rows: Vec<scroll_layout::RowPlacement>,
 }
 
 // Scratch buffers for the per-frame scroll-layout solve/apply, kept on the
@@ -138,8 +148,8 @@ struct LayoutScratch {
     labels: HashMap<AssetId, LabelUpdate>,
     specs: Vec<RowSpec>,
     collapsed: Vec<bool>,
-    // Per-panel `(active, row placements)` for the region reflow.
-    solved_rows: Vec<(bool, Vec<scroll_layout::RowPlacement>)>,
+    // Per-panel solve output, indexed like `panels`.
+    solved: Vec<PanelSolve>,
 }
 
 // A settings dropdown whose floating option list is open. Owned by
@@ -1172,23 +1182,46 @@ impl UiInputSystem {
     }
 
     // Publish the current dropdown state as an `OpenDropdown` resource for
-    // GraphicsSystem to draw next tick (`None` while closed).
+    // GraphicsSystem to draw next tick (`None` while closed). The published
+    // view is updated in place: the option labels only change when a list
+    // opens, so the steady-state frames of an open list refresh the cheap
+    // fields without recloning the options.
     fn publish_dropdown(&self, ctx: &mut PipelineContext) {
-        let screen = self
-            .open_dropdown
-            .as_ref()
-            .map(|s| crate::ecs::DropdownView {
-                anchor: s.anchor,
-                options: s.options.clone(),
-                selected: s.selected,
-                first: s.first(),
-                hovered: s.hovered,
-                screen: s.screen,
-                font: s.font,
-                scale: s.scale,
-                color: s.color,
-            });
-        ctx.insert_resource(crate::ecs::OpenDropdown(screen));
+        let mut published = ctx
+            .take_resource::<crate::ecs::OpenDropdown>()
+            .unwrap_or_default();
+        match &self.open_dropdown {
+            None => published.0 = None,
+            Some(s) => match published.0.as_mut() {
+                Some(view) => {
+                    view.anchor = s.anchor;
+                    if view.options != s.options {
+                        view.options.clone_from(&s.options);
+                    }
+                    view.selected = s.selected;
+                    view.first = s.first();
+                    view.hovered = s.hovered;
+                    view.screen = s.screen;
+                    view.font = s.font;
+                    view.scale = s.scale;
+                    view.color = s.color;
+                }
+                None => {
+                    published.0 = Some(crate::ecs::DropdownView {
+                        anchor: s.anchor,
+                        options: s.options.clone(),
+                        selected: s.selected,
+                        first: s.first(),
+                        hovered: s.hovered,
+                        screen: s.screen,
+                        font: s.font,
+                        scale: s.scale,
+                        color: s.color,
+                    });
+                }
+            },
+        }
+        ctx.insert_resource(published);
     }
 
     // Whether the engine disabled this region's setting row at runtime
@@ -1585,9 +1618,11 @@ impl UiInputSystem {
         // in one pass per component type.
         self.layout.sprites.clear();
         self.layout.labels.clear();
-        self.layout.solved_rows.clear();
+        self.layout
+            .solved
+            .resize_with(self.panels.len(), Default::default);
 
-        for panel in self.panels.iter_mut() {
+        for (pi, panel) in self.panels.iter_mut().enumerate() {
             let panel_active = panel.screen == active;
             self.layout.collapsed.clear();
             self.layout
@@ -1598,11 +1633,13 @@ impl UiInputSystem {
                 height: r.height,
                 group: r.group,
             }));
-            let solved = scroll_layout::solve(
+            self.layout.solved[pi].active = panel_active;
+            let solved = scroll_layout::solve_into(
                 &self.layout.specs,
                 &self.layout.collapsed,
                 panel.band[3],
                 panel.scroll,
+                &mut self.layout.solved[pi].rows,
             );
             panel.scroll = solved.scroll;
             panel.content_height = solved.content_height;
@@ -1610,7 +1647,7 @@ impl UiInputSystem {
 
             if panel_active {
                 for (ri, row) in panel.rows.iter().enumerate() {
-                    let pl = solved.rows[ri];
+                    let pl = self.layout.solved[pi].rows[ri];
                     for (k, id) in row.elements.iter().enumerate() {
                         let y = row.base_ys[k] + pl.dy;
                         let s = self.layout.sprites.entry(*id).or_default();
@@ -1632,25 +1669,22 @@ impl UiInputSystem {
                 if let Some(track) = panel.track {
                     self.layout.sprites.entry(track).or_default().visible = Some(scrollable);
                 }
-                for g in &panel.groups {
+                for (gi, g) in panel.groups.iter().enumerate() {
                     if let Some(h) = g.header {
-                        let prefix = if g.collapsed { "+ " } else { "- " };
-                        self.layout.labels.entry(h).or_default().content =
-                            Some(format!("{prefix}{}", g.title));
+                        self.layout.labels.entry(h).or_default().header = Some((pi, gi));
                     }
                 }
             }
-            self.layout.solved_rows.push((panel_active, solved.rows));
         }
 
         // Reflow each panel-owned region in memory (positions the click loop
         // hit-tests against next frame).
         for entry in self.regions.iter_mut() {
             if let Some((pi, ri)) = entry.scroll_row
-                && let Some((panel_active, rows)) = self.layout.solved_rows.get(pi)
-                && *panel_active
+                && let Some(solve) = self.layout.solved.get(pi)
+                && solve.active
             {
-                let pl = rows[ri];
+                let pl = solve.rows[ri];
                 entry.region.y = entry.region_base_y + pl.dy;
                 entry.hidden = !pl.visible;
             }
@@ -1671,15 +1705,20 @@ impl UiInputSystem {
             }
         }
         for l in ctx.query_mut::<TextLabel>() {
-            if let Some(u) = self.layout.labels.get_mut(&l.asset_id) {
+            if let Some(u) = self.layout.labels.get(&l.asset_id) {
                 if let Some(y) = u.y {
                     l.y = y;
                 }
                 if let Some(vis) = u.visible {
                     l.visible = vis;
                 }
-                if let Some(content) = u.content.take() {
-                    l.content = content;
+                // A group header's `+`/`-` prefixed title, rewritten in place
+                // so the label's String keeps its capacity.
+                if let Some((pi, gi)) = u.header {
+                    let g = &self.panels[pi].groups[gi];
+                    l.content.clear();
+                    l.content.push_str(if g.collapsed { "+ " } else { "- " });
+                    l.content.push_str(&g.title);
                 }
             }
         }

@@ -13,6 +13,9 @@ pub struct TextCallBuffer {
     pub calls: Vec<TextDrawCall>,
     // Spent geometry buffers (cleared, capacity intact) awaiting reuse.
     spare: Vec<(Vec<TextVertex>, Vec<u16>)>,
+    // Index scratch for the layer sort, reused across frames.
+    sort_order: Vec<u32>,
+    sort_dest: Vec<u32>,
 }
 
 impl TextCallBuffer {
@@ -46,6 +49,38 @@ impl TextCallBuffer {
     /// Hand the assembled list to its consumer, leaving this buffer empty.
     pub fn take(&mut self) -> Vec<TextDrawCall> {
         std::mem::take(&mut self.calls)
+    }
+
+    /// Reorder the assembled calls by ascending draw layer, keeping same-layer
+    /// calls in insertion order. Equivalent to a stable sort by layer, but the
+    /// sort runs over indices in persistent scratch and the permutation is
+    /// applied with swaps, so a steady-state frame allocates nothing. Skipped
+    /// entirely when every call sits at layer 0.
+    pub fn sort_by_layer(&mut self) {
+        if self.calls.iter().all(|c| c.layer == 0) {
+            return;
+        }
+        let calls = &mut self.calls;
+        // `order[new] = old`: ties broken by index, so equal layers keep their
+        // insertion order.
+        let order = &mut self.sort_order;
+        order.clear();
+        order.extend(0..calls.len() as u32);
+        order.sort_unstable_by_key(|&i| (calls[i as usize].layer, i));
+        // Invert to `dest[old] = new`, then walk each swap cycle in place.
+        let dest = &mut self.sort_dest;
+        dest.clear();
+        dest.resize(calls.len(), 0);
+        for (new, &old) in order.iter().enumerate() {
+            dest[old as usize] = new as u32;
+        }
+        for i in 0..calls.len() {
+            while dest[i] as usize != i {
+                let j = dest[i] as usize;
+                calls.swap(i, j);
+                dest.swap(i, j);
+            }
+        }
     }
 }
 
@@ -107,5 +142,54 @@ mod tests {
         buf.calls.push(call(1));
         assert_eq!(buf.take().len(), 1);
         assert!(buf.calls.is_empty());
+    }
+
+    // A call tagged through `atlas_slot` so a sort's reordering is observable.
+    fn layered(layer: i32, tag: usize) -> TextDrawCall {
+        TextDrawCall {
+            layer,
+            atlas_slot: tag,
+            ..call(0)
+        }
+    }
+
+    #[test]
+    fn sort_by_layer_orders_ascending_and_keeps_same_layer_insertion_order() {
+        let mut buf = TextCallBuffer::default();
+        for (layer, tag) in [(2, 0), (0, 1), (1, 2), (0, 3), (2, 4)] {
+            buf.calls.push(layered(layer, tag));
+        }
+        buf.sort_by_layer();
+        let got: Vec<(i32, usize)> = buf.calls.iter().map(|c| (c.layer, c.atlas_slot)).collect();
+        assert_eq!(got, [(0, 1), (0, 3), (1, 2), (2, 0), (2, 4)]);
+    }
+
+    #[test]
+    fn sort_by_layer_leaves_an_unlayered_list_untouched() {
+        let mut buf = TextCallBuffer::default();
+        for tag in 0..4 {
+            buf.calls.push(layered(0, tag));
+        }
+        buf.sort_by_layer();
+        let tags: Vec<usize> = buf.calls.iter().map(|c| c.atlas_slot).collect();
+        assert_eq!(tags, [0, 1, 2, 3]);
+    }
+
+    // The scratch is reused across sorts of different lengths, so a second sort
+    // after a shorter frame still permutes correctly.
+    #[test]
+    fn sort_by_layer_is_correct_across_reuse() {
+        let mut buf = TextCallBuffer::default();
+        for (layer, tag) in [(3, 0), (1, 1), (2, 2)] {
+            buf.calls.push(layered(layer, tag));
+        }
+        buf.sort_by_layer();
+        buf.calls.clear();
+        for (layer, tag) in [(5, 0), (4, 1)] {
+            buf.calls.push(layered(layer, tag));
+        }
+        buf.sort_by_layer();
+        let got: Vec<(i32, usize)> = buf.calls.iter().map(|c| (c.layer, c.atlas_slot)).collect();
+        assert_eq!(got, [(4, 1), (5, 0)]);
     }
 }

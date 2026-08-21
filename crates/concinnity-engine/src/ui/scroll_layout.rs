@@ -31,10 +31,10 @@ pub struct RowPlacement {
     pub visible: bool,
 }
 
-// The full solution for one panel.
-#[derive(Debug, Clone, PartialEq)]
+// The scalar solution for one panel; the per-row placements land in the
+// caller's buffer (see `solve_into`).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Solved {
-    pub rows: Vec<RowPlacement>,
     // Total height of the visible stack (sum of shown row heights).
     pub content_height: f32,
     // The scroll offset after clamping to `[0, max_scroll]`.
@@ -54,25 +54,23 @@ impl Solved {
     }
 }
 
-// Solve the vertical layout. `rows` are in top-to-bottom order with their
-// build-time (all-expanded, unscrolled) positions implied by the running sum of
-// heights. `collapsed[g]` hides every row whose `group == Some(g)`. `band_height`
-// is the visible window; `scroll` is the requested offset (clamped here).
-pub fn solve(rows: &[RowSpec], collapsed: &[bool], band_height: f32, scroll: f32) -> Solved {
+// Solve the vertical layout, writing each row's placement into `out` (cleared
+// first, so a caller reuses its capacity frame over frame). `rows` are in
+// top-to-bottom order with their build-time (all-expanded, unscrolled)
+// positions implied by the running sum of heights. `collapsed[g]` hides every
+// row whose `group == Some(g)`. `band_height` is the visible window; `scroll`
+// is the requested offset (clamped here).
+pub fn solve_into(
+    rows: &[RowSpec],
+    collapsed: &[bool],
+    band_height: f32,
+    scroll: f32,
+    out: &mut Vec<RowPlacement>,
+) -> Solved {
     let is_hidden = |r: &RowSpec| {
         r.group
             .is_some_and(|g| collapsed.get(g).copied().unwrap_or(false))
     };
-
-    // The build laid every row out as if all groups were expanded; recover each
-    // row's build-time top from that all-expanded running sum so `dy` is the
-    // delta the client adds to the authored position.
-    let mut base_top = 0.0_f32;
-    let mut base_tops = Vec::with_capacity(rows.len());
-    for r in rows {
-        base_tops.push(base_top);
-        base_top += r.height;
-    }
 
     // Total content height with the current collapsed state.
     let content_height: f32 = rows
@@ -84,21 +82,26 @@ pub fn solve(rows: &[RowSpec], collapsed: &[bool], band_height: f32, scroll: f32
     let max_scroll = (content_height - band_height).max(0.0);
     let scroll = scroll.clamp(0.0, max_scroll);
 
-    // Walk the visible rows, accumulating the laid-out top, and emit each row's
-    // delta from its build-time top minus the scroll.
+    // Walk the rows, accumulating both the build-time top (the all-expanded
+    // running sum the build laid every row out with) and the laid-out top of
+    // the visible stack, and emit each visible row's delta between the two
+    // minus the scroll.
+    out.clear();
+    out.reserve(rows.len());
+    let mut base_top = 0.0_f32;
     let mut laid_top = 0.0_f32;
-    let mut placements = Vec::with_capacity(rows.len());
-    for (i, r) in rows.iter().enumerate() {
+    for r in rows {
         if is_hidden(r) {
-            placements.push(RowPlacement {
+            out.push(RowPlacement {
                 dy: 0.0,
                 visible: false,
             });
-            continue;
+        } else {
+            let dy = laid_top - base_top - scroll;
+            out.push(RowPlacement { dy, visible: true });
+            laid_top += r.height;
         }
-        let dy = laid_top - base_tops[i] - scroll;
-        placements.push(RowPlacement { dy, visible: true });
-        laid_top += r.height;
+        base_top += r.height;
     }
 
     // Thumb size = band / content (clamped to 1 when content fits); offset =
@@ -112,7 +115,6 @@ pub fn solve(rows: &[RowSpec], collapsed: &[bool], band_height: f32, scroll: f32
     };
 
     Solved {
-        rows: placements,
         content_height,
         scroll,
         thumb_frac,
@@ -126,6 +128,42 @@ mod tests {
 
     fn row(height: f32, group: Option<usize>) -> RowSpec {
         RowSpec { height, group }
+    }
+
+    // Test shim over `solve_into`: the scalars plus the placements in one value.
+    struct FullSolve {
+        rows: Vec<RowPlacement>,
+        content_height: f32,
+        scroll: f32,
+        thumb_frac: f32,
+        thumb_offset_frac: f32,
+    }
+
+    impl FullSolve {
+        fn scrollable(&self) -> bool {
+            self.thumb_frac < 1.0
+        }
+    }
+
+    fn solve(rows: &[RowSpec], collapsed: &[bool], band_height: f32, scroll: f32) -> FullSolve {
+        let mut placements = Vec::new();
+        let s = solve_into(rows, collapsed, band_height, scroll, &mut placements);
+        FullSolve {
+            rows: placements,
+            content_height: s.content_height,
+            scroll: s.scroll,
+            thumb_frac: s.thumb_frac,
+            thumb_offset_frac: s.thumb_offset_frac,
+        }
+    }
+
+    #[test]
+    fn solve_into_clears_the_reused_buffer_before_placing() {
+        let rows = [row(50.0, None), row(50.0, None)];
+        let mut out = Vec::new();
+        solve_into(&rows, &[], 300.0, 0.0, &mut out);
+        solve_into(&rows, &[], 300.0, 0.0, &mut out);
+        assert_eq!(out.len(), 2, "a reused buffer holds one solve, not two");
     }
 
     #[test]

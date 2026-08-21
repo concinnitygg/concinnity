@@ -7,6 +7,18 @@ use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::text;
 
+// Scratch for the per-frame label layout, kept on the overlay system so the
+// pass reuses its capacity instead of reallocating each frame.
+#[derive(Debug, Default)]
+pub(super) struct LabelLayoutScratch {
+    // Every measurable label's box this frame, keyed by id.
+    boxes: std::collections::HashMap<AssetId, LabelBox>,
+    // One container's resolved placements, reused per container.
+    placements: Vec<crate::assets::Placement>,
+    // Every placed label's resolved text origin.
+    placed: std::collections::HashMap<AssetId, (f32, f32)>,
+}
+
 // Reposition the labels owned by every visible `LayoutContainer`. This runs in
 // the overlay build because measuring a label needs the loaded font metrics;
 // the resolved origin is written back into each label so `build_text_calls`
@@ -14,31 +26,32 @@ use crate::gfx::text;
 pub(super) fn apply_label_layout(
     ctx: &mut PipelineContext,
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    scratch: &mut LabelLayoutScratch,
 ) {
-    let containers: Vec<LayoutContainer> = ctx
-        .query::<LayoutContainer>()
-        .filter(|c| c.visible)
-        .cloned()
-        .collect();
-    if containers.is_empty() {
+    if !ctx.query::<LayoutContainer>().any(|c| c.visible) {
         return;
     }
     // Measure every label once, keyed by id.
-    let mut boxes: std::collections::HashMap<AssetId, LabelBox> = std::collections::HashMap::new();
+    scratch.boxes.clear();
     for label in ctx.query::<TextLabel>() {
         if let Some(b) = text::measure_label_box(label, loaded_fonts) {
-            boxes.insert(label.asset_id, b);
+            scratch.boxes.insert(label.asset_id, b);
         }
     }
     // Resolve placements, then write them back into the labels.
-    let placements: Vec<_> = containers
-        .iter()
-        .flat_map(|c| c.layout(|id| boxes.get(&id).copied()))
-        .collect();
-    let placed: std::collections::HashMap<AssetId, (f32, f32)> =
-        placements.into_iter().map(|p| (p.id, (p.x, p.y))).collect();
+    scratch.placed.clear();
+    for c in ctx.query::<LayoutContainer>() {
+        if !c.visible {
+            continue;
+        }
+        let boxes = &scratch.boxes;
+        c.layout_into(|id| boxes.get(&id).copied(), &mut scratch.placements);
+        for p in &scratch.placements {
+            scratch.placed.insert(p.id, (p.x, p.y));
+        }
+    }
     for label in ctx.query_mut::<TextLabel>() {
-        if let Some(&(x, y)) = placed.get(&label.asset_id) {
+        if let Some(&(x, y)) = scratch.placed.get(&label.asset_id) {
             label.x = x;
             label.y = y;
         }
@@ -271,7 +284,11 @@ mod tests {
             rows: vec![row(&[AssetId(1), AssetId(2)]), row(&[AssetId(3)])],
             ..Default::default()
         });
-        apply_label_layout(&mut w.ctx(), &loaded_fonts());
+        apply_label_layout(
+            &mut w.ctx(),
+            &loaded_fonts(),
+            &mut LabelLayoutScratch::default(),
+        );
         assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
         // The second chip clears the first's 20px box plus the 6px column gap.
         assert_eq!(w.label_at(AssetId(2)), (126.0, 48.0));
@@ -289,7 +306,11 @@ mod tests {
             visible: false,
             ..Default::default()
         });
-        apply_label_layout(&mut w.ctx(), &loaded_fonts());
+        apply_label_layout(
+            &mut w.ctx(),
+            &loaded_fonts(),
+            &mut LabelLayoutScratch::default(),
+        );
         assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
     }
 
@@ -312,12 +333,44 @@ mod tests {
             rows: vec![row(&[AssetId(1), AssetId(2), AssetId(3), AssetId(4)])],
             ..Default::default()
         });
-        apply_label_layout(&mut w.ctx(), &loaded_fonts());
+        apply_label_layout(
+            &mut w.ctx(),
+            &loaded_fonts(),
+            &mut LabelLayoutScratch::default(),
+        );
         assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
         // The last chip packs against the first, as if the two dropped ones were absent.
         assert_eq!(w.label_at(AssetId(4)), (126.0, 48.0));
         assert_eq!(w.label_at(AssetId(2)), (SENTINEL, SENTINEL));
         assert_eq!(w.label_at(AssetId(3)), (SENTINEL, SENTINEL));
+    }
+
+    // A reused scratch never leaks placements from an earlier frame: a label
+    // that leaves the layout keeps its own position instead of taking last
+    // frame's placement.
+    #[test]
+    fn apply_label_layout_reuses_scratch_without_stale_placements() {
+        let mut w = TestWorld::new();
+        w.push(chip(AssetId(1), "aa"));
+        w.push(LayoutContainer {
+            x: 100.0,
+            y: 50.0,
+            rows: vec![row(&[AssetId(1)])],
+            ..Default::default()
+        });
+        let mut scratch = LabelLayoutScratch::default();
+        apply_label_layout(&mut w.ctx(), &loaded_fonts(), &mut scratch);
+        assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
+
+        for c in w.ctx().query_mut::<LayoutContainer>() {
+            c.rows.clear();
+        }
+        for l in w.ctx().query_mut::<TextLabel>() {
+            l.x = SENTINEL;
+            l.y = SENTINEL;
+        }
+        apply_label_layout(&mut w.ctx(), &loaded_fonts(), &mut scratch);
+        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
     }
 
     // Chips anchor flush with the window's right margin, stacked downward in id

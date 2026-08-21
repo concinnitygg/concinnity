@@ -6,15 +6,47 @@ use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::text;
 
-// Build the transient overlay Sprites + TextLabels for an open dropdown list.
-// These are fed through the same sprite / text shapers as the menu but with no
-// clip bands, so the list draws unclipped on top of the menu (escaping the
-// scroll band's scissor). Geometry is reference space for a screen-owned row (and
-// window pixels otherwise), matching the input hit-test in `ui`.
+// Persistent buffers for the synthesised elements, kept on the overlay system
+// so a steady-state frame reuses their capacity (including every label's
+// content String) instead of reallocating.
+#[derive(Debug, Default)]
+pub(super) struct WidgetScratch {
+    pub(super) sprites: Vec<Sprite>,
+    pub(super) labels: Vec<TextLabel>,
+    // Spent content Strings reclaimed from the previous build's labels.
+    strings: Vec<String>,
+}
+
+impl WidgetScratch {
+    // Start a new build: drop the previous elements, pooling their Strings.
+    fn begin(&mut self) {
+        self.sprites.clear();
+        for label in self.labels.drain(..) {
+            let mut s = label.content;
+            s.clear();
+            self.strings.push(s);
+        }
+    }
+
+    // An owned copy of `content`, backed by a pooled String when one is spare.
+    fn string(&mut self, content: &str) -> String {
+        let mut s = self.strings.pop().unwrap_or_default();
+        s.push_str(content);
+        s
+    }
+}
+
+// Build the transient overlay Sprites + TextLabels for an open dropdown list
+// into `out`, replacing its previous contents. These are fed through the same
+// sprite / text shapers as the menu but with no clip bands, so the list draws
+// unclipped on top of the menu (escaping the scroll band's scissor). Geometry
+// is reference space for a screen-owned row (and window pixels otherwise),
+// matching the input hit-test in `ui`.
 pub(super) fn build_dropdown_overlay(
     screen: &crate::ecs::DropdownView,
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
-) -> (Vec<Sprite>, Vec<TextLabel>) {
+    out: &mut WidgetScratch,
+) {
     // Panel fill (near-opaque so rows behind it do not show through), a framing
     // border, and the selected / hovered row highlights.
     const PANEL_BG: [f32; 4] = [0.06, 0.08, 0.14, 0.98];
@@ -38,7 +70,7 @@ pub(super) fn build_dropdown_overlay(
             .checked_sub(first)
             .filter(|r| *r < layout.items.len())
     };
-    let mut sprites: Vec<Sprite> = Vec::new();
+    out.begin();
     let mk_sprite = |rect: [f32; 4], tint: [f32; 4]| Sprite {
         asset_id: AssetId::default(),
         x: rect[0],
@@ -58,7 +90,7 @@ pub(super) fn build_dropdown_overlay(
 
     // Border quad (a little larger, drawn first) then the panel fill on top.
     let [lx, ly, lw, lh] = layout.list;
-    sprites.push(mk_sprite(
+    out.sprites.push(mk_sprite(
         [
             lx - BORDER_PX,
             ly - BORDER_PX,
@@ -67,26 +99,26 @@ pub(super) fn build_dropdown_overlay(
         ],
         BORDER,
     ));
-    sprites.push(mk_sprite(layout.list, PANEL_BG));
+    out.sprites.push(mk_sprite(layout.list, PANEL_BG));
     // The currently-applied option, then the hovered one on top of it (each
     // only when its option is inside the shown window).
     if let Some(rect) = row_of(screen.selected).and_then(|r| layout.items.get(r)) {
-        sprites.push(mk_sprite(*rect, SELECTED_BG));
+        out.sprites.push(mk_sprite(*rect, SELECTED_BG));
     }
     if let Some(rect) = screen
         .hovered
         .and_then(row_of)
         .and_then(|r| layout.items.get(r))
     {
-        sprites.push(mk_sprite(*rect, HOVER_BG));
+        out.sprites.push(mk_sprite(*rect, HOVER_BG));
     }
     // A scrolled list gets a scrollbar inside its right edge: a faint
     // full-height track with the draggable thumb over it.
     if let Some(rect) = dropdown::track_rect(&layout, count) {
-        sprites.push(mk_sprite(rect, TRACK));
+        out.sprites.push(mk_sprite(rect, TRACK));
     }
     if let Some(rect) = dropdown::thumb_rect(&layout, first, count) {
-        sprites.push(mk_sprite(rect, THUMB));
+        out.sprites.push(mk_sprite(rect, THUMB));
     }
 
     // One text label per SHOWN option, vertically centered in its row (the text
@@ -96,15 +128,12 @@ pub(super) fn build_dropdown_overlay(
         .and_then(|f| loaded_fonts.get(&f))
         .map(|f| f.size_px * screen.scale)
         .unwrap_or(0.0);
-    let labels: Vec<TextLabel> = screen
-        .options
-        .iter()
-        .skip(first)
-        .zip(&layout.items)
-        .map(|(opt, rect)| TextLabel {
+    for (opt, rect) in screen.options.iter().skip(first).zip(&layout.items) {
+        let content = out.string(opt);
+        out.labels.push(TextLabel {
             asset_id: AssetId::default(),
             font: screen.font,
-            content: opt.clone(),
+            content,
             x: rect[0] + TEXT_PAD,
             y: rect[1] + (rect[3] - line_h) / 2.0,
             color: screen.color,
@@ -120,31 +149,32 @@ pub(super) fn build_dropdown_overlay(
             max_lines: 1,
             visible: true,
             screen: screen.screen,
-        })
-        .collect();
-
-    (sprites, labels)
+        });
+    }
 }
 
-// The visible slice of a single-line field's text, fit to its box width. `avail`
-// is the drawable text width; `advance` measures the rendered width of a prefix
-// with the real font metrics. Returns the substring to draw, the x offset to add
-// to the field's left text edge (always >= 0, so nothing bleeds left), and the
-// caret's x offset from that same edge. A field that fits is returned untouched;
-// one that overflows is truncated from the head with an ellipsis while unfocused,
-// or horizontally scrolled to keep the caret in screen while focused.
+// The visible slice of a single-line field's text, fit to its box width and
+// appended to `out`. `avail` is the drawable text width; `advance` measures the
+// rendered width of a prefix with the real font metrics. Returns the x offset
+// to add to the field's left text edge (always >= 0, so nothing bleeds left)
+// and the caret's x offset from that same edge. A field that fits passes
+// through untouched; one that overflows is truncated from the head with an
+// ellipsis while unfocused, or horizontally scrolled to keep the caret in
+// screen while focused.
 fn fit_line(
     content: &str,
     caret_byte: usize,
     avail: f32,
     focused: bool,
     advance: impl Fn(&str) -> f32,
-) -> (String, f32, f32) {
+    out: &mut String,
+) -> (f32, f32) {
     const ELLIPSIS: &str = "...";
     let caret_byte = caret_byte.min(content.len());
     let full = advance(content);
     if avail <= 0.0 || full <= avail {
-        return (content.to_string(), 0.0, advance(&content[..caret_byte]));
+        out.push_str(content);
+        return (0.0, advance(&content[..caret_byte]));
     }
     if focused {
         // Pin the caret to the right edge once the text runs past the box, easing
@@ -152,27 +182,23 @@ fn fit_line(
         let caret_w = advance(&content[..caret_byte]);
         let scroll = (caret_w - avail).max(0.0);
         // Byte boundaries: the start, then the end of each char.
-        let mut bounds = vec![0usize];
-        bounds.extend(content.char_indices().map(|(b, c)| b + c.len_utf8()));
+        let bounds = || {
+            core::iter::once(0usize).chain(content.char_indices().map(|(b, c)| b + c.len_utf8()))
+        };
         // Drop chars fully scrolled off the left so nothing bleeds past that edge.
-        let start = *bounds
-            .iter()
-            .find(|&&b| advance(&content[..b]) >= scroll)
-            .unwrap_or(&0);
+        let start = bounds()
+            .find(|&b| advance(&content[..b]) >= scroll)
+            .unwrap_or(0);
         // Keep chars up to the last boundary still inside the box.
-        let end = bounds
-            .iter()
-            .rev()
-            .find(|&&b| advance(&content[..b]) - scroll <= avail)
-            .copied()
-            .unwrap_or(content.len())
-            .max(start);
-        let visible = content.get(start..end).unwrap_or("").to_string();
-        (
-            visible,
-            advance(&content[..start]) - scroll,
-            caret_w - scroll,
-        )
+        let mut end = None;
+        for b in bounds() {
+            if advance(&content[..b]) - scroll <= avail {
+                end = Some(b);
+            }
+        }
+        let end = end.unwrap_or(content.len()).max(start);
+        out.push_str(content.get(start..end).unwrap_or(""));
+        (advance(&content[..start]) - scroll, caret_w - scroll)
     } else {
         // Truncate from the head, leaving room for an ellipsis.
         let ell = advance(ELLIPSIS);
@@ -184,21 +210,25 @@ fn fit_line(
             }
             end = nb;
         }
-        (format!("{}{ELLIPSIS}", &content[..end]), 0.0, 0.0)
+        out.push_str(&content[..end]);
+        out.push_str(ELLIPSIS);
+        (0.0, 0.0)
     }
 }
 
-// Synthesise the transient Sprites + TextLabels that draw a TextInput field: a
-// background box, the typed content (or the dimmer placeholder while empty and
-// unfocused), and a caret bar while focused. Fed through the same shapers as the
-// authored overlay elements, carrying the field's `screen` / `fit` so screen mapping
-// and visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
+// Synthesise the transient Sprites + TextLabels that draw a TextInput field
+// into `out`, replacing its previous contents: a background box, the typed
+// content (or the dimmer placeholder while empty and unfocused), and a caret
+// bar while focused. Fed through the same shapers as the authored overlay
+// elements, carrying the field's `screen` / `fit` so screen mapping and
+// visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
 // box (`fit_line`) so a long value never bleeds past the field's edges.
 pub(super) fn build_text_input_overlay(
     ti: &TextInput,
     loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
     caret_visible: bool,
-) -> (Vec<Sprite>, Vec<TextLabel>) {
+    out: &mut WidgetScratch,
+) {
     const CARET_W: f32 = 2.0;
     let font = ti.font.and_then(|f| loaded_fonts.get(&f));
     let line_h = font
@@ -208,7 +238,8 @@ pub(super) fn build_text_input_overlay(
     // the line box's top here vertically centres the text in the field.
     let text_y = ti.y + (ti.height - line_h) / 2.0;
 
-    let bg = Sprite {
+    out.begin();
+    out.sprites.push(Sprite {
         asset_id: AssetId::default(),
         x: ti.x,
         y: ti.y,
@@ -223,8 +254,7 @@ pub(super) fn build_text_input_overlay(
         corner_radius: ti.corner_radius,
         border_width: 0.0,
         border_color: [0.0, 0.0, 0.0, 1.0],
-    };
-    let mut sprites = vec![bg];
+    });
 
     // Placeholder only while empty and unfocused; otherwise the live content.
     let showing_placeholder = ti.content.is_empty() && !ti.focused;
@@ -246,14 +276,23 @@ pub(super) fn build_text_input_overlay(
     // Fit the text to the box. Without a loaded font we cannot measure, so pass it
     // through (it will not be rendered until a font loads).
     let avail = (ti.width - 2.0 * ti.padding - CARET_W).max(0.0);
-    let (content, x_offset, caret_off) = match font {
-        Some(f) => fit_line(raw, caret_byte, avail, ti.focused, |s| {
-            text::text_advance_width(s, f, ti.scale)
-        }),
-        None => (raw.to_string(), 0.0, 0.0),
+    let mut content = out.string("");
+    let (x_offset, caret_off) = match font {
+        Some(f) => fit_line(
+            raw,
+            caret_byte,
+            avail,
+            ti.focused,
+            |s| text::text_advance_width(s, f, ti.scale),
+            &mut content,
+        ),
+        None => {
+            content.push_str(raw);
+            (0.0, 0.0)
+        }
     };
 
-    let label = TextLabel {
+    out.labels.push(TextLabel {
         asset_id: AssetId::default(),
         font: ti.font,
         content,
@@ -271,8 +310,7 @@ pub(super) fn build_text_input_overlay(
         max_lines: 0,
         visible: true,
         screen: ti.screen,
-    };
-    let mut labels = vec![label];
+    });
 
     // Inline completion: the ghost suffix in the placeholder colour just past
     // the caret, only while the field holds focus and the content fits the box
@@ -296,11 +334,25 @@ pub(super) fn build_text_input_overlay(
                 end = nb;
             }
             if end > 0 {
-                let mut ghost = labels[0].clone();
-                ghost.content = ti.ghost[..end].to_string();
-                ghost.x = ti.x + ti.padding + content_w + CARET_W;
-                ghost.color = ti.placeholder_color;
-                labels.push(ghost);
+                let content = out.string(&ti.ghost[..end]);
+                out.labels.push(TextLabel {
+                    asset_id: AssetId::default(),
+                    font: ti.font,
+                    content,
+                    x: ti.x + ti.padding + content_w + CARET_W,
+                    y: text_y,
+                    color: ti.placeholder_color,
+                    scale: ti.scale,
+                    centered: false,
+                    align: crate::assets::TextAlign::Left,
+                    fit: ti.fit,
+                    background: [0.0, 0.0, 0.0, 0.0],
+                    padding: 0.0,
+                    wrap_width: 0.0,
+                    max_lines: 0,
+                    visible: true,
+                    screen: ti.screen,
+                });
             }
         }
     }
@@ -309,7 +361,7 @@ pub(super) fn build_text_input_overlay(
     // focus and the font loaded, and only on the visible half of the blink cycle.
     if ti.focused && font.is_some() && caret_visible {
         let caret_x = ti.x + ti.padding + caret_off;
-        sprites.push(Sprite {
+        out.sprites.push(Sprite {
             asset_id: AssetId::default(),
             x: caret_x,
             y: text_y,
@@ -326,14 +378,46 @@ pub(super) fn build_text_input_overlay(
             border_color: [0.0, 0.0, 0.0, 1.0],
         });
     }
-
-    (sprites, labels)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ecs::{DropdownView, FontHandle};
+
+    // Tuple-returning shims over the scratch-filling builders, so the tests
+    // read the built elements as owned lists.
+    fn fit_line(
+        content: &str,
+        caret_byte: usize,
+        avail: f32,
+        focused: bool,
+        advance: impl Fn(&str) -> f32,
+    ) -> (String, f32, f32) {
+        let mut out = String::new();
+        let (x_offset, caret_off) =
+            super::fit_line(content, caret_byte, avail, focused, advance, &mut out);
+        (out, x_offset, caret_off)
+    }
+
+    fn build_dropdown_overlay(
+        screen: &DropdownView,
+        loaded_fonts: &std::collections::HashMap<FontHandle, text::LoadedFont>,
+    ) -> (Vec<Sprite>, Vec<TextLabel>) {
+        let mut out = WidgetScratch::default();
+        super::build_dropdown_overlay(screen, loaded_fonts, &mut out);
+        (out.sprites, out.labels)
+    }
+
+    fn build_text_input_overlay(
+        ti: &TextInput,
+        loaded_fonts: &std::collections::HashMap<FontHandle, text::LoadedFont>,
+        caret_visible: bool,
+    ) -> (Vec<Sprite>, Vec<TextLabel>) {
+        let mut out = WidgetScratch::default();
+        super::build_text_input_overlay(ti, loaded_fonts, caret_visible, &mut out);
+        (out.sprites, out.labels)
+    }
 
     // A fixed-width mock metric (every char 10px) makes `fit_line` widths exact.
     fn mock_advance(s: &str) -> f32 {
@@ -409,6 +493,25 @@ mod tests {
 
     fn rect(s: &Sprite) -> [f32; 4] {
         [s.x, s.y, s.width, s.height]
+    }
+
+    // A reused scratch replaces its previous build wholesale, pooling the spent
+    // label Strings, so back-to-back builds produce identical elements.
+    #[test]
+    fn a_reused_scratch_builds_the_same_elements_as_a_fresh_one() {
+        let view = dropdown_view(&["aa", "bb"]);
+        let fonts = loaded_fonts();
+        let mut scratch = WidgetScratch::default();
+        super::build_dropdown_overlay(&view, &fonts, &mut scratch);
+        let sprites = scratch.sprites.len();
+        let contents: Vec<String> = scratch.labels.iter().map(|l| l.content.clone()).collect();
+
+        // A different build in between leaves nothing of the dropdown behind.
+        super::build_text_input_overlay(&text_input(), &fonts, true, &mut scratch);
+        super::build_dropdown_overlay(&view, &fonts, &mut scratch);
+        assert_eq!(scratch.sprites.len(), sprites);
+        let again: Vec<String> = scratch.labels.iter().map(|l| l.content.clone()).collect();
+        assert_eq!(again, contents);
     }
 
     // Text that fits the box is returned untouched, with the caret at its measured

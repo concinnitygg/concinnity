@@ -120,40 +120,54 @@ impl LayoutContainer {
     /// boxes. Boxes within a row are laid edge-to-edge with `col_gap` between
     /// them; rows are stacked with `row_gap` between them.
     pub fn layout(&self, size_of: impl Fn(AssetId) -> Option<LabelBox>) -> Vec<Placement> {
-        // Resolve each row to its measurable cells, dropping unknown labels.
-        let rows: Vec<Vec<(AssetId, LabelBox)>> = self
-            .rows
-            .iter()
-            .map(|row| {
-                row.cols
-                    .iter()
-                    .filter_map(|&id| size_of(id).map(|b| (id, b)))
-                    .collect()
-            })
-            .collect();
+        let mut out = Vec::new();
+        self.layout_into(size_of, &mut out);
+        out
+    }
 
-        let row_width = |cells: &[(AssetId, LabelBox)]| -> f32 {
-            if cells.is_empty() {
-                return 0.0;
+    /// [`LayoutContainer::layout`] writing into a caller-owned buffer, so a
+    /// per-frame caller reuses its capacity. Clears `out` first.
+    pub fn layout_into(
+        &self,
+        size_of: impl Fn(AssetId) -> Option<LabelBox>,
+        out: &mut Vec<Placement>,
+    ) {
+        out.clear();
+        // A row's measurable width: cells laid edge-to-edge with the column
+        // gap, dropping unknown labels.
+        let row_width = |row: &LayoutRow| -> f32 {
+            let mut sum = 0.0_f32;
+            let mut n = 0usize;
+            for &id in &row.cols {
+                if let Some(b) = size_of(id) {
+                    sum += b.w;
+                    n += 1;
+                }
             }
-            let sum: f32 = cells.iter().map(|(_, b)| b.w).sum();
-            sum + self.col_gap * (cells.len() - 1) as f32
+            if n == 0 {
+                0.0
+            } else {
+                sum + self.col_gap * (n - 1) as f32
+            }
         };
 
         // Content width is the widest row; narrower rows justify within it.
-        let content_w = rows
-            .iter()
-            .map(|cells| row_width(cells))
-            .fold(0.0_f32, f32::max);
+        let content_w = self.rows.iter().map(row_width).fold(0.0_f32, f32::max);
 
-        let mut out = Vec::new();
         let mut y_cursor = self.y;
-        for (row_idx, cells) in rows.iter().enumerate() {
-            if !cells.is_empty() {
-                let rw = row_width(cells);
+        for row in &self.rows {
+            let mut n = 0usize;
+            let mut row_h = 0.0_f32;
+            for &id in &row.cols {
+                if let Some(b) = size_of(id) {
+                    n += 1;
+                    row_h = row_h.max(b.h);
+                }
+            }
+            if n > 0 {
+                let rw = row_width(row);
                 let slack = (content_w - rw).max(0.0);
-                let n = cells.len();
-                let (start, gap) = match self.rows[row_idx].justify {
+                let (start, gap) = match row.justify {
                     Justify::Left => (0.0, self.col_gap),
                     Justify::Right => (slack, self.col_gap),
                     Justify::Center => (slack / 2.0, self.col_gap),
@@ -166,23 +180,24 @@ impl LayoutContainer {
                     }
                 };
                 let mut x_cursor = self.x + start;
-                for (id, b) in cells {
+                for &id in &row.cols {
+                    let Some(b) = size_of(id) else {
+                        continue;
+                    };
                     // Box occupies [x_cursor, x_cursor + b.w]; the text origin the
                     // renderer wants is inset from the box's top-left by the
                     // horizontal padding and the (possibly different) vertical
                     // inset, since the box hugs the visible glyphs.
                     out.push(Placement {
-                        id: *id,
+                        id,
                         x: x_cursor + b.pad,
                         y: y_cursor + b.top_inset,
                     });
                     x_cursor += b.w + gap;
                 }
             }
-            let row_h = cells.iter().map(|(_, b)| b.h).fold(0.0_f32, f32::max);
             y_cursor += row_h + self.row_gap;
         }
-        out
     }
 }
 
@@ -329,6 +344,16 @@ mod tests {
         let back: LayoutContainer = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.rows[0].justify, Justify::SpaceBetween);
         assert_eq!(back.rows[1].cols, [AssetId(11)]);
+    }
+
+    #[test]
+    fn layout_into_clears_the_reused_buffer_before_placing() {
+        let c = container(vec![row(Justify::Left, &[1, 2])]);
+        let mut out = Vec::new();
+        c.layout_into(box_of, &mut out);
+        c.layout_into(box_of, &mut out);
+        assert_eq!(out.len(), 2, "a reused buffer holds one solve, not two");
+        assert_eq!(out, c.layout(box_of));
     }
 
     #[test]

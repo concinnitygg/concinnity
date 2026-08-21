@@ -76,6 +76,11 @@ pub struct OverlaySystem {
     start_time: Option<Instant>,
     // Scratch for the per-element draw-layer merge, reused across frames.
     layers: std::collections::HashMap<AssetId, i32>,
+    // Scratch for the LayoutContainer label reflow, reused across frames.
+    hud_scratch: hud_layout::LabelLayoutScratch,
+    // Buffers the synthesised dropdown / text-input elements are built into,
+    // reused across frames.
+    widget_scratch: widgets::WidgetScratch,
     // The draw list under construction plus the pooled geometry of recycled
     // frames; the finished list moves out through `OverlayFrame` each tick.
     buffer: crate::gfx::call_buffer::TextCallBuffer,
@@ -180,7 +185,7 @@ impl OverlaySystem {
             .unwrap_or_default();
         // Reposition LayoutContainer-managed labels before measuring them
         // for draw, so a HUD reflows to its live text each frame.
-        hud_layout::apply_label_layout(ctx, &assets.fonts);
+        hud_layout::apply_label_layout(ctx, &assets.fonts, &mut self.hud_scratch);
         // Anchor the DebugHud chips to the top-right corner, stacked.
         hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
         // Pack the StatHud chips into a tight strip in the top-left corner.
@@ -252,16 +257,16 @@ impl OverlaySystem {
         // clipped row text, before the cursor) and unclipped, so it escapes
         // the scroll band's scissor. Built as transient overlay Sprites +
         // TextLabels fed through the same shapers (with no clip bands).
-        if let Some(screen) = ctx
+        if let Some(view) = ctx
             .resource::<crate::ecs::OpenDropdown>()
-            .and_then(|d| d.0.clone())
+            .and_then(|d| d.0.as_ref())
         {
             let no_clips = std::collections::HashMap::new();
-            let (dd_sprites, dd_labels) = widgets::build_dropdown_overlay(&screen, &assets.fonts);
+            widgets::build_dropdown_overlay(view, &assets.fonts, &mut self.widget_scratch);
             let dd_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
                 &mut self.buffer,
-                &dd_sprites,
+                &self.widget_scratch.sprites,
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
@@ -270,7 +275,7 @@ impl OverlaySystem {
             );
             text::build_text_calls_into(
                 &mut self.buffer,
-                &dd_labels,
+                &self.widget_scratch.labels,
                 &assets.fonts,
                 win_w,
                 win_h,
@@ -297,8 +302,12 @@ impl OverlaySystem {
             if !ti.visible {
                 continue;
             }
-            let (ti_sprites, ti_labels) =
-                widgets::build_text_input_overlay(ti, &assets.fonts, caret_visible);
+            widgets::build_text_input_overlay(
+                ti,
+                &assets.fonts,
+                caret_visible,
+                &mut self.widget_scratch,
+            );
             // The synthesised overlay carries no asset id, so its calls take the
             // field's own layer (from the field's id) rather than looking up the
             // default id -- otherwise a focused panel's text fields would sink
@@ -307,7 +316,7 @@ impl OverlaySystem {
             let ti_start = self.buffer.calls.len();
             gfx_sprite::build_sprite_calls_into(
                 &mut self.buffer,
-                &ti_sprites,
+                &self.widget_scratch.sprites,
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
@@ -316,7 +325,7 @@ impl OverlaySystem {
             );
             text::build_text_calls_into(
                 &mut self.buffer,
-                &ti_labels,
+                &self.widget_scratch.labels,
                 &assets.fonts,
                 win_w,
                 win_h,
@@ -371,15 +380,12 @@ impl OverlaySystem {
                 !s.follow_cursor && s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s)
             });
         // Reorder the overlay by layer when any call carries one (an active screen
-        // stack, the editor's focus-stack overrides, an open dropdown, the cursor):
-        // a stable sort keeps same-layer order (so the sprites-then-text order
-        // within a panel is intact) while lifting a screen's or focused panel's
-        // whole content above the others'. Skipped entirely when nothing is
-        // layered, so draw order stays pure insertion order.
-        let calls = &mut self.buffer.calls;
-        if calls.iter().any(|c| c.layer != 0) {
-            calls.sort_by_key(|c| c.layer);
-        }
+        // stack, the editor's focus-stack overrides, an open dropdown, the cursor).
+        // Same-layer order is kept (so the sprites-then-text order within a panel
+        // is intact) while lifting a screen's or focused panel's whole content
+        // above the others'. Skipped entirely when nothing is layered, so draw
+        // order stays pure insertion order.
+        self.buffer.sort_by_layer();
         OverlayFrame {
             calls: self.buffer.take(),
             want_ui_cursor,
