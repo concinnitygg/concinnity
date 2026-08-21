@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::math::IDENTITY4;
 use crate::directx::pipeline::{
@@ -252,13 +253,7 @@ fn create_gbuffer_pso(
     layout: &[D3D12_INPUT_ELEMENT_DESC],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -920,8 +915,7 @@ impl DxContext {
                 std::mem::size_of::<GBufferView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { gb.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&gb.view_ubo_resources[frame_idx]);
 
         let w = self.render_width;
         let h = self.render_height;
@@ -1214,15 +1208,12 @@ impl DxContext {
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
         let prefix = self.skinned_record_base();
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
 
         // Build this frame's previous-frame model buffer (static + skinned regions;
         // the instance region is init-written + immutable). Honours velocity_active.
         self.build_gbuffer_prev_models(frame_idx, velocity_active);
-        // SAFETY: a property query on a live resource; it only reads.
-        let prev_model_gva = unsafe { prev_model_res.GetGPUVirtualAddress() };
+        let prev_model_gva = com::gpu_va(prev_model_res);
 
         // Static + instance prefix: bind the static VB to BOTH vertex streams
         // (prev_pos == cur_pos) + the static u32 IB, then one `ExecuteIndirect`

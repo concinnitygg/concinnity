@@ -529,21 +529,12 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        let ptr = buf.mapped_ptr();
         // Instance region: the instances' current models (immutable, camera-only
         // motion). Written once into every frame buffer after the static prefix;
         // the per-frame fill rewrites only the static + skinned regions.
         if !instance_models.is_empty() {
             let stride = std::mem::size_of::<[[f32; 4]; 4]>();
-            // SAFETY: the buffer holds `n_cull >= n_objects + instance_models.len()`
-            // records, so writing past the `n_objects` offset stays in bounds.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    instance_models.as_ptr() as *const u8,
-                    ptr.add(n_objects * stride),
-                    std::mem::size_of_val(instance_models),
-                );
-            }
+            buf.write_slice(n_objects * stride, instance_models);
         }
         prev_model_buffers.push(buf);
     }
@@ -1318,17 +1309,7 @@ impl VkContext {
             prev_vp,
             view: self.view_matrix,
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `GBufferView`, so `mapped_ptr()` is a live mapping of at least
-        // `size_of::<GBufferView>()` bytes; the source is a separate live borrow, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const GBufferView as *const u8,
-                gb.view_ubo_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<GBufferView>(),
-            );
-        }
+        gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
         // Clears: alpha-0 normal+depth = "no geometry"; roughness 1.0 = no SSR;
         // velocity 0 = no motion.
@@ -1920,12 +1901,7 @@ impl VkContext {
         frame_idx: usize,
         velocity_active: bool,
     ) {
-        let Some(ptr) = self
-            .cull
-            .prev_model_buffers
-            .get(frame_idx)
-            .map(|b| b.mapped_ptr())
-        else {
+        let Some(buf) = self.cull.prev_model_buffers.get(frame_idx) else {
             return;
         };
         let stride = std::mem::size_of::<[[f32; 4]; 4]>();
@@ -1935,31 +1911,14 @@ impl VkContext {
             } else {
                 obj.model
             };
-            // SAFETY: the buffer was sized for `cull_count()` records and the loop
-            // is bounded by `take(n_objects)`, so `i * stride` is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add(i * stride),
-                    stride,
-                );
-            }
+            buf.write_val(i * stride, &prev);
         }
         // Streamed chunks: current model -> camera-only velocity (chunk terrain is
         // static-in-world; the unused reserve slots keep stale prev_models but their
         // draw-args are disabled, so the gbuffer never rasterises them).
         let chunk_base = self.chunk_record_base();
         self.for_each_chunk_record(|k, obj| {
-            let prev = obj.model;
-            // SAFETY: `for_each_chunk_record` caps `k < n_chunk`, so
-            // `chunk_base + k < skinned_record_base()`, in range for `cull_count()`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add((chunk_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((chunk_base + k) * stride, &obj.model);
         });
         let base = self.skinned_record_base();
         for (k, obj) in self
@@ -1971,17 +1930,7 @@ impl VkContext {
         {
             // Skinned motion is per-vertex (previous deformed buffer), so the model
             // matrix is the current one (cur == prev model, like the legacy path).
-            let prev = obj.model;
-            // SAFETY: the buffer reserved `n_skinned` records past
-            // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.n_skinned`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &prev as *const [[f32; 4]; 4] as *const u8,
-                    ptr.add((base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((base + k) * stride, &obj.model);
         }
     }
 }

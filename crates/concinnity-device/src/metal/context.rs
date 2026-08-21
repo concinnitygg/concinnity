@@ -1498,6 +1498,35 @@ pub(super) fn bytes_of_slice<T: bytemuck::NoUninit>(slice: &[T]) -> &[u8] {
     bytemuck::cast_slice(slice)
 }
 
+// Copy a `#[repr(C)]` slice into a shared-storage buffer at offset 0,
+// bounds-checked against the buffer length.
+pub(super) fn write_buffer_slice<T: Copy>(
+    buffer: &ProtocolObject<dyn MTLBuffer>,
+    data: &[T],
+) -> Result<(), String> {
+    let bytes = std::mem::size_of_val(data);
+    if bytes == 0 {
+        return Ok(());
+    }
+    let len = buffer.length();
+    if bytes > len {
+        return Err(format!(
+            "buffer write of {bytes} bytes exceeds buffer length {len}"
+        ));
+    }
+    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
+    // check above proved it holds `bytes`. `data` is a separate live borrow of exactly that
+    // many bytes (padding is copied, never inspected), so the ranges cannot overlap.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            data.as_ptr().cast::<u8>(),
+            buffer.contents().as_ptr().cast::<u8>(),
+            bytes,
+        );
+    }
+    Ok(())
+}
+
 // Copy `src` into a shared-storage buffer at `offset` bytes, bounds-checked
 // against the buffer length.
 pub(super) fn write_buffer_region(

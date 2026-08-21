@@ -348,14 +348,10 @@ impl VkContext {
             self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuObjectData>();
         let args_size =
             self.cull_count() * std::mem::size_of::<crate::gfx::render_types::GpuDrawArgs>();
-        // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at least the cull
-        // count's worth of records, so each mapped pointer covers the range being zeroed.
-        unsafe {
-            std::ptr::write_bytes(bake.object_buf.mapped_ptr(), 0, object_size);
-            std::ptr::write_bytes(bake.draw_args_buf.mapped_ptr(), 0, args_size);
-        }
-        self.build_object_records_into(bake.object_buf.mapped_ptr());
-        self.build_draw_args_records_into(bake.draw_args_buf.mapped_ptr(), eye);
+        bake.object_buf.zero_bytes(0, object_size);
+        bake.draw_args_buf.zero_bytes(0, args_size);
+        self.build_object_records_into(&bake.object_buf);
+        self.build_draw_args_records_into(&bake.draw_args_buf, eye);
 
         // Per-face view uniforms (the only per-face binding), all six filled once.
         // reflections_enabled stays 0: no resolve runs over a probe face, so the bake
@@ -376,14 +372,7 @@ impl VkContext {
                 shade_mode: 0.0,
                 _end_pad: 0.0,
             };
-            // SAFETY: each view UBO was sized for one ViewUniforms.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &view as *const ViewUniforms as *const u8,
-                    bake.view_bufs[face].mapped_ptr(),
-                    std::mem::size_of::<ViewUniforms>(),
-                );
-            }
+            bake.view_bufs[face].write_val(0, &view);
         }
 
         self.probe_rendering = Some(RenderingBake {
@@ -1493,10 +1482,7 @@ fn make_ubo_bytes(
         vk::BufferUsageFlags::UNIFORM_BUFFER,
         host,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.mapped_ptr(), bytes.len()) };
+    buf.write_bytes(0, bytes);
     Ok(buf)
 }
 

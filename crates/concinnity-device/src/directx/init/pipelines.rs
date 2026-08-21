@@ -19,6 +19,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtins;
+use crate::directx::com;
 use crate::directx::context::{FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader, compile_cull_shader_phase2,
@@ -1102,13 +1103,7 @@ fn create_main_pso_filled(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -1181,13 +1176,7 @@ pub(in crate::directx) fn create_shadow_pso(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),

@@ -386,36 +386,6 @@ impl RtFrameRing {
     }
 }
 
-// Copy a `#[repr(C)]` slice into a shared-storage GPU buffer at offset 0. The
-// ring's instance-descriptor and geometry-table slots are filled this way each
-// frame instead of being reallocated around a fresh upload.
-pub(super) fn write_slice<T: Copy>(
-    buffer: &ProtocolObject<dyn MTLBuffer>,
-    data: &[T],
-) -> Result<(), String> {
-    let bytes = std::mem::size_of_val(data);
-    if bytes == 0 {
-        return Ok(());
-    }
-    let len = buffer.length();
-    if bytes > len {
-        return Err(format!(
-            "RT upload of {bytes} bytes exceeds buffer length {len}"
-        ));
-    }
-    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
-    // check above proved it holds `bytes`. `data` is a separate live allocation of exactly that
-    // many bytes, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            data.as_ptr().cast::<u8>(),
-            buffer.contents().as_ptr().cast::<u8>(),
-            bytes,
-        );
-    }
-    Ok(())
-}
-
 fn shared_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     bytes: usize,

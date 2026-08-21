@@ -34,6 +34,7 @@ use crate::directx::allocator::{PooledBuffer, PooledTexture};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::*;
 
+use super::com;
 use super::context::*;
 use super::draw::*;
 use super::math::*;
@@ -1140,14 +1141,12 @@ impl DxContext {
         let index_buffer = upload_buffer(&alloc, idx_bytes_raw, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
 
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&vertex_buffer),
             SizeInBytes: vert_bytes_raw.len().max(4) as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&index_buffer),
             SizeInBytes: idx_bytes_raw.len().max(4) as u32,
             // Static IB is u32: the `indices: &[u32]` signature is honoured
             // end-to-end. A previous half-completed migration left this as

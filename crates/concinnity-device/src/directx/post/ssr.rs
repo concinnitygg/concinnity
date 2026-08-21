@@ -16,6 +16,7 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
 
+use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::gbuffer::GbufferResources;
@@ -227,13 +228,7 @@ fn create_ssr_resolve_pso(
     ps: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -642,9 +637,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
                 std::mem::size_of::<SsrParams>(),
             );
         }
-        let params_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.resolve.params_ubo_resources[self.frame_idx].GetGPUVirtualAddress() };
+        let params_gva = com::gpu_va(&self.resolve.params_ubo_resources[self.frame_idx]);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -661,7 +654,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
             cmd.SetGraphicsRootDescriptorTable(5, self.ctx.probe_cube_table_gpu());
             cmd.SetGraphicsRootConstantBufferView(
                 6,
-                self.ctx.probe_set_cbvs[self.frame_idx].GetGPUVirtualAddress(),
+                com::gpu_va(&self.ctx.probe_set_cbvs[self.frame_idx]),
             );
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,

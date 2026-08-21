@@ -130,12 +130,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), size as usize);
-    }
+    staging.write_bytes(0, data);
     let buf = alloc.create_buffer(size, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
     texture::one_shot_submit(device, command_pool, queue, |cmd| {
         let copy = vk::BufferCopy::default().size(size);

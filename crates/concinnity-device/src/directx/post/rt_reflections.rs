@@ -24,6 +24,7 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
+use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -192,13 +193,7 @@ fn create_rt_pso(
     ps: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -489,8 +484,7 @@ impl DxContext {
                 std::mem::size_of::<RtParams>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let params_gva = unsafe { rt.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let params_gva = com::gpu_va(&rt.params_ubo_resources[frame_idx]);
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
         // the GPU-cull bindless path populates; otherwise fall back to the
@@ -541,14 +535,8 @@ impl DxContext {
             // Root SRVs: TLAS / vertex / index / geometry table (by GPU virtual
             // address; inline ray tracing reads the TLAS through a root SRV).
             cmd.SetGraphicsRootShaderResourceView(1, accel.tlas_gva());
-            cmd.SetGraphicsRootShaderResourceView(
-                2,
-                self.geometry.vertex_buffer.GetGPUVirtualAddress(),
-            );
-            cmd.SetGraphicsRootShaderResourceView(
-                3,
-                self.geometry.index_buffer.GetGPUVirtualAddress(),
-            );
+            cmd.SetGraphicsRootShaderResourceView(2, com::gpu_va(&self.geometry.vertex_buffer));
+            cmd.SetGraphicsRootShaderResourceView(3, com::gpu_va(&self.geometry.index_buffer));
             cmd.SetGraphicsRootShaderResourceView(4, accel.geom_table_gva());
             // Texture tables.
             cmd.SetGraphicsRootDescriptorTable(5, self.hdr.srv_gpu);
@@ -571,10 +559,7 @@ impl DxContext {
             // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
             // so a probe-less world is byte-identical to before.
             cmd.SetGraphicsRootDescriptorTable(12, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(
-                13,
-                self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress(),
-            );
+            cmd.SetGraphicsRootConstantBufferView(13, com::gpu_va(&self.probe_set_cbvs[frame_idx]));
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

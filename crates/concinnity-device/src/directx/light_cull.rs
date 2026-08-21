@@ -9,6 +9,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -113,13 +114,7 @@ pub(in crate::directx) fn create_light_cull_pso(
     cs: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -196,15 +191,13 @@ impl DxContext {
         } else {
             CLUSTER_SLOT_UNCLUSTERED
         };
-        // SAFETY: a property query on a live resource; it only reads.
-        let base = unsafe { self.light_cull.params_resources[frame_idx].GetGPUVirtualAddress() };
+        let base = com::gpu_va(&self.light_cull.params_resources[frame_idx]);
         base + slot * CLUSTER_PARAMS_SLOT_STRIDE
     }
 
     // GPU virtual address of the per-cluster light-index buffer (root SRV).
     pub(in crate::directx) fn cluster_list_gva(&self) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.light_cull.cluster_buffer.GetGPUVirtualAddress() }
+        com::gpu_va(&self.light_cull.cluster_buffer)
     }
 
     // Write this frame's live `ClusterParams` into slot 0. Slot 1 (the
@@ -243,8 +236,7 @@ impl DxContext {
         };
         let cluster_buffer = &self.light_cull.cluster_buffer;
         let params_gva = self.cluster_params_gva(frame_idx, true);
-        // SAFETY: a property query on a live resource; it only reads.
-        let lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
+        let lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -253,7 +245,7 @@ impl DxContext {
             cmd.SetPipelineState(pso);
             cmd.SetComputeRootConstantBufferView(0, params_gva);
             cmd.SetComputeRootShaderResourceView(1, lights_gva);
-            cmd.SetComputeRootUnorderedAccessView(2, cluster_buffer.GetGPUVirtualAddress());
+            cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(cluster_buffer));
             // One thread per cluster, 64-wide threadgroups.
             cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
         }

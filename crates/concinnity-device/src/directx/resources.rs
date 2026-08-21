@@ -13,6 +13,7 @@ use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::*;
 
 use super::builtins;
+use super::com;
 use super::context::*;
 use super::init::pipelines::{create_main_instanced_root_signature, create_main_pso};
 use super::math::*;
@@ -144,13 +145,7 @@ fn create_skinned_pso_filled(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = skinned_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -220,13 +215,7 @@ fn create_skinned_shadow_pso(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = skinned_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -1160,14 +1149,12 @@ impl DxContext {
         })?;
 
         self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_len as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_len as u32,
             // Static IB is u32 (matches the `Format` chosen in init/mod.rs).
             Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
@@ -1474,14 +1461,12 @@ impl DxContext {
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { skinned_vertex_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&skinned_vertex_buffer),
             SizeInBytes: vtx_bytes.len() as u32,
             StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { skinned_index_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&skinned_index_buffer),
             SizeInBytes: idx_bytes.len() as u32,
             Format: DXGI_FORMAT_R16_UINT,
         };
@@ -1593,8 +1578,7 @@ impl DxContext {
                 let buf =
                     create_uav_buffer(&self.device, deformed_bytes, D3D12_RESOURCE_STATE_COMMON)?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
-                    // SAFETY: a property query on a live resource; it only reads.
-                    BufferLocation: unsafe { buf.GetGPUVirtualAddress() },
+                    BufferLocation: com::gpu_va(&buf),
                     SizeInBytes: deformed_bytes as u32,
                     StrideInBytes: stride as u32,
                 };
@@ -1876,8 +1860,7 @@ impl DxContext {
 
     // GPU virtual address of skinned object `i`'s joint buffer for `frame_idx`.
     pub(super) fn skinned_joint_gva(&self, frame_idx: usize, i: usize) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.skinned.joint_buffers[frame_idx][i].GetGPUVirtualAddress() }
+        com::gpu_va(&self.skinned.joint_buffers[frame_idx][i])
     }
 
     // Attach morph-target delta buffers to the skinned draw objects. `morphs[i]`
@@ -2012,8 +1995,7 @@ impl DxContext {
     // `frame_idx`, or `None` when no weight buffers are allocated.
     pub(super) fn morph_weight_gva(&self, frame_idx: usize, i: usize) -> Option<u64> {
         let buf = self.skinned.morph_weight_buffers.get(frame_idx)?.get(i)?;
-        // SAFETY: a property query on a live resource; it only reads.
-        Some(unsafe { buf.GetGPUVirtualAddress() })
+        Some(com::gpu_va(buf))
     }
 }
 

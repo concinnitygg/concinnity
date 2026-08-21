@@ -51,6 +51,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::assets::sdf_volume::SdfVolume;
+use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{
     compile_hlsl, main_input_layout, serialize_desc_and_create, shader_source,
@@ -321,13 +322,7 @@ fn create_raymarch_pso(
     let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
     rtv_formats[0] = HDR_FORMAT;
     let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -460,13 +455,7 @@ fn create_raymarch_volumetric_pso(
     let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
     rtv_formats[0] = HDR_FORMAT;
     let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -631,13 +620,7 @@ fn create_raymarch_shadow_pso(
     };
 
     let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -780,14 +763,12 @@ fn build_cube_buffers(
     }
 
     let vbv = D3D12_VERTEX_BUFFER_VIEW {
-        // SAFETY: a property query on a live resource; it only reads.
-        BufferLocation: unsafe { vb.GetGPUVirtualAddress() },
+        BufferLocation: com::gpu_va(&vb),
         SizeInBytes: vb_bytes as u32,
         StrideInBytes: std::mem::size_of::<Vertex>() as u32,
     };
     let ibv = D3D12_INDEX_BUFFER_VIEW {
-        // SAFETY: a property query on a live resource; it only reads.
-        BufferLocation: unsafe { ib.GetGPUVirtualAddress() },
+        BufferLocation: com::gpu_va(&ib),
         SizeInBytes: ib_bytes as u32,
         Format: DXGI_FORMAT_R16_UINT,
     };
@@ -1152,8 +1133,7 @@ impl RaymarchResources {
                 );
                 // Persistently mapped, never unmap.
             }
-            // SAFETY: a property query on a live resource; it only reads.
-            let gva = unsafe { cb.GetGPUVirtualAddress() };
+            let gva = com::gpu_va(&cb);
             volumes.push(RaymarchVolumeRecord {
                 pso,
                 shadow_pso,
@@ -1274,13 +1254,9 @@ impl DxContext {
                 std::mem::size_of::<RaymarchView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { rm.view_cbuffers[frame_idx].GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let light_gva = unsafe { self.uniforms.light_ubo.GetGPUVirtualAddress() };
-        let shadow_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.uniforms.shadow_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
+        let light_gva = com::gpu_va(&self.uniforms.light_ubo);
+        let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
         // State entering this pass (post-Main, post-AutoExposure):
         //   * hdr_color (MSAA):  RENDER_TARGET  (the Main pass resolved
@@ -1503,10 +1479,8 @@ impl DxContext {
                 std::mem::size_of::<RaymarchView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { rm.view_cbuffers[frame_idx].GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let light_gva = unsafe { self.uniforms.light_ubo.GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
+        let light_gva = com::gpu_va(&self.uniforms.light_ubo);
 
         let sm = self.shadow.map_size;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and

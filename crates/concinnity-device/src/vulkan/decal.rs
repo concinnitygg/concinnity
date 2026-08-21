@@ -718,12 +718,7 @@ fn upload_static_buffer(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), data.len());
-    }
+    staging.write_bytes(0, data);
     let buf = alloc.create_buffer(
         size,
         usage | vk::BufferUsageFlags::TRANSFER_DST,
@@ -804,16 +799,7 @@ impl VkContext {
             viewport: viewport_pix,
             _pad: [0.0; 2],
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `DecalView`, so `mapped_ptr()` is a live mapping of at least `size_of::<DecalView>()`
-        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const DecalView as *const u8,
-                decals.view_ubos[frame_idx].mapped_ptr(),
-                std::mem::size_of::<DecalView>(),
-            );
-        }
+        decals.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Upload per-decal params slots for every live record (visible or
         // not; easier to skip the visibility check here and pay one
@@ -829,20 +815,7 @@ impl VkContext {
                 tint: d.tint,
                 fade: [2.0, 0.0, 0.0, 0.0],
             };
-            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `DecalParams`, so `mapped_ptr()` is a live mapping of at least
-            // `size_of::<DecalParams>()` bytes; the source is a separate live borrow, so the ranges
-            // cannot overlap.
-            unsafe {
-                let dst = decals.params_ubos[frame_idx]
-                    .mapped_ptr()
-                    .add(i * PARAMS_STRIDE as usize);
-                std::ptr::copy_nonoverlapping(
-                    &params as *const DecalParams as *const u8,
-                    dst,
-                    std::mem::size_of::<DecalParams>(),
-                );
-            }
+            decals.params_ubos[frame_idx].write_val(i * PARAMS_STRIDE as usize, &params);
         }
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's sample:

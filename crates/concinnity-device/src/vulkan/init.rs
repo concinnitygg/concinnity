@@ -1060,7 +1060,7 @@ impl VkContext {
         };
         let shadow_uniforms = crate::gfx::csm::empty_shadow_uniforms();
         for ubo in &shadow_ubos {
-            upload_shadow_uniforms(ubo.mapped_ptr(), &shadow_uniforms);
+            upload_shadow_uniforms(ubo, &shadow_uniforms);
         }
         upload_light_uniforms(&light_ubo, &light_uniforms);
         // Empty scene keeps the 1-element placeholder (nothing copied in).
@@ -2738,22 +2738,8 @@ impl VkContext {
             let obj_stride = std::mem::size_of::<GpuObjectData>();
             let da_stride = std::mem::size_of::<GpuDrawArgs>();
             for (obj_buf, da_buf) in object_buffers.iter().zip(draw_args_buffers.iter()) {
-                let (obj_ptr, da_ptr) = (obj_buf.mapped_ptr(), da_buf.mapped_ptr());
-                // SAFETY: the buffers were sized for `n_objects + n_instances`
-                // records, so writing `records.len()` past the `n_objects` offset
-                // stays in bounds.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        records.as_ptr() as *const u8,
-                        obj_ptr.add(n_objects * obj_stride),
-                        records.len() * obj_stride,
-                    );
-                    std::ptr::copy_nonoverlapping(
-                        draw_args.as_ptr() as *const u8,
-                        da_ptr.add(n_objects * da_stride),
-                        draw_args.len() * da_stride,
-                    );
-                }
+                obj_buf.write_slice(n_objects * obj_stride, &records);
+                da_buf.write_slice(n_objects * da_stride, &draw_args);
             }
         }
 

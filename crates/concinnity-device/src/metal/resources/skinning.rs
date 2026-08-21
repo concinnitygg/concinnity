@@ -15,7 +15,9 @@ use objc2_metal::{
 
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::SkinnedDrawObject;
-use crate::metal::context::{HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region};
+use crate::metal::context::{
+    HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice,
+};
 use crate::metal::math::IDENTITY4;
 use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
@@ -28,23 +30,13 @@ fn upload_skinned_index_buffer(
     indices: &[u16],
     label: &str,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
-    let bytes = std::mem::size_of_val(indices);
     let buffer = device
         .newBufferWithLength_options(
             crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or_else(|| format!("{label}: failed to create skinned index buffer"))?;
-    // SAFETY: the buffer was just allocated at least `bytes` long with shared
-    // storage, so `contents()` is a valid CPU-visible mapping of that range, and
-    // the source slice is a distinct live allocation of exactly `bytes`.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            indices.as_ptr().cast::<u8>(),
-            buffer.contents().as_ptr().cast::<u8>(),
-            bytes,
-        );
-    }
+    write_buffer_slice(&buffer, indices).map_err(|e| format!("{label}: {e}"))?;
     Ok(buffer)
 }
 

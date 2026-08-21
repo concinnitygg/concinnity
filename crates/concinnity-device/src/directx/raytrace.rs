@@ -48,6 +48,7 @@ use crate::gfx::rt_topology::{GeomSig, plan_topology_refresh};
 pub(super) use crate::gfx::rt_geom::RtDynamicMode;
 
 use super::builtins;
+use super::com;
 use super::context::FRAMES;
 use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
 
@@ -430,13 +431,7 @@ fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPi
     let cs = builtins::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. `root_sig` outlives the synchronous
-        // pipeline-state creation (it is moved into `SkinPipeline` afterwards).
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(&root_sig) },
+        pRootSignature: com::borrowed(&root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -748,30 +743,26 @@ pub(super) struct RtAccelData {
 impl RtAccelData {
     // GPU virtual address of the TLAS (bound as a root SRV for inline tracing).
     pub(super) fn tlas_gva(&self) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.tlas.GetGPUVirtualAddress() }
+        com::gpu_va(&self.tlas)
     }
 
     // GPU virtual address of the geometry table (bound as a `StructuredBuffer`
     // root SRV).
     pub(super) fn geom_table_gva(&self) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.geom_table.GetGPUVirtualAddress() }
+        com::gpu_va(&self.geom_table)
     }
 
     // GPU virtual address of the deformed (posed) skinned vertex buffer (bound as
     // the trace's t8 root SRV). A valid 1-element dummy GVA when the scene has no
     // skinned geometry, so the binding is always live.
     pub(super) fn deformed_verts_gva(&self) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.deformed_verts.GetGPUVirtualAddress() }
+        com::gpu_va(&self.deformed_verts)
     }
 
     // GPU virtual address of the u16 skinned index buffer (bound as the trace's
     // t9 root SRV). A valid 1-element dummy GVA when there is no skinned geometry.
     pub(super) fn skinned_index_gva(&self) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.skinned_indices.GetGPUVirtualAddress() }
+        com::gpu_va(&self.skinned_indices)
     }
 
     // Attach the compute-skinning pipeline, built alongside the RT PSO (gated on
@@ -867,10 +858,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
         return Ok(None);
     }
 
-    // SAFETY: a property query on a live resource; it only reads.
-    let vbuf_gva = unsafe { vertex_buffer.GetGPUVirtualAddress() };
-    // SAFETY: a property query on a live resource; it only reads.
-    let ibuf_gva = unsafe { index_buffer.GetGPUVirtualAddress() };
+    let vbuf_gva = com::gpu_va(vertex_buffer);
+    let ibuf_gva = com::gpu_va(index_buffer);
 
     // One geometry desc per BLAS: participating objects first, then clusters.
     let mut geo_descs: Vec<D3D12_RAYTRACING_GEOMETRY_DESC> =
@@ -914,17 +903,17 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(object_indices.len());
     for (slot, &i) in object_indices.iter().enumerate() {
         let obj = &draw_objects[i];
-        // SAFETY: a property query on a live resource; it only reads.
-        instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
-            blas[slot].GetGPUVirtualAddress()
-        }));
+        instance_descs.push(instance_desc(
+            obj.model,
+            slot as u32,
+            com::gpu_va(&blas[slot]),
+        ));
         geom_entries.push(geom_entry(obj, albedo_count));
     }
     let mut cluster_instances: Vec<D3D12_RAYTRACING_INSTANCE_DESC> = Vec::new();
     let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
     for (ci, (_cluster_idx, c)) in cluster_list.iter().enumerate() {
-        // SAFETY: a property query on a live resource; it only reads.
-        let blas_gva = unsafe { blas[draw_blas_count + ci].GetGPUVirtualAddress() };
+        let blas_gva = com::gpu_va(&blas[draw_blas_count + ci]);
         for model in &c.instances {
             let id = (instance_descs.len() + cluster_instances.len()) as u32;
             cluster_instances.push(instance_desc(*model, id, blas_gva));
@@ -942,8 +931,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
     let tlas = create_as_buffer(device, tlas_pre.ResultDataMaxSizeInBytes)?;
     let scratch = create_scratch(device, max_scratch)?;
-    // SAFETY: a property query on a live resource; it only reads.
-    let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
+    let scratch_gva = com::gpu_va(&scratch);
 
     // Record every BLAS build (UAV-barrier-serialised over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
@@ -953,7 +941,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     record_builds(alloc, queue, |cmd4| unsafe {
         for (slot, geo) in geo_descs.iter().enumerate() {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: blas[slot].GetGPUVirtualAddress(),
+                DestAccelerationStructureData: com::gpu_va(&blas[slot]),
                 Inputs: blas_inputs(geo),
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
@@ -962,11 +950,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
             cmd4.ResourceBarrier(&[uav_barrier()]);
         }
         let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-            DestAccelerationStructureData: tlas.GetGPUVirtualAddress(),
-            Inputs: tlas_inputs(
-                instance_descs.len() as u32,
-                instance_buffer.GetGPUVirtualAddress(),
-            ),
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
             SourceAccelerationStructureData: 0,
             ScratchAccelerationStructureData: scratch_gva,
         };
@@ -1372,10 +1357,11 @@ impl RtAccelData {
         let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(instance_descs.capacity());
         for (slot, &idx) in new_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
-            // SAFETY: a property query on a live resource; it only reads.
-            instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
-                new_blas[slot].GetGPUVirtualAddress()
-            }));
+            instance_descs.push(instance_desc(
+                obj.model,
+                slot as u32,
+                com::gpu_va(&new_blas[slot]),
+            ));
             geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         instance_descs.extend_from_slice(&rebaked_clusters);
@@ -1387,8 +1373,7 @@ impl RtAccelData {
         // A single dedicated scratch covers every fresh BLAS build + the TLAS build;
         // retired below (the async builds keep reading it after this returns).
         let scratch = create_scratch(device, max_scratch.max(256))?;
-        // SAFETY: a property query on a live resource; it only reads.
-        let scratch_gva = unsafe { scratch.GetGPUVirtualAddress() };
+        let scratch_gva = com::gpu_va(&scratch);
 
         // Recycle the next static ring slot (last live a full cycle ago, so its
         // trace has retired), growing it to this refresh's sizes. The cursor advance
@@ -1432,7 +1417,7 @@ impl RtAccelData {
         unsafe {
             for (geo, dest) in &fresh_builds {
                 let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                    DestAccelerationStructureData: dest.GetGPUVirtualAddress(),
+                    DestAccelerationStructureData: com::gpu_va(dest),
                     Inputs: blas_inputs(geo),
                     SourceAccelerationStructureData: 0,
                     ScratchAccelerationStructureData: scratch_gva,
@@ -1441,11 +1426,8 @@ impl RtAccelData {
                 cmd.ResourceBarrier(&[uav_barrier()]);
             }
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: tlas.GetGPUVirtualAddress(),
-                Inputs: tlas_inputs(
-                    instance_descs.len() as u32,
-                    instance_buffer.GetGPUVirtualAddress(),
-                ),
+                DestAccelerationStructureData: com::gpu_va(&tlas),
+                Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
@@ -1510,10 +1492,11 @@ impl RtAccelData {
         geom_entries.clear();
         for (slot, &idx) in self.object_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
-            // SAFETY: a property query on a live resource; it only reads.
-            instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
-                self.blas[slot].GetGPUVirtualAddress()
-            }));
+            instance_descs.push(instance_desc(
+                obj.model,
+                slot as u32,
+                com::gpu_va(&self.blas[slot]),
+            ));
             geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         // Cluster instances keep their stored BLAS GVA + transform; only their
@@ -1560,15 +1543,10 @@ impl RtAccelData {
             .cast()
             .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (rebuild): {e}"))?;
         let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-            // SAFETY: a property query on a live resource; it only reads.
-            DestAccelerationStructureData: unsafe { tlas.GetGPUVirtualAddress() },
-            // SAFETY: a property query on a live resource; it only reads.
-            Inputs: tlas_inputs(instance_descs.len() as u32, unsafe {
-                instance_buffer.GetGPUVirtualAddress()
-            }),
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
             SourceAccelerationStructureData: 0,
-            // SAFETY: a property query on a live resource; it only reads.
-            ScratchAccelerationStructureData: unsafe { self.scratch.GetGPUVirtualAddress() },
+            ScratchAccelerationStructureData: com::gpu_va(&self.scratch),
         };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -1693,8 +1671,7 @@ impl RtAccelData {
             .deformed
             .clone()
             .expect("deformed vertex buffer was sized above");
-        // SAFETY: a property query on a live resource; it only reads.
-        let deformed_gva = unsafe { deformed_verts.GetGPUVirtualAddress() };
+        let deformed_gva = com::gpu_va(&deformed_verts);
 
         // A freshly (re)allocated buffer rests in COMMON; a reused one rests in
         // `read_state` from its previous rebuild. Either is a valid source for the
@@ -1732,8 +1709,7 @@ impl RtAccelData {
             let Some(joint) = skinned.joint_buffers.get(obj_idx) else {
                 continue;
             };
-            // SAFETY: a property query on a live resource; it only reads.
-            let joint_gva = unsafe { joint.GetGPUVirtualAddress() };
+            let joint_gva = com::gpu_va(joint);
             if joint_gva == 0 {
                 continue;
             }
@@ -1832,10 +1808,11 @@ impl RtAccelData {
         geom_entries.clear();
         for (slot, &idx) in self.object_indices.iter().enumerate() {
             let obj = &draw_objects[idx];
-            // SAFETY: a property query on a live resource; it only reads.
-            instance_descs.push(instance_desc(obj.model, slot as u32, unsafe {
-                self.blas[slot].GetGPUVirtualAddress()
-            }));
+            instance_descs.push(instance_desc(
+                obj.model,
+                slot as u32,
+                com::gpu_va(&self.blas[slot]),
+            ));
             geom_entries.push(geom_entry(obj, self.albedo_count));
         }
         instance_descs.extend_from_slice(&self.cluster_instances);
@@ -1843,8 +1820,7 @@ impl RtAccelData {
         for (si, &obj_idx) in skinned_objects.iter().enumerate() {
             let obj = &skinned.objects[obj_idx];
             let id = instance_descs.len() as u32;
-            // SAFETY: a property query on a live resource; it only reads.
-            let blas_gva = unsafe { ring.blas[si].0.GetGPUVirtualAddress() };
+            let blas_gva = com::gpu_va(&ring.blas[si].0);
             instance_descs.push(instance_desc(obj.model, id, blas_gva));
             // Albedo / normal resolve through the shared flat pool by the skinned
             // object's own material slots, like any static object.
@@ -1894,8 +1870,7 @@ impl RtAccelData {
             .scratch
             .clone()
             .expect("RT scratch buffer was sized above");
-        // SAFETY: a property query on a live resource; it only reads.
-        let scratch_gva = unsafe { scratch_buffer.GetGPUVirtualAddress() };
+        let scratch_gva = com::gpu_va(&scratch_buffer);
 
         // Settle build-or-refit last, once every fallible step above has passed:
         // recording a build the command list never gets would leave the slot
@@ -1911,7 +1886,7 @@ impl RtAccelData {
         // slice these commands name is live for the call.
         unsafe {
             for (si, geo) in skinned_geo.iter().enumerate() {
-                let dest = ring.blas[si].0.GetGPUVirtualAddress();
+                let dest = com::gpu_va(&ring.blas[si].0);
                 let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
                     DestAccelerationStructureData: dest,
                     Inputs: skinned_blas_inputs(geo, update),
@@ -1925,11 +1900,8 @@ impl RtAccelData {
                 cmd.ResourceBarrier(&[uav_barrier()]);
             }
             let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: tlas.GetGPUVirtualAddress(),
-                Inputs: tlas_inputs(
-                    instance_descs.len() as u32,
-                    instance_buffer.GetGPUVirtualAddress(),
-                ),
+                DestAccelerationStructureData: com::gpu_va(&tlas),
+                Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
@@ -1985,10 +1957,8 @@ impl super::context::DxContext {
         if self.skinned.draw_objects.is_empty() {
             return;
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let src_gva = unsafe { vb.GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let dst_gva = unsafe { deformed.GetGPUVirtualAddress() };
+        let src_gva = com::gpu_va(vb);
+        let dst_gva = com::gpu_va(deformed);
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -2022,8 +1992,7 @@ impl super::context::DxContext {
                 .morph_delta_buffers
                 .get(i)
                 .and_then(|b| b.as_ref())
-                // SAFETY: a property query on a live resource; it only reads.
-                .map(|b| unsafe { b.GetGPUVirtualAddress() })
+                .map(|b| com::gpu_va(b))
                 .unwrap_or(src_gva);
             let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
@@ -2097,10 +2066,8 @@ impl super::context::DxContext {
             self.skinned.index_buffer.as_ref(),
         ) {
             (Some(vb), Some(ib)) if !self.skinned.draw_objects.is_empty() => {
-                // SAFETY: a property query on a live resource; it only reads.
-                let vertex_gva = unsafe { vb.GetGPUVirtualAddress() };
-                // SAFETY: a property query on a live resource; it only reads.
-                let index_gva = unsafe { ib.GetGPUVirtualAddress() };
+                let vertex_gva = com::gpu_va(vb);
+                let index_gva = com::gpu_va(ib);
                 Some((vertex_gva, index_gva))
             }
             _ => None,

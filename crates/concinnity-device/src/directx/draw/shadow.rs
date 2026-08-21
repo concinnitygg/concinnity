@@ -22,6 +22,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 
+use crate::directx::com;
 use crate::directx::context::DxContext;
 
 // Root constants for the legacy shadow pass (80 bytes = 20 DWORDs): model matrix
@@ -195,9 +196,7 @@ impl DxContext {
         let n_cull = self.cull_count();
         let prefix = self.skinned_record_base();
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
 
         // Per-cascade GPU cull -> per-cascade indirect command regions. Runs as a
         // compute prologue in this (shadow) command list, before any render pass.

@@ -35,12 +35,7 @@ impl VkContext {
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
-        // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-        // which is at least the source length, so `mapped_ptr()` is a live mapping of that many
-        // bytes; the source is a separate live allocation, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), data.len());
-        }
+        staging.write_bytes(0, data);
         texture::one_shot_submit(
             &self.device,
             self.commands.command_pool,

@@ -25,6 +25,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -218,13 +219,7 @@ fn create_simulate_pso(
     cs: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -244,13 +239,7 @@ fn create_render_pso(
     ps: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -671,11 +660,8 @@ impl DxContext {
                 std::mem::size_of::<ParticleView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { resources.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
-        let params_base_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { resources.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&resources.view_ubo_resources[frame_idx]);
+        let params_base_gva = com::gpu_va(&resources.params_ubo_resources[frame_idx]);
         let budget_upload = &resources.budget_upload_resources[frame_idx];
 
         // Pass 1: take per-emitter spawn budgets, write the integer budget
@@ -743,10 +729,8 @@ impl DxContext {
 
             frame_data.push(Some(EmitterFrameData {
                 params_gva: params_base_gva + i as u64 * resources.params_stride,
-                // SAFETY: a property query on a live resource; it only reads.
-                pool_gva: unsafe { gpu.pool.GetGPUVirtualAddress() },
-                // SAFETY: a property query on a live resource; it only reads.
-                counter_gva: unsafe { gpu.spawn_counter.GetGPUVirtualAddress() },
+                pool_gva: com::gpu_va(&gpu.pool),
+                counter_gva: com::gpu_va(&gpu.spawn_counter),
             }));
         }
 

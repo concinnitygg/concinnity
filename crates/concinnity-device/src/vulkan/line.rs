@@ -674,21 +674,8 @@ impl VkContext {
             occluded_alpha: OCCLUDED_ALPHA,
             _pad: [0.0; 3],
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `LineView`, so `mapped_ptr()` is a live mapping of at least `size_of::<LineView>()`
-        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const LineView as *const u8,
-                lines.view_ubos[frame_idx].mapped_ptr(),
-                std::mem::size_of::<LineView>(),
-            );
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr() as *const u8,
-                slot.buffer.mapped_ptr(),
-                bytes as usize,
-            );
-        }
+        lines.view_ubos[frame_idx].write_val(0, &view_uni);
+        slot.buffer.write_slice(0, vertices);
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's occlusion
         // sample: the graph declares this pass's depth read and the executor emits

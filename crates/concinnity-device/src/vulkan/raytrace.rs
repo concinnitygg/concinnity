@@ -787,16 +787,7 @@ fn create_host_buffer<T: Copy>(
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     let buffer = pooled.buffer();
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            data.as_ptr() as *const u8,
-            pooled.mapped_ptr(),
-            std::mem::size_of_val(data),
-        );
-    }
+    pooled.write_slice(0, data);
     Ok(HostBuffer {
         buffer,
         pooled,
@@ -825,16 +816,7 @@ fn write_or_recreate_host<T: Copy>(
     if let Some(buf) = slot.as_ref()
         && buf.size >= needed
     {
-        // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-        // which is at least the source length, so `mapped_ptr()` is a live mapping of that many
-        // bytes; the source is a separate live allocation, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr() as *const u8,
-                buf.pooled.mapped_ptr(),
-                std::mem::size_of_val(data),
-            );
-        }
+        buf.pooled.write_slice(0, data);
         return Ok(());
     }
     let fresh = create_host_buffer(alloc, data, usage, label)?;

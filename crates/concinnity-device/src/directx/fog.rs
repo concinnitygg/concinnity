@@ -24,6 +24,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -275,13 +276,7 @@ fn create_fog_pso(
     ps: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -350,13 +345,7 @@ fn create_fog_froxel_pso(
     cs: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -721,11 +710,8 @@ impl DxContext {
                 std::mem::size_of::<FogFroxelParams>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let params_gva = unsafe { fog.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
-        let froxel_params_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let params_gva = com::gpu_va(&fog.params_ubo_resources[frame_idx]);
+        let froxel_params_gva = com::gpu_va(&fog.froxel_params_ubo_resources[frame_idx]);
 
         // The shadow map's cascade tap is a declared read of this pass, so the
         // Shadow consumer barrier's stage union already carries the non-pixel
@@ -780,11 +766,8 @@ impl DxContext {
 
         // `FogParams` / `FogFroxelParams` were uploaded by `encode_fog_froxel`
         // for this frame's slot, so we only read their GVAs here.
-        // SAFETY: a property query on a live resource; it only reads.
-        let params_gva = unsafe { fog.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
-        let froxel_params_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { fog.froxel_params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let params_gva = com::gpu_va(&fog.params_ubo_resources[frame_idx]);
+        let froxel_params_gva = com::gpu_va(&fog.froxel_params_ubo_resources[frame_idx]);
 
         // Main depth and the froxel volume are both graph resources, so both
         // transitions are already in place: the executor emits this pass's depth

@@ -58,7 +58,8 @@ use objc2_metal::{
     MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
 
-use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey, write_slice};
+use super::context::write_buffer_slice;
+use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
 use super::transient::RetirePool;
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
@@ -1767,8 +1768,8 @@ impl RtAccelData {
         // into the slot's upload buffers.
         let instance_buffer = slot.instances(device, std::mem::size_of_val(&instances[..]))?;
         let geom_table = slot.geom_table(device, std::mem::size_of_val(&geom[..]))?;
-        write_slice(&instance_buffer, instances)?;
-        write_slice(&geom_table, geom)?;
+        write_buffer_slice(&instance_buffer, instances)?;
+        write_buffer_slice(&geom_table, geom)?;
 
         // The TLAS descriptor pins the BLAS array, the instance buffer and the
         // instance count; while none of those change the cached one drives every

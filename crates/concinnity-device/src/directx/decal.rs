@@ -16,6 +16,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -195,13 +196,7 @@ fn create_decal_pso(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = decal_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -334,14 +329,12 @@ impl DecalResources {
         )?;
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&vertex_buffer),
             SizeInBytes: vbytes.len() as u32,
             StrideInBytes: 12,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&index_buffer),
             SizeInBytes: ibytes.len() as u32,
             Format: DXGI_FORMAT_R16_UINT,
         };
@@ -510,11 +503,8 @@ impl DxContext {
                 std::mem::size_of::<DecalView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { decals.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
-        let params_base_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { decals.params_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&decals.view_ubo_resources[frame_idx]);
+        let params_base_gva = com::gpu_va(&decals.params_ubo_resources[frame_idx]);
 
         // Main depth is already in a shader-resource state for the fragment's
         // sample: the graph declares this pass's depth read and the executor emits

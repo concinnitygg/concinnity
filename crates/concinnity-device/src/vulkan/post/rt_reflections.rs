@@ -1125,16 +1125,7 @@ impl VkContext {
             sun_color: self.fog_sun_color,
             prefilter_mip_count: self.prefilter_mip_count as f32,
         });
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `RtParams`, so `mapped_ptr()` is a live mapping of at least `size_of::<RtParams>()`
-        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &params as *const RtParams as *const u8,
-                rt.params_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<RtParams>(),
-            );
-        }
+        rt.params_buffers[frame_idx].write_val(0, &params);
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
         // the bindless static path populates; otherwise fall back to the

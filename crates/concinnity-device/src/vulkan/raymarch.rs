@@ -291,21 +291,8 @@ fn build_cube_buffers(alloc: &DeviceAllocator) -> Result<CubeBuffers, String> {
 
     let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
     let ib = alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            corners.as_ptr() as *const u8,
-            vb.mapped_ptr(),
-            vb_bytes as usize,
-        );
-        std::ptr::copy_nonoverlapping(
-            indices.as_ptr() as *const u8,
-            ib.mapped_ptr(),
-            ib_bytes as usize,
-        );
-    }
+    vb.write_slice(0, &corners);
+    ib.write_slice(0, &indices);
     Ok((vb, ib))
 }
 
@@ -1252,17 +1239,7 @@ impl RaymarchResources {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `RaymarchVolumeUniforms`, so `mapped_ptr()` is a live mapping of at least
-            // `size_of::<RaymarchVolumeUniforms>()` bytes; the source is a separate live borrow, so
-            // the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &uniforms as *const RaymarchVolumeUniforms as *const u8,
-                    volume_ubo.mapped_ptr(),
-                    std::mem::size_of::<RaymarchVolumeUniforms>(),
-                );
-            }
+            volume_ubo.write_val(0, &uniforms);
             let volume_set = alloc_sets(device, descriptor_pool, &[volume_set_layout])?[0];
             write_volume_set(device, volume_set, volume_ubo.buffer());
 
@@ -1460,7 +1437,7 @@ impl VkContext {
         if !rm.any_shadow_casters() {
             return;
         }
-        let Some(ptr) = rm.shadow_view_ubos.get(frame_idx).map(|b| b.mapped_ptr()) else {
+        let Some(ubo) = rm.shadow_view_ubos.get(frame_idx) else {
             return;
         };
         // Only `time` is read by the shadow shaders; the rest is inert padding.
@@ -1473,16 +1450,7 @@ impl VkContext {
             time: elapsed,
             prefilter_mip_count: 0.0,
         };
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `RaymarchView`, so the mapped pointer is a live mapping of at least that many bytes; the
-        // source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view as *const RaymarchView as *const u8,
-                ptr,
-                std::mem::size_of::<RaymarchView>(),
-            );
-        }
+        ubo.write_val(0, &view);
     }
 
     // Draw the visible SDF shadow casters into one CSM cascade. Called from the
@@ -1582,21 +1550,10 @@ impl VkContext {
         let snapshot = rm.snapshot.image;
 
         // Upload this frame's view.
-        let view_ptr = rm
-            .view_ubos
+        rm.view_ubos
             .get(frame_idx)
-            .map(|b| b.mapped_ptr())
-            .ok_or("raymarch: view_ubos index OOB")?;
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `RaymarchView`, so the mapped pointer is a live mapping of at least that many bytes; the
-        // source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                view as *const RaymarchView as *const u8,
-                view_ptr,
-                std::mem::size_of::<RaymarchView>(),
-            );
-        }
+            .ok_or("raymarch: view_ubos index OOB")?
+            .write_val(0, view);
 
         let color_aspect = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,

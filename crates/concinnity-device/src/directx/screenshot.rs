@@ -24,6 +24,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::gfx::hdr_output::HdrEncoding;
 use crate::gfx::image_decode::{self, PixelLayout};
 
+use super::com;
 use super::context::DxContext;
 use super::texture::{create_buffer, one_shot_submit, transition_barrier};
 
@@ -100,25 +101,17 @@ impl DxContext {
         // Copy the presented back-buffer into the readback buffer, bracketing
         // with PRESENT <-> COPY_SOURCE barriers so the buffer is left exactly as
         // the next present expects it. `one_shot_submit` fence-waits internally.
-        // `pResource` is borrowed (no AddRef) via `transmute_copy`: the field is
-        // a `ManuallyDrop`, so a `clone()` here would never be released and would
-        // leak one reference per screenshot. Leaking a back-buffer reference in
-        // particular would later block `ResizeBuffers`. `readback` / `back_buffer`
-        // outlive the synchronous `one_shot_submit` below, so the raw pointers
-        // stay valid.
+        // Leaking a back-buffer reference here would later block `ResizeBuffers`;
+        // `readback` / `back_buffer` outlive the synchronous `one_shot_submit`.
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&readback) },
+            pResource: com::borrowed(&readback),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&back_buffer) },
+            pResource: com::borrowed(&back_buffer),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,

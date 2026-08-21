@@ -209,17 +209,7 @@ impl VkContext {
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )?;
-                // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-                // `size`, which is at least the source length, so `mapped_ptr()` is a live mapping
-                // of that many bytes; the source is a separate live allocation, so the ranges
-                // cannot overlap.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        identity_seed.as_ptr() as *const u8,
-                        buf.mapped_ptr(),
-                        joint_buf_bytes as usize,
-                    );
-                }
+                buf.write_slice(0, &identity_seed);
                 bufs.push(buf);
             }
             let layouts: Vec<_> = (0..n).map(|_| joint_set_layout).collect();
@@ -474,20 +464,11 @@ impl VkContext {
             return;
         };
         for (i, mats) in self.skinned.joint_matrices.iter().enumerate() {
-            let Some(dst) = frame_bufs.get(i).map(|b| b.mapped_ptr()) else {
+            let Some(dst) = frame_bufs.get(i) else {
                 continue;
             };
             let count = mats.len().min(MAX_JOINTS);
-            // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `the params struct`, so the mapped pointer is a live mapping of at least that
-            // many bytes; the source is a separate live borrow, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    mats.as_ptr() as *const u8,
-                    dst,
-                    count * std::mem::size_of::<[[f32; 4]; 4]>(),
-                );
-            }
+            dst.write_slice(0, &mats[..count]);
         }
     }
 
@@ -553,10 +534,7 @@ impl VkContext {
                         vk::MemoryPropertyFlags::HOST_VISIBLE
                             | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )?;
-                    // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at
-                    // least the cull count's worth of records, so each mapped pointer covers the
-                    // range being zeroed.
-                    unsafe { std::ptr::write_bytes(buf.mapped_ptr(), 0, size as usize) };
+                    buf.zero_bytes(0, size as usize);
                     bufs.push(buf);
                 }
                 weight_buffers.push(bufs);
@@ -631,20 +609,10 @@ impl VkContext {
             return;
         };
         for (i, w) in self.skinned.morph_weights.iter().enumerate() {
-            let (Some(dst), false) = (frame_bufs.get(i).map(|b| b.mapped_ptr()), w.is_empty())
-            else {
+            let (Some(dst), false) = (frame_bufs.get(i), w.is_empty()) else {
                 continue;
             };
-            // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `f32`, so the mapped pointer is a live mapping of at least that many bytes;
-            // the source is a separate live borrow, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    w.as_ptr() as *const u8,
-                    dst,
-                    w.len() * std::mem::size_of::<f32>(),
-                );
-            }
+            dst.write_slice(0, w);
         }
     }
 

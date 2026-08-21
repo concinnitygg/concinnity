@@ -19,6 +19,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::builtins;
+use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::texture::transition_barrier;
@@ -165,13 +166,7 @@ pub(in crate::directx) fn create_cull_pso(
     cs: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -423,19 +418,13 @@ impl DxContext {
             .as_ref()
             .expect("encode_cull: cull_root_sig missing");
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        let draw_args_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
         // Per-object cull-status buffer (u1): always allocated alongside the
         // indirect buffer, always written, read by phase 2 under two-pass
         // occlusion (ignored under single-pass). Resting state is
         // `UNORDERED_ACCESS`, so it binds as a root UAV with no transition.
-        let cull_status_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.cull_status_buffers[frame_idx].GetGPUVirtualAddress() };
+        let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
         // Pack the six already-normalised frustum planes + the previous frame's
         // VP + Hi-Z metadata for the kernel. Hi-Z is gated on the per-context
@@ -495,7 +484,7 @@ impl DxContext {
             if let Some(srv) = hiz_srv {
                 cmd.SetComputeRootDescriptorTable(3, srv);
             }
-            cmd.SetComputeRootUnorderedAccessView(4, indirect.GetGPUVirtualAddress());
+            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             // One thread per build-time object, 64-wide threadgroups.
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
@@ -530,13 +519,9 @@ impl DxContext {
             .as_ref()
             .expect("encode_probe_cull: cull_root_sig missing");
         let indirect = &self.cull.indirect_cmd_buffers[slot];
-        // SAFETY: a property query on a live resource; it only reads.
-        let object_gva = unsafe { self.cull.object_buffer_resources[slot].GetGPUVirtualAddress() };
-        let draw_args_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.draw_args_buffer_resources[slot].GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let cull_status_gva = unsafe { self.cull.cull_status_buffers[slot].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[slot]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[slot]);
+        let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[slot]);
 
         // A Hi-Z SRV is still bound (the root signature's descriptor table at [3]
         // must point at a live descriptor) but `hiz_enabled = 0` makes the kernel
@@ -584,7 +569,7 @@ impl DxContext {
             if let Some(srv) = hiz_srv {
                 cmd.SetComputeRootDescriptorTable(3, srv);
             }
-            cmd.SetComputeRootUnorderedAccessView(4, indirect.GetGPUVirtualAddress());
+            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
             cmd.ResourceBarrier(&[transition_barrier(
@@ -634,16 +619,10 @@ impl DxContext {
             return;
         }
 
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        let draw_args_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let status_gva = unsafe { status.GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let base_gva = unsafe { indirect.GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
+        let status_gva = com::gpu_va(status);
+        let base_gva = com::gpu_va(indirect);
 
         // Hi-Z is disabled for the shadow cull (`hiz_enabled = 0`), so the kernel
         // never samples the pyramid; the descriptor table at root [3] still has to
@@ -769,14 +748,9 @@ impl DxContext {
         // the kernel's `n_cull` written commands always land within plane's region.
         debug_assert!(n_cull <= region_count);
 
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        let draw_args_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let base_gva = unsafe { indirect.GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
+        let base_gva = com::gpu_va(indirect);
 
         // Hi-Z disabled (`hiz_enabled = 0`): the kernel never samples the pyramid,
         // but the descriptor table at root [3] must still point at a live descriptor.
@@ -883,15 +857,9 @@ impl DxContext {
             return;
         }
 
-        let object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        let draw_args_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.draw_args_buffer_resources[frame_idx].GetGPUVirtualAddress() };
-        let cull_status_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.cull_status_buffers[frame_idx].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
+        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
+        let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
         // just rebuilt from this frame's depth. `hiz_enabled = 1`: HizBuild
@@ -932,7 +900,7 @@ impl DxContext {
             // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the
             // HizBuild node rewrote the texels in place).
             cmd.SetComputeRootDescriptorTable(3, hiz.srv_gpu);
-            cmd.SetComputeRootUnorderedAccessView(4, indirect.GetGPUVirtualAddress());
+            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
         }

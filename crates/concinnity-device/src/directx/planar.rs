@@ -30,6 +30,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use super::context::{DxContext, FRAMES, align256};
 use super::cull::INDIRECT_COMMAND_STRIDE;
 use super::draw::ViewUniforms;
@@ -213,8 +214,7 @@ impl PlanarReflectionSet {
             // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| format!("planar: map view cbv: {e}"))?;
-            // SAFETY: a property query on a live resource; it only reads.
-            view_gvas.push(unsafe { cbv.GetGPUVirtualAddress() });
+            view_gvas.push(com::gpu_va(&cbv));
             view_ptrs.push(ptr as *mut u8);
             view_cbvs.push(cbv);
         }
@@ -309,8 +309,7 @@ impl PlanarReflectionSet {
 
     // GPU address of this frame's never-read mirror-cull status scratch.
     fn status_gva(&self, frame: usize) -> u64 {
-        // SAFETY: a property query on a live resource; it only reads.
-        unsafe { self.planar_status[frame].GetGPUVirtualAddress() }
+        com::gpu_va(&self.planar_status[frame])
     }
 
     // Byte offset to plane `slot`'s region (of `n_cull` commands) in the indirect
@@ -477,9 +476,7 @@ impl DxContext {
 
         // Per plane: render the culled region from the reflected view into the
         // shared colour + depth (against the frame's object buffer), then resolve.
-        let frame_object_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.cull.object_buffer_resources[params.frame_idx].GetGPUVirtualAddress() };
+        let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
         let indirect = set.indirect(params.frame_idx);
         for slot in 0..set.plane_count() {
             let ring = slot * FRAMES + params.frame_idx;

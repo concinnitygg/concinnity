@@ -210,6 +210,93 @@ impl PooledBuffer {
         self.mapped
     }
 
+    // Byte length of the leased range backing this buffer: its aligned
+    // allocation size, at least the size requested at creation. 0 for `null()`.
+    pub(super) fn byte_len(&self) -> usize {
+        self._lease.as_ref().map_or(0, |l| l.size as usize)
+    }
+
+    // Assert the buffer is host-visible and `[offset, offset + len)` is within
+    // the leased range, then hand back the write cursor.
+    fn write_dst(&self, offset: usize, len: usize) -> *mut u8 {
+        assert!(
+            !self.mapped.is_null(),
+            "write into a buffer with no host mapping"
+        );
+        let cap = self.byte_len();
+        assert!(
+            offset.checked_add(len).is_some_and(|end| end <= cap),
+            "buffer write [{offset}, {}) exceeds mapped length {cap}",
+            offset.saturating_add(len),
+        );
+        // SAFETY: `offset <= cap` per the assert above, and the lease's mapping
+        // covers `cap` bytes, so the offset pointer stays in bounds.
+        unsafe { self.mapped.add(offset) }
+    }
+
+    // Copy `bytes` into the buffer at `offset` bytes. Panics if the buffer is
+    // not host-visible or the write does not fit the leased range.
+    pub(super) fn write_bytes(&self, offset: usize, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let dst = self.write_dst(offset, bytes.len());
+        // SAFETY: `write_dst` proved the destination holds `bytes.len()` bytes
+        // of this buffer's live mapping; `bytes` is a separate borrow, so the
+        // ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
+        }
+    }
+
+    // Copy `value`'s bytes into the buffer at `offset` bytes. Panics if the
+    // buffer is not host-visible or the write does not fit the leased range.
+    pub(super) fn write_val<T: Copy>(&self, offset: usize, value: &T) {
+        let len = size_of::<T>();
+        if len == 0 {
+            return;
+        }
+        let dst = self.write_dst(offset, len);
+        // SAFETY: `write_dst` proved the destination holds `size_of::<T>()`
+        // bytes of this buffer's live mapping, and `value` is a live borrow of
+        // exactly that many bytes (padding is copied, never inspected). The
+        // borrow is separate from the mapping, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping((value as *const T).cast::<u8>(), dst, len);
+        }
+    }
+
+    // Copy `values`' bytes into the buffer at `offset` bytes. Panics if the
+    // buffer is not host-visible or the write does not fit the leased range.
+    pub(super) fn write_slice<T: Copy>(&self, offset: usize, values: &[T]) {
+        let len = size_of_val(values);
+        if len == 0 {
+            return;
+        }
+        let dst = self.write_dst(offset, len);
+        // SAFETY: `write_dst` proved the destination holds `size_of_val(values)`
+        // bytes of this buffer's live mapping, and `values` is a live borrow of
+        // exactly that many bytes (padding is copied, never inspected). The
+        // borrow is separate from the mapping, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr().cast::<u8>(), dst, len);
+        }
+    }
+
+    // Zero `len` bytes of the buffer at `offset` bytes. Panics if the buffer
+    // is not host-visible or the range does not fit the leased range.
+    pub(super) fn zero_bytes(&self, offset: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let dst = self.write_dst(offset, len);
+        // SAFETY: `write_dst` proved the destination holds `len` bytes of this
+        // buffer's live mapping.
+        unsafe {
+            std::ptr::write_bytes(dst, 0, len);
+        }
+    }
+
     // A placeholder naming no buffer, for a slot filled before its real
     // resource exists. Dropping it is a no-op.
     pub(super) fn null() -> Self {
@@ -913,6 +1000,72 @@ mod tests {
         drop(a);
         drop(b);
         alloc.destroy();
+    }
+
+    #[test]
+    fn safe_writes_land_at_their_offsets() {
+        let Some(gpu) = test_gpu() else {
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let buffer = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert!(buffer.byte_len() >= 1024);
+
+        buffer.write_bytes(0, &[0x11, 0x22]);
+        buffer.write_val(4, &0x3344_5566_u32);
+        buffer.write_slice(8, &[0x77_u8, 0x88]);
+        buffer.write_bytes(2, &[]);
+        buffer.write_bytes(10, &[0xEE, 0xEE]);
+        buffer.zero_bytes(10, 2);
+        buffer.zero_bytes(12, 0);
+        // SAFETY: the buffer is HOST_VISIBLE | HOST_COHERENT, so its mapped
+        // pointer covers the 1024 requested bytes; every read is in range.
+        unsafe {
+            let p = buffer.mapped_ptr();
+            assert_eq!(*p, 0x11);
+            assert_eq!(*p.add(1), 0x22);
+            assert_eq!(
+                std::ptr::read_unaligned(p.add(4).cast::<u32>()),
+                0x3344_5566
+            );
+            assert_eq!(*p.add(8), 0x77);
+            assert_eq!(*p.add(9), 0x88);
+            assert_eq!(*p.add(10), 0);
+            assert_eq!(*p.add(11), 0);
+        }
+
+        drop(buffer);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn an_out_of_bounds_write_panics() {
+        let Some(gpu) = test_gpu() else {
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let buffer = alloc
+            .create_buffer(64, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let len = buffer.byte_len();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            buffer.write_bytes(len, &[0xFF]);
+        }));
+        assert!(result.is_err());
+        drop(buffer);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn writes_to_a_null_buffer_panic() {
+        let buffer = PooledBuffer::null();
+        assert_eq!(buffer.byte_len(), 0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            buffer.write_val(0, &1_u32);
+        }));
+        assert!(result.is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::LodSlice;
 
+use super::com;
 use super::context::DxContext;
 use super::texture::{create_buffer, one_shot_submit, transition_barrier};
 
@@ -339,14 +340,12 @@ impl DxContext {
             obj.lod_alternates = lods;
         }
         self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
         self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_bytes as u32,
             Format: DXGI_FORMAT_R32_UINT,
         };
@@ -662,14 +661,12 @@ impl DxContext {
             obj.index_count = i_count;
         }
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_vbuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
             StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            // SAFETY: a property query on a live resource; it only reads.
-            BufferLocation: unsafe { new_ibuf.GetGPUVirtualAddress() },
+            BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_bytes as u32,
             Format: DXGI_FORMAT_R16_UINT,
         };

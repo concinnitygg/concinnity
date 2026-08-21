@@ -158,30 +158,14 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
 // One-shot tightly packed upload of a record slice into a host-visible pooled
 // buffer.
 fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
-    let size = std::mem::size_of_val(records);
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
-    }
+    buffer.write_slice(0, records);
 }
 
 // As `upload_records`, but places record `i` at `i * stride` so each slot can
 // back its own uniform-buffer descriptor.
 fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
-    // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-    // `T`, so `mapped_ptr()` is a live mapping of at least `size_of::<T>()` bytes; the source is a
-    // separate live borrow, so the ranges cannot overlap.
-    unsafe {
-        let base = buffer.mapped_ptr();
-        for (i, r) in records.iter().enumerate() {
-            std::ptr::copy_nonoverlapping(
-                r as *const T as *const u8,
-                base.add(i * stride as usize),
-                size_of::<T>(),
-            );
-        }
+    for (i, r) in records.iter().enumerate() {
+        buffer.write_val(i * stride as usize, r);
     }
 }
 

@@ -14,6 +14,7 @@
 
 use crate::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 
+use super::com;
 use super::context::{DxContext, InstanceBucketLayout};
 
 impl DxContext {
@@ -156,8 +157,7 @@ impl DxContext {
                 continue;
             }
             let inst_buf = &self.instanced.upload_buffers[frame_idx][cluster_idx];
-            // SAFETY: a property query on a live resource; it only reads.
-            let inst_gva_base = unsafe { inst_buf.GetGPUVirtualAddress() };
+            let inst_gva_base = com::gpu_va(inst_buf);
 
             per_cluster(cluster_idx, cluster);
             for bucket in buckets.iter() {

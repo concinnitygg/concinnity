@@ -1008,21 +1008,8 @@ impl VkContext {
             z_far: fog_settings.max_distance,
             _pad: [0.0; 2],
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `FogParams`, so `mapped_ptr()` is a live mapping of at least `size_of::<FogParams>()`
-        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &params as *const FogParams as *const u8,
-                fog.params_ubos[frame_idx].mapped_ptr(),
-                std::mem::size_of::<FogParams>(),
-            );
-            std::ptr::copy_nonoverlapping(
-                &froxel_params as *const FogFroxelParams as *const u8,
-                fog.froxel_ubos[frame_idx].mapped_ptr(),
-                std::mem::size_of::<FogFroxelParams>(),
-            );
-        }
+        fog.params_ubos[frame_idx].write_val(0, &params);
+        fog.froxel_ubos[frame_idx].write_val(0, &froxel_params);
 
         // Both of this pass's transitions are graph-driven. The froxel volume's
         // SHADER_READ_ONLY -> GENERAL open comes from the FogFroxel producer

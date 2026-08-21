@@ -440,16 +440,7 @@ impl PlanarReflectionSet {
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let probeset_buf =
             alloc.create_buffer(probeset_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
-        // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-        // which is at least the source length, so `mapped_ptr()` is a live mapping of that many
-        // bytes; the source is a separate live allocation, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &empty as *const ProbeSet as *const u8,
-                probeset_buf.mapped_ptr(),
-                probeset_size as usize,
-            );
-        }
+        probeset_buf.write_val(0, &empty);
 
         // Per-(plane, frame) reflected-view UBO ring.
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
@@ -673,17 +664,7 @@ impl PlanarReflectionSet {
             let params_size = std::mem::size_of::<CullHizParams>() as u64;
             let ubo =
                 alloc.create_buffer(params_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
-            // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // `size`, which is at least the source length, so `mapped_ptr()` is a live mapping of
-            // that many bytes; the source is a separate live allocation, so the ranges cannot
-            // overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &params as *const CullHizParams as *const u8,
-                    ubo.mapped_ptr(),
-                    params_size as usize,
-                );
-            }
+            ubo.write_val(0, &params);
             let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&hiz_layout))?[0];
             let img = img_info(hiz_view, hiz_sampler);
             let ubo_info = buf_info(ubo.buffer(), params_size);
@@ -947,17 +928,7 @@ impl VkContext {
                 _end_pad: 0.0,
             };
             let ring = slot * set.frames + frame_idx;
-            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `ViewUniforms`, so `mapped_ptr()` is a live mapping of at least
-            // `size_of::<ViewUniforms>()` bytes; the source is a separate live borrow, so the
-            // ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &view as *const ViewUniforms as *const u8,
-                    set.view_bufs[ring].mapped_ptr(),
-                    std::mem::size_of::<ViewUniforms>(),
-                );
-            }
+            set.view_bufs[ring].write_val(0, &view);
             // Reflected-frustum cull (compute, outside any render pass) into this
             // plane's indirect, reading the frame's camera-independent object set so
             // geometry visible only in the reflection is captured. The oblique clip

@@ -129,17 +129,7 @@ impl UploadRing {
                 slot.capacity
             ));
         }
-        // SAFETY: the slot's buffer was created HOST_VISIBLE | HOST_COHERENT with `capacity` bytes
-        // so `mapped_ptr()` is a live mapping of that length, and the bounds check above proved
-        // `offset + bytes.len()` is within it. `bytes` is a separate borrow, so the ranges cannot
-        // overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                slot.buffer.mapped_ptr().add(offset as usize),
-                bytes.len(),
-            );
-        }
+        slot.buffer.write_bytes(offset as usize, bytes);
         slot.cursor = end;
         Ok((slot.buffer.buffer(), offset))
     }

@@ -598,16 +598,10 @@ fn upload_texture_levels_deferred(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        let ptr = staging.mapped_ptr();
-        let mut off = 0usize;
-        for m in levels {
-            std::ptr::copy_nonoverlapping(m.data.as_ptr(), ptr.add(off), m.data.len());
-            off += m.data.len();
-        }
+    let mut off = 0usize;
+    for m in levels {
+        staging.write_bytes(off, m.data);
+        off += m.data.len();
     }
 
     // Device-local image with the full mip chain.
@@ -782,12 +776,7 @@ pub(super) fn upload_color_lut(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.mapped_ptr(), needed);
-    }
+    staging.write_bytes(0, &data[..needed]);
 
     // Device-local 3D image. `create_image` is TYPE_2D only, so the LUT image
     // is built inline.
@@ -913,12 +902,7 @@ pub(super) fn upload_float_lut(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(texels.as_ptr(), staging.mapped_ptr() as *mut f32, needed);
-    }
+    staging.write_slice(0, &texels[..needed]);
 
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -1412,16 +1396,10 @@ fn create_cube_image(
         vk::BufferUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        let ptr = staging.mapped_ptr();
-        let mut off = 0usize;
-        for (m, bytes) in mip_bytes.iter().enumerate() {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(off), mip_sizes[m]);
-            off += mip_sizes[m];
-        }
+    let mut off = 0usize;
+    for (m, bytes) in mip_bytes.iter().enumerate() {
+        staging.write_bytes(off, &bytes[..mip_sizes[m]]);
+        off += mip_sizes[m];
     }
 
     // Transition all 6 layers / N mips to TRANSFER_DST, copy each face per mip,

@@ -19,6 +19,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::com;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
@@ -123,10 +124,7 @@ fn create_fullscreen_pso(
     ps: &[u8],
 ) -> Result<ID3D12PipelineState, String> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef (see the SSR PSO builder).
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),

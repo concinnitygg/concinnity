@@ -10,6 +10,7 @@
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::graph_exec::{FrameGpuBuffers, MainPassCamera};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
@@ -45,12 +46,12 @@ impl DxContext {
         unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 params.spot_buffer,
-                self.spot_shadow.buffer.GetGPUVirtualAddress(),
+                com::gpu_va(&self.spot_shadow.buffer),
             );
             cmd.SetGraphicsRootDescriptorTable(params.spot_table, self.spot_shadow.srv_gpu);
             cmd.SetGraphicsRootShaderResourceView(
                 params.area_buffer,
-                self.area_light.buffer.GetGPUVirtualAddress(),
+                com::gpu_va(&self.area_light.buffer),
             );
             cmd.SetGraphicsRootDescriptorTable(params.ltc_table, self.area_light.ltc_table_gpu);
         }
@@ -339,9 +340,7 @@ impl DxContext {
                 .as_ref()
                 .expect("cull command signature is live alongside the bindless PSO");
             let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
-            let object_gva =
-                // SAFETY: a property query on a live resource; it only reads.
-                unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+            let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
 
             // Main bindless pass: issue the GPU-culled command buffer. The b0
             // object-id root constant is set per command by the command
@@ -380,7 +379,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress(),
+                    com::gpu_va(&self.probe_set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: the static + instance prefix
                 // `[0, skinned_record_base())` against the static VB/IB (bound
@@ -628,9 +627,7 @@ impl DxContext {
                 let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
                 let bindless_pso =
                     self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
-                let object_gva =
-                    // SAFETY: a property query on a live resource; it only reads.
-                    unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+                let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
                 // SAFETY: the command list is in the recording state, and every resource,
                 // descriptor and slice these commands name is live for the call.
                 unsafe {
@@ -673,7 +670,7 @@ impl DxContext {
                     cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                     cmd.SetGraphicsRootConstantBufferView(
                         11,
-                        self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress(),
+                        com::gpu_va(&self.probe_set_cbvs[frame_idx]),
                     );
                     // ExecuteIndirect #2: skinned tail
                     // `[skinned_record_base(), cull_count())`, byte-offset into the
@@ -893,9 +890,7 @@ impl DxContext {
         ) && self.cull_count() > 0
         {
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
-            let object_gva =
-                // SAFETY: a property query on a live resource; it only reads.
-                unsafe { self.cull.object_buffer_resources[frame_idx].GetGPUVirtualAddress() };
+            let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -923,7 +918,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress(),
+                    com::gpu_va(&self.probe_set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: static + instance prefix against the static
                 // VB/IB (bound above), once per shader bucket.

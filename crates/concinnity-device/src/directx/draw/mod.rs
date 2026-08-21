@@ -18,6 +18,7 @@ use crate::gfx::render_types::{
     ShadowUniforms, TextDrawCall,
 };
 
+use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use super::math::{mat4_inverse, mat4_mul, perspective};
@@ -146,9 +147,7 @@ impl DxContext {
                 std::mem::size_of::<ShadowUniforms>(),
             );
         }
-        let shadow_ubo_gva =
-            // SAFETY: a property query on a live resource; it only reads.
-            unsafe { self.uniforms.shadow_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
         // Reflection-probe set (parallax boxes + live count) into this frame's ring
         // CBV; the bindless main pass binds it at root param [11]. A ring (one CBV per
@@ -433,14 +432,11 @@ impl DxContext {
             visible.extend_from_slice(&self.always_draw);
         }
 
-        // SAFETY: a property query on a live resource; it only reads.
-        let (view_gva, light_gva, local_lights_gva) = unsafe {
-            (
-                self.uniforms.view_ubo_resources[frame_idx].GetGPUVirtualAddress(),
-                self.uniforms.light_ubo.GetGPUVirtualAddress(),
-                self.uniforms.local_light_buffer.GetGPUVirtualAddress(),
-            )
-        };
+        let (view_gva, light_gva, local_lights_gva) = (
+            com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
+            com::gpu_va(&self.uniforms.light_ubo),
+            com::gpu_va(&self.uniforms.local_light_buffer),
+        );
 
         // Scene source for the bloom prefilter + the composite. Priority:
         //   1. FSR3 upscaler output (when temporal upscaling is on; the

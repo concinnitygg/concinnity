@@ -1040,21 +1040,8 @@ fn build_panel_buffers(
     let ib_bytes = std::mem::size_of_val(idxs.as_slice()) as u64;
     let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
     let ib = alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            packed.as_ptr() as *const u8,
-            vb.mapped_ptr(),
-            vb_bytes as usize,
-        );
-        std::ptr::copy_nonoverlapping(
-            idxs.as_ptr() as *const u8,
-            ib.mapped_ptr(),
-            ib_bytes as usize,
-        );
-    }
+    vb.write_slice(0, &packed);
+    ib.write_slice(0, &idxs);
     Ok((vb, ib, idxs.len() as u32))
 }
 
@@ -1292,17 +1279,7 @@ impl GlassResources {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `GlassParams`, so `mapped_ptr()` is a live mapping of at least
-            // `size_of::<GlassParams>()` bytes; the source is a separate live borrow, so the ranges
-            // cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &params as *const GlassParams as *const u8,
-                    params_ubo.mapped_ptr(),
-                    std::mem::size_of::<GlassParams>(),
-                );
-            }
+            params_ubo.write_val(0, &params);
             let planar_view = planar_slot
                 .and_then(|s| planar_target_views.get(s).copied())
                 .unwrap_or(snapshot.view);
@@ -1575,21 +1552,11 @@ impl VkContext {
         let snapshot = glass.snapshot.image;
 
         // Upload this frame's view UBO.
-        let view_ptr = glass
+        glass
             .view_ubos
             .get(frame_idx)
-            .map(|b| b.mapped_ptr())
-            .ok_or("glass: view_ubos index OOB")?;
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `TransparentView`, so the mapped pointer is a live mapping of at least that many bytes;
-        // the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                view as *const TransparentView as *const u8,
-                view_ptr,
-                std::mem::size_of::<TransparentView>(),
-            );
-        }
+            .ok_or("glass: view_ubos index OOB")?
+            .write_val(0, view);
 
         // Per-pixel RT reflection is selected over the probe / planar path when RT
         // is live (the scene TLAS is built) AND the glass RT pipelines compiled --
@@ -1631,17 +1598,7 @@ impl VkContext {
                 sun_color: self.fog_sun_color,
                 prefilter_mip_count: self.prefilter_mip_count as f32,
             });
-            // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to
-            // hold a `RtParams`, so `mapped_ptr()` is a live mapping of at least
-            // `size_of::<RtParams>()` bytes; the source is a separate live borrow, so the ranges
-            // cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &params as *const RtParams as *const u8,
-                    glass_rt.params_buffers[frame_idx].mapped_ptr(),
-                    std::mem::size_of::<RtParams>(),
-                );
-            }
+            glass_rt.params_buffers[frame_idx].write_val(0, &params);
         }
 
         let color_range = vk::ImageSubresourceRange {

@@ -18,6 +18,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use crate::assets::GlassPanel;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
@@ -368,13 +369,7 @@ fn create_glass_pso(
 ) -> Result<ID3D12PipelineState, String> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: vs.as_ptr() as _,
             BytecodeLength: vs.len(),
@@ -784,14 +779,12 @@ impl GlassResources {
             )?;
             let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
             let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-                // SAFETY: a property query on a live resource; it only reads.
-                BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
+                BufferLocation: com::gpu_va(&vertex_buffer),
                 SizeInBytes: vbytes.len() as u32,
                 StrideInBytes: std::mem::size_of::<Vertex>() as u32,
             };
             let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-                // SAFETY: a property query on a live resource; it only reads.
-                BufferLocation: unsafe { index_buffer.GetGPUVirtualAddress() },
+                BufferLocation: com::gpu_va(&index_buffer),
                 SizeInBytes: ibytes.len() as u32,
                 Format: DXGI_FORMAT_R16_UINT,
             };
@@ -822,8 +815,7 @@ impl GlassResources {
                 );
                 // Persistently mapped, never unmap.
             }
-            // SAFETY: a property query on a live resource; it only reads.
-            let params_cbuffer_gva = unsafe { params_cbuffer.GetGPUVirtualAddress() };
+            let params_cbuffer_gva = com::gpu_va(&params_cbuffer);
 
             records.push(GlassPanelRecord {
                 vertex_buffer,
@@ -949,8 +941,7 @@ impl DxContext {
                 std::mem::size_of::<TransparentView>(),
             );
         }
-        // SAFETY: a property query on a live resource; it only reads.
-        let view_gva = unsafe { glass.view_ubo_resources[frame_idx].GetGPUVirtualAddress() };
+        let view_gva = com::gpu_va(&glass.view_ubo_resources[frame_idx]);
 
         // Per-pixel RT reflection is selected over the probe/planar path when RT
         // is live (the scene TLAS is built) AND the RT glass pipelines compiled at
@@ -992,8 +983,7 @@ impl DxContext {
                     std::mem::size_of::<RtParams>(),
                 );
             }
-            // SAFETY: a property query on a live resource; it only reads.
-            Some(unsafe { glass.rt_params_ubo_resources[frame_idx].GetGPUVirtualAddress() })
+            Some(com::gpu_va(&glass.rt_params_ubo_resources[frame_idx]))
         } else {
             None
         };
@@ -1074,8 +1064,7 @@ impl DxContext {
         // and the per-frame ProbeSet CBV (b4). count == 0 keeps the sky / white rim.
         let prefilter_srv = self.prefilter_cube_srv_gpu();
         let probe_cube_srv = self.probe_cube_table_gpu();
-        // SAFETY: a property query on a live resource; it only reads.
-        let probe_set_gva = unsafe { self.probe_set_cbvs[frame_idx].GetGPUVirtualAddress() };
+        let probe_set_gva = com::gpu_va(&self.probe_set_cbvs[frame_idx]);
 
         if rt_live {
             // Sharp per-pixel RT trace. Bind the RT inputs once before the draw
@@ -1108,14 +1097,8 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(6, probe_set_gva);
                 cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva);
                 cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva());
-                cmd.SetGraphicsRootShaderResourceView(
-                    9,
-                    self.geometry.vertex_buffer.GetGPUVirtualAddress(),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    10,
-                    self.geometry.index_buffer.GetGPUVirtualAddress(),
-                );
+                cmd.SetGraphicsRootShaderResourceView(9, com::gpu_va(&self.geometry.vertex_buffer));
+                cmd.SetGraphicsRootShaderResourceView(10, com::gpu_va(&self.geometry.index_buffer));
                 cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva());
                 cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
                 cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());

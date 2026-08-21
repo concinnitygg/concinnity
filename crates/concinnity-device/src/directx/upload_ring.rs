@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::com;
 use crate::directx::texture::create_buffer;
 // Sub-range offset rounding, shared with the other backends' text uploads.
 pub(in crate::directx) use crate::gfx::fullscreen::align_up;
@@ -106,8 +107,7 @@ impl UploadRing {
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { buffer.Map(0, None, Some(&mut base)) }.map_err(|e| format!("upload map: {e}"))?;
-        // SAFETY: a property query on a live resource; it only reads.
-        let gpu_va = unsafe { buffer.GetGPUVirtualAddress() };
+        let gpu_va = com::gpu_va(&buffer);
         // Replacing `buffer` drops the old resource (and unmaps it); the frame
         // fence already proved the GPU finished reading it.
         slot.buffer = Some(buffer);

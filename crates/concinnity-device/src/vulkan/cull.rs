@@ -176,10 +176,8 @@ impl VkContext {
                 std::mem::size_of::<CullParams>(),
             )
         };
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `CullHizParams`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
-        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
-        // slice the commands name is live for the call.
+        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
+        // live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
@@ -202,11 +200,7 @@ impl VkContext {
                     hiz_mip_count: hiz.mip_count,
                     hiz_enabled: u32::from(self.cull.hiz_valid),
                 };
-                std::ptr::copy_nonoverlapping(
-                    &params as *const CullHizParams as *const u8,
-                    hiz.cull_ubos[frame_idx].mapped_ptr(),
-                    std::mem::size_of::<CullHizParams>(),
-                );
+                hiz.cull_ubos[frame_idx].write_val(0, &params);
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -376,17 +370,11 @@ impl VkContext {
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
         };
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `CullHizParams`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
-        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
-        // slice the commands name is live for the call.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &hiz_params as *const CullHizParams as *const u8,
-                hiz.cull_ubos2[frame_idx].mapped_ptr(),
-                std::mem::size_of::<CullHizParams>(),
-            );
+        hiz.cull_ubos2[frame_idx].write_val(0, &hiz_params);
 
+        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
+        // live for the call.
+        unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,

@@ -908,17 +908,7 @@ impl VkContext {
             cam_up,
             _pad1: 0.0,
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `ParticleView`, so `mapped_ptr()` is a live mapping of at least
-        // `size_of::<ParticleView>()` bytes; the source is a separate live borrow, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const ParticleView as *const u8,
-                resources.view_ubos[frame_idx].mapped_ptr(),
-                std::mem::size_of::<ParticleView>(),
-            );
-        }
+        resources.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Per-emitter spawn budget + ParticleParams pre-compute. Each
         // emitter advances its own fractional accumulator and we cache

@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
+use super::com;
 
 // GPU resource handle
 
@@ -454,27 +455,19 @@ fn upload_texture_levels_deferred(
 
     // Copy each mip subresource, then transition all subresources to shader-read.
     // The copy-location structs are created once and reused across the loop (only
-    // the footprint / subresource index changes). `pResource` borrows the upload /
-    // texture pointer without an AddRef: the field is a `ManuallyDrop`, so a
-    // `clone()` would never be released and would leak a reference to the transient
-    // upload buffer (a real memory leak) and the destination texture (a VRAM leak
-    // under streaming eviction) on every upload. Both outlive the recorded
-    // `CopyTextureRegion` calls (the upload buffer rides the returned in-flight
-    // handle until the GPU retires the copy).
+    // the footprint / subresource index changes). Both resources outlive the
+    // recorded `CopyTextureRegion` calls (the upload buffer rides the returned
+    // in-flight handle until the GPU retires the copy).
     let (allocator, cmd) = one_shot_submit_nowait(device, alloc.queue(), |cmd| {
         let mut src = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*upload) },
+            pResource: com::borrowed(&*upload),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layouts[0],
             },
         };
         let mut dst = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*texture) },
+            pResource: com::borrowed(&*texture),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -687,24 +680,16 @@ pub(super) fn create_fallback_shadow_array(
         upload.Unmap(0, None);
     }
 
-    // `pResource` borrows the upload / texture pointer without an AddRef: the
-    // field is a `ManuallyDrop`, so a `clone()` would never be released and would
-    // leak a reference to the transient upload buffer and the destination texture
-    // on every upload. Both outlive the synchronous `CopyTextureRegion` call.
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*upload) },
+            pResource: com::borrowed(&*upload),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            pResource: com::borrowed(&texture),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -1218,18 +1203,9 @@ pub(super) fn transition_barrier(
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
         Anonymous: D3D12_RESOURCE_BARRIER_0 {
             Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                // Borrow the resource pointer into the barrier without an
-                // AddRef. `pResource` is wrapped in `ManuallyDrop`, so a
-                // `clone()` here is never released and leaks one reference to
-                // the resource on every barrier; against the swapchain back
-                // buffers that accumulates until `ResizeBuffers` rejects the
-                // resize ("outstanding buffer references"). The caller's
-                // `&resource` outlives the `ResourceBarrier` call, so copying
-                // the raw pointer (no refcount change) is sound, and the
-                // `ManuallyDrop` guarantees it is never released.
-                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
-                // outlives the call, and the `ManuallyDrop` field never releases it.
-                pResource: unsafe { std::mem::transmute_copy(resource) },
+                // Leaked back-buffer references accumulate until `ResizeBuffers`
+                // rejects the resize ("outstanding buffer references").
+                pResource: com::borrowed(resource),
                 StateBefore: before,
                 StateAfter: after,
                 Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -1247,15 +1223,7 @@ pub(super) fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
         Anonymous: D3D12_RESOURCE_BARRIER_0 {
             UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
-                // SAFETY: `ID3D12Resource` is a transparent wrapper over its COM
-                // pointer, so `transmute_copy` yields that pointer and nothing
-                // else. It is borrowed rather than cloned because `pResource`
-                // sits in a `ManuallyDrop` that is never dropped: an AddRef here
-                // would leak one reference on every barrier. The caller's
-                // `&resource` outlives the `ResourceBarrier` call that consumes
-                // the returned struct, so the raw pointer stays valid. Same
-                // contract as `transition_barrier` above.
-                pResource: unsafe { std::mem::transmute_copy(resource) },
+                pResource: com::borrowed(resource),
             }),
         },
     }
@@ -1277,12 +1245,7 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
         Anonymous: D3D12_RESOURCE_BARRIER_0 {
             Aliasing: std::mem::ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
                 pResourceBefore: std::mem::ManuallyDrop::new(None),
-                // Borrow the resource pointer without an AddRef, same rationale
-                // as `transition_barrier`: the caller's `&after` outlives the
-                // `ResourceBarrier` call and the `ManuallyDrop` never releases it.
-                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
-                // outlives the call, and the `ManuallyDrop` field never releases it.
-                pResourceAfter: unsafe { std::mem::transmute_copy(after) },
+                pResourceAfter: com::borrowed(after),
             }),
         },
     }
@@ -1649,26 +1612,17 @@ fn upload_face_major_into_cube(
     // call.
     unsafe { upload.Unmap(0, None) };
 
-    // `pResource` borrows the upload / texture pointer without an AddRef: the
-    // field is a `ManuallyDrop`, so a `clone()` would never be released and would
-    // leak a reference to the transient upload buffer and the destination texture
-    // on every subresource copy. Both outlive the synchronous `CopyTextureRegion`
-    // calls (`texture` is borrowed from the caller).
     one_shot_submit(device, alloc.queue(), |cmd| {
         for subres in 0..num_subresources {
             let src = D3D12_TEXTURE_COPY_LOCATION {
-                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
-                // outlives the call, and the `ManuallyDrop` field never releases it.
-                pResource: unsafe { std::mem::transmute_copy(&*upload) },
+                pResource: com::borrowed(&*upload),
                 Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     PlacedFootprint: layouts[subres as usize],
                 },
             };
             let dst = D3D12_TEXTURE_COPY_LOCATION {
-                // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object
-                // outlives the call, and the `ManuallyDrop` field never releases it.
-                pResource: unsafe { std::mem::transmute_copy(texture) },
+                pResource: com::borrowed(texture),
                 Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                     SubresourceIndex: subres,
@@ -1815,25 +1769,17 @@ pub(super) fn upload_color_lut(
     // call.
     unsafe { upload.Unmap(0, None) };
 
-    // Copy upload → texture, then transition to shader-read. `pResource` borrows
-    // the upload / texture pointer without an AddRef: the field is a `ManuallyDrop`,
-    // so a `clone()` would never be released and would leak a reference to the
-    // transient upload buffer and the destination texture on every upload. Both
-    // outlive the synchronous `CopyTextureRegion` call.
+    // Copy upload → texture, then transition to shader-read.
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*upload) },
+            pResource: com::borrowed(&*upload),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*texture) },
+            pResource: com::borrowed(&*texture),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,
@@ -1954,22 +1900,16 @@ pub(super) fn upload_float_lut(
     // call.
     unsafe { upload.Unmap(0, None) };
 
-    // `pResource` borrows without an AddRef; both resources outlive the
-    // synchronous copy (see `upload_color_lut`).
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*upload) },
+            pResource: com::borrowed(&*upload),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
             },
         };
         let dst = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&*texture) },
+            pResource: com::borrowed(&*texture),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 SubresourceIndex: 0,

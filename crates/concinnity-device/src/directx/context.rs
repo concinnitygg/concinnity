@@ -16,6 +16,7 @@ use crate::gfx::render_types::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureResources;
+use super::com;
 use super::decal::*;
 use super::fog::*;
 use super::particle::{ParticleEmitterGpuState, ParticleResources};
@@ -569,8 +570,7 @@ impl SpotShadowState {
     // GPU address of slice `slice`'s baked `ShadowUniforms`.
     pub fn slice_ubo_gva(&self, slice: u32) -> u64 {
         debug_assert!(slice < self.count());
-        // SAFETY: a property query on a live resource; it only reads.
-        let base = unsafe { self.ubo.GetGPUVirtualAddress() };
+        let base = com::gpu_va(&self.ubo);
         base + slice as u64 * self.ubo_stride
     }
 }

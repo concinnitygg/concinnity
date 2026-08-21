@@ -61,22 +61,13 @@ impl VkContext {
             if cluster.instances.is_empty() {
                 continue;
             }
-            let upload_ptr = self.instanced.buffers[frame_idx][cluster_idx].mapped_ptr();
+            let upload = &self.instanced.buffers[frame_idx][cluster_idx];
             let buckets = cluster.lod_buckets(cam_pos);
             row.reserve(buckets.len());
             let mut prefix_instances: usize = 0;
             for bucket in buckets {
                 let count = bucket.instances.len();
-                // SAFETY: the per-cluster SSBO was sized at init for every
-                // instance the cluster declared; the bucket lengths sum to that
-                // count, so the bucket-ordered write stays in bounds.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bucket.instances.as_ptr() as *const u8,
-                        upload_ptr.add(prefix_instances * STRIDE),
-                        count * STRIDE,
-                    );
-                }
+                upload.write_slice(prefix_instances * STRIDE, &bucket.instances);
                 prefix_instances += count;
                 row.push(bucket);
             }

@@ -42,6 +42,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
+use super::com;
 use super::context::{DxContext, FRAMES};
 use super::texture::{
     HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
@@ -484,8 +485,7 @@ impl DxContext {
                     std::mem::size_of::<super::draw::ViewUniforms>(),
                 );
             }
-            // SAFETY: a property query on a live resource; it only reads.
-            view_gvas.push(unsafe { cbv.GetGPUVirtualAddress() });
+            view_gvas.push(com::gpu_va(&cbv));
             view_cbvs.push(cbv);
         }
 
@@ -613,8 +613,7 @@ impl DxContext {
             (bake.rtv, bake.dsv)
         };
         let indirect = &self.cull.indirect_cmd_buffers[slot];
-        // SAFETY: a property query on a live resource; it only reads.
-        let object_gva = unsafe { self.cull.object_buffer_resources[slot].GetGPUVirtualAddress() };
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[slot]);
         self.encode_main_into_face(
             &cmd,
             FaceTargets { rtv, dsv },
@@ -677,9 +676,7 @@ impl DxContext {
             .expect("probe bake targets are live while a bake is recording");
         let layout = bake.readback_layout;
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-            // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives
-            // the call, and the `ManuallyDrop` field never releases it.
-            pResource: unsafe { std::mem::transmute_copy(&bake.readbacks[face]) },
+            pResource: com::borrowed(&bake.readbacks[face]),
             Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                 PlacedFootprint: layout,
@@ -719,7 +716,7 @@ impl DxContext {
                     ),
                 ]);
                 let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: std::mem::transmute_copy(resolve),
+                    pResource: com::borrowed(resolve),
                     Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                     Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                         SubresourceIndex: 0,
@@ -742,7 +739,7 @@ impl DxContext {
                     D3D12_RESOURCE_STATE_COPY_SOURCE,
                 )]);
                 let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: std::mem::transmute_copy(&bake.color),
+                    pResource: com::borrowed(&bake.color),
                     Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                     Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
                         SubresourceIndex: 0,
@@ -906,8 +903,7 @@ impl DxContext {
             .cull_command_signature
             .as_ref()
             .expect("cull command signature is live alongside the bindless PSO");
-        // SAFETY: a property query on a live resource; it only reads.
-        let local_lights_gva = unsafe { self.uniforms.local_light_buffer.GetGPUVirtualAddress() };
+        let local_lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -971,10 +967,7 @@ impl DxContext {
             // ProbeSet (count 0), so a probe face samples only the sky, not other
             // probes, and never reads the live ProbeSet ring while it is rewritten.
             cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(
-                11,
-                self.probe_set_empty_cbv.GetGPUVirtualAddress(),
-            );
+            cmd.SetGraphicsRootConstantBufferView(11, com::gpu_va(&self.probe_set_empty_cbv));
             // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
             // omitted (not captured into the probe in V1).
             cmd.ExecuteIndirect(
@@ -1061,8 +1054,7 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuf
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
     }
-    // SAFETY: a property query on a live resource; it only reads.
-    let gva = unsafe { cbv.GetGPUVirtualAddress() };
+    let gva = com::gpu_va(&cbv);
     Ok((cbv, gva))
 }
 

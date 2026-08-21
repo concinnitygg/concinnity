@@ -66,24 +66,22 @@ impl VkContext {
     // for a normal-less draw). Rebuilt every frame so `update_model` /
     // `update_visibility` edits are reflected; a no-op when bindless is off.
     fn build_object_buffer(&self, frame_idx: usize) {
-        let Some(ptr) = self
-            .cull
-            .object_buffers
-            .get(frame_idx)
-            .map(|b| b.mapped_ptr())
-        else {
+        let Some(buf) = self.cull.object_buffers.get(frame_idx) else {
             return;
         };
-        self.build_object_records_into(ptr);
+        self.build_object_records_into(buf);
     }
 
     // Write the bindless `GpuObjectData` records (static + streamed-chunk +
-    // skinned-tail) into a mapped buffer at `ptr`. Factored out of
-    // `build_object_buffer` so the reflection-probe capture can build the same
-    // records into its own bake-owned buffer (the instance tail is left untouched,
-    // so a bake buffer must be zeroed first -- a zero record is a disabled draw the
-    // cull kernel skips, which is how the probe omits instanced geometry in V1).
-    pub(in crate::vulkan) fn build_object_records_into(&self, ptr: *mut u8) {
+    // skinned-tail) into `buf`. Factored out of `build_object_buffer` so the
+    // reflection-probe capture can build the same records into its own bake-owned
+    // buffer (the instance tail is left untouched, so a bake buffer must be zeroed
+    // first -- a zero record is a disabled draw the cull kernel skips, which is how
+    // the probe omits instanced geometry in V1).
+    pub(in crate::vulkan) fn build_object_records_into(
+        &self,
+        buf: &super::allocator::PooledBuffer,
+    ) {
         use crate::gfx::render_types::{
             GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
             pack_skinned_record,
@@ -94,16 +92,7 @@ impl VkContext {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            // SAFETY: the buffer was sized for `n_objects + n_instances + n_skinned`
-            // records (the instance tail is written once at init) and the loop is
-            // bounded by `take(n_objects)`, so `i * stride` is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuObjectData as *const u8,
-                    ptr.add(i * stride),
-                    stride,
-                );
-            }
+            buf.write_val(i * stride, &rec);
         }
 
         // Streamed chunks: one record each in the reserved region at
@@ -118,15 +107,7 @@ impl VkContext {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + n_chunk)` and
-            // `for_each_chunk_record` caps `k < n_chunk`, so the write is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuObjectData as *const u8,
-                    ptr.add((chunk_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((chunk_base + k) * stride, &rec);
         });
 
         // Skinned objects: one record each in the reserved tail at
@@ -146,16 +127,7 @@ impl VkContext {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_skinned_record(obj, albedo, normal);
-            // SAFETY: the buffer reserved `n_skinned` records past
-            // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.n_skinned`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuObjectData as *const u8,
-                    ptr.add((skinned_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((skinned_base + k) * stride, &rec);
         }
     }
 
@@ -168,24 +140,23 @@ impl VkContext {
     // picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `directx/cull.rs`.
     fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3]) {
-        let Some(ptr) = self
-            .cull
-            .draw_args_buffers
-            .get(frame_idx)
-            .map(|b| b.mapped_ptr())
-        else {
+        let Some(buf) = self.cull.draw_args_buffers.get(frame_idx) else {
             return;
         };
-        self.build_draw_args_records_into(ptr, cam_pos);
+        self.build_draw_args_records_into(buf, cam_pos);
     }
 
     // Write the GPU-cull `GpuDrawArgs` records (static + streamed-chunk +
     // skinned-tail, the per-object active-LOD slice picked by distance from
-    // `cam_pos`) into a mapped buffer at `ptr`. Factored out of
-    // `build_draw_args_buffer` so the reflection-probe capture can build the same
-    // args into its own bake-owned buffer against the probe eye. The instance tail
-    // is left untouched (a zeroed bake buffer keeps it disabled = skipped).
-    pub(in crate::vulkan) fn build_draw_args_records_into(&self, ptr: *mut u8, cam_pos: [f32; 3]) {
+    // `cam_pos`) into `buf`. Factored out of `build_draw_args_buffer` so the
+    // reflection-probe capture can build the same args into its own bake-owned
+    // buffer against the probe eye. The instance tail is left untouched (a zeroed
+    // bake buffer keeps it disabled = skipped).
+    pub(in crate::vulkan) fn build_draw_args_records_into(
+        &self,
+        buf: &super::allocator::PooledBuffer,
+        cam_pos: [f32; 3],
+    ) {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let stride = std::mem::size_of::<GpuDrawArgs>();
         for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
@@ -202,16 +173,7 @@ impl VkContext {
                 flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(obj.shader_bucket),
             };
-            // SAFETY: the buffer was sized for `n_objects + n_instances + n_skinned`
-            // records (the instance tail is written once at init) and the loop is
-            // bounded by `take(n_objects)`, so `i * stride` is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add(i * stride),
-                    stride,
-                );
-            }
+            buf.write_val(i * stride, &rec);
         }
 
         // Streamed chunks: one draw-arg each in the reserved region at
@@ -231,15 +193,7 @@ impl VkContext {
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
             };
-            // SAFETY: `for_each_chunk_record` caps `k < n_chunk`, so
-            // `chunk_base + k < skinned_record_base()`, in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add((chunk_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((chunk_base + k) * stride, &rec);
         });
         // Disable the unused chunk reserve tail so vacated / never-used slots draw
         // nothing (the cull kernel skips `objects[i]` for an ENABLED-clear record).
@@ -250,14 +204,7 @@ impl VkContext {
             flags: 0,
         };
         for k in n_resident_chunks..self.n_chunk {
-            // SAFETY: `k < n_chunk`, so `chunk_base + k < skinned_record_base()`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &disabled as *const GpuDrawArgs as *const u8,
-                    ptr.add((chunk_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((chunk_base + k) * stride, &disabled);
         }
 
         // Skinned objects: one record each in the reserved tail. The main pass's
@@ -282,16 +229,7 @@ impl VkContext {
                 base_vertex: 0,
                 flags: draw_args_flags(obj.visible, true, true),
             };
-            // SAFETY: the buffers reserved `n_skinned` records past
-            // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.n_skinned`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add((skinned_base + k) * stride),
-                    stride,
-                );
-            }
+            buf.write_val((skinned_base + k) * stride, &rec);
         }
     }
 
@@ -428,10 +366,7 @@ impl VkContext {
                     self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
             }
-            upload_shadow_uniforms(
-                self.shadow.ubos[frame_idx].mapped_ptr(),
-                &self.shadow.uniforms,
-            );
+            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &self.shadow.uniforms);
         }
 
         // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
@@ -666,31 +601,12 @@ impl VkContext {
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
         };
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `ViewUniforms`, so `mapped_ptr()` is a live mapping of at least
-        // `size_of::<ViewUniforms>()` bytes; the source is a separate live borrow, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &view_uni as *const ViewUniforms as *const u8,
-                self.uniforms.view_ubo_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<ViewUniforms>(),
-            );
-        }
+        self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
         // Reflection-probe set (global set 0 binding 7): EMPTY (count 0 = sky
         // reflection) until a probe bakes, so the forward shader keeps the sky
         // path. Uploaded every frame so a later install is picked up immediately.
-        // SAFETY: the destination buffer was created HOST_VISIBLE | HOST_COHERENT and sized to hold
-        // a `ProbeSet`, so `mapped_ptr()` is a live mapping of at least `size_of::<ProbeSet>()`
-        // bytes; the source is a separate live borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
-                self.uniforms.probe_set_ubo_buffers[frame_idx].mapped_ptr(),
-                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
-            );
-        }
+        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe_set);
 
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
 
@@ -861,18 +777,10 @@ impl VkContext {
 }
 
 // Helper: write ShadowUniforms into one persistently-mapped slot of the
-// per-frame-in-flight ring. `ptr` must be that slot's mapping, which is at least
-// `size_of::<ShadowUniforms>()` bytes and HOST_COHERENT.
-pub(super) fn upload_shadow_uniforms(ptr: *mut u8, su: &ShadowUniforms) {
-    // SAFETY: `ptr` maps a HOST_COHERENT allocation of exactly this size, and
-    // the ring slot belongs to a frame whose fence the caller already waited.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            su as *const ShadowUniforms as *const u8,
-            ptr,
-            std::mem::size_of::<ShadowUniforms>(),
-        );
-    }
+// per-frame-in-flight ring. The slot belongs to a frame whose fence the caller
+// already waited.
+pub(super) fn upload_shadow_uniforms(ubo: &super::allocator::PooledBuffer, su: &ShadowUniforms) {
+    ubo.write_val(0, su);
 }
 
 // Helper: upload LightUniforms to the shared light UBO.
@@ -880,17 +788,7 @@ pub(super) fn upload_light_uniforms(
     light_ubo: &super::allocator::PooledBuffer,
     lu: &LightUniforms,
 ) {
-    let size = std::mem::size_of::<LightUniforms>();
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            lu as *const LightUniforms as *const u8,
-            light_ubo.mapped_ptr(),
-            size,
-        );
-    }
+    light_ubo.write_val(0, lu);
 }
 
 // Helper: one-shot upload of the per-scene local lights into the static SSBO.
@@ -904,11 +802,5 @@ pub(super) fn upload_static_records<T: Copy>(
     if records.is_empty() {
         return;
     }
-    let size = std::mem::size_of_val(records);
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, buffer.mapped_ptr(), size);
-    }
+    buffer.write_slice(0, records);
 }

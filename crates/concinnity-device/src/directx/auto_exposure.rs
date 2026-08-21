@@ -12,6 +12,7 @@
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::com;
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 
 use crate::directx::context::{DxContext, FRAMES};
@@ -283,13 +284,7 @@ pub(in crate::directx) fn create_compute_pso(
     label: &str,
 ) -> Result<ID3D12PipelineState, String> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        // Borrow the root signature without an AddRef. `pRootSignature` is a
-        // `ManuallyDrop`, so a `clone()` here is never released and leaks one
-        // reference per PSO creation. The caller's `&root_sig` outlives the
-        // synchronous pipeline-state creation, so copying the raw pointer is sound.
-        // SAFETY: a raw pointer copy with no refcount change; the borrowed COM object outlives the
-        // call, and the `ManuallyDrop` field never releases it.
-        pRootSignature: unsafe { std::mem::transmute_copy(root_sig) },
+        pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: cs.as_ptr() as _,
             BytecodeLength: cs.len(),
@@ -405,10 +400,8 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[to_compute]) };
 
-        // SAFETY: a property query on a live resource; it only reads.
-        let histogram_gva = unsafe { resources.histogram.GetGPUVirtualAddress() };
-        // SAFETY: a property query on a live resource; it only reads.
-        let output_gva = unsafe { resources.output_buf.GetGPUVirtualAddress() };
+        let histogram_gva = com::gpu_va(&resources.histogram);
+        let output_gva = com::gpu_va(&resources.output_buf);
 
         // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
