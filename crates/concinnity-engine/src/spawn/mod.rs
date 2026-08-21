@@ -155,7 +155,7 @@ impl SpawnSystem {
         // (timed despawns + cadence spawns below) truly pauses.
         if !menu_active {
             let expired = template::tick_lifetimes(ctx, dt);
-            for entity in expired {
+            for &entity in expired.iter() {
                 despawn::despawn_subtree(ctx, ops, slots, entity);
             }
         }
@@ -221,11 +221,11 @@ impl SpawnSystem {
         // its draw_objects, so steady spawn/despawn churn does not leak
         // slots. After the despawn / reparent drains so a spawn can reuse
         // slots freed this same frame.
-        let spawn_reqs: Vec<SpawnRequest> = match ctx.events::<SpawnRequest>() {
-            Some(events) => events.read(&mut self.spawn_cmd_cursor).copied().collect(),
-            None => Vec::new(),
+        let spawn_reqs = match ctx.events::<SpawnRequest>() {
+            Some(events) => frame.collect(events.read(&mut self.spawn_cmd_cursor).copied()),
+            None => frame.collect([]),
         };
-        for req in spawn_reqs {
+        for &req in spawn_reqs.iter() {
             let Some(template) = resolve_name(ctx, req.template) else {
                 continue;
             };
@@ -261,11 +261,11 @@ impl SpawnSystem {
         // while a menu is open so spawner clocks do not advance behind
         // the pause.
         let due_spawns = if menu_active {
-            Vec::new()
+            frame.collect([])
         } else {
             template::tick_spawners(ctx, dt)
         };
-        for due in due_spawns {
+        for &due in due_spawns.iter() {
             let Some(template) = resolve_name(ctx, due.template) else {
                 continue;
             };

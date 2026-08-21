@@ -96,7 +96,12 @@ fn camera_text(pose: Option<([f32; 3], f32, f32)>) -> String {
 // independently -- a missing `ThreadBudget` / `MemoryBudget` resource (the
 // editor's in-memory preview) or an unavailable RSS query renders `--` rather
 // than a stale or zeroed figure -- so the chip stays informative in any context.
-fn sys_text(threads: Option<(usize, usize)>, rss: Option<u64>, budget_mib: Option<u64>) -> String {
+fn sys_text(
+    threads: Option<(usize, usize)>,
+    rss: Option<u64>,
+    budget_mib: Option<u64>,
+    frame_allocs: Option<u32>,
+) -> String {
     let threads_part = match threads {
         Some((job, cores)) => format!("threads {job}/{cores}"),
         None => "threads --".to_string(),
@@ -106,7 +111,12 @@ fn sys_text(threads: Option<(usize, usize)>, rss: Option<u64>, budget_mib: Optio
         (Some(rss), None) => format!("mem {} MB", rss / (1024 * 1024)),
         (None, _) => "mem -- MB".to_string(),
     };
-    format!("{threads_part} | {mem_part}")
+    // Sampled only in dev builds; the segment vanishes rather than showing a
+    // meaningless zero elsewhere.
+    match frame_allocs {
+        Some(allocs) => format!("{threads_part} | {mem_part} | alloc {allocs}/f"),
+        None => format!("{threads_part} | {mem_part}"),
+    }
 }
 
 /// Draws the developer debug HUD: a multi-line `PASSES` chip listing the top
@@ -234,6 +244,9 @@ impl System for DebugHudSystem {
             self.last_rss_sample = Some(now);
         }
         let rss = self.rss;
+        // Whole-frame allocation count from the frame loop's dev-build
+        // sampling; `None` (and no HUD segment) in release builds.
+        let frame_allocs = ctx.profile.frame_allocs();
 
         Self::write_chip(ctx, self.passes_label, passes_text(&self.pass_times));
         Self::write_chip(
@@ -242,7 +255,11 @@ impl System for DebugHudSystem {
             mouse_text(self.mouse_pos.0, self.mouse_pos.1),
         );
         Self::write_chip(ctx, self.camera_label, camera_text(self.camera_pose));
-        Self::write_chip(ctx, self.sys_label, sys_text(threads, rss, budget_mib));
+        Self::write_chip(
+            ctx,
+            self.sys_label,
+            sys_text(threads, rss, budget_mib, frame_allocs),
+        );
         StepResult::Continue
     }
 }
@@ -356,7 +373,7 @@ mod tests {
         // Both budgets and the RSS present: the full "threads j/c | mem u/b MB"
         // line, memory truncated to whole MiB.
         assert_eq!(
-            sys_text(Some((11, 12)), Some(512 * 1024 * 1024), Some(16384)),
+            sys_text(Some((11, 12)), Some(512 * 1024 * 1024), Some(16384), None),
             "threads 11/12 | mem 512/16384 MB"
         );
     }
@@ -366,22 +383,31 @@ mod tests {
         // No ThreadBudget: the thread half reads `--`; the memory half still
         // renders from the RSS + budget.
         assert_eq!(
-            sys_text(None, Some(256 * 1024 * 1024), Some(8192)),
+            sys_text(None, Some(256 * 1024 * 1024), Some(8192), None),
             "threads -- | mem 256/8192 MB"
         );
         // No budget resource: the memory half drops the "/ budget" tail.
         assert_eq!(
-            sys_text(Some((3, 4)), Some(256 * 1024 * 1024), None),
+            sys_text(Some((3, 4)), Some(256 * 1024 * 1024), None, None),
             "threads 3/4 | mem 256 MB"
         );
         // No RSS query: the memory half reads `--`.
         assert_eq!(
-            sys_text(Some((3, 4)), None, Some(8192)),
+            sys_text(Some((3, 4)), None, Some(8192), None),
             "threads 3/4 | mem -- MB"
         );
         // Nothing available (the editor's in-memory preview on an unsupported
         // target): a fully placeholdered line, never a panic.
-        assert_eq!(sys_text(None, None, None), "threads -- | mem -- MB");
+        assert_eq!(sys_text(None, None, None, None), "threads -- | mem -- MB");
+    }
+
+    #[test]
+    fn sys_text_appends_frame_allocs_only_when_sampled() {
+        // A dev-build frame loop supplies the count; the segment appends.
+        assert_eq!(
+            sys_text(Some((3, 4)), Some(256 * 1024 * 1024), Some(8192), Some(29)),
+            "threads 3/4 | mem 256/8192 MB | alloc 29/f"
+        );
     }
 
     // A DebugHud component spawns the internal debug-HUD system.

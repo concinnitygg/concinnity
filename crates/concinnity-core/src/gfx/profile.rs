@@ -106,6 +106,16 @@ pub struct FrameProfile {
     last: Vec<(&'static str, u32)>,
     // Accumulator for the frame currently in progress.
     current: Vec<(&'static str, u32)>,
+    // Heap allocations counted during each system's step, rotated with the
+    // timings. Sampled by the frame loop in dev builds only; empty otherwise.
+    // The counters are process-wide, so a delta includes what other threads
+    // (streaming workers, the pipelined render half) allocated meanwhile --
+    // attribution is approximate, the frame total is exact churn.
+    last_allocs: Vec<(&'static str, u32)>,
+    current_allocs: Vec<(&'static str, u32)>,
+    // Heap allocations counted across the whole most recent frame. `None` in
+    // release builds and in binaries without the tracking allocator.
+    frame_allocs: Option<u32>,
     // Render-backend stats for the most recent drawn frame. Left at the
     // default when no graphics backend is running.
     pub render: RenderStats,
@@ -118,6 +128,8 @@ impl FrameProfile {
     pub fn begin_frame(&mut self) {
         core::mem::swap(&mut self.last, &mut self.current);
         self.current.clear();
+        core::mem::swap(&mut self.last_allocs, &mut self.current_allocs);
+        self.current_allocs.clear();
     }
 
     // Record one system's CPU step time for the in-progress frame.
@@ -125,11 +137,36 @@ impl FrameProfile {
         self.current.push((name, micros));
     }
 
+    // Record the heap allocations counted during one system's step.
+    pub fn record_system_allocs(&mut self, name: &'static str, allocs: u32) {
+        self.current_allocs.push((name, allocs));
+    }
+
+    // Record the heap allocations counted across the frame that just finished.
+    // Written at the end of a step rather than rotated: the value is complete
+    // the moment the frame is, so readers between steps see the latest frame.
+    pub fn set_frame_allocs(&mut self, allocs: u32) {
+        self.frame_allocs = Some(allocs);
+    }
+
     // System step times from the last fully completed frame, in step order.
     // Read by the runtime debug server's `profile` command (a binary-only
     // module), so the lib build sees no caller.
     pub fn system_timings(&self) -> &[(&'static str, u32)] {
         &self.last
+    }
+
+    // Per-system heap-allocation counts from the last fully completed frame,
+    // in step order. Empty unless the frame loop sampled them (dev builds with
+    // the tracking allocator installed).
+    pub fn system_allocs(&self) -> &[(&'static str, u32)] {
+        &self.last_allocs
+    }
+
+    // Heap allocations counted across the most recent frame, under the same
+    // conditions as `system_allocs`.
+    pub fn frame_allocs(&self) -> Option<u32> {
+        self.frame_allocs
     }
 }
 
@@ -160,6 +197,34 @@ mod tests {
         assert_eq!(p.system_timings(), &[("A", 10), ("B", 20)]);
         p.begin_frame();
         assert_eq!(p.system_timings(), &[("A", 99)]);
+    }
+
+    // Alloc counts rotate with the timings, and stay empty when the frame
+    // loop never sampled them (release builds, untracked binaries).
+    #[test]
+    fn alloc_counts_rotate_with_the_timings() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.begin_frame();
+        assert!(p.system_allocs().is_empty(), "unsampled stays empty");
+
+        p.record_system("A", 10);
+        p.record_system_allocs("A", 3);
+        assert!(p.system_allocs().is_empty(), "readable only after rotation");
+        p.begin_frame();
+        assert_eq!(p.system_allocs(), &[("A", 3)]);
+    }
+
+    // The whole-frame count is written when the frame ends, so it reads back
+    // immediately rather than one rotation late.
+    #[test]
+    fn frame_allocs_read_back_without_a_rotation() {
+        let mut p = FrameProfile::default();
+        assert_eq!(p.frame_allocs(), None);
+        p.set_frame_allocs(42);
+        assert_eq!(p.frame_allocs(), Some(42));
+        p.begin_frame();
+        assert_eq!(p.frame_allocs(), Some(42), "rotation leaves it in place");
     }
 
     #[test]

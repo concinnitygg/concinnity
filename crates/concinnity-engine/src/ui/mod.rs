@@ -670,8 +670,9 @@ impl System for UiInputSystem {
         let thumb_active = self.handle_scroll_input(&input, active_screen, &overlay);
 
         // Per-panel bands (reference space), so a scroll-content region only
-        // fires while the cursor is inside its panel window.
-        let panel_bands: Vec<[f32; 4]> = self.panels.iter().map(|p| p.band).collect();
+        // fires while the cursor is inside its panel window. Copied into frame
+        // scratch so the region loop below can borrow `self` mutably.
+        let panel_bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
 
         // Slider drag pass. A slider's track region is driven here, not by the
         // click-to-fire loop below: the press edge (`clicked`) over a track

@@ -476,14 +476,12 @@ impl BehaviorSystem {
 
     // Create instances for newly matching entities and drop those whose entity
     // is gone, preserving the state of everything that persists.
-    fn resync_instances(&mut self, snapshot: &Snapshot) {
+    fn resync_instances(&mut self, snapshot: &Snapshot, frame: crate::ecs::FrameContext) {
         // A variable source starts baselined at the variable's current value,
         // so a restored save does not read as a change on the instance's first
         // tick. Read before the loop, which borrows `self.instances` mutably.
-        let baselines: Vec<Val> = self
-            .programs
-            .iter()
-            .map(|p| match &p.def.on {
+        let baselines = frame.collect(self.programs.iter().map(|p| {
+            match &p.def.on {
                 BehaviorSource::Variable(name) => self
                     .var_table
                     .slot_of(name)
@@ -491,8 +489,8 @@ impl BehaviorSystem {
                     .copied()
                     .unwrap_or(Val::Int(0)),
                 _ => Val::Int(0),
-            })
-            .collect();
+            }
+        }));
         for (i, program) in self.programs.iter().enumerate() {
             if !program.is_scoped() {
                 if self.instances[i].is_empty() {
@@ -539,15 +537,23 @@ impl BehaviorSystem {
         let tracing = request.is_some();
         let mut fired: Vec<(usize, Vec<u32>)> = Vec::new();
 
+        // Copied out of the context so the frame temporaries below can hold
+        // scratch while `ctx` stays usable. Main-thread only: the parallel
+        // eval workers keep their per-worker persistent buffers (see
+        // `eval_one`), and nothing arena-backed crosses into them.
+        let frame = ctx.frame;
+
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.gather(ctx, &mut snapshot);
-        self.resync_instances(&snapshot);
+        self.resync_instances(&snapshot, frame);
         self.populated = true;
 
         // Fire decisions run against this tick's starting values, so a `set`
         // here is seen by variable-source behaviors next tick and chains
-        // advance one link per tick.
-        let mut runs: Vec<(usize, Option<Entity>)> = Vec::new();
+        // advance one link per tick. Every instance could fire, so the
+        // reservation is exact.
+        let bound: usize = self.instances.iter().map(Vec::len).sum();
+        let mut runs = frame.vec::<(usize, Option<Entity>)>(bound);
         for i in 0..self.programs.len() {
             let var_slot = match &self.programs[i].def.on {
                 BehaviorSource::Variable(name) => self.var_table.slot_of(name),
@@ -585,7 +591,7 @@ impl BehaviorSystem {
                 idx += 1;
             }
         }
-        for (i, entity) in runs {
+        for &(i, entity) in runs.iter() {
             let delay = self.programs[i].def.delay;
             if delay > 0.0 {
                 self.pending.push((i, entity, delay));

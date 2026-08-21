@@ -139,10 +139,20 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         },
         "profile" => {
             let r = &state.profile_render;
+            // Per-system alloc counts share the timing list's order when the
+            // frame loop sampled them (dev builds); absent otherwise, so the
+            // field is omitted rather than reported as a misleading zero.
             let systems: Vec<_> = state
                 .profile_systems
                 .iter()
-                .map(|(name, micros)| serde_json::json!({ "name": name, "micros": micros }))
+                .enumerate()
+                .map(|(i, (name, micros))| {
+                    let mut entry = serde_json::json!({ "name": name, "micros": micros });
+                    if let Some((_, allocs)) = state.profile_allocs.get(i) {
+                        entry["allocs"] = serde_json::json!(allocs);
+                    }
+                    entry
+                })
                 .collect();
             // Skip empty-name slots so the JSON reflects only the passes the
             // active backend actually populated. Per-pass GPU timing lands on
@@ -157,6 +167,7 @@ pub(super) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             serde_json::json!({
                 "ok": true,
                 "frame": state.frame,
+                "frame_allocs": state.profile_frame_allocs,
                 "systems": systems,
                 "render": {
                     "draw_calls": r.draw_calls,
@@ -457,6 +468,25 @@ mod tests {
         assert_eq!(r["systems"][0]["name"], "GraphicsSystem");
         assert_eq!(r["systems"][0]["micros"], 1234);
         assert!(r["render"]["passes"].is_array());
+        // An unsampled build omits the alloc fields rather than reporting
+        // zeroes that read as "this frame allocated nothing".
+        assert!(r["systems"][0].get("allocs").is_none());
+        assert!(r["frame_allocs"].is_null());
+    }
+
+    #[test]
+    fn profile_reports_alloc_counts_when_sampled() {
+        let st = DebugState {
+            profile_systems: vec![("SpawnSystem".into(), 10), ("GraphicsSystem".into(), 1234)],
+            profile_allocs: vec![("SpawnSystem".into(), 0), ("GraphicsSystem".into(), 17)],
+            profile_frame_allocs: Some(29),
+            ..Default::default()
+        };
+        let r = reply(r#"{"cmd":"profile"}"#, st);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["frame_allocs"], 29);
+        assert_eq!(r["systems"][0]["allocs"], 0);
+        assert_eq!(r["systems"][1]["allocs"], 17);
     }
 
     #[test]

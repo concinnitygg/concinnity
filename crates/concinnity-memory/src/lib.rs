@@ -64,6 +64,13 @@ pub fn stats() -> Option<MemStats> {
     tracking::COUNTERS.snapshot()
 }
 
+// Allocations made since process start, or `None` under the same condition as
+// `stats`. Cheaper than a full `stats` read; the frame loop samples this around
+// every system step in dev builds to attribute per-frame allocation churn.
+pub fn alloc_count() -> Option<u64> {
+    tracking::COUNTERS.alloc_count()
+}
+
 // The process-wide tagged accounting. Subsystems report what they hold into it
 // and readouts break the process down by tag; unlike `stats`, it is live
 // whether or not a binary installed the tracking allocator.

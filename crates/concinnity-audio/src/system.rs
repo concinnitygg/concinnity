@@ -408,11 +408,13 @@ impl System for AudioSystem {
 
         // Impact one-shots: a contact plays each colliding body's authored
         // impact clip at the contact point, scaled by the impulse. Physics
-        // gates and debounces the events; the voice pool caps bursts.
+        // gates and debounces the events; the voice pool caps bursts. The
+        // events copy into frame scratch to release the queue borrow before
+        // the component reads below.
+        let frame = ctx.frame;
         if let Some(events) = ctx.events::<ContactEvent>() {
-            let contacts: Vec<ContactEvent> =
-                events.read(&mut self.contact_cursor).copied().collect();
-            for contact in contacts {
+            let contacts = frame.collect(events.read(&mut self.contact_cursor).copied());
+            for &contact in contacts.iter() {
                 for entity in [Some(contact.a), contact.b].into_iter().flatten() {
                     let Some(dynamics) = ctx.get::<BodyDynamics>(entity) else {
                         continue;

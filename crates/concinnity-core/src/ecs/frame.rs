@@ -83,6 +83,20 @@ impl<'a> FrameContext<'a> {
             None => FrameVec::Heap(alloc::vec![value; len]),
         }
     }
+
+    /// An empty frame temporary reserving room for `capacity` pushes, falling
+    /// back to the heap if the reserve is exhausted.
+    ///
+    /// For the gathers `collect` cannot express: values found by a loop that
+    /// also mutates what it walks, so no iterator exists to hand over. Reserve
+    /// the loop's upper bound; a push past it moves the values to the heap
+    /// (see [`FrameVec::push`]) rather than failing.
+    pub fn vec<T: Copy>(&self, capacity: usize) -> FrameVec<'a, T> {
+        match self.scratch.vec::<T>(capacity) {
+            Some(out) => FrameVec::Scratch(out),
+            None => FrameVec::Heap(Vec::new()),
+        }
+    }
 }
 
 /// A frame temporary: in the scratch arena when it fit, on the heap when it did
@@ -94,6 +108,26 @@ impl<'a> FrameContext<'a> {
 pub enum FrameVec<'a, T: Copy> {
     Scratch(ArenaVec<'a, T>),
     Heap(Vec<T>),
+}
+
+impl<T: Copy> FrameVec<'_, T> {
+    /// Append `value`. A scratch reservation is fixed, so a push past it moves
+    /// the gathered values to the heap and continues there: the caller sized
+    /// the reservation from an upper bound, and an outgrown bound is a
+    /// correctness fallback exactly like an exhausted reserve.
+    pub fn push(&mut self, value: T) {
+        match self {
+            FrameVec::Scratch(v) => {
+                if !v.push(value) {
+                    let mut heap = Vec::with_capacity(v.len() + 1);
+                    heap.extend_from_slice(v);
+                    heap.push(value);
+                    *self = FrameVec::Heap(heap);
+                }
+            }
+            FrameVec::Heap(v) => v.push(value),
+        }
+    }
 }
 
 impl<T: Copy> core::ops::Deref for FrameVec<'_, T> {
@@ -193,6 +227,40 @@ mod tests {
         frame[1] = 5;
         assert_eq!(&*frame, &[0, 5, 0]);
         assert_eq!(arena.overflows(), 1);
+    }
+
+    #[test]
+    fn a_reserved_frame_takes_pushes_in_scratch() {
+        let arena = Arena::with_capacity(4096);
+        let mut out = FrameContext::new(&arena).vec::<u32>(3);
+        out.push(1);
+        out.push(2);
+        assert!(matches!(out, FrameVec::Scratch(_)));
+        assert_eq!(&*out, &[1, 2]);
+        assert_eq!(arena.overflows(), 0);
+    }
+
+    // Outgrowing the reservation is the same fallback as outgrowing the
+    // reserve: the values move to the heap and every one of them survives.
+    #[test]
+    fn a_push_past_the_reservation_moves_to_the_heap() {
+        let arena = Arena::with_capacity(4096);
+        let mut out = FrameContext::new(&arena).vec::<u32>(2);
+        out.push(1);
+        out.push(2);
+        out.push(3);
+        assert!(matches!(out, FrameVec::Heap(_)));
+        assert_eq!(&*out, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn a_reservation_the_reserve_cannot_hold_starts_on_the_heap() {
+        let arena = Arena::with_capacity(8);
+        let mut out = FrameContext::new(&arena).vec::<u64>(64);
+        assert!(matches!(out, FrameVec::Heap(_)));
+        assert_eq!(arena.overflows(), 1, "the decline is recorded");
+        out.push(7);
+        assert_eq!(&*out, &[7]);
     }
 
     #[test]

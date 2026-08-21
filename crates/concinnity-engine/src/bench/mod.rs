@@ -1,6 +1,7 @@
 // src/bench/mod.rs
 //
-// In-crate microbenchmarks for engine internals, and the fixture they share.
+// In-crate microbenchmarks for engine internals, the fixture they share, and
+// the per-frame allocation pins (`alloc_budget`, which DO run un-ignored).
 //
 // These live inside the crate rather than in `benches/` because what is worth
 // measuring here is `pub(crate)`: the per-frame transform propagation and the
@@ -18,6 +19,7 @@
 // collide with this test binary's allocator and close a dependency cycle. The
 // numbers come from the same instruments either way.
 
+pub(crate) mod alloc_budget;
 pub(crate) mod extraction;
 pub(crate) mod transforms;
 

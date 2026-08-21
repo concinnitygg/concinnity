@@ -150,6 +150,17 @@ impl Counters {
             .count()
     }
 
+    // Allocations counted by this block since process start, without the peak
+    // refresh a full `snapshot` pays. Cheap enough to sample around every
+    // system step; `None` under the same condition as `snapshot`.
+    pub fn alloc_count(&self) -> Option<u64> {
+        let count = self
+            .shards
+            .iter()
+            .fold(0u64, |sum, s| sum + s.allocs.load(Relaxed) as u64);
+        (count > 0).then_some(count)
+    }
+
     // `None` until something allocates through this block, which for the global
     // block means "no binary installed the allocator".
     pub fn snapshot(&self) -> Option<MemStats> {
@@ -212,6 +223,21 @@ mod tests {
 
         counters.record_alloc(64);
         assert!(counters.snapshot().is_some());
+    }
+
+    // The cheap count agrees with the full snapshot and shares its
+    // None-until-installed probe, so a delta reader can rely on either.
+    #[test]
+    fn alloc_count_matches_the_snapshot() {
+        let counters = Counters::new();
+        assert_eq!(counters.alloc_count(), None);
+
+        counters.record_alloc(64);
+        counters.record_alloc(32);
+        counters.record_free(64);
+        let stats = counters.snapshot().expect("block has seen allocations");
+        assert_eq!(counters.alloc_count(), Some(stats.alloc_count));
+        assert_eq!(counters.alloc_count(), Some(2));
     }
 
     #[test]

@@ -258,6 +258,12 @@ impl DebugHook for DebugServer {
             .iter()
             .map(|&(name, micros)| (name.to_string(), micros))
             .collect();
+        state.profile_allocs = profile
+            .system_allocs()
+            .iter()
+            .map(|&(name, allocs)| (name.to_string(), allocs))
+            .collect();
+        state.profile_frame_allocs = profile.frame_allocs();
         state.profile_render = profile.render;
 
         // Active-camera pose for `camera-get`. One component read, so refresh

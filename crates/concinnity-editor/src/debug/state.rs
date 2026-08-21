@@ -38,6 +38,13 @@ pub(crate) struct DebugState {
     // Per-system CPU step times (micros) from the last completed frame,
     // refreshed every tick for the `profile` command.
     pub(super) profile_systems: Vec<(String, u32)>,
+    // Per-system heap-allocation counts from the last completed frame, same
+    // order as `profile_systems`. Empty in builds the frame loop does not
+    // sample (release, or no tracking allocator).
+    pub(super) profile_allocs: Vec<(String, u32)>,
+    // Whole-frame heap-allocation count from the most recent frame, `None`
+    // under the same conditions `profile_allocs` is empty.
+    pub(super) profile_frame_allocs: Option<u32>,
     // Render-backend stats from the most recent frame, for `profile`.
     pub(super) profile_render: crate::gfx::profile::RenderStats,
     // App shutdown token, set once via `DebugHook::attach_shutdown`. The

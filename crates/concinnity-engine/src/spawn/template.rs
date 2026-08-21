@@ -128,22 +128,28 @@ pub(super) fn spawn_skinned_from_template(
 // place it, and how long the copy should live. Returned by `tick_spawners` for
 // the caller to route through `spawn_from_template` with the live backend, the
 // same way `tick_lifetimes` returns expiries for the caller to despawn.
+#[derive(Clone, Copy)]
 pub(super) struct DueSpawn {
     pub template: AssetId,
     pub transform: Transform,
     pub lifetime: Option<f32>,
 }
 
-// Advance every Spawner's clock by `dt` and return the spawns now due. A
-// spawner emits one copy per whole `interval` elapsed (so a long frame that
-// crosses several intervals catches up), at the spawner entity's own Transform.
-// A non-positive interval is inert (never spawns). A zero `lifetime` means the
-// copy is not auto-removed; otherwise it carries that countdown.
-pub(super) fn tick_spawners(ctx: &mut PipelineContext, dt: f32) -> Vec<DueSpawn> {
+// Advance every Spawner's clock by `dt` and return the spawns now due, in
+// frame scratch. A spawner emits one copy per whole `interval` elapsed (so a
+// long frame that crosses several intervals catches up), at the spawner
+// entity's own Transform. A non-positive interval is inert (never spawns). A
+// zero `lifetime` means the copy is not auto-removed; otherwise it carries
+// that countdown.
+pub(super) fn tick_spawners<'a>(
+    ctx: &mut PipelineContext<'a>,
+    dt: f32,
+) -> crate::ecs::FrameVec<'a, DueSpawn> {
+    let frame = ctx.frame;
     // Advance every spawner's clock in place, recording only the ones that
     // crossed at least one interval this step (template, lifetime, and how many
-    // copies are due). Steady-state frames where nothing fires allocate nothing.
-    let mut fired: Vec<(Entity, AssetId, f32, u32)> = Vec::new();
+    // copies are due). Every spawner could fire, so the reservation is exact.
+    let mut fired = frame.vec::<(Entity, AssetId, f32, u32)>(ctx.query::<Spawner>().len());
     for (entity, spawner) in ctx.query_mut_with_entity::<Spawner>() {
         if spawner.interval <= 0.0 {
             continue;
@@ -161,8 +167,13 @@ pub(super) fn tick_spawners(ctx: &mut PipelineContext, dt: f32) -> Vec<DueSpawn>
     }
     // Resolve each fired spawner's placement (its Transform) now that the mutable
     // Spawner borrow is released, and expand to one DueSpawn per copy.
-    let mut due = Vec::new();
-    for (entity, template, lifetime, count) in fired {
+    let mut due = frame.vec::<DueSpawn>(
+        fired
+            .iter()
+            .map(|&(.., count)| count as usize)
+            .sum::<usize>(),
+    );
+    for &(entity, template, lifetime, count) in fired.iter() {
         let transform = ctx.get::<Transform>(entity).copied().unwrap_or_default();
         for _ in 0..count {
             due.push(DueSpawn {
@@ -176,12 +187,16 @@ pub(super) fn tick_spawners(ctx: &mut PipelineContext, dt: f32) -> Vec<DueSpawn>
 }
 
 // Decrement every Lifetime by `dt` and return the entities whose countdown
-// reached zero this step, for the caller to despawn. Entities still alive keep
-// their decremented remaining. Returning the expired list (rather than
-// despawning inline, which would mutate storage mid-iteration) lets the caller
-// route each expiry through the same despawn cascade a DespawnRequest uses.
-pub(super) fn tick_lifetimes(ctx: &mut PipelineContext, dt: f32) -> Vec<Entity> {
-    let mut expired = Vec::new();
+// reached zero this step, in frame scratch, for the caller to despawn.
+// Entities still alive keep their decremented remaining. Returning the expired
+// list (rather than despawning inline, which would mutate storage
+// mid-iteration) lets the caller route each expiry through the same despawn
+// cascade a DespawnRequest uses.
+pub(super) fn tick_lifetimes<'a>(
+    ctx: &mut PipelineContext<'a>,
+    dt: f32,
+) -> crate::ecs::FrameVec<'a, Entity> {
+    let mut expired = ctx.frame.vec::<Entity>(ctx.query::<Lifetime>().len());
     for (entity, life) in ctx.query_mut_with_entity::<Lifetime>() {
         life.remaining -= dt;
         if life.remaining <= 0.0 {
@@ -323,7 +338,7 @@ mod tests {
             // Its Lifetime expires; the expiry frees the slot like a despawn's
             // retire -> free does, then despawns the entity.
             let expired = tick_lifetimes(ctx, 1.0);
-            assert_eq!(expired, vec![first], "the short-lived spawn expired");
+            assert_eq!(&*expired, &[first], "the short-lived spawn expired");
             let freed: Vec<u32> = ctx.get::<RenderHandle>(first).unwrap().draws.to_vec();
             for slot in &freed {
                 alloc.free(*slot as usize);
@@ -391,7 +406,7 @@ mod tests {
             // Its Lifetime expires; the expiry releases the slot to the pool like
             // a despawn's retire does, then despawns the entity.
             let expired = tick_lifetimes(ctx, 1.0);
-            assert_eq!(expired, vec![first]);
+            assert_eq!(&*expired, &[first]);
             pool.release(first_slot);
             ctx.despawn(first);
 
@@ -530,7 +545,7 @@ mod tests {
             ctx.insert(long, Lifetime { remaining: 5.0 });
 
             let expired = tick_lifetimes(ctx, 0.2);
-            assert_eq!(expired, vec![short], "only the short lifetime expired");
+            assert_eq!(&*expired, &[short], "only the short lifetime expired");
             // The survivor's clock advanced but it is still alive.
             assert_eq!(ctx.get::<Lifetime>(long).unwrap().remaining, 4.8);
         });

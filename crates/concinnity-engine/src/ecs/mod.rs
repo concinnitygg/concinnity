@@ -28,8 +28,9 @@ pub mod waves;
 pub use concinnity_core::ecs::{
     Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
     ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
-    Events, FontHandle, FrameContext, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord, MeshHandle,
-    PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle, TextureHandle, Tick,
+    Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord,
+    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle,
+    TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;
@@ -787,6 +788,13 @@ impl World {
     // Tick -- systems run in order, Done systems are removed.
     // Returns Done when no systems remain, Stop on hard halt.
     pub fn step(&mut self) -> StepResult {
+        // Dev builds sample the tracked heap around the frame and each system
+        // step, so per-frame allocation churn is visible in the profile. The
+        // counters are process-wide: a delta includes concurrent threads
+        // (streaming workers, the pipelined render half), so per-system
+        // attribution is approximate while the frame total is exact churn.
+        #[cfg(debug_assertions)]
+        let frame_alloc_start = concinnity_memory::alloc_count();
         // Rotate the profiler's system-timing buffers so the frame that just
         // finished becomes the readable snapshot for this frame's readers.
         self.profile.begin_frame();
@@ -807,12 +815,21 @@ impl World {
             let name = self.systems[i].name();
             let started = std::time::Instant::now();
             #[cfg(debug_assertions)]
+            let alloc_start = concinnity_memory::alloc_count();
+            #[cfg(debug_assertions)]
             access_ids::set_active(Some((self.systems[i].access(), name)));
             let result = self.systems[i].step(&mut ctx);
             #[cfg(debug_assertions)]
             access_ids::set_active(None);
             let micros = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
             ctx.profile.record_system(name, micros);
+            #[cfg(debug_assertions)]
+            if let (Some(start), Some(end)) = (alloc_start, concinnity_memory::alloc_count()) {
+                ctx.profile.record_system_allocs(
+                    name,
+                    end.saturating_sub(start).min(u32::MAX as u64) as u32,
+                );
+            }
             match result {
                 StepResult::Stop => return StepResult::Stop,
                 StepResult::Done => {
@@ -829,6 +846,11 @@ impl World {
             self.schedule = Some(waves::build(&self.systems));
         }
         self.report_scratch_overflow();
+        #[cfg(debug_assertions)]
+        if let (Some(start), Some(end)) = (frame_alloc_start, concinnity_memory::alloc_count()) {
+            self.profile
+                .set_frame_allocs(end.saturating_sub(start).min(u32::MAX as u64) as u32);
+        }
         if self.systems.is_empty() {
             StepResult::Done
         } else {
