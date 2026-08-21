@@ -59,7 +59,7 @@ pub(super) struct RecordFrameView<'a> {
 impl VkContext {
     // Rebuild this frame's `GpuObjectData` storage buffer for the bindless
     // static pass: one 144-byte record per build-time `DrawObject`, indexed
-    // by object id. Streamed `VoxelWorld` chunks (past `n_objects`) are
+    // by object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are
     // skipped: they render through the legacy pipeline. The pool indices
     // address the shared handle-indexed texture pool: albedo = `texture_slot`,
     // normal = the normal map's own handle (or the flat-normal fallback slot
@@ -88,7 +88,13 @@ impl VkContext {
         };
         let texture_count = self.textures.len() as u32;
         let stride = std::mem::size_of::<GpuObjectData>();
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
@@ -121,7 +127,7 @@ impl VkContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
@@ -135,7 +141,7 @@ impl VkContext {
     // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
     // the indexed-draw arguments the kernel encodes plus the per-frame
     // cull-decision bits (`update_visibility` / streaming residency). Streamed
-    // chunks (past `n_objects`) are skipped; a no-op when bindless is off.
+    // chunks (past `draw.n_objects`) are skipped; a no-op when bindless is off.
     // The per-object `(index_offset, index_count)` is the active LOD slice
     // picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `directx/cull.rs`.
@@ -159,7 +165,13 @@ impl VkContext {
     ) {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_bucket_bits, draw_args_flags};
         let stride = std::mem::size_of::<GpuDrawArgs>();
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             // Per-frame active LOD pick. Objects with no alternates fall
             // straight through to LOD0.
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
@@ -203,7 +215,7 @@ impl VkContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_chunks..self.n_chunk {
+        for k in n_resident_chunks..self.draw.n_chunk {
             buf.write_val((chunk_base + k) * stride, &disabled);
         }
 
@@ -218,7 +230,7 @@ impl VkContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
@@ -337,7 +349,7 @@ impl VkContext {
         if self.shadow.pipeline.is_some() {
             let fresh =
                 crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
-                    view: self.view_matrix,
+                    view: self.view.matrix,
                     cam_pos,
                     fov_y_rad: fov_y_radians,
                     aspect: cascade_aspect,
@@ -413,7 +425,7 @@ impl VkContext {
             hdr_height: extent.height,
             hdr_sample_count: self.msaa_samples.as_raw(),
             bindless_cull_enabled: self.cull.cull_pipeline.is_some() && self.cull_count() > 0,
-            auto_exposure_enabled: self.auto_exposure.is_some(),
+            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
             // Velocity (motion vectors) runs for TAA *or* temporal upscaling
             // (FSR consumes them); TAA resources are forced built under
@@ -427,14 +439,15 @@ impl VkContext {
             // for a SSGI-only build (it owns the shared pre-pass G-buffer), so
             // gate the resolve node on the dedicated flag, not `ssr.is_some()`.
             ssr_enabled: self.ssr_resolve_active,
-            particles_enabled: self.particle_resources.is_some()
-                && self.particles.iter().any(|p| p.is_some()),
+            particles_enabled: self.particle.resources.is_some()
+                && self.particle.records.iter().any(|p| p.is_some()),
             // Gated on both the resources (built at init when the world declared
             // a VolumetricFog) and the live settings, so runtime
             // `update_fog_settings(None)` drops the FogFroxel + Fog passes from
             // the graph entirely. Mirrors Metal's `pipeline && settings` gate.
-            fog_enabled: self.fog_resources.is_some() && self.fog_settings.is_some(),
-            decals_enabled: self.decals_state.is_some() && self.decals.iter().any(|d| d.is_some()),
+            fog_enabled: self.fog.resources.is_some() && self.fog.settings.is_some(),
+            decals_enabled: self.decal.resources.is_some()
+                && self.decal.records.iter().any(|d| d.is_some()),
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).
             ssr_prepass_enabled: self.ssr.is_some(),
@@ -508,7 +521,7 @@ impl VkContext {
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
         let seed_inputs =
-            crate::gfx::render_graph::apply_view(&seed_inputs, self.view_mode, self.view_show);
+            crate::gfx::render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
 
         //  Camera projection + per-frame view state. Computed before the main
         //  render pass begins so the GPU-cull compute dispatch (which Vulkan
@@ -521,7 +534,7 @@ impl VkContext {
         let proj = perspective(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.view_matrix);
+        let cur_vp = mat4_mul(proj, self.view.matrix);
         // When TAA is on, offset the projection by a sub-pixel Halton jitter so
         // the accumulation has fresh sample positions each frame. The jitter is
         // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the
@@ -552,7 +565,7 @@ impl VkContext {
         } else {
             proj
         };
-        let vp_mat = mat4_mul(render_proj, self.view_matrix);
+        let vp_mat = mat4_mul(render_proj, self.view.matrix);
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -563,13 +576,13 @@ impl VkContext {
         // sets bind the static `use_clusters = 0` copy instead.
         let clustered = self.light_cull.pipeline.is_some();
         let cluster_params = crate::gfx::render_types::ClusterParams {
-            inv_view_proj: super::math::mat4_inverse(mat4_mul(proj, self.view_matrix)),
+            inv_view_proj: super::math::mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,
             z_near: near.max(1e-3),
             view_forward: [
-                -self.view_matrix[0][2],
-                -self.view_matrix[1][2],
-                -self.view_matrix[2][2],
+                -self.view.matrix[0][2],
+                -self.view.matrix[1][2],
+                -self.view.matrix[2][2],
             ],
             z_far: far,
             grid_x: crate::gfx::render_types::CLUSTER_GRID_X,
@@ -586,7 +599,7 @@ impl VkContext {
         // Update view UBO for this frame.
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view: self.view_matrix,
+            view: self.view.matrix,
             elapsed,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
             // composite owns the scene image this frame (the composite is present
@@ -606,7 +619,7 @@ impl VkContext {
         // Reflection-probe set (global set 0 binding 7): EMPTY (count 0 = sky
         // reflection) until a probe bakes, so the forward shader keeps the sky
         // path. Uploaded every frame so a later install is picked up immediately.
-        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe_set);
+        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.set);
 
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
 
@@ -626,7 +639,7 @@ impl VkContext {
             self.build_draw_args_buffer(frame_idx, cam_pos);
         }
 
-        // CPU visibility list (BVH-culled cullables + always_draw fallback).
+        // CPU visibility list (BVH-culled cullables + draw.always fallback).
         // Computed before the main render pass so the SSAO pre-pass below can
         // walk the same set, and so velocity / TAA later can reuse it without
         // a second BVH walk. `mem::take` swaps out the persistent scratch
@@ -634,13 +647,14 @@ impl VkContext {
         // back below before we return Ok (error path loses capacity, fine
         // since record_frame errors are exceptional). Left empty when the world
         // is hidden so the Main pass draws nothing behind the menu.
-        let mut visible = std::mem::take(&mut self.visible_scratch);
+        let mut visible = std::mem::take(&mut self.draw.visible_scratch);
         visible.clear();
         if !world_hidden {
-            self.cull_bvh
+            self.draw
+                .bvh
                 .query(&frustum, cam_pos, |idx| visible.push(idx));
             visible.sort_unstable();
-            visible.extend_from_slice(&self.always_draw);
+            visible.extend_from_slice(&self.draw.always);
         }
 
         //  Single merged frame graph dispatched in one
@@ -665,7 +679,7 @@ impl VkContext {
         // feature toggles or a target resizes). Taken out of the cache so the later
         // `&mut self` execute_graph does not conflict with a borrow of it; put back
         // after execution. A mismatch (or a cold cache) rebuilds.
-        let graph = match self.frame_graph_cache.take() {
+        let graph = match self.draw.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == seed_inputs => cached_graph,
             _ => build_frame_graph(&seed_inputs).map_err(|e| format!("frame graph: {e}"))?,
         };
@@ -694,7 +708,7 @@ impl VkContext {
         let pass_bufs = self.execute_graph(&graph, &params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with
         // matching inputs skips the rebuild.
-        self.frame_graph_cache = Some((seed_inputs, graph));
+        self.draw.graph_cache = Some((seed_inputs, graph));
 
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
         // `HizFinal` pass, so it has already been recorded above; `hiz_valid` only
@@ -722,8 +736,8 @@ impl VkContext {
         if let Some(gb) = &mut self.gbuffer {
             gb.prev_view_proj = cur_vp;
             gb.prev_models
-                .resize(self.draw_objects.len(), super::math::IDENTITY4);
-            for (prev, obj) in gb.prev_models.iter_mut().zip(self.draw_objects.iter()) {
+                .resize(self.draw.objects.len(), super::math::IDENTITY4);
+            for (prev, obj) in gb.prev_models.iter_mut().zip(self.draw.objects.iter()) {
                 *prev = obj.model;
             }
         }
@@ -737,7 +751,7 @@ impl VkContext {
             self.cull.hiz_valid = true;
         }
 
-        self.visible_scratch = visible;
+        self.draw.visible_scratch = visible;
 
         // Drain the parallel-safe draw-call accumulator (bumped by every pass
         // encoder, including those fanned onto rayon workers) into this frame's

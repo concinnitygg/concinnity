@@ -425,13 +425,13 @@ pub(super) struct GpuUploadContext<'a> {
 // The transient resources a deferred texture upload leaves in flight: the
 // staging buffer the copy reads from and the submitted one-shot command
 // buffer. Neither may be freed until the GPU retired the upload; the texture
-// streaming path parks these on `VkContext::stream_retires`.
+// streaming path parks these on `VkContext`'s `stream.retires`.
 pub(super) struct UploadInFlight {
     pub staging: PooledBuffer,
     pub cmd: vk::CommandBuffer,
 }
 
-// A streamed texture swap's GPU debris, freed once `VkContext::stream_frame`
+// A streamed texture swap's GPU debris, freed once `VkContext`'s `stream.frame`
 // reaches `retire_at`: the replaced pool image (pending frames may still
 // sample it, and the per-frame pool copies re-point over the next
 // `frames_in_flight` ticks) plus the upload's in-flight transients (still

@@ -16,7 +16,7 @@
 // adopt that claim at the parallel-dispatch boundary. Workers reach
 // `&DxContext` through `ParallelCtxRef::as_ctx()` for strictly
 // read-only encode work; the only mutations during encode are bumps to
-// `draw_calls_accum` (atomic), the `deformed_primed` velocity-priming
+// `diagnostics.draw_calls_accum` (atomic), the `deformed_primed` velocity-priming
 // store (atomic), and inline command-list recording into the worker's
 // own dedicated cmd list (single-writer per allocator).
 //
@@ -57,7 +57,7 @@ unsafe impl Send for SendableCmdList {}
 // The contract is **read-only**: any mutable field access from a
 // worker (RefCell::borrow_mut, Cell::set on a frame-relevant field)
 // is unsound. The audited mutations during encode are limited to the
-// `draw_calls_accum: AtomicU32` bump via `inc_draw_calls` and the
+// `diagnostics.draw_calls_accum: AtomicU32` bump via `inc_draw_calls` and the
 // `skinned.deformed_primed: AtomicBool` priming store in the G-buffer
 // pass, both already thread-safe.
 // The wrapper itself is the shared generic shim in `gfx::parallel_ctx`; this
@@ -67,7 +67,7 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // SAFETY: see the type-level safety contract above. The contract is
 // **read-only**: any mutable field access from a worker (RefCell::borrow_mut,
 // Cell::set on a frame-relevant field) is unsound. The audited mutations during
-// encode are limited to the `draw_calls_accum: AtomicU32` bump via
+// encode are limited to the `diagnostics.draw_calls_accum: AtomicU32` bump via
 // `inc_draw_calls` and the `skinned.deformed_primed: AtomicBool` priming store
 // in the G-buffer pass, both already thread-safe; D3D12 device-derived objects
 // (root signatures, PSOs, descriptor heaps, mapped upload buffers, fence) are

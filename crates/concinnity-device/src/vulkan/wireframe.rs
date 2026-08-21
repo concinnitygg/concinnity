@@ -46,7 +46,7 @@ impl VkContext {
     // they are not built yet. Called from `draw_frame` before the frame is
     // recorded.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.view_mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -77,9 +77,9 @@ impl VkContext {
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
         let device = self.device.clone();
-        let hr = self.hot_reload;
+        let hr = self.hot_reload.enabled;
         let msaa = self.msaa_samples;
-        let format = self.swapchain_format;
+        let format = self.swapchain.format;
         let render_pass = self.main_render_pass.handle();
         let mut built = VkWireframe {
             built: true,
@@ -188,7 +188,7 @@ impl VkContext {
         twin: Option<&'a OwnedPipeline>,
     ) -> &'a OwnedPipeline {
         match twin {
-            Some(w) if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
+            Some(w) if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
             _ => solid,
         }
     }

@@ -84,8 +84,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.SetPipelineState(&self.composite_pso);
-            cmd.SetGraphicsRootSignature(&self.composite_root_sig);
+            cmd.SetPipelineState(&self.composite.pso);
+            cmd.SetGraphicsRootSignature(&self.composite.root_sig);
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -101,9 +101,9 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
             // the Rust struct.
             let composite = CompositeParams {
                 post: self.post_process,
-                fade: self.scene_fade,
+                fade: self.view.scene_fade,
                 view_mode: args.channel_view,
-                far: self.view_far,
+                far: self.view.far,
             };
             cmd.SetGraphicsRoot32BitConstants(
                 2,
@@ -136,7 +136,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
     }
 
     fn begin_text(&self, cmd: &Self::Rec, args: &Self::Args) -> bool {
-        let Some(text_pso) = &self.text_pso else {
+        let Some(text_pso) = &self.text.pso else {
             return false;
         };
         if self.descriptors.text_atlas_srv_gpus.is_empty() {
@@ -152,7 +152,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(text_pso);
-            cmd.SetGraphicsRootSignature(&self.text_root_sig);
+            cmd.SetGraphicsRootSignature(&self.text.root_sig);
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -220,8 +220,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for DxContext {
         let vert_bytes = bytemuck::cast_slice(&call.vertices);
         let idx_bytes = bytemuck::cast_slice(&call.indices);
 
-        let vert_va = self.text_upload.push(args.frame_idx, vert_bytes)?;
-        let idx_va = self.text_upload.push(args.frame_idx, idx_bytes)?;
+        let vert_va = self.text.upload.push(args.frame_idx, vert_bytes)?;
+        let idx_va = self.text.upload.push(args.frame_idx, idx_bytes)?;
 
         let vbv = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: vert_va,
@@ -283,7 +283,8 @@ impl DxContext {
         // fence in `draw_frame` has already confirmed the GPU is done with this
         // slot, so resetting / growing it now is race-free.
         let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
-        self.text_upload
+        self.text
+            .upload
             .reserve(&self.alloc, frame_idx, text_bytes)?;
 
         let args = DxCompositeArgs {
@@ -293,8 +294,8 @@ impl DxContext {
             width,
             height,
             frame_idx,
-            channel_view: if self.view_mode.is_gbuffer_channel() {
-                self.view_mode as u32
+            channel_view: if self.view.mode.is_gbuffer_channel() {
+                self.view.mode as u32
             } else {
                 0
             },

@@ -957,7 +957,7 @@ impl DxContext {
         // the glass RtParams ring. Mirrors `encode_rt_reflections`'s build.
         let rt_params_gva = if rt_live {
             let rt = self.rt_reflections.as_ref().expect("rt_reflections_active");
-            let v = self.view_matrix;
+            let v = self.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -1033,8 +1033,8 @@ impl DxContext {
         // manual occlusion Load: the graph declares this pass's depth read and the
         // executor emits the transition ahead of this command list.
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -1064,7 +1064,7 @@ impl DxContext {
         // and the per-frame ProbeSet CBV (b4). count == 0 keeps the sky / white rim.
         let prefilter_srv = self.prefilter_cube_srv_gpu();
         let probe_cube_srv = self.probe_cube_table_gpu();
-        let probe_set_gva = com::gpu_va(&self.probe_set_cbvs[frame_idx]);
+        let probe_set_gva = com::gpu_va(&self.probe.set_cbvs[frame_idx]);
 
         if rt_live {
             // Sharp per-pixel RT trace. Bind the RT inputs once before the draw

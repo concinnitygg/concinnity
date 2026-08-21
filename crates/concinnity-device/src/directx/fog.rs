@@ -648,7 +648,7 @@ impl DxContext {
     fn fog_froxel_params(&self, near: f32) -> Option<FogFroxelParams> {
         let fog = self.fog.settings?;
         Some(FogFroxelParams {
-            view: self.view_matrix,
+            view: self.view.matrix,
             froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
             _pad_align: 0,
             z_near: near.max(1e-3),
@@ -687,7 +687,10 @@ impl DxContext {
         // slots. The `Fog` render pass below reads from the same slot, so
         // both passes see the same params this frame.
         let inv_vp = super::math::mat4_inverse(vp);
-        let viewport = [self.render_width as f32, self.render_height as f32];
+        let viewport = [
+            self.extent.render_width as f32,
+            self.extent.render_height as f32,
+        ];
         let params = fog_settings.params(
             inv_vp,
             cam_pos,
@@ -744,7 +747,7 @@ impl DxContext {
     // Encode the volumetric-fog pass. Samples the 3D froxel volume the
     // `FogFroxel` compute pass populated this frame. Caller has already
     // ended the main HDR pass + the projected-decal pass (if any), so
-    // `depth_resource` (MSAA when MSAA is on) holds the scene depth and
+    // `depth.resource` (MSAA when MSAA is on) holds the scene depth and
     // the resolved scene target holds the resolved scene + decal colour.
     // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
     // target.
@@ -778,8 +781,8 @@ impl DxContext {
         // read-modify-write, so the executor has already put it in RENDER_TARGET.
         let scene_rtv = self.hdr_scene_rtv();
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

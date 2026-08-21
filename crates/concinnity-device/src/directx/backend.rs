@@ -226,12 +226,14 @@ impl RenderBackend for DxContext {
     }
 
     fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
-        self.draw_objects
+        self.draw
+            .objects
             .get(draw_idx)
             .map(|o| (o.vertex_count, o.index_count))
     }
     fn draw_lod_index_counts(&self, draw_idx: usize) -> Option<Vec<usize>> {
-        self.draw_objects
+        self.draw
+            .objects
             .get(draw_idx)
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }

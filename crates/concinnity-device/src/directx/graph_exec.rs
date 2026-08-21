@@ -398,7 +398,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Camera far-plane in view units. Consumed by `Upscale` (FSR3
     // dispatch's `cameraFar`).
     pub far: f32,
-    // BVH-culled visible-object indices (sorted, with `always_draw`
+    // BVH-culled visible-object indices (sorted, with `draw.always`
     // appended). Consumed by Main's bindless + legacy + instanced
     // sub-passes.
     pub visible: &'a [u32],
@@ -774,7 +774,7 @@ impl DxContext {
             // restore returns it there for the next main pass. This is the case
             // that keeps resting per-resource rather than per-class -- shadow_map
             // is the same class and rests sampled.
-            "hdr_depth" => Some(one(&self.depth_resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
+            "hdr_depth" => Some(one(&self.depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
             // The multisample colour attachment, which exists only when the
             // world is multisampled -- and so does the graph resource. It rests
             // in RENDER_TARGET and no pass ever samples it, so every derived

@@ -88,6 +88,421 @@ pub(super) fn take_embedded_pump_events() -> bool {
     EMBEDDED_PUMP_EVENTS.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
+// The scene draw list plus the CPU cull inputs derived from it, and the record
+// counts that extend the GPU-driven cull past the static objects.
+pub(super) struct DrawState {
+    // One entry per renderable object.
+    pub objects: Vec<DrawObject>,
+    // Spatial index over the cullable subset of `objects`, built once at init.
+    // The main pass queries it per frame to skip off-screen draws.
+    pub bvh: crate::gfx::bvh::Bvh,
+    // Indices into `objects` for non-cullable items (skybox, rooms, dynamic
+    // props). Drawn unconditionally after the BVH-visible set.
+    pub always: Vec<u32>,
+    // Parallel to `objects`: whether each slot is already in `always`. A slot
+    // vacated by a culled static prop and later recycled for a runtime clone
+    // must join `always` exactly once; this guards against a double push
+    // without an O(n) membership scan.
+    pub always_member: Vec<bool>,
+    // Per-frame scratch for the legacy CPU draw path's visible set (BVH-culled
+    // cullables + `always` fallback). `mem::take`d at the top of draw_frame and
+    // returned at the bottom so the heap allocation is reused across frames
+    // instead of `Vec::with_capacity`'d each tick.
+    pub visible_scratch: Vec<u32>,
+    // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
+    // built from. `build_frame_graph` is a pure function of those inputs (which
+    // change only when a feature toggles or a target resizes), so a frame whose
+    // inputs match the cached key reuses it instead of rebuilding. Taken out
+    // during `execute_graph` (which needs `&mut self`) and put back after, so a
+    // steady scene compiles once.
+    pub graph_cache: Option<(
+        crate::gfx::render_graph::FrameGraphInputs,
+        crate::gfx::render_graph::CompiledGraph,
+    )>,
+    // Total instances across every cluster. When the bindless static pass is
+    // active (`bindless && !objects.is_empty()`), each instance is folded into
+    // the GPU-driven cull buffers as an extra `GpuObjectData` record after the
+    // static objects, so the cull dispatch + indirect draw cover
+    // `cull_count() == objects.len() + draw.n_instances`. 0 leaves the static path
+    // identical and routes instances through the legacy instanced draw.
+    pub n_instances: usize,
+    // Skinned draw objects folded into the GPU-driven cull. Set by
+    // `upload_skinned` ONLY when bindless + static geometry is present; 0
+    // otherwise (a pure-skinned or non-bindless world keeps the legacy skinned
+    // VS draw). When > 0, each skinned object is one extra `GpuObjectData`
+    // record after the static + instance records, so `cull_count()` extends to
+    // `objects.len() + draw.n_instances + draw.n_skinned` and the skinned tail draws the
+    // compute-deformed geometry through the skinned u16 index buffer.
+    pub n_skinned: usize,
+}
+
+// InstancedProp clusters and the per-instance records they draw through.
+pub(super) struct InstancedState {
+    // One entry per cluster. Each issues one drawIndexedInstanced call with all
+    // of its per-instance transforms uploaded to a transient GPU buffer per
+    // frame. Empty when there are no clusters in the scene.
+    pub clusters: Vec<InstancedCluster>,
+    // The per-instance `GpuObjectData` / `GpuDrawArgs` records, built once at
+    // init (instances are placed at world load and never move).
+    // `build_object_buffer` / `build_draw_args_buffer` append these after their
+    // per-frame static fill, so the transient object / draw-args rings carry
+    // both. Per-instance LOD is deferred (every instance draws the cluster base
+    // LOD), so these stay static; supporting it would move the build per-frame.
+    pub records: Vec<crate::gfx::render_types::GpuObjectData>,
+    pub draw_args: Vec<crate::gfx::render_types::GpuDrawArgs>,
+    // PSO that pairs `vertex_main_instanced` with `fragment_main`. `None` when
+    // no clusters were provided or no instanced shader was compiled.
+    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+}
+
+// The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
+pub(super) struct ViewState {
+    pub clear_color: [f32; 4],
+    // Scene-transition fade to black in [0, 1], applied in the composite pass.
+    // Backend-owned rather than a `PostProcessParams` field so a settings push
+    // cannot reset an in-flight fade, and kept out of `view.clear_color` so it fades
+    // the whole image, not just the pixels no geometry covers.
+    pub scene_fade: f32,
+    // The viewport view mode: the main passes read it for the wireframe fill
+    // mode and the unlit shade flag, the composite for its channel
+    // visualization.
+    pub mode: concinnity_core::gfx::view_modes::ViewMode,
+    // The frame's camera far plane, for the composite's depth-channel
+    // normalization.
+    pub far: f32,
+    pub matrix: [[f32; 4]; 4],
+}
+
+// Scene-captured reflection probes: each surface's specular reflection samples
+// the nearest probe whose box contains it, while the skybox + diffuse keep the
+// sky. See metal/probe.rs.
+pub(super) struct ProbeState {
+    // The where/box list (declared `ReflectionProbe` assets or
+    // `auto_seed_probes`).
+    pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
+    // The baked cube per placement, parallel to `placements`.
+    pub maps: Vec<EnvironmentMapTextures>,
+    // Staggered bake cursor. Reset to the placement count when placements are
+    // set; each eligible frame bakes a bounded budget and advances it, so the
+    // load cost spreads over several frames instead of one.
+    pub bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
+    // Per-probe influence boxes + count, pushed to the fragment shader at
+    // buffer(6). `EMPTY` until a bake.
+    pub set: concinnity_render::uniforms::ProbeSet,
+    // The probe currently rendering its six cube faces on the GPU (one at a
+    // time; owns the reserved-ring-slot buffers + capture targets). The render
+    // thread never blocks: the faces are submitted without `waitUntilCompleted`
+    // and a completion handler flags GPU completion. `None` when idle.
+    pub rendering: Option<super::probe::RenderingBake>,
+    // The probe whose read-back faces are convolving on a worker thread (one at
+    // a time). Holds only the worker's payload slot (plain data), so it overlaps
+    // the next probe's render -- pipelining the convolution shortens the bake
+    // warm-up. `None` when idle.
+    pub converting: Option<super::probe::ConvertingBake>,
+    // Deferred-free pool for an in-flight bake's GPU resources when a
+    // re-placement (`set_reflection_probes`) interrupts it: the capture command
+    // buffers may still be reading those buffers/textures, so they are parked
+    // here and freed once the frames-in-flight fence guarantees the bake has
+    // retired.
+    pub retire_pool: super::transient::RetirePool<super::probe::BakeGpu>,
+}
+
+// Cascaded shadow map resources + the cascade schedule. `pipeline_state` is
+// `None` when no ShadowStage was declared or `map_size == 0`, in which case the
+// shadow pass is skipped; `map` and `sampler` are always present (1x1 fallback
+// reading 1.0 = fully lit when disabled) so fragment shaders can always sample
+// texture(2) / sampler(1). Mirrors `DxContext::shadow`.
+pub(super) struct ShadowState {
+    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Depth32Float texture array, one slice per cascade.
+    pub map: Retained<ProtocolObject<dyn MTLTexture>>,
+    // Per-cascade resolution, stored so the shadow pass can size the viewport to
+    // the texture array's per-slice dimensions.
+    pub map_size: u32,
+    // Cascade re-render policy from `GraphicsConfig.shadow_update`. Hybrid
+    // refreshes the near cascade every frame and the far cascades round-robin.
+    pub update: crate::assets::ShadowUpdate,
+    // Shadow distance in world units (`GraphicsConfig.shadow_distance`), read by
+    // the per-frame cascade-split computation and capped at the camera far
+    // plane. Mutable so `set_shadow_distance` can change it live.
+    pub distance: u32,
+    // Active cascade count, 1..=4 (`GraphicsConfig.shadow_cascades`). The
+    // per-frame split + schedule read it; only the first `cascades` of the four
+    // slots are rendered + sampled. Mutable so `set_shadow_cascades` is live.
+    pub cascades: u32,
+    // Round-robin clock + primed-set for the cascade schedule; advanced once per
+    // frame by `next_shadow_cascade_mask`.
+    pub scheduler: crate::gfx::shadow_schedule::ShadowCascadeScheduler,
+    // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
+    // draw_frame and read by encode_shadow_pass so the two agree on which slices
+    // to refresh and which to leave intact.
+    pub render_mask: u32,
+    pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // Cascaded light VPs + split depths. The near cascade's VP refreshes every
+    // frame; far cascades' VPs persist between their round-robin refreshes
+    // (Hybrid mode) so each slice is sampled with the VP it was rendered with.
+    pub uniforms: ShadowUniforms,
+    // World-space unit vector pointing TOWARD the first directional light.
+    // Captured at init from the light uniforms; used by per-frame CSM updates.
+    pub light_dir: [f32; 3],
+}
+
+// Spot-light shadow slices + their refresh schedule. Mirrors
+// `DxContext::spot_shadow`.
+pub(super) struct SpotShadowState {
+    // One Depth32Float slice per shadow-casting spot light, indexed by
+    // `GpuLight.shadow_index`. Always present so the fragment shader's
+    // depth-array binding is valid; a 1x1 fallback (depth 1.0 = lit) stands in
+    // when no spot casts shadows.
+    pub map: Retained<ProtocolObject<dyn MTLTexture>>,
+    // Per-slice light-space projections, uploaded once (local lights are
+    // static). Empty when nothing casts, in which case the pass never runs.
+    pub buffer: PooledBuffer,
+    pub count: u32,
+    // Prime-then-round-robin refresh schedule over the spot slices, the spot
+    // analogue of `ShadowState::scheduler`.
+    pub scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
+    // Which spot slices re-render this frame; set once per frame in draw_frame
+    // and read by encode_spot_shadow_pass.
+    pub render_mask: u32,
+}
+
+// Per-frame-in-flight transient buffer rings, plus the CPU scratch that fills
+// them. Each ring hands out this frame's slot so a build reuses a buffer instead
+// of allocating one per frame; the scratch `Vec`s are `mem::take`n during a build
+// and returned after, so the per-frame `collect` reuses one heap allocation.
+pub(super) struct FrameRings {
+    // Ring of per-frame `GpuObjectData` buffers. Written by `build_object_buffer`.
+    pub object: super::transient::TransientRing,
+    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
+    // `build_draw_args_buffer`.
+    pub draw_args: super::transient::TransientRing,
+    // Ring of per-frame `prev_model` buffers for the GPU-driven G-buffer /
+    // velocity pre-pass: one column-major `float4x4` per cull record, indexed
+    // identically to the object buffer. Written by `build_gbuffer_prev_models`.
+    pub prev_model: super::transient::TransientRing,
+    // Ring of per-frame `BindlessTextures` argument buffers. The argument
+    // encoder fills the slot in place each frame; see
+    // `build_bindless_texture_args`.
+    pub bindless_tex: super::transient::TransientRing,
+    // Ring of per-skinned-object joint-palette buffers, one inner buffer per
+    // object, for the current and previous (velocity) poses. Written by
+    // `build_joint_buffers`.
+    pub joint: super::transient::JointRing,
+    pub prev_joint: super::transient::JointRing,
+    // Ring of per-cluster instance-matrix buffers. `prepare_instanced_draws`
+    // fills this frame's slot once; the main / SSR / SSAO / velocity passes share
+    // the result instead of each re-uploading the instance matrices.
+    pub instance: super::transient::InstanceRing,
+    pub object_scratch: Vec<crate::gfx::render_types::GpuObjectData>,
+    pub draw_args_scratch: Vec<crate::gfx::render_types::GpuDrawArgs>,
+    pub prev_model_scratch: Vec<[[f32; 4]; 4]>,
+}
+
+// Transparent water surfaces and the pipelines that draw them. The RT variants
+// trace a sharp reflection ray against the scene BVH instead of sampling the
+// probe cube; they are `Some` only when the world has >=1 `WaterSurface` AND the
+// device supports ray tracing, and are selected per-frame only while `rt.accel`
+// is live. The flat variant uses the per-object material tint as albedo (the
+// non-bindless RT fallback); the textured variant samples the reflected hit's
+// albedo / normal / emissive maps from the bindless pool (bound at buffer 10 for
+// water, since the main pass's index 7 is the ProbeSet here) and is selected
+// only in a bindless world.
+pub(super) struct WaterState {
+    // `Some` only when the world declared >=1 `WaterSurface`; the transparent
+    // pass executor short-circuits otherwise.
+    pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // One GPU record per `WaterSurface` asset: tessellated VB+IB plus the
+    // per-surface fragment / vertex uniforms (rebuilt at init from the asset;
+    // `prefilter_mip_count` is patched per-frame).
+    pub surfaces: Vec<super::water::WaterSurfaceRecord>,
+}
+
+// Transparent glass: the `GlassPanel` producer and the see-through mesh path.
+// The panel RT variants follow the same flat / textured split as [`WaterState`].
+pub(super) struct GlassState {
+    // Shared pipeline for the `GlassPanel` transparent producer. `Some` only
+    // when the world declared >=1 `GlassPanel`.
+    pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Ray-traced transparent glass MESH pipelines (`glass_mesh_rt.metal`): an
+    // imported `Material` with `transparent: true` routed through the transparent
+    // pass with a per-pixel RT trace off the interpolated mesh normal, instead of
+    // the Layer-1 opaque-reflective fallback. Built only on RT-capable devices
+    // (regardless of whether the world declares a transparent material -- a live
+    // RT toggle then has the pipeline ready). `mesh_pipeline_rt.is_some()` gates
+    // the whole transparent-mesh path: when live (RT on) transparent meshes are
+    // skipped in the opaque pass + the RT BLAS and drawn here; otherwise they
+    // render opaque (Layer 1).
+    pub mesh_pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub mesh_pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Indices into `draw.objects` of every see-through glass mesh (its material
+    // has both `transparent` and `see_through` set), precomputed at init so the
+    // per-frame Layer 2 producer does not rescan all objects. Empty on non-RT
+    // devices or when no material opts into see-through (those transparent meshes
+    // then render opaque, Layer 1). The objects stay IN `draw.objects` (a
+    // DrawObject's position is a key into the cull / prev-model / RT parallel
+    // arrays); this list only marks which to reroute. A non-empty list (plus a
+    // built mesh pipeline) is what enables the Layer 2 path -- see
+    // `seethrough_meshes_enabled`. See-through is opt-in per `Material` because
+    // it only looks right when the space behind the glass is modelled; without
+    // it, Layer 1's tinted reflective glass hides the interior.
+    pub seethrough_mesh_indices: Vec<usize>,
+    // One GPU record per `GlassPanel` asset: the static world-space quad VB+IB
+    // plus the per-panel uniforms. Contributes to the transparent pass.
+    pub panels: Vec<super::glass::GlassPanelRecord>,
+}
+
+// Raymarched SDF volumes and the unit-cube proxy geometry the pass rasterises.
+pub(super) struct RaymarchState {
+    // One GPU record per `SdfVolume` asset: the per-volume render pipeline
+    // (compiled lazily at init from the user's fragment shader source + the
+    // engine-shipped helpers/template) plus the static per-volume uniforms
+    // (centre, extent, params, ...). Drives the pass at `PassId::Raymarch`.
+    pub volumes: Vec<super::raymarch::RaymarchVolumeRecord>,
+    // Shared unit-cube proxy geometry (8 vertices, 36 indices). `Some` whenever
+    // any `SdfVolume` exists in the world; the encoder reads them per-frame and
+    // the asset cost is fixed (96 + 72 bytes).
+    pub cube_vertex_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub cube_index_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+}
+
+// HUD text pass. `pipeline_state` is `None` when no Font assets were declared
+// and `atlas_textures` is empty in the same case. The pipeline targets the
+// single-sample drawable in the composite pass (after HDR tonemap), so text is
+// rendered in display-referred LDR.
+pub(super) struct TextState {
+    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub atlas_textures: Vec<PooledTexture>,
+    // Linear-clamp sampler for glyph atlas lookups.
+    pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // Ring of per-frame HUD text geometry buffers. `draw_frame` writes the whole
+    // frame's labels into this frame's slot before the graph runs; the composite
+    // pass binds sub-ranges of it.
+    pub upload: super::text_upload::TextUploadRing,
+}
+
+// Built-in shader hot reload. `enabled` is true only under `cn debug`: it
+// switches the built-in `.metal` source loader to a disk-first read with
+// embedded fallback, so a saved shader edit is picked up by
+// [`MtlContext::reload_shaders`]. Under `cn run` production keeps the static
+// `include_str!`-baked path. `reload_pending` is the atomic flag set by the
+// `notify` watcher or the debug WS `reload-shaders` command, polled at the top of
+// `draw_frame`; the debug server reads its `Arc` clone via `GraphicsSystem`.
+// Both it and `watcher` are `Some` only when `enabled`.
+pub(super) struct HotReloadState {
+    pub enabled: bool,
+    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Held purely for lifetime: dropping it stops the watcher, which pushes
+    // events into `reload_pending` directly rather than being read from here.
+    #[allow(dead_code)]
+    pub watcher: Option<crate::metal::hot_reload::WatcherHandle>,
+}
+
+// Byte-range sub-allocators over the shared `vertex_buffer` / `index_buffer`.
+// The mesh pair covers the streamed-mesh regions, seeded at init by evicting
+// every streamed mesh; from then on `upload_mesh` / `evict_mesh` allocate and
+// free byte ranges so a streamed mesh can be placed wherever there is free
+// space. The chunk pair covers the headroom region appended by
+// `setup_chunk_streaming`, disjoint from both the build-time geometry and the
+// mesh allocators so a streamed `VoxelWorld` chunk never collides with static
+// geometry; empty until `setup_chunk_streaming` runs.
+pub(super) struct GeometryAllocators {
+    pub mesh_vtx: crate::suballoc::range_alloc::RangeAllocator,
+    pub mesh_idx: crate::suballoc::range_alloc::RangeAllocator,
+    pub chunk_vtx: crate::suballoc::range_alloc::RangeAllocator,
+    pub chunk_idx: crate::suballoc::range_alloc::RangeAllocator,
+}
+
+// The window this context draws into.
+pub(super) struct WindowState {
+    // The shared AppKit window + input layer (crate::appkit), which also owns the
+    // NSWindow, the fullscreen tracking, and the display-mode hold. Holds the
+    // same view as `view` below, upcast to `NSView`.
+    pub appkit: crate::appkit::AppKitWindow,
+    // MTKView with isPaused=true and enableSetNeedsDisplay=false so its internal
+    // display link never fires. draw() is called manually from draw_frame().
+    // Metal-only: the drawable and its render-pass descriptor come from here,
+    // which is why the shared window layer keeps only the NSView upcast.
+    pub view: Retained<MTKView>,
+    // Whether this context is responsible for tearing the window / view down on
+    // drop (closing the NSWindow, or removing the embedded subview). True for a
+    // normally constructed context; set false on the outgoing context of a live
+    // `cn editor` reload, which transplants the window to its successor -- the
+    // successor owns it now, so the outgoing drop must NOT close the shared
+    // window (that would order it out from under the reused context).
+    pub owns: bool,
+    pub was_visible: bool,
+}
+
+// Per-frame counters, GPU timings, and the fault reporting that crosses the
+// backend boundary. Most of these are written from a GPU completion handler on a
+// callback thread, so they are shared behind atomics.
+pub(super) struct Diagnostics {
+    // Per-frame draw-call / VRAM / GPU-time counters surfaced to the profiler
+    // overlay via `render_stats`.
+    pub frame_stats: crate::gfx::profile::RenderStats,
+    // GPU execution time of the last completed frame, in microseconds. Written
+    // by each command buffer's completion handler.
+    pub gpu_time_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    // Set once the frame render command buffer is observed to have faulted on
+    // the GPU. A render fault is the usual *origin* of a `SubmissionsIgnored`
+    // cascade that then shows up downstream on the next acceleration-structure
+    // build; logging the render buffer's own error names the real culprit.
+    // Logged once (this flag throttles it) so a per-frame fault streak does not
+    // spam at frame rate.
+    pub render_fault_logged: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // First classified GPU failure observed on a completed frame command buffer,
+    // parked here by the completion handler until the next draw_frame reports it
+    // across the backend boundary.
+    pub device_error: std::sync::Arc<std::sync::Mutex<Option<crate::gfx::error::RenderError>>>,
+    // Count of render-graph per-pass command-buffer faults logged so far. Each
+    // graph pass commits its own command buffer; this throttle logs the first
+    // handful (with the pass name + error) so the *original* fault in a
+    // `SubmissionsIgnored`/`InnocentVictim` cascade is identifiable, while later
+    // victims do not spam at frame rate.
+    pub pass_fault_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    // Per-pass GPU sample buffers, when the active device supports the
+    // `MTLCommonCounterSetTimestamp` counter set. Each `draw_frame` rotates to
+    // the next slot in the ring; the completion handler resolves that slot into
+    // `diagnostics.pass_times_us` for the profiler overlay.
+    pub pass_timing: Option<super::pass_timing::PassTimingResources>,
+    // Per-pass GPU microseconds from the most recently resolved frame. One
+    // atomic per pass slot, shared between the GPU completion handler that
+    // writes it and `render_stats()` that reads it.
+    pub pass_times_us:
+        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::PASS_COUNT]>,
+    // Atomic accumulator the parallel-dispatched workers fetch_add their draw
+    // counts into. Drained into `diagnostics.frame_stats.draw_calls` at the end of
+    // `execute_graph`. AtomicU32 because workers may run concurrently.
+    pub draw_calls_accum: std::sync::atomic::AtomicU32,
+}
+
+// HDR output negotiation for the swapchain.
+pub(super) struct HdrState {
+    // Maximum extended-range colour-component multiplier reported by the active
+    // panel when the renderer is on the HDR path. `Some(2.0)` on HDR400,
+    // `Some(8.0+)` on HDR1000-class panels; `None` on SDR (whether the world
+    // disabled HDR or the platform fell back). Surfaced via `RenderStats.max_edr`
+    // so the `StatHud` overlay can render an `EDR` chip showing the headroom.
+    pub max_edr: Option<f32>,
+    // Resolved HDR encoding of the swapchain (scRGB-linear vs PQ), or `None` on
+    // the SDR path. Read only by the headless `screenshot` path to decode the
+    // captured `RGBA16Float` EDR drawable. Mirrors DX `hdr.encoding`.
+    pub encoding: Option<crate::gfx::hdr_output::HdrEncoding>,
+    // The world's HDR-output *request* this context was built with (before EDR
+    // negotiation could fall it back to SDR). Reported by `hot_swap_config` so a
+    // live `cn editor` world reload can tell whether the new world would produce
+    // the same swapchain: comparing the request (not the negotiated result) keeps
+    // a display without EDR headroom from spuriously forcing a rebuild every
+    // save. Paired with `frames_in_flight` as the swapchain identity.
+    pub display_requested: bool,
+    pub pq_requested: bool,
+}
+
 // Metal rendering context. Owns all GPU resources and the window.
 // Only ever accessed from the main thread.
 pub struct MtlContext {
@@ -106,25 +521,7 @@ pub struct MtlContext {
     // `PostProcessParams.hdr_output` flag carries the EDR signal into the
     // shader.
     pub(super) swap_pixel_format: MTLPixelFormat,
-    // Maximum extended-range colour-component multiplier reported by the
-    // active panel when the renderer is on the HDR path. `Some(2.0)` on
-    // HDR400, `Some(8.0+)` on HDR1000-class panels; `None` on SDR (whether
-    // the world disabled HDR or the platform fell back). Surfaced via
-    // `RenderStats.max_edr` so the `StatHud` overlay can render an `EDR`
-    // chip showing the available headroom.
-    pub(super) max_edr: Option<f32>,
-    // Resolved HDR encoding of the swapchain (scRGB-linear vs PQ), or `None`
-    // on the SDR path. Read only by the headless `screenshot` path to decode
-    // the captured `RGBA16Float` EDR drawable. Mirrors DX `hdr_encoding`.
-    pub(super) hdr_encoding: Option<crate::gfx::hdr_output::HdrEncoding>,
-    // The world's HDR-output *request* this context was built with (before EDR
-    // negotiation could fall it back to SDR). Reported by `hot_swap_config` so a
-    // live `cn editor` world reload can tell whether the new world would produce
-    // the same swapchain: comparing the request (not the negotiated result)
-    // keeps a display without EDR headroom from spuriously forcing a rebuild
-    // every save. Paired with `frames_in_flight` as the swapchain identity.
-    pub(super) hdr_display_requested: bool,
-    pub(super) hdr_pq_requested: bool,
+    pub(super) hdr: HdrState,
     // Colour texture of the most recently presented drawable, retained so the
     // `cn debug` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
@@ -181,68 +578,17 @@ pub struct MtlContext {
     pub(super) vertex_buffer: PooledBuffer,
     // Single shared index buffer containing indices for all draw objects.
     pub(super) index_buffer: PooledBuffer,
-    // One entry per renderable object. Replaces the former single index_count.
-    pub(super) draw_objects: Vec<DrawObject>,
-    // Spatial index over the cullable subset of `draw_objects`, built once
-    // at init. The main pass queries it per frame to skip off-screen draws.
-    pub(super) cull_bvh: crate::gfx::bvh::Bvh,
-    // Indices into `draw_objects` for non-cullable items (skybox, rooms,
-    // dynamic props). Drawn unconditionally after the BVH-visible set.
-    pub(super) always_draw: Vec<u32>,
-    // Parallel to `draw_objects`: whether each slot is already in `always_draw`.
-    // A slot vacated by a culled static prop and later recycled for a runtime
-    // clone must join `always_draw` exactly once; this guards against a double
-    // push without an O(n) membership scan.
-    pub(super) always_draw_member: Vec<bool>,
-    // Per-frame scratch for the legacy CPU draw path's visible set
-    // (BVH-culled cullables + always_draw fallback). `mem::take`d at the
-    // top of draw_frame and returned at the bottom so the heap allocation
-    // is reused across frames instead of `Vec::with_capacity`'d each tick.
-    pub(super) visible_scratch: Vec<u32>,
-    // One entry per InstancedProp cluster. Each cluster issues one
-    // drawIndexedInstanced call with all of its per-instance transforms
-    // uploaded to a transient GPU buffer per frame. Empty when there are
-    // no clusters in the scene.
-    pub(super) instanced_clusters: Vec<InstancedCluster>,
-    // Total instances across every cluster. When the bindless static pass is
-    // active (`bindless && !draw_objects.is_empty()`), each instance is folded
-    // into the GPU-driven cull buffers as an extra `GpuObjectData` record after
-    // the static objects, so the cull dispatch + indirect draw cover
-    // `cull_count() == draw_objects.len() + n_instances`. 0 leaves the static
-    // path identical and routes instances through the legacy instanced draw.
-    pub(super) n_instances: usize,
-    // The per-instance `GpuObjectData` / `GpuDrawArgs` records, built once at
-    // init (instances are placed at world load and never move). `build_object_buffer`
-    // / `build_draw_args_buffer` append these after their per-frame static fill
-    // each frame, so the transient object / draw-args rings carry both. Per-instance
-    // LOD is deferred (every instance draws the cluster base LOD), so these stay
-    // static; supporting it would move the build per-frame.
-    pub(super) instance_records: Vec<crate::gfx::render_types::GpuObjectData>,
-    pub(super) instance_draw_args: Vec<crate::gfx::render_types::GpuDrawArgs>,
-    // Number of skinned draw objects folded into the GPU-driven cull.
-    // Set by `upload_skinned` ONLY when bindless + static geometry is present;
-    // 0 otherwise (a pure-skinned or non-bindless world keeps the legacy skinned
-    // VS draw). When > 0, each skinned object is one extra `GpuObjectData` record
-    // after the static + instance records, so `cull_count()` extends to
-    // `draw_objects.len() + n_instances + n_skinned` and the skinned tail draws
-    // the compute-deformed geometry through the skinned u16 index buffer.
-    pub(super) n_skinned: usize,
-    // PSO that pairs `vertex_main_instanced` with `fragment_main`. None when
-    // no clusters were provided or no instanced shader was compiled.
-    pub(super) instanced_pipeline_state:
-        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) clear_color: [f32; 4],
-    // Scene-transition fade to black in [0, 1], applied in the composite pass.
-    // Backend-owned rather than a `PostProcessParams` field so a settings push
-    // cannot reset an in-flight fade, and kept out of `clear_color` so it fades
-    // the whole image, not just the pixels no geometry covers.
-    pub(super) scene_fade: f32,
+    // Draw list + cull inputs + folded record counts. See [`DrawState`].
+    pub(super) draw: DrawState,
+    // InstancedProp clusters. See [`InstancedState`].
+    pub(super) instanced: InstancedState,
+    // Per-frame view state. See [`ViewState`].
+    pub(super) view: ViewState,
     // True when the world has no 3D geometry (e.g. a text-only world). The
     // off-screen HDR / bloom / effect targets are then allocated at 1x1 since
     // nothing is rendered into them; the composite pass still runs at the full
     // drawable size, so text stays crisp.
     pub(super) geometry_less: bool,
-    pub(super) view_matrix: [[f32; 4]; 4],
     // Shared texture pool (slot == handle): every texture (albedo, normal map,
     // emissive/ORM, terrain secondary) lives here once, matching DX/VK. A 1x1
     // opaque-white fallback is always present at slot 0 so shaders that sample
@@ -260,41 +606,10 @@ pub struct MtlContext {
     // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
     pub(super) local_light_buffer: PooledBuffer,
     pub(super) sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Shadow map resources.
-    // shadow_pipeline_state is None when no ShadowStage was declared or
-    // shadow_map_size == 0, in which case the shadow pass is skipped.
-    // shadow_map and shadow_sampler are always Some (1x1 fallback when disabled)
-    // so fragment shaders can always safely sample texture(2) / sampler(1).
-    pub(super) shadow_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Depth32Float texture array, one slice per cascade. When the shadow pass
-    // is disabled this is a 1x1 fallback that always reads 1.0 (fully lit).
-    pub(super) shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
-    // Per-cascade resolution stored so the shadow pass can size the viewport
-    // to match the texture array's per-slice dimensions.
-    pub(super) shadow_map_size: u32,
-    // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
-    // refreshes the near cascade every frame and the far cascades round-robin.
-    pub(super) shadow_update: crate::assets::ShadowUpdate,
-    // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
-    // per-frame cascade-split computation and capped at the camera far plane.
-    // Mutable so set_shadow_distance can change it live.
-    pub(super) shadow_distance: u32,
-    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). The
-    // per-frame split + schedule read it; only the first `shadow_cascades` of the
-    // four slots are rendered + sampled. Mutable so set_shadow_cascades is live.
-    pub(super) shadow_cascades: u32,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame by `next_shadow_cascade_mask`.
-    pub(super) shadow_scheduler: crate::gfx::shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
-    // draw_frame and read by encode_shadow_pass so the two agree on which
-    // slices to refresh and which to leave intact.
-    pub(super) shadow_render_mask: u32,
-    pub(super) shadow_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Spot shadow map array: one Depth32Float slice per shadow-casting spot
-    // light, indexed by `GpuLight.shadow_index`. Always Some so the fragment
-    // shader's depth-array binding is valid; a 1x1 fallback (depth 1.0 = lit)
-    // stands in when no spot casts shadows.
+    // Cascaded shadow map + its schedule. See [`ShadowState`].
+    pub(super) shadow: ShadowState,
+    // Spot-light shadow slices + their schedule. See [`SpotShadowState`].
+    pub(super) spot_shadow: SpotShadowState,
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
     pub(super) area_light_buffer: PooledBuffer,
@@ -304,24 +619,6 @@ pub struct MtlContext {
     // scene-independent and created once.
     pub(super) ltc_matrix_texture: PooledTexture,
     pub(super) ltc_magnitude_texture: PooledTexture,
-    pub(super) spot_shadow_map: Retained<ProtocolObject<dyn MTLTexture>>,
-    // Per-slice light-space projections, uploaded once (local lights are
-    // static). Empty when nothing casts, in which case the pass never runs.
-    pub(super) spot_shadow_buffer: PooledBuffer,
-    pub(super) spot_shadow_count: u32,
-    // Prime-then-round-robin refresh schedule over the spot slices, the spot
-    // analogue of `shadow_scheduler`.
-    pub(super) spot_shadow_scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
-    // Which spot slices re-render this frame; set once per frame in draw_frame
-    // and read by encode_spot_shadow_pass.
-    pub(super) spot_shadow_render_mask: u32,
-    // Cascaded light VPs + split depths. The near cascade's VP refreshes every
-    // frame; far cascades' VPs persist between their round-robin refreshes
-    // (Hybrid mode) so each slice is sampled with the VP it was rendered with.
-    pub(super) shadow_uniforms: ShadowUniforms,
-    // World-space unit vector pointing TOWARD the first directional light.
-    // Captured at init from the light_uniforms; used by per-frame CSM updates.
-    pub(super) shadow_light_dir: [f32; 3],
     // IBL cubemaps + mip count. Always Some: the runtime synthesizes a 1x1
     // grey fallback for both cubes when no EnvironmentMap was supplied, so
     // the fragment shader's texture(3) / texture(4) bindings are always
@@ -334,42 +631,11 @@ pub struct MtlContext {
     // sky. Each surface's specular reflection samples the nearest probe whose box
     // contains it; the skybox + diffuse keep the sky.
     //
-    // `probe_placements` is the where/box list (declared `ReflectionProbe` assets
-    // or `auto_seed_probes`); `probe_maps` is the baked cube per placement
-    // (parallel index); `probe_set` is the box uniform pushed to the shader.
-    pub(super) probe_placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
-    pub(super) probe_maps: Vec<EnvironmentMapTextures>,
-    // Staggered bake cursor. Reset to the placement count when placements are set;
-    // each eligible frame bakes a bounded budget and advances it, so the load cost
-    // spreads over several frames instead of one. See metal/probe.rs.
-    pub(super) probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue,
-    // Per-probe influence boxes + count, pushed to the fragment shader at
-    // buffer(6). `EMPTY` until a bake. See metal/probe.rs.
-    pub(super) probe_set: concinnity_render::uniforms::ProbeSet,
-    // The probe currently rendering its six cube faces on the GPU (one at a time;
-    // owns the reserved-ring-slot buffers + capture targets). The render thread never
-    // blocks: the faces are submitted without `waitUntilCompleted` and a completion
-    // handler flags GPU completion. `None` when nothing is rendering. See metal/probe.rs.
-    pub(super) probe_rendering: Option<super::probe::RenderingBake>,
-    // The probe whose read-back faces are convolving on a worker thread (one at a time).
-    // Holds only the worker's payload slot (plain data), so it overlaps the next probe's
-    // render -- pipelining the convolution shortens the bake warm-up. `None` when idle.
-    pub(super) probe_converting: Option<super::probe::ConvertingBake>,
-    // Deferred-free pool for an in-flight bake's GPU resources when a re-placement
-    // (`set_reflection_probes`) interrupts it: the capture command buffers may
-    // still be reading those buffers/textures, so they are parked here and freed
-    // once the frames-in-flight fence guarantees the bake has retired.
-    pub(super) probe_retire_pool: super::transient::RetirePool<super::probe::BakeGpu>,
+    // Scene-captured reflection probes. See [`ProbeState`].
+    pub(super) probe: ProbeState,
     // Linear-clamp sampler bound at sampler(2) for cubemap sampling.
     pub(super) cube_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Text rendering resources. text_pipeline_state is None when no Font assets
-    // were declared; text_atlas_textures is empty in the same case. The text
-    // pipeline now targets the single-sample drawable in the composite pass
-    // (after HDR tonemap), so text is rendered in display-referred LDR.
-    pub(super) text_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) text_atlas_textures: Vec<PooledTexture>,
-    // Linear-clamp sampler for glyph atlas lookups.
-    pub(super) text_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    pub(super) text: TextState,
     // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
     // Depth32Float). Re-created lazily in `draw_frame` whenever the
     // drawable size changes. The main + instanced pipelines render into
@@ -458,7 +724,7 @@ pub struct MtlContext {
     pub(super) light_cull: super::light_cull::LightCullState,
     // Per-frame clustered-lighting params (main camera), rebuilt each frame in
     // draw_frame and bound to the light-cull pass + the forward pass. Mirrors
-    // shadow_uniforms' per-frame update + shared bind.
+    // shadow.uniforms' per-frame update + shared bind.
     pub(super) cluster_params: ClusterParams,
     // Particle-system feature state: the per-emitter records (+ tombstone
     // free-list), the parallel per-emitter GPU pools, the shared compute +
@@ -469,28 +735,12 @@ pub struct MtlContext {
     // EV + authored bias, the histogram/average compute pipelines + buffers,
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
-    // True only under `cn debug`. Switches the built-in `.metal` source loader
-    // to a disk-first read with embedded fallback, so a saved shader edit is
-    // picked up by [`MtlContext::reload_shaders`] (triggered by either the
-    // `reload-shaders` debug command or the filesystem watcher). False under
-    // `cn run`: production keeps the static include_str!-baked path.
-    pub(super) hot_reload: bool,
+    pub(super) hot_reload: HotReloadState,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
     // the dev loop and `cn run --screenshot`; false in plain production.
     pub(super) capture: bool,
-    // Atomic flag set by the `notify` filesystem watcher or the debug WS
-    // `reload-shaders` command. Polled at the top of `draw_frame`; when set,
-    // `MtlContext::reload_shaders` rebuilds every built-in pipeline before
-    // the next frame's passes run. `Some` only when `hot_reload` is on; the
-    // debug server reads its `Arc` clone via `GraphicsSystem`.
-    pub(super) shader_reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Live `notify` watcher handle; dropping it stops the watcher. `Some`
-    // only when `hot_reload` is on. Held purely for lifetime: the watcher
-    // pushes events into `shader_reload_pending` directly.
-    #[allow(dead_code)]
-    pub(super) shader_watcher: Option<crate::metal::hot_reload::WatcherHandle>,
-    // Previous frame's model matrix for every `draw_objects` entry, parallel
+    // Previous frame's model matrix for every `draw.objects` entry, parallel
     // to it. The velocity pre-pass diffs current against previous so props
     // moved via `update_model` produce a correct motion vector.
     pub(super) prev_draw_models: Vec<[[f32; 4]; 4]>,
@@ -498,76 +748,9 @@ pub struct MtlContext {
     // shared skinned vertex / index buffers, the per-mesh draw objects, and
     // the current + previous joint-palette matrices. See [`SkinnedState`].
     pub(super) skinned: SkinnedState,
-    // Sub-allocators for the streamed-mesh regions of `vertex_buffer` and
-    // `index_buffer`. Seeded at init by evicting every streamed mesh; from
-    // then on `upload_mesh` / `evict_mesh` allocate and free byte ranges so a
-    // streamed mesh can be placed wherever there is free space.
-    pub(super) mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    pub(super) mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    // Sub-allocators for the chunk-geometry headroom region appended to
-    // `vertex_buffer` / `index_buffer` by `setup_chunk_streaming`. They manage
-    // a byte range disjoint from the build-time geometry and the
-    // mesh-streaming allocators, so a streamed `VoxelWorld` chunk never
-    // collides with static geometry. Empty until `setup_chunk_streaming` runs.
-    pub(super) chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    pub(super) chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    // The shared AppKit window + input layer (crate::appkit), which also owns
-    // the NSWindow, the fullscreen tracking, and the display-mode hold. Holds
-    // the same view as `mtk_view` below, upcast to `NSView`.
-    pub(super) win: crate::appkit::AppKitWindow,
-    // MTKView with isPaused=true and enableSetNeedsDisplay=false so its internal
-    // display link never fires. draw() is called manually from draw_frame().
-    // Metal-only: the drawable and its render-pass descriptor come from here,
-    // which is why the shared window layer keeps only the NSView upcast.
-    pub(super) mtk_view: Retained<MTKView>,
-    // Whether this context is responsible for tearing the window / view down on
-    // drop (closing the NSWindow, or removing the embedded subview). True for a
-    // normally constructed context; set false on the outgoing context of a live
-    // `cn editor` reload, which transplants the window to its successor -- the
-    // successor owns it now, so the outgoing drop must NOT close the shared
-    // window (that would order it out from under the reused context).
-    pub(super) owns_window: bool,
-    pub(super) was_visible: bool,
-    // Render statistics for the most recent frame: draw-call and object
-    // counts (filled by `draw_frame`) plus the GPU frame time pulled from
-    // `gpu_time_us`. Surfaced to the profiler overlay via `render_stats()`.
-    pub(super) frame_stats: crate::gfx::profile::RenderStats,
-    // GPU execution time of the last completed frame, in microseconds.
-    // Written by each command buffer's completion handler, which runs on a
-    // GPU callback thread, so it is shared behind an atomic.
-    pub(super) gpu_time_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    // Set once the frame render command buffer is observed to have faulted on
-    // the GPU (in its completion handler, on a GPU callback thread). A render
-    // fault is the usual *origin* of a `SubmissionsIgnored` cascade that then
-    // shows up downstream on the next acceleration-structure build; logging the
-    // render buffer's own error names the real culprit. Logged once (this flag
-    // throttles it) so a per-frame fault streak does not spam at frame rate.
-    pub(super) render_fault_logged: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // First classified GPU failure observed on a completed frame command
-    // buffer, parked here by the completion handler (GPU callback thread)
-    // until the next draw_frame reports it across the backend boundary.
-    pub(super) device_error:
-        std::sync::Arc<std::sync::Mutex<Option<crate::gfx::error::RenderError>>>,
-    // Count of render-graph per-pass command-buffer faults logged so far.
-    // Each graph pass commits its own command buffer; this throttle logs the
-    // first handful (with the pass name + error) so the *original* fault in a
-    // `SubmissionsIgnored`/`InnocentVictim` cascade (which pass actually broke)
-    // is identifiable, while later victims do not spam at frame rate.
-    pub(super) pass_fault_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    // Per-pass GPU sample buffers, when the active device supports the
-    // `MTLCommonCounterSetTimestamp` counter set. Each `draw_frame` rotates
-    // to the next slot in the ring; the completion handler resolves that
-    // slot into [`pass_times_us`] for the profiler overlay.
-    pub(super) pass_timing: Option<super::pass_timing::PassTimingResources>,
-    // Per-pass GPU microseconds from the most recently resolved frame. One
-    // atomic per pass slot, shared between the GPU completion handler that
-    // writes it and `render_stats()` that reads it.
-    pub(super) pass_times_us:
-        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::PASS_COUNT]>,
-    // Atomic accumulator the parallel-dispatched workers fetch_add their
-    // draw counts into. Drained into `frame_stats.draw_calls` at the end
-    // of `execute_graph`. AtomicU32 because workers may run concurrently.
-    pub(super) draw_calls_accum: std::sync::atomic::AtomicU32,
+    pub(super) geometry_alloc: GeometryAllocators,
+    pub(super) window: WindowState,
+    pub(super) diagnostics: Diagnostics,
     // Frames-in-flight pacing. `draw_frame` acquires a slot before encoding
     // and the frame command buffer's completion handler releases it once the
     // GPU retires the frame, bounding how far the CPU may queue ahead of the
@@ -581,143 +764,16 @@ pub struct MtlContext {
     // Monotonic counter over frames that build per-frame buffers; `% depth`
     // selects this frame's ring slot. Advanced once per such frame.
     pub(super) frame_ring_index: u64,
-    // Ring of per-frame `GpuObjectData` buffers for the bindless static pass,
-    // replacing a fresh allocation each frame. Written by `build_object_buffer`.
-    pub(super) object_ring: super::transient::TransientRing,
-    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
-    // `build_draw_args_buffer`.
-    pub(super) draw_args_ring: super::transient::TransientRing,
-    // Ring of per-frame `prev_model` buffers for the GPU-driven G-buffer/velocity
-    // pre-pass: one column-major `float4x4` per cull record, indexed
-    // identically to the object buffer. Written by `build_gbuffer_prev_models`.
-    pub(super) prev_model_ring: super::transient::TransientRing,
-    // Ring of per-frame `BindlessTextures` argument buffers. The argument
-    // encoder fills the slot in place each frame; see `build_bindless_texture_args`.
-    pub(super) bindless_tex_ring: super::transient::TransientRing,
-    // Ring of per-skinned-object joint-palette buffers, one inner buffer per
-    // object, for the current and previous (velocity) poses. Written by
-    // `build_joint_buffers`.
-    pub(super) joint_ring: super::transient::JointRing,
-    pub(super) prev_joint_ring: super::transient::JointRing,
-    // Ring of per-cluster instance-matrix buffers. `prepare_instanced_draws`
-    // fills this frame's slot once; the main / SSR / SSAO / velocity passes
-    // share the result instead of each re-uploading the instance matrices.
-    pub(super) instance_ring: super::transient::InstanceRing,
-    // Ring of per-frame HUD text geometry buffers. `draw_frame` writes the whole
-    // frame's labels into this frame's slot before the graph runs; the composite
-    // pass binds sub-ranges of it. See [`super::text_upload::TextUploadRing`].
-    pub(super) text_upload: super::text_upload::TextUploadRing,
-    // Reused scratch for the `GpuObjectData` / `GpuDrawArgs` builds so the
-    // per-frame `collect` reuses one heap allocation instead of allocating a
-    // fresh `Vec` each frame. `mem::take`n during the build and returned after.
-    pub(super) object_scratch: Vec<crate::gfx::render_types::GpuObjectData>,
-    pub(super) draw_args_scratch: Vec<crate::gfx::render_types::GpuDrawArgs>,
-    // Reused scratch for the per-frame `prev_model` build, same
-    // pattern as `object_scratch`.
-    pub(super) prev_model_scratch: Vec<[[f32; 4]; 4]>,
-    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was
-    // built from. `build_frame_graph` is a pure function of those inputs (which
-    // change only when a feature toggles or a target resizes), so a frame whose
-    // inputs match the cached key reuses the compiled graph instead of rebuilding
-    // it. Taken out during `execute_graph` (which needs `&mut self`) and put back
-    // after, so a steady scene compiles the graph once and reuses it thereafter.
-    pub(super) frame_graph_cache: Option<(
-        crate::gfx::render_graph::FrameGraphInputs,
-        crate::gfx::render_graph::CompiledGraph,
-    )>,
-    // The frame's viewport view mode, snapped from FrameParams at the top of
-    // draw_frame: the main passes read it for the wireframe fill mode and the
-    // unlit shade flag, the composite for its channel visualization.
-    pub(super) view_mode: concinnity_core::gfx::view_modes::ViewMode,
-    // The frame's camera far plane, snapped alongside `view_mode` for the
-    // composite's depth-channel normalization.
-    pub(super) view_far: f32,
-    // Transparent water-surface pipeline. `Some` only when the world
-    // declared ≥1 `WaterSurface`; the transparent pass executor short-
-    // circuits otherwise.
-    pub(super) water_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced water pipeline: traces a sharp reflection ray against the scene
-    // BVH instead of sampling the probe cube. `Some` only when the world has
-    // ≥1 `WaterSurface` AND the device supports ray tracing; selected per-frame
-    // only while `rt.accel` is live (RT on), the probe pipeline otherwise. This
-    // is the FLAT variant (per-object material tint as albedo); the non-bindless
-    // RT fallback.
-    pub(super) water_pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced water pipeline, TEXTURED variant: samples the reflected hit's
-    // albedo / normal / emissive maps from the bindless pool (bound at buffer 10
-    // for water, since the main pass's index 7 is the ProbeSet here). Built under
-    // the same RT gate; selected over the flat variant only in a bindless world
-    // (where the pool exists), while `rt.accel` is live.
-    pub(super) water_pipeline_rt_textured:
-        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // One GPU record per `WaterSurface` asset: tessellated VB+IB plus the
-    // per-surface fragment / vertex uniforms (rebuilt at init from the
-    // asset; `prefilter_mip_count` is patched per-frame).
-    pub(super) water_surfaces: Vec<super::water::WaterSurfaceRecord>,
+    pub(super) rings: FrameRings,
+    pub(super) water: WaterState,
     // Planar reflection targets, one set per distinct reflector plane (water
     // surfaces + glass panes, grouped by `assign_planar_slots`). `Some` only when
     // the world declared >=1 such reflector; the scene is re-rendered mirrored
     // across each plane into these each frame (RT off) and the reflective shader
     // samples the resolve of its slot. Rebuilt on resize alongside `hdr_targets`.
     pub(super) planar_reflection: Option<super::planar::PlanarReflectionSet>,
-    // Shared pipeline for the `GlassPanel` transparent producer. `Some` only
-    // when the world declared ≥1 `GlassPanel`.
-    pub(super) glass_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced glass pipeline: traces a sharp reflection ray against the scene
-    // BVH instead of sampling the probe cube. `Some` only when the world has
-    // ≥1 `GlassPanel` AND the device supports ray tracing; selected per-frame
-    // only while `rt.accel` is live (RT on), the probe pipeline otherwise. This
-    // is the FLAT variant (per-object material tint as albedo); the non-bindless
-    // RT fallback.
-    pub(super) glass_pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced glass pipeline, TEXTURED variant: samples the reflected hit's
-    // albedo / normal / emissive maps from the bindless pool (bound at buffer 10
-    // for glass, since the main pass's index 7 is the ProbeSet here). Built under
-    // the same RT gate; selected over the flat variant only in a bindless world
-    // (where the pool exists), while `rt.accel` is live.
-    pub(super) glass_pipeline_rt_textured:
-        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Ray-traced transparent glass MESH pipelines (`glass_mesh_rt.metal`): an
-    // imported `Material` with `transparent: true` routed through the transparent
-    // pass with a per-pixel RT trace off the interpolated mesh normal, instead of
-    // the Layer-1 opaque-reflective fallback. Built only on RT-capable devices
-    // (regardless of whether the world declares a transparent material -- a live
-    // RT toggle then has the pipeline ready). `glass_mesh_pipeline_rt.is_some()`
-    // gates the whole transparent-mesh path: when live (RT on) transparent meshes
-    // are skipped in the opaque pass + the RT BLAS and drawn here; otherwise they
-    // render opaque (Layer 1). The flat variant uses the reflected hit's material
-    // tint; the textured variant samples the bindless pool (selected in a bindless
-    // world).
-    pub(super) glass_mesh_pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) glass_mesh_pipeline_rt_textured:
-        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Indices into `draw_objects` of every see-through glass mesh (its material
-    // has both `transparent` and `see_through` set), precomputed at init so the
-    // per-frame Layer 2 producer does not rescan all objects. Empty on non-RT
-    // devices or when no material opts into see-through (those transparent
-    // meshes then render opaque, Layer 1). The objects stay IN `draw_objects` (a
-    // DrawObject's position is a key into the cull / prev-model / RT parallel
-    // arrays); this list only marks which to reroute. A non-empty list (plus a
-    // built mesh pipeline) is what enables the Layer 2 path -- see
-    // `seethrough_meshes_enabled`. See-through is opt-in per `Material` because
-    // it only looks right when the space behind the glass is modelled; without
-    // it, Layer 1's tinted reflective glass hides the interior.
-    pub(super) seethrough_mesh_indices: Vec<usize>,
-    // One GPU record per `GlassPanel` asset: the static world-space quad VB+IB
-    // plus the per-panel uniforms. Contributes to the transparent pass.
-    pub(super) glass_panels: Vec<super::glass::GlassPanelRecord>,
-    // One GPU record per `SdfVolume` asset: the per-volume render
-    // pipeline (compiled lazily at init from the user's fragment
-    // shader source + the engine-shipped helpers/template) plus the
-    // static per-volume uniforms (centre, extent, params, …). Drives
-    // the raymarch pass at `PassId::Raymarch`.
-    pub(super) raymarch_volumes: Vec<super::raymarch::RaymarchVolumeRecord>,
-    // Shared unit-cube proxy geometry the raymarch pass rasterises (8
-    // vertices, 36 indices). `Some` whenever any `SdfVolume` exists in
-    // the world; the encoder reads them per-frame and the asset cost
-    // is fixed (96 + 72 bytes).
-    pub(super) raymarch_cube_vertex_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub(super) raymarch_cube_index_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) glass: GlassState,
+    pub(super) raymarch: RaymarchState,
 }
 
 // SAFETY: MtlContext is only ever accessed from the main thread (as documented
@@ -796,12 +852,12 @@ impl MtlContext {
 
     // Number of records the GPU-driven cull processes this frame: the static
     // draw objects, every folded instance, then every folded skinned object.
-    // Metal has no separate `n_objects` field; `draw_objects.len()` is the
+    // Metal has no separate `n_objects` field; `draw.objects.len()` is the
     // static count. Drives the cull dispatch width + `object_count` uniform, the
     // shared ICB capacity, and the indirect-draw `NSRange`. Equals
-    // `draw_objects.len()` for static-only worlds, so those paths are untouched.
+    // `draw.objects.len()` for static-only worlds, so those paths are untouched.
     pub(super) fn cull_count(&self) -> usize {
-        self.draw_objects.len() + self.n_instances + self.n_skinned
+        self.draw.objects.len() + self.draw.n_instances + self.draw.n_skinned
     }
 
     // The prefiltered radiance cube for probe array slot `i`: the baked probe
@@ -809,7 +865,7 @@ impl MtlContext {
     // slots and for slots past the baked count). The skybox + diffuse always use
     // `env_map` directly, so they keep the sky regardless.
     pub(super) fn probe_cube_or_sky(&self, i: usize) -> &ProtocolObject<dyn MTLTexture> {
-        match self.probe_maps.get(i) {
+        match self.probe.maps.get(i) {
             Some(p) => p.prefilter.as_ref(),
             None => self.env_map.prefilter.as_ref(),
         }
@@ -821,7 +877,7 @@ impl MtlContext {
     // and the main pass binds the deformed vertex buffer for that range. Equals
     // `cull_count()` when no skinned mesh is folded.
     pub(super) fn skinned_record_base(&self) -> usize {
-        self.draw_objects.len() + self.n_instances
+        self.draw.objects.len() + self.draw.n_instances
     }
 
     // The buffer to bind at the cull kernel's skinned-index slot (buffer 6):
@@ -844,7 +900,7 @@ impl MtlContext {
     // its argument buffer) when the draw list has outgrown it. A no-op for
     // non-bindless contexts, which have no cull pipeline. New capacity is
     // rounded up to the next power of two so streamed chunks growing
-    // `draw_objects` do not rebuild the ICB every frame.
+    // `draw.objects` do not rebuild the ICB every frame.
     //
     // The per-object `cull_status_buffer` (always, for the phase-1 kernel's
     // buffer(5) binding) and (under two-pass occlusion) the phase-2 ICB
@@ -1091,7 +1147,7 @@ impl MtlContext {
     // window (which reports the cursor in the same units) rather than the
     // `MTKView` directly, so both macOS backends resolve it identically.
     pub fn logical_size(&self) -> (f32, f32) {
-        self.win.logical_size()
+        self.window.appkit.logical_size()
     }
 
     // Device capability flags for the settings menu. Ray tracing is queried
@@ -1117,14 +1173,18 @@ impl MtlContext {
     // overlay. The GPU frame time is the last value reported by a completed
     // command buffer, so it may lag the draw counts by a frame or two.
     pub fn render_stats(&self) -> crate::gfx::profile::RenderStats {
-        let mut stats = self.frame_stats;
-        stats.gpu_frame_us = self.gpu_time_us.load(std::sync::atomic::Ordering::Relaxed);
+        let mut stats = self.diagnostics.frame_stats;
+        stats.gpu_frame_us = self
+            .diagnostics
+            .gpu_time_us
+            .load(std::sync::atomic::Ordering::Relaxed);
         // Per-pass timings are filled in pass-index order with their stable
         // names, leaving slots past PASS_COUNT at the default ("", 0).
         // Reports zero for any pass that did not write its sample slot this
         // frame (e.g. SSR when disabled, or any pass not yet wired up).
         for (i, name) in super::pass_timing::PASS_NAMES.iter().enumerate() {
-            let micros = self.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
+            let micros =
+                self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
             stats.pass_times_us[i] = (*name, micros);
         }
         // Surface the auto-exposure EMA state. `None` when the world did not
@@ -1134,13 +1194,13 @@ impl MtlContext {
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.
-        stats.max_edr = self.max_edr;
+        stats.max_edr = self.hdr.max_edr;
         stats
     }
 
     // Push a new view matrix; takes effect on the next draw_frame call.
     pub fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
-        self.view_matrix = matrix;
+        self.view.matrix = matrix;
     }
 
     // Update the model matrices of the given draw objects, one
@@ -1148,7 +1208,7 @@ impl MtlContext {
     // effect.
     pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
-            if let Some(obj) = self.draw_objects.get_mut(index as usize) {
+            if let Some(obj) = self.draw.objects.get_mut(index as usize) {
                 obj.model = model;
             }
         }
@@ -1157,7 +1217,7 @@ impl MtlContext {
     // Show or hide a single draw object. Hidden objects are skipped in both
     // the shadow and main passes. Has no effect if the index is out of range.
     pub fn update_visibility(&mut self, index: usize, visible: bool) {
-        if let Some(obj) = self.draw_objects.get_mut(index) {
+        if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = visible;
         }
     }
@@ -1168,7 +1228,7 @@ impl MtlContext {
     // any pass. The geometry buffers stay allocated; the engine's draw-slot
     // allocator recycles the index. Has no effect if the index is out of range.
     pub fn retire_draw_object(&mut self, index: usize) {
-        if let Some(obj) = self.draw_objects.get_mut(index) {
+        if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
         }
@@ -1186,39 +1246,39 @@ impl MtlContext {
     ) -> usize {
         match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
+                self.draw.objects[slot] = obj;
                 self.prev_draw_models[slot] = model;
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
-                    self.draw_objects.len(),
+                    self.draw.objects.len(),
                     "appended draw slot must match the draw-object count"
                 );
-                self.draw_objects.push(obj);
+                self.draw.objects.push(obj);
                 self.prev_draw_models.push(model);
-                self.always_draw_member.push(false);
+                self.draw.always_member.push(false);
                 slot
             }
         }
     }
 
-    // Add a draw slot to `always_draw` if it is not already a member. Runtime
+    // Add a draw slot to `draw.always` if it is not already a member. Runtime
     // draws (chunks, spawned clones) are drawn unconditionally because the
     // init-time BVH cannot refit to admit them; a slot recycled from a culled
-    // static prop is not yet in `always_draw` and must be added.
+    // static prop is not yet in `draw.always` and must be added.
     pub(super) fn ensure_always_draw(&mut self, slot: usize) {
-        if !self.always_draw_member[slot] {
-            self.always_draw.push(slot as u32);
-            self.always_draw_member[slot] = true;
+        if !self.draw.always_member[slot] {
+            self.draw.always.push(slot as u32);
+            self.draw.always_member[slot] = true;
         }
     }
 
     // Set the scene-transition fade for the next draw_frame call. Applied in
     // the composite pass, so a FadeBlack fades the whole image.
     pub fn set_fade(&mut self, fade: f32) {
-        self.scene_fade = fade.clamp(0.0, 1.0);
+        self.view.scene_fade = fade.clamp(0.0, 1.0);
     }
 
     // Instantiate a runtime copy of an existing draw object at a new transform:
@@ -1227,7 +1287,7 @@ impl MtlContext {
     // cull distance, swapping only the model matrix. Driven by runtime entity
     // spawn (`SpawnRequest`); the destination slot comes from the engine's
     // allocator. The copy is marked non-cullable (sentinel AABB) and joins
-    // `always_draw` since the init-time BVH cannot refit; it is drawn every
+    // `draw.always` since the init-time BVH cannot refit; it is drawn every
     // frame like a streamed chunk.
     pub fn clone_static_draw_object(
         &mut self,
@@ -1235,7 +1295,7 @@ impl MtlContext {
         model: [[f32; 4]; 4],
         dst: crate::gfx::draw_slot::SlotAlloc,
     ) -> Result<(), String> {
-        let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
+        let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
@@ -1279,7 +1339,7 @@ impl MtlContext {
         texture_slot: usize,
         normal_map_slot: usize,
     ) {
-        if let Some(obj) = self.draw_objects.get_mut(draw_idx) {
+        if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
             obj.material = material;
             obj.texture_slot = texture_slot;
             obj.normal_map_slot = normal_map_slot;
@@ -1295,7 +1355,7 @@ impl MtlContext {
     // `world.jsonl` hot-reload (`cn debug` only). Has no effect if the index
     // is out of range.
     pub fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
-        if let Some(obj) = self.draw_objects.get_mut(draw_idx) {
+        if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
             obj.cull_distance = cull_distance.max(0.0);
         }
     }
@@ -1311,7 +1371,7 @@ impl MtlContext {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) = super::init::effects::build_decal_resources_for_runtime(
                 &self.device,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.decal.pipeline = Some(ps);
             self.decal.cube_vertex_buffer = Some(vbuf);
@@ -1359,7 +1419,7 @@ impl MtlContext {
     ) -> Result<usize, String> {
         if self.particle.pipelines.is_none() {
             let pipelines =
-                super::particle::build_particle_pipelines(&self.device, self.hot_reload)?;
+                super::particle::build_particle_pipelines(&self.device, self.hot_reload.enabled)?;
             self.particle.pipelines = Some(pipelines);
         }
         let gpu_state =
@@ -1401,14 +1461,14 @@ impl MtlContext {
 
     // Returns true if the window has been closed by the user.
     pub fn window_closed(&self) -> bool {
-        if self.win.closed() {
+        if self.window.appkit.closed() {
             return true;
         }
         // Detect close via the red-X button: NSWindow.close() hides the window
         // without posting an ApplicationDefined event, so window_closed never
         // becomes true through the event pump alone. Guard with was_visible so
         // we don't misfire before the first frame appears.
-        self.was_visible && self.win.window().is_some_and(|w| !w.isVisible())
+        self.window.was_visible && self.window.appkit.window().is_some_and(|w| !w.isVisible())
     }
 
     // Block until the GPU has finished all in-flight work.
@@ -1421,7 +1481,8 @@ impl MtlContext {
 
     // Drain the classified GPU failure a completion handler parked, if any.
     pub(super) fn take_device_error(&self) -> Option<crate::gfx::error::RenderError> {
-        self.device_error
+        self.diagnostics
+            .device_error
             .lock()
             .ok()
             .and_then(|mut slot| slot.take())
@@ -1449,19 +1510,19 @@ impl Drop for MtlContext {
         // reload) must tear nothing down: the successor owns the window, view,
         // and cursor state now, so closing the window here would order the reused
         // window out from under it.
-        if !self.owns_window {
+        if !self.window.owns {
             return;
         }
         // Always release the cursor on teardown so the OS mouse association and
         // cursor visibility are restored even if the caller didn't do it.
-        self.win.release_cursor();
-        if let Some(window) = self.win.window() {
+        self.window.appkit.release_cursor();
+        if let Some(window) = self.window.appkit.window() {
             // Close the game window so it doesn't linger after the run loop exits.
             window.close();
         } else {
             // In embedded mode (no NSWindow), the MTKView was added as a subview.
             // Explicitly remove it so it doesn't outlive the preview session.
-            self.mtk_view.removeFromSuperview();
+            self.window.view.removeFromSuperview();
         }
     }
 }

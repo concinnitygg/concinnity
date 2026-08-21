@@ -31,14 +31,14 @@
 //                    the GPU being done) and the heavy GGX prefilter convolution
 //                    runs on a WORKER THREAD, off the render thread.
 //   * (install)   -- when the worker finishes, the convolved cube is uploaded and
-//                    installed into `probe_maps` + `probe_set` on the main thread.
+//                    installed into `probe.maps` + `probe.set` on the main thread.
 // The Rendering and Converting phases run in PARALLEL across two slots
-// (`probe_rendering` / `probe_converting`): once a probe's faces are read back its
+// (`probe.rendering` / `probe.converting`): once a probe's faces are read back its
 // GPU resources (the reserved ring slot included) are freed, so the NEXT probe starts
 // rendering while the prior probe's faces convolve on the worker -- shortening the
 // warm-up vs serialising render-then-convolve per probe. Only ONE probe renders at a
 // time (so a single reserved ring slot suffices, GPU lifetime unchanged) and only ONE
-// converts at a time (so installs stay in queue order, keeping `probe_maps` aligned
+// converts at a time (so installs stay in queue order, keeping `probe.maps` aligned
 // with the placement list). A re-placement (`set_reflection_probes`) parks the
 // rendering slot's GPU resources in a frame-tagged retire pool so they outlive any
 // still-running capture; the converting slot holds only plain data and drops freely.
@@ -98,9 +98,9 @@ const PROBE_FACE_COUNT: usize = 6;
 // probe's render shortens the bake warm-up. Only ONE probe holds the reserved ring slot
 // at a time (the rendering one), so the GPU-resource lifetime is identical to a single
 // in-flight bake; at most one probe converts at a time, which keeps installs in queue
-// order (`probe_maps` is appended one cube per probe).
+// order (`probe.maps` is appended one cube per probe).
 pub(in crate::metal) struct RenderingBake {
-    // Placement index being captured; its cube lands at `probe_maps[index]` on install.
+    // Placement index being captured; its cube lands at `probe.maps[index]` on install.
     index: usize,
     placement: reflection_probe::ProbePlacement,
     // Set by the LAST face's completion handler once every face has been submitted.
@@ -122,7 +122,7 @@ pub(in crate::metal) struct RenderingBake {
 }
 
 pub(in crate::metal) struct ConvertingBake {
-    // Placement index; its convolved cube lands at `probe_maps[index]` on install.
+    // Placement index; its convolved cube lands at `probe.maps[index]` on install.
     index: usize,
     placement: reflection_probe::ProbePlacement,
     // The off-thread prefilter convolution writes its `ENVM` payload here exactly once;
@@ -165,7 +165,8 @@ impl MtlContext {
                     // Object AABBs as occupancy so a probe is not auto-captured from
                     // inside a wall; skip degenerate (non-finite) boxes.
                     let occupancy: Vec<([f32; 3], [f32; 3])> = self
-                        .draw_objects
+                        .draw
+                        .objects
                         .iter()
                         .map(|o| (o.bb_min, o.bb_max))
                         .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
@@ -185,19 +186,19 @@ impl MtlContext {
             );
             placements.truncate(MAX_PROBES);
         }
-        self.probe_placements = placements;
-        self.probe_maps.clear();
-        self.probe_set = concinnity_render::uniforms::ProbeSet::EMPTY;
-        self.probe_bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe_placements.len());
+        self.probe.placements = placements;
+        self.probe.maps.clear();
+        self.probe.set = concinnity_render::uniforms::ProbeSet::EMPTY;
+        self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
         // Park the rendering capture's GPU resources instead of dropping them: its
         // command buffers may still be reading the reserved-slot buffers + resolve
         // targets, so defer their free until the frames-in-flight fence guarantees those
         // command buffers have retired. The converting bake holds only the worker's
         // payload slot (plain data) and drops freely.
-        if let Some(bake) = self.probe_rendering.take() {
-            self.probe_retire_pool.push(self.frame_ring_index, bake.gpu);
+        if let Some(bake) = self.probe.rendering.take() {
+            self.probe.retire_pool.push(self.frame_ring_index, bake.gpu);
         }
-        self.probe_converting = None;
+        self.probe.converting = None;
     }
 
     // The reserved transient-ring slot the asynchronous bake builds its bindless
@@ -223,7 +224,8 @@ impl MtlContext {
     ) -> Result<(), String> {
         // Free any parked (interrupted) bake resources the fence now guarantees have
         // retired on the GPU.
-        self.probe_retire_pool
+        self.probe
+            .retire_pool
             .collect(self.frame_ring_index, self.frames_in_flight as u64);
 
         // Permanent ineligibility: the capture renders through the bindless ICB
@@ -237,11 +239,11 @@ impl MtlContext {
         // after a bake started, so park any in-flight capture behind the fence rather
         // than leaking it (its command buffers may still be reading those resources).
         if !self.bindless || self.geometry_less || self.env_map.prefilter_mip_count <= 1 {
-            if let Some(bake) = self.probe_rendering.take() {
-                self.probe_retire_pool.push(self.frame_ring_index, bake.gpu);
+            if let Some(bake) = self.probe.rendering.take() {
+                self.probe.retire_pool.push(self.frame_ring_index, bake.gpu);
             }
-            self.probe_converting = None;
-            self.probe_bake_queue.abort();
+            self.probe.converting = None;
+            self.probe.bake_queue.abort();
             return Ok(());
         }
 
@@ -249,14 +251,15 @@ impl MtlContext {
         // `next_bake_action` transition table called once per slot. Every transition
         // that can fail routes through `fail_bake` (abandon the rest, keep what baked):
         // the queue cursor advanced when a probe started, so leaving it pending after a
-        // mid-bake failure would desync `probe_maps` from the placement list.
+        // mid-bake failure would desync `probe.maps` from the placement list.
 
         // Converting slot: install the convolved cube once the worker finishes. Doing
         // this FIRST frees the slot so the rendering slot can read its finished capture
         // back this same frame.
-        let converting_occupied = self.probe_converting.is_some();
+        let converting_occupied = self.probe.converting.is_some();
         let payload_ready = self
-            .probe_converting
+            .probe
+            .converting
             .as_ref()
             .is_some_and(|c| c.payload.get().is_some());
         let install = reflection_probe::next_bake_action(
@@ -285,15 +288,17 @@ impl MtlContext {
         // keeps at most one probe converting, so installs stay in queue order -- and the
         // next probe's render overlaps the prior probe's off-thread convolution, so the
         // warm-up no longer serialises render-then-convolve per probe.
-        let rendering_occupied = self.probe_rendering.is_some();
+        let rendering_occupied = self.probe.rendering.is_some();
         // `done` only matters once every face is submitted; the completion handler is
         // attached on the last face, so it cannot be set while faces remain.
         let more_faces = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
         let done = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .is_some_and(|r| r.done.load(Ordering::Acquire));
         // Transient ineligibility: geometry may still be streaming in on the first
@@ -308,7 +313,7 @@ impl MtlContext {
             },
             done && converting_free,
             false,
-            self.probe_bake_queue.pending(),
+            self.probe.bake_queue.pending(),
             eligible,
             more_faces,
         ) {
@@ -334,21 +339,21 @@ impl MtlContext {
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started,
-    // so aborting (cursor -> end) is what keeps `probe_maps` aligned with the
+    // so aborting (cursor -> end) is what keeps `probe.maps` aligned with the
     // placement list; the sky covers the remaining placements.
     fn fail_bake(&mut self, e: String) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
-            self.probe_maps.len()
+            self.probe.maps.len()
         );
-        // Abandon BOTH slots: a converting-slot (install) failure leaves `probe_maps`
+        // Abandon BOTH slots: a converting-slot (install) failure leaves `probe.maps`
         // short by one, so a later rendering probe would install at a gapped index and
         // desync the box alignment. Dropping the rendering gpu here is safe -- Metal
         // retains resources referenced by in-flight command buffers until they retire --
         // and the queue abort means the reserved ring slot is never reused.
-        self.probe_rendering = None;
-        self.probe_converting = None;
-        self.probe_bake_queue.abort();
+        self.probe.rendering = None;
+        self.probe.converting = None;
+        self.probe.bake_queue.abort();
     }
 
     // Begin baking the next pending placement: build the reserved-slot bindless
@@ -357,15 +362,15 @@ impl MtlContext {
     // faces follow one per frame via `probe_render_next_face`, so a single frame never
     // pays the cost of all six full-scene captures.
     fn probe_start_next(&mut self, near: f32, far: f32, elapsed: f32) -> Result<(), String> {
-        let Some(index) = self.probe_bake_queue.take_next() else {
+        let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
-        // Note: unlike the install-time check, `index == probe_maps.len()` does NOT hold
+        // Note: unlike the install-time check, `index == probe.maps.len()` does NOT hold
         // here -- with the pipeline this probe can START rendering while the PRIOR probe
-        // is still converting (not yet installed), so `probe_maps` may be one entry
+        // is still converting (not yet installed), so `probe.maps` may be one entry
         // behind. The box-alignment invariant is enforced at install instead, where the
         // single-converting rule guarantees installs land in queue order.
-        let placement = self.probe_placements[index];
+        let placement = self.probe.placements[index];
         let eye = placement.position;
         let slot = self.bake_ring_slot();
 
@@ -390,7 +395,7 @@ impl MtlContext {
         // cross-command-buffer producer/consumer pattern, like the frame's). `None`
         // for static worlds.
         let deformed: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> =
-            if self.n_skinned > 0 {
+            if self.draw.n_skinned > 0 {
                 match self.skinned.deformed.first().map(|b| b.length()) {
                     Some(len) if len > 0 => Some(
                         self.device
@@ -411,7 +416,7 @@ impl MtlContext {
             .map(|_| make_resolve_shared(&self.device, PROBE_FACE_SIZE))
             .collect::<Result<_, _>>()?;
 
-        self.probe_rendering = Some(RenderingBake {
+        self.probe.rendering = Some(RenderingBake {
             index,
             placement,
             done: Arc::new(AtomicBool::new(false)),
@@ -442,7 +447,7 @@ impl MtlContext {
     // it: each face's cull (and the frame's own cull) waits for the prior read,
     // ordering the reuse correctly with no explicit barrier or `waitUntilCompleted`.
     fn probe_render_next_face(&mut self) -> Result<(), String> {
-        let Some(bake) = self.probe_rendering.as_ref() else {
+        let Some(bake) = self.probe.rendering.as_ref() else {
             return Err("probe: render face with no capture in flight".into());
         };
         let (face, eye, near, far, elapsed, counts) = (
@@ -465,7 +470,8 @@ impl MtlContext {
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp);
 
         let RenderingBake { done, gpu, .. } = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .expect("probe capture was just checked");
 
@@ -554,7 +560,7 @@ impl MtlContext {
         render_cb.commit();
 
         // Advance the cursor (a separate mutable borrow now the render borrows ended).
-        if let Some(RenderingBake { cursor, .. }) = &mut self.probe_rendering {
+        if let Some(RenderingBake { cursor, .. }) = &mut self.probe.rendering {
             *cursor += 1;
         }
         Ok(())
@@ -572,7 +578,8 @@ impl MtlContext {
             gpu,
             ..
         } = self
-            .probe_rendering
+            .probe
+            .rendering
             .take()
             .ok_or("probe: readback with no bake in flight")?;
         let mut faces: [Vec<f32>; 6] = std::array::from_fn(|_| Vec::new());
@@ -609,7 +616,7 @@ impl MtlContext {
             let _ = slot.set(bytes);
         });
 
-        self.probe_converting = Some(ConvertingBake {
+        self.probe.converting = Some(ConvertingBake {
             index,
             placement,
             payload,
@@ -618,7 +625,7 @@ impl MtlContext {
     }
 
     // The off-thread convolution finished: upload its payload as a probe cube and
-    // install it into `probe_maps` + `probe_set` (the specular reflection source),
+    // install it into `probe.maps` + `probe.set` (the specular reflection source),
     // leaving `env_map` / the sky untouched. Runs on the main thread.
     fn probe_install(&mut self) -> Result<(), String> {
         let ConvertingBake {
@@ -626,23 +633,24 @@ impl MtlContext {
             placement: p,
             payload,
         } = self
-            .probe_converting
+            .probe
+            .converting
             .take()
             .ok_or("probe: install with no bake in flight")?;
         let bytes = payload.get().ok_or("probe: install before payload ready")?;
         let textures = self.build_probe_textures(bytes)?;
-        debug_assert_eq!(index, self.probe_maps.len());
-        self.probe_maps.push(textures);
-        self.probe_set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
+        debug_assert_eq!(index, self.probe.maps.len());
+        self.probe.maps.push(textures);
+        self.probe.set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
         };
-        self.probe_set.count = self.probe_maps.len() as u32;
+        self.probe.set.count = self.probe.maps.len() as u32;
         tracing::info!(
             "reflection probes: baked {}/{}",
             index + 1,
-            self.probe_placements.len()
+            self.probe.placements.len()
         );
         Ok(())
     }
@@ -652,7 +660,7 @@ impl MtlContext {
     // objects sit inside the static extent for the scenes this bakes, so the
     // static objects' union is a good probe-centring volume.
     pub(in crate::metal) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        reflection_probe::fold_world_bounds(self.draw_objects.iter().map(|o| (o.bb_min, o.bb_max)))
+        reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
     }
 }
 

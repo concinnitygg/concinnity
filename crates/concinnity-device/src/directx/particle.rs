@@ -640,7 +640,7 @@ impl DxContext {
         // Camera basis for camera-facing billboards: rows 0 and 1 of the view
         // matrix's 3×3 are the world-space right and up vectors (the view
         // matrix is column-major, so we read those rows out element-wise).
-        let v = self.view_matrix;
+        let v = self.view.matrix;
         let cam_right = [v[0][0], v[1][0], v[2][0]];
         let cam_up = [v[0][1], v[1][1], v[2][1]];
         let view_uni = ParticleView {
@@ -849,8 +849,8 @@ impl DxContext {
         if any_visible {
             let scene_rtv = self.hdr_scene_rtv();
 
-            let w = self.render_width;
-            let h = self.render_height;
+            let w = self.extent.render_width;
+            let h = self.extent.render_height;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -949,7 +949,7 @@ impl DxContext {
             let resources = ParticleResources::new(
                 &self.alloc,
                 self.particle.srv_base_slot,
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 self.hot_reload.enabled,
             )?;
             self.particle.resources = Some(resources);

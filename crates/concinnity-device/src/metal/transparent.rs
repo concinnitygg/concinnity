@@ -129,7 +129,7 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Transparent);
         }
 
@@ -190,7 +190,7 @@ impl MtlContext {
             GLASS_POOL_SAMPLER_INDEX,
             1,
         );
-        enc.set_fragment_value(&self.probe_set, 7);
+        enc.set_fragment_value(&self.probe.set, 7);
         // A planar reflection resolve at texture(11), the default for every
         // transparent draw so the slot is always bound (validation-safe) even
         // for slotless / probe-path draws. water.metal + glass.slang sample it
@@ -217,9 +217,9 @@ impl MtlContext {
         // auto-tracked -- declare them resident or the trace reads garbage.
         if let (Some(accel), Some(rt_params)) = (
             self.rt.accel.as_ref().filter(|_| {
-                self.glass_pipeline_rt.is_some()
-                    || self.water_pipeline_rt.is_some()
-                    || self.glass_mesh_pipeline_rt.is_some()
+                self.glass.pipeline_rt.is_some()
+                    || self.water.pipeline_rt.is_some()
+                    || self.glass.mesh_pipeline_rt.is_some()
             }),
             rt_params,
         ) {
@@ -234,9 +234,9 @@ impl MtlContext {
             // Textured variants (bindless world): the albedo / normal /
             // emissive pool at buffer(10) + its textures declared resident.
             if let Some(tex_args) = bindless_tex_args.filter(|_| {
-                self.glass_pipeline_rt_textured.is_some()
-                    || self.water_pipeline_rt_textured.is_some()
-                    || self.glass_mesh_pipeline_rt_textured.is_some()
+                self.glass.pipeline_rt_textured.is_some()
+                    || self.water.pipeline_rt_textured.is_some()
+                    || self.glass.mesh_pipeline_rt_textured.is_some()
             }) {
                 enc.set_fragment_buffer(tex_args.as_ref(), 0, 10);
                 self.use_bindless_textures(&enc);

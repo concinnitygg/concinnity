@@ -71,7 +71,8 @@ impl VkContext {
         frame: u64,
     ) -> crate::gfx::error::RenderResult<()> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
         let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
@@ -134,7 +135,7 @@ impl VkContext {
         let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off as u64, idx_bytes)?;
 
-        let obj = &mut self.draw_objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx];
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
@@ -163,7 +164,7 @@ impl VkContext {
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> Result<(), String> {
-        let obj = self.draw_objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
             format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
@@ -248,7 +249,7 @@ impl VkContext {
         }
         // Refresh per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw_objects[draw_idx];
+        let slot = &mut self.draw.objects[draw_idx];
         for ((switch_distance, _), slice) in
             lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
         {
@@ -268,7 +269,8 @@ impl VkContext {
     // the draw non-resident so it is skipped in every pass.
     pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
         let v_off = obj.vertex_offset as u64;
@@ -281,7 +283,7 @@ impl VkContext {
         self.geometry
             .mesh_idx_alloc
             .free(i_off, i_len, retire_frame);
-        self.draw_objects[draw_idx].resident = false;
+        self.draw.objects[draw_idx].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
         self.rt_topology_dirty = true;

@@ -98,7 +98,7 @@ impl MtlContext {
     }
 
     // Upload a baked reflection-probe payload to GPU cube textures and return
-    // them. The caller installs the result into `probe_maps` (the specular
+    // them. The caller installs the result into `probe.maps` (the specular
     // reflection source, distinct from `env_map`); the skybox + diffuse irradiance
     // keep sampling `env_map`, so the visible sky is never replaced by the capture.
     pub(in crate::metal) fn build_probe_textures(

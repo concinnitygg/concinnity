@@ -170,7 +170,7 @@ impl MtlContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = super::math::mat4_mul(params.vp, super::math::mat4_inverse(self.view_matrix));
+        let proj = super::math::mat4_mul(params.vp, super::math::mat4_inverse(self.view.matrix));
         // Reused across planes for the non-bindless CPU reflected-frustum cull:
         // `reflected_visible_set` clears it each plane, so one allocation serves
         // the whole frame. Unused on the bindless path (the GPU mirror cull drives
@@ -180,7 +180,7 @@ impl MtlContext {
             let oriented =
                 crate::gfx::planar_reflection::orient_plane_toward(*plane, params.cam_pos);
             let m = crate::gfx::planar_reflection::planar_matrices(
-                self.view_matrix,
+                self.view.matrix,
                 proj,
                 params.cam_pos,
                 oriented,
@@ -219,10 +219,10 @@ impl MtlContext {
                 // set against the reflected frustum so the legacy face render draws
                 // the reflection's geometry instead of the main camera's set.
                 crate::gfx::planar_reflection::reflected_visible_set(
-                    &self.cull_bvh,
+                    &self.draw.bvh,
                     &mirror_frustum,
                     m.eye,
-                    &self.always_draw,
+                    &self.draw.always,
                     &mut reflected_visible,
                 );
                 (None, reflected_visible.as_slice())

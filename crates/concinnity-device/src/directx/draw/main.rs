@@ -59,7 +59,7 @@ impl DxContext {
 
     // Rebuild this frame's `StructuredBuffer<GpuObjectData>` for the bindless
     // static pass: one 144-byte record per build-time `DrawObject`, indexed by
-    // object id. Streamed `VoxelWorld` chunks (past `n_objects`) are skipped;
+    // object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are skipped;
     // they render through the legacy pipeline. Rebuilt every frame so
     // `update_model` / `update_visibility` edits are reflected; a no-op when
     // the bindless pass is inactive.
@@ -77,12 +77,18 @@ impl DxContext {
         // fallback slot for a normal-less draw). The bindless main pass + RT hit
         // shader bind the pool base, so a shared texture resolves to one descriptor.
         let texture_count = self.descriptors.textures.len() as u32;
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            // SAFETY: the buffer was sized for `n_objects` records and the
-            // loop is bounded by `take(n_objects)`, so `i * stride` is in range.
+            // SAFETY: the buffer was sized for `draw.n_objects` records and the
+            // loop is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuObjectData as *const u8,
@@ -105,8 +111,8 @@ impl DxContext {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_object_record(obj, albedo, normal);
-            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + n_chunk)` and
-            // `for_each_chunk_record` caps `k < n_chunk`, so the write is in range.
+            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + draw.n_chunk)` and
+            // `for_each_chunk_record` caps `k < draw.n_chunk`, so the write is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuObjectData as *const u8,
@@ -126,15 +132,15 @@ impl DxContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
             let normal = normal_pool_index(obj.normal_map_slot, texture_count);
             let rec = pack_skinned_record(obj, albedo, normal);
-            // SAFETY: the buffer reserved `n_skinned` records past
+            // SAFETY: the buffer reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.n_skinned`.
+            // `self.skinned.draw_objects.len() == self.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuObjectData as *const u8,
@@ -237,13 +243,13 @@ impl DxContext {
             local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
-        let depth_dsv = self.depth_dsv;
+        let depth_dsv = self.depth.dsv;
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&depth_dsv));
-            cmd.ClearRenderTargetView(self.hdr.color_rtv, &self.clear_color, None);
+            cmd.ClearRenderTargetView(self.hdr.color_rtv, &self.view.clear_color, None);
             cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
 
             let vp = D3D12_VIEWPORT {
@@ -289,7 +295,7 @@ impl DxContext {
             ]);
         }
 
-        let last_obj = self.draw_objects.len().saturating_sub(1);
+        let last_obj = self.draw.objects.len().saturating_sub(1);
 
         // SSAO (GTAO) ran ahead of this pass via the pre-graph
         // (`PassId::SsaoBlur` dispatches the bundled prepass + kernel +
@@ -379,7 +385,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    com::gpu_va(&self.probe_set_cbvs[frame_idx]),
+                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: the static + instance prefix
                 // `[0, skinned_record_base())` against the static VB/IB (bound
@@ -451,15 +457,15 @@ impl DxContext {
             // Shared static-object traversal (gate + LOD pick); the closure
             // owns this pass's per-draw bindings + draw.
             self.draw_static_objects(visible, cam_pos, |obj, i, index_offset, index_count| {
-                if use_bindless && i < self.n_objects {
+                if use_bindless && i < self.draw.n_objects {
                     return; // build-time object, already drawn bindless
                 }
                 let is_clone = self.clone.slot_by_draw_idx.contains_key(&i);
-                if use_bindless && i >= self.n_objects && !is_clone {
+                if use_bindless && i >= self.draw.n_objects && !is_clone {
                     return; // streamed chunk, already drawn bindless (folded record)
                 }
                 // Descriptor table [5]: albedo + normal SRVs for this object.
-                // Three sources for runtime-added draws past `n_objects`:
+                // Three sources for runtime-added draws past `draw.n_objects`:
                 //   - Runtime clones (`clone_static_draw_object`) have their
                 //     own (albedo, normal) SRV pair baked into the clone pool
                 //     at init; the draw_idx → clone_offset lookup finds it.
@@ -468,7 +474,7 @@ impl DxContext {
                 //   - Build-time draws use the pre-baked per-object pair.
                 let obj_srv_gpu = if let Some(&clone_offset) = self.clone.slot_by_draw_idx.get(&i) {
                     self.clone_srv_gpu(clone_offset)
-                } else if i >= self.n_objects {
+                } else if i >= self.draw.n_objects {
                     self.chunk_srv_gpu()
                 } else {
                     self.object_srv_gpu(i.min(last_obj))
@@ -509,7 +515,7 @@ impl DxContext {
 
         // Instanced clusters main pass. Skipped when the bindless merge is active:
         // each instance is folded into the GPU-driven `GpuObjectData` buffer as a
-        // record at `n_objects + k` and drawn by the bindless `ExecuteIndirect`
+        // record at `draw.n_objects + k` and drawn by the bindless `ExecuteIndirect`
         // above (with per-instance culling). The gbuffer pre-pass + shadow still
         // use this legacy path for instances.
         if let (Some(inst_pso), Some(inst_root_sig)) = (
@@ -617,7 +623,7 @@ impl DxContext {
         // deformed buffer and left it in VERTEX_AND_CONSTANT_BUFFER. Otherwise the
         // legacy per-draw skinned pass runs (custom-shader worlds, or a
         // pure-skinned world with no static geometry to engage bindless).
-        if use_bindless && self.n_skinned > 0 {
+        if use_bindless && self.draw.n_skinned > 0 {
             if let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(deformed_vbv)) = (
                 self.cull.main_bindless_pso.as_ref(),
                 self.cull.main_bindless_root_sig.as_ref(),
@@ -670,14 +676,14 @@ impl DxContext {
                     cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                     cmd.SetGraphicsRootConstantBufferView(
                         11,
-                        com::gpu_va(&self.probe_set_cbvs[frame_idx]),
+                        com::gpu_va(&self.probe.set_cbvs[frame_idx]),
                     );
                     // ExecuteIndirect #2: skinned tail
                     // `[skinned_record_base(), cull_count())`, byte-offset into the
                     // same indirect command buffer.
                     cmd.ExecuteIndirect(
                         cull_sig,
-                        self.n_skinned as u32,
+                        self.draw.n_skinned as u32,
                         indirect,
                         (self.skinned_record_base()
                             * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
@@ -842,7 +848,7 @@ impl DxContext {
             local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
-        let depth_dsv = self.depth_dsv;
+        let depth_dsv = self.depth.dsv;
 
         // Load (do not clear) the phase-1 colour + depth: Main2 composites the
         // disoccluded geometry on top.
@@ -918,7 +924,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    com::gpu_va(&self.probe_set_cbvs[frame_idx]),
+                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: static + instance prefix against the static
                 // VB/IB (bound above), once per shader bucket.
@@ -943,7 +949,7 @@ impl DxContext {
             // IB. The root signature + root descriptors set above persist, so only
             // the pipeline (a bucket may have replaced it) and the vertex/index
             // buffers rebind. Skinned draws always render bucket 0.
-            if self.n_skinned > 0
+            if self.draw.n_skinned > 0
                 && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
             {
                 // SAFETY: the command list is in the recording state, and every resource,
@@ -954,7 +960,7 @@ impl DxContext {
                     cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(
                         cull_sig,
-                        self.n_skinned as u32,
+                        self.draw.n_skinned as u32,
                         indirect,
                         (self.skinned_record_base()
                             * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)

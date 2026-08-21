@@ -15,7 +15,7 @@
 // dispatch writes one indirect buffer per cascade and each cascade is issued
 // with one `cmd_draw_indexed_indirect` (static + instance prefix) + one for the
 // skinned tail, instead of the CPU per-object loop. Streamed chunks / runtime
-// clones (records past `n_objects`) keep the legacy per-object loop; a
+// clones (records past `draw.n_objects`) keep the legacy per-object loop; a
 // non-bindless world (custom shader) keeps the legacy path entirely.
 //
 // The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
@@ -252,7 +252,7 @@ impl VkContext {
             }
 
             // Skinned tail against the deformed VB + skinned u16 IB.
-            if self.n_skinned > 0
+            if self.draw.n_skinned > 0
                 && let Some(deformed) = self.skinned.deformed.get(frame_idx)
             {
                 device.cmd_bind_vertex_buffers(
@@ -271,7 +271,7 @@ impl VkContext {
                     cmd,
                     indirect,
                     (self.skinned_record_base() * stride as usize) as u64,
-                    self.n_skinned as u32,
+                    self.draw.n_skinned as u32,
                     stride,
                 );
                 self.inc_draw_calls(1);
@@ -284,7 +284,7 @@ impl VkContext {
     }
 
     // Legacy per-object casters for runtime clones past the bindless record range
-    // (`i >= n_objects` AND in `clone_slot_by_draw_idx`). Streamed VoxelWorld chunks
+    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
     // now fold into the GPU-driven cull records (drawn by the per-cascade indirect
     // draw), so they are skipped here. Mirrors the legacy static loop, appending
     // into this cascade's depth (no re-clear). A no-op for worlds with no clones.
@@ -296,7 +296,7 @@ impl VkContext {
         cascade_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        if self.clone_slot_by_draw_idx.is_empty() {
+        if self.clone.slot_by_draw_idx.is_empty() {
             return;
         }
         let (Some(shadow_pipeline), Some(shadow_pl)) = (
@@ -328,11 +328,11 @@ impl VkContext {
                 0,
                 vk::IndexType::UINT32,
             );
-            for (i, obj) in self.draw_objects.iter().enumerate() {
-                if i < self.n_objects || !obj.visible || !obj.resident {
+            for (i, obj) in self.draw.objects.iter().enumerate() {
+                if i < self.draw.n_objects || !obj.visible || !obj.resident {
                     continue;
                 }
-                if !self.clone_slot_by_draw_idx.contains_key(&i) {
+                if !self.clone.slot_by_draw_idx.contains_key(&i) {
                     continue; // streamed chunk -> folded into the cull records
                 }
                 let d = crate::gfx::lod::camera_distance(obj, cam_pos);
@@ -406,7 +406,7 @@ impl VkContext {
                 vk::IndexType::UINT32,
             );
 
-            for obj in &self.draw_objects {
+            for obj in &self.draw.objects {
                 // A non-resident streamed mesh has no geometry in the
                 // shared buffers yet -- skip it everywhere.
                 if !obj.visible || !obj.resident {

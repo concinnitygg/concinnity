@@ -95,27 +95,28 @@ impl MtlContext {
             .ok_or("draw_frame must be called from the main thread")?;
         // Snapped for the pass encoders (wireframe fill mode, unlit shading,
         // the composite's channel visualization + depth normalization).
-        self.view_mode = view_mode;
-        self.view_far = far;
+        self.view.mode = view_mode;
+        self.view.far = far;
 
         // Reset this frame's render stats; the draw counters below accumulate
-        // into `frame_stats`, and `render_stats()` reports them (plus the GPU
+        // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
         // frame time) to the profiler overlay. `objects` is the total scene
         // size: static draw objects, every instanced-cluster instance, and
         // skinned meshes.
-        self.frame_stats = crate::gfx::profile::RenderStats::default();
+        self.diagnostics.frame_stats = crate::gfx::profile::RenderStats::default();
         let instanced_total: usize = self
-            .instanced_clusters
+            .instanced
+            .clusters
             .iter()
             .map(|c| c.instances.len())
             .sum();
-        self.frame_stats.objects =
-            (self.draw_objects.len() + instanced_total + self.skinned.draw_objects.len()) as u32;
+        self.diagnostics.frame_stats.objects =
+            (self.draw.objects.len() + instanced_total + self.skinned.draw_objects.len()) as u32;
         // Live skinned count: authored meshes plus runtime-spawned instances,
         // excluding the hidden pre-reserved pool slots. `objects` above counts
         // the whole pool and so stays flat across skinned spawn/despawn; this
         // tracks the visible count, so a spawn bumps it and a despawn drops it.
-        self.frame_stats.skinned_visible = self
+        self.diagnostics.frame_stats.skinned_visible = self
             .skinned
             .draw_objects
             .iter()
@@ -125,14 +126,15 @@ impl MtlContext {
         // instance pool.
         // Current GPU memory footprint. On Apple Silicon's unified memory this
         // is the Metal device's allocation within system RAM.
-        self.frame_stats.vram_bytes = self.device.currentAllocatedSize() as u64;
-        self.frame_stats.transient_pool_bytes = self.transient_pool.heap_bytes();
+        self.diagnostics.frame_stats.vram_bytes = self.device.currentAllocatedSize() as u64;
+        self.diagnostics.frame_stats.transient_pool_bytes = self.transient_pool.heap_bytes();
 
         // Rotate the per-frame sample-buffer slot if per-pass GPU timing is
-        // available. Every `pass_timing.attach_*` call this frame writes
+        // available. Every `diagnostics.pass_timing.attach_*` call this frame writes
         // into the same slot's buffer; the completion handler resolves it
         // after the frame retires.
         let pass_timing_slot = self
+            .diagnostics
             .pass_timing
             .as_mut()
             .map(|p| p.begin_frame())
@@ -143,8 +145,8 @@ impl MtlContext {
         // delivery (pumping there would dequeue mouse clicks meant for the
         // tab bar before they reach their targets); the windowed CLI path
         // and the blocking-in-view play path opt in.
-        if self.win.pump_events() {
-            self.win.pump_ns_events(mtm);
+        if self.window.appkit.pump_events() {
+            self.window.appkit.pump_ns_events(mtm);
             if self.window_closed() {
                 return Ok(());
             }
@@ -155,7 +157,7 @@ impl MtlContext {
         // Runs off the delegate-tracked flag so OS-driven fullscreen exits
         // (green traffic-light button, Mission Control) restore too. Cheap
         // when nothing changed.
-        self.win.reconcile_display_mode();
+        self.window.appkit.reconcile_display_mode();
 
         // Frames-in-flight gate: block until the GPU has retired an older frame
         // so the CPU never queues more than `frames_in_flight` frames ahead,
@@ -168,7 +170,7 @@ impl MtlContext {
         let frame_slot = self.frame_pacing.acquire();
 
         // Asynchronous reflection-probe bake. One probe at a time, advanced across
-        // frames, captures real geometry into `probe_maps` (the sky `env_map` is
+        // frames, captures real geometry into `probe.maps` (the sky `env_map` is
         // left untouched) so glossy surfaces reflect their surroundings instead of a
         // foreign HDR; unbaked probes fall back to the sky until installed. The
         // render thread never blocks on it: the six faces are submitted without
@@ -183,14 +185,14 @@ impl MtlContext {
         }
 
         // tell MTKView to prepare its drawable for this frame
-        self.mtk_view.draw();
+        self.window.view.draw();
 
-        let drawable = match self.mtk_view.currentDrawable() {
+        let drawable = match self.window.view.currentDrawable() {
             Some(d) => d,
             // drawable not yet available -- skip this frame silently
             None => return Ok(()),
         };
-        self.was_visible = true;
+        self.window.was_visible = true;
 
         // This frame's transient-buffer ring slot. The fence guarantees the
         // frame that last used `frame_ring_index - frames_in_flight` has retired
@@ -249,49 +251,49 @@ impl MtlContext {
         // The aspect/near/far are taken from the same params used by the main
         // perspective below so cascades match the visible camera frustum.
         let cascade_aspect = {
-            let s = self.mtk_view.drawableSize();
+            let s = self.window.view.drawableSize();
             if s.height == 0.0 {
                 1.0
             } else {
                 (s.width / s.height) as f32
             }
         };
-        if self.shadow_pipeline_state.is_some() {
+        if self.shadow.pipeline_state.is_some() {
             let fresh =
                 crate::gfx::csm::compute_shadow_uniforms(crate::gfx::csm::ShadowUniformInputs {
-                    view: self.view_matrix,
+                    view: self.view.matrix,
                     cam_pos,
                     fov_y_rad: fov_y_radians,
                     aspect: cascade_aspect,
                     near,
-                    shadow_distance: (self.shadow_distance as f32).min(far),
-                    light_dir_to_source: self.shadow_light_dir,
-                    shadow_map_size: self.shadow_map_size,
-                    active_cascades: self.shadow_cascades,
+                    shadow_distance: (self.shadow.distance as f32).min(far),
+                    light_dir_to_source: self.shadow.light_dir,
+                    shadow_map_size: self.shadow.map_size,
+                    active_cascades: self.shadow.cascades,
                 });
             // Pick this frame's cascades and refresh only their VPs; cascades
             // skipped this frame keep the VP their slice was rendered with so
             // the Main pass samples each slice consistently. Splits depend only
             // on the camera near/far range (not position), so always take fresh.
             let mask = self.next_shadow_cascade_mask();
-            self.shadow_render_mask = mask;
-            self.shadow_uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow_uniforms.active_cascades = fresh.active_cascades;
+            self.shadow.render_mask = mask;
+            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
+            self.shadow.uniforms.active_cascades = fresh.active_cascades;
             for i in 0..crate::gfx::render_types::NUM_SHADOW_CASCADES {
                 if mask & (1u32 << i) != 0 {
-                    self.shadow_uniforms.light_vps[i] = fresh.light_vps[i];
+                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
                 }
             }
         }
 
         // Spot shadow slices refresh on their own prime-then-round-robin clock;
         // their projections are static, so only the depth contents redraw.
-        self.spot_shadow_render_mask = self.next_spot_shadow_mask();
+        self.spot_shadow.render_mask = self.next_spot_shadow_mask();
 
         // Main pass prep: resize off-screen targets, then the visible set.
         // Resize the HDR targets if the drawable size changed (window resize
-        // or initial layout). The drawable was just refreshed by mtk_view.draw().
-        let draw_size = self.mtk_view.drawableSize();
+        // or initial layout). The drawable was just refreshed by window.view.draw().
+        let draw_size = self.window.view.drawableSize();
         // Geometry-less worlds keep their off-screen targets pinned at 1x1
         // (see MtlContext::new); the composite pass still uses the full drawable.
         let (want_w, want_h) = if self.geometry_less {
@@ -322,7 +324,7 @@ impl MtlContext {
         // `execute_graph`) can project AABBs through it against the pyramid the
         // mid-frame `HizBuild` rebuilds from this frame's depth. The same value
         // becomes `cull_prev_view_proj` at end-of-frame for next frame's phase 1.
-        self.cull.cur_view_proj = mat4_mul(proj, self.view_matrix);
+        self.cull.cur_view_proj = mat4_mul(proj, self.view.matrix);
         // When TAA or the MetalFX upscaler is on, offset the projection by
         // a sub-pixel Halton jitter so the temporal accumulator has fresh
         // sample positions each frame. The jitter is a pure NDC x/y shift,
@@ -350,7 +352,7 @@ impl MtlContext {
         } else {
             proj
         };
-        let vp = mat4_mul(proj_render, self.view_matrix);
+        let vp = mat4_mul(proj_render, self.view.matrix);
         // Inverse of the (jittered) view-projection, computed once here and
         // threaded through `GraphFrameParams` to every pass that reconstructs a
         // world-space position from depth (fog, decals, raymarch, transparent),
@@ -375,7 +377,7 @@ impl MtlContext {
         // no acceleration-structure refresh -- so it runs as a bare clear that
         // the opaque overlay then covers. The masked graph drops every other
         // world pass, so none of this work would be consumed anyway.
-        let mut visible = std::mem::take(&mut self.visible_scratch);
+        let mut visible = std::mem::take(&mut self.draw.visible_scratch);
         visible.clear();
         let (object_buffer, cull_draw_args, bindless_tex_args, prepared_instances) = if world_hidden
         {
@@ -393,10 +395,11 @@ impl MtlContext {
             // objects, then the always-draw fallback (skybox, rooms, dynamic
             // props). The bindless static pass instead consumes the GPU-culled
             // indirect command buffer, so it never walks this list.
-            self.cull_bvh
+            self.draw
+                .bvh
                 .query(&frustum, cam_pos, |idx| visible.push(idx));
             visible.sort_unstable();
-            visible.extend_from_slice(&self.always_draw);
+            visible.extend_from_slice(&self.draw.always);
 
             // Per-frame GPU buffer prep for the bindless path.
             // The object data + indirect-args + bindless texture argbuf are
@@ -473,7 +476,7 @@ impl MtlContext {
             .settings
             .map(|settings| settings.params(fov_y_radians, aspect));
         let ssr_params = self.ssr.settings.map(|settings| {
-            let v = self.view_matrix;
+            let v = self.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -502,7 +505,7 @@ impl MtlContext {
                 .settings
                 .filter(|_| self.rt.accel.is_some())
                 .map(|settings| {
-                    let v = self.view_matrix;
+                    let v = self.view.matrix;
                     let inv_view_rot = [
                         [v[0][0], v[1][0], v[2][0], 0.0],
                         [v[0][1], v[1][1], v[2][1], 0.0],
@@ -549,7 +552,7 @@ impl MtlContext {
             // the jitter-free history, so the fog flickers (a moving moire). The
             // un-jittered inv_vp keeps the volume stable frame to frame; its offset
             // versus the jittered depth buffer is far below the coarse froxel grid.
-            let fog_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view_matrix));
+            let fog_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view.matrix));
             fog.params(fog_inv_vp, cam_pos, sun.direction, sun_color, viewport)
         });
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
@@ -559,7 +562,7 @@ impl MtlContext {
             self.fog
                 .settings
                 .map(|fog| crate::gfx::render_types::FogFroxelParams {
-                    view: self.view_matrix,
+                    view: self.view.matrix,
                     froxel_dims: [
                         crate::gfx::render_graph::FOG_FROXEL_X,
                         crate::gfx::render_graph::FOG_FROXEL_Y,
@@ -579,15 +582,15 @@ impl MtlContext {
         // and the LightCull graph node is omitted. Stored on self so the shared
         // main-pass bind can push it; a local copy feeds the LightCull arm.
         let clustered = self.light_cull.pipeline.is_some();
-        let cluster_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view_matrix));
+        let cluster_inv_vp = super::math::mat4_inverse(mat4_mul(proj, self.view.matrix));
         self.cluster_params = crate::gfx::render_types::ClusterParams {
             inv_view_proj: cluster_inv_vp,
             cam_pos,
             z_near: near.max(1e-3),
             view_forward: [
-                -self.view_matrix[0][2],
-                -self.view_matrix[1][2],
-                -self.view_matrix[2][2],
+                -self.view.matrix[0][2],
+                -self.view.matrix[1][2],
+                -self.view.matrix[2][2],
             ],
             z_far: far,
             grid_x: crate::gfx::render_types::CLUSTER_GRID_X,
@@ -606,7 +609,7 @@ impl MtlContext {
         let vel_uniforms = if velocity_active {
             Some(VelocityUniforms {
                 jittered_vp: vp,
-                cur_vp: mat4_mul(proj, self.view_matrix),
+                cur_vp: mat4_mul(proj, self.view.matrix),
                 prev_vp: self.prev_view_proj,
             })
         } else {
@@ -659,8 +662,8 @@ impl MtlContext {
         // SSR off `scene_input` aliases `hdr_resolve`, which is the correct
         // RMW target: the transparent encoder blits a scene copy first, so the
         // self-read for refraction is safe.
-        let transparent_active = (self.water_pipeline.is_some() && !self.water_surfaces.is_empty())
-            || (self.glass_pipeline.is_some() && !self.glass_panels.is_empty());
+        let transparent_active = (self.water.pipeline.is_some() && !self.water.surfaces.is_empty())
+            || (self.glass.pipeline.is_some() && !self.glass.panels.is_empty());
 
         // Line pipeline: built on the first frame that publishes lines,
         // so the graph gate below can see it live this same frame.
@@ -676,8 +679,8 @@ impl MtlContext {
         // frame start above and stays alive through `presentDrawable`
         // below.
         let graph_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow_pipeline_state.is_some(),
-            shadow_map_size: self.shadow_map_size,
+            shadow_enabled: self.shadow.pipeline_state.is_some(),
+            shadow_map_size: self.shadow.map_size,
             hdr_width: self.hdr_targets.width,
             hdr_height: self.hdr_targets.height,
             hdr_sample_count: super::context::HDR_SAMPLE_COUNT,
@@ -721,7 +724,7 @@ impl MtlContext {
             // the volume vec at init. Tightened to the real `is_some()
             // && !empty()` predicate once the context fields land
             // alongside `encode_raymarch` (see metal/raymarch.rs).
-            raymarch_enabled: !self.raymarch_volumes.is_empty(),
+            raymarch_enabled: !self.raymarch.volumes.is_empty(),
             // Two-pass Hi-Z occlusion. Resolved from
             // `PostProcessConfig.occlusion_two_pass` (and gated at init on the
             // bindless cull path existing). The graph builder further ANDs this
@@ -757,9 +760,9 @@ impl MtlContext {
             clustered_lighting_enabled: clustered,
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
-            shadowed_spot_count: self.spot_shadow_count,
+            shadowed_spot_count: self.spot_shadow.count,
             spot_shadow_slice_size: crate::gfx::render_types::spot_shadow_slice_size(
-                self.shadow_map_size,
+                self.shadow.map_size,
             ),
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
@@ -771,7 +774,7 @@ impl MtlContext {
         // when a feature toggles or a target resizes). Taken out of the cache so
         // the later `&mut self` execute_graph does not conflict with a borrow of
         // it; put back after execution. A mismatch (or a cold cache) rebuilds.
-        let graph = match self.frame_graph_cache.take() {
+        let graph = match self.draw.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == graph_inputs => cached_graph,
             _ => crate::gfx::render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| format!("frame graph: {}", e))?,
@@ -780,10 +783,10 @@ impl MtlContext {
         // a local so `params` owns a handle rather than borrowing `self.skinned`
         // across the `&mut self` execute_graph call (every other GraphFrameParams
         // buffer is likewise a local). `Some` only when the fold is active
-        // (n_skinned > 0, set in upload_skinned under bindless + static geometry);
+        // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
         // the Cull pass writes it via encode_main_skin and the Main / Main2
         // skinned ICB tail binds it.
-        let deformed_this_frame = if self.n_skinned > 0 {
+        let deformed_this_frame = if self.draw.n_skinned > 0 {
             self.skinned.deformed.get(ring_slot).cloned()
         } else {
             None
@@ -791,7 +794,7 @@ impl MtlContext {
         // The previous frame's deformed slot (one behind in the ring), read by
         // the GPU-driven G-buffer skinned tail for per-vertex skin motion. The
         // priming gate (`deformed_primed`) covers the unposed first frame.
-        let deformed_prev_frame = if self.n_skinned > 0 {
+        let deformed_prev_frame = if self.draw.n_skinned > 0 {
             let prev_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
             self.skinned.deformed.get(prev_slot).cloned()
         } else {
@@ -814,7 +817,8 @@ impl MtlContext {
         // buffer instead of minting a pair per label mid-encode. Done here, past
         // the frames-in-flight fence, so overwriting the slot cannot race a GPU
         // read of the frame that last used it.
-        self.text_upload
+        self.text
+            .upload
             .upload(&self.device, ring_slot, text_calls)?;
 
         let params = GraphFrameParams {
@@ -863,7 +867,7 @@ impl MtlContext {
         self.execute_graph(&graph, &params)?;
         // Cache the compiled graph under this frame's inputs so the next frame
         // with matching inputs skips the rebuild.
-        self.frame_graph_cache = Some((graph_inputs, graph));
+        self.draw.graph_cache = Some((graph_inputs, graph));
 
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
         // `HizFinal` pass, so it has already been encoded. Advance the temporal
@@ -900,19 +904,20 @@ impl MtlContext {
         //
         // If per-pass timing is active, the same completion handler also
         // resolves the frame's `MTLCounterSampleBuffer` slot and publishes
-        // each pass's microseconds into `pass_times_us`. The handler holds
+        // each pass's microseconds into `diagnostics.pass_times_us`. The handler holds
         // a `Retained` clone of the sample buffer, so the buffer outlives
-        // the borrow `self.pass_timing` came from.
+        // the borrow `self.diagnostics.pass_timing` came from.
         {
             // Hand this frame's in-flight slot to the GPU completion handler;
             // `into_gpu_release` suppresses the guard's Drop so the slot is
             // released exactly once, when the GPU retires the command buffer.
             let frame_sem = frame_slot.into_gpu_release();
-            let gpu_time = std::sync::Arc::clone(&self.gpu_time_us);
-            let pass_times = std::sync::Arc::clone(&self.pass_times_us);
-            let render_fault_logged = std::sync::Arc::clone(&self.render_fault_logged);
-            let device_error = std::sync::Arc::clone(&self.device_error);
+            let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
+            let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
+            let render_fault_logged = std::sync::Arc::clone(&self.diagnostics.render_fault_logged);
+            let device_error = std::sync::Arc::clone(&self.diagnostics.device_error);
             let pass_buffer = self
+                .diagnostics
                 .pass_timing
                 .as_ref()
                 .map(|p| p.buffer_for(pass_timing_slot));
@@ -921,6 +926,7 @@ impl MtlContext {
             // every world pass behind an opaque menu) would otherwise resolve to
             // its last run's stale timestamps; the handler zeroes those slots.
             let active_mask = self
+                .diagnostics
                 .pass_timing
                 .as_ref()
                 .map(|p| p.attached_mask())
@@ -1006,7 +1012,7 @@ impl MtlContext {
         // prop update. TAA-specific bookkeeping (history-target ping-pong)
         // only runs when TAA itself is on.
         if velocity_active {
-            self.prev_view_proj = mat4_mul(proj, self.view_matrix);
+            self.prev_view_proj = mat4_mul(proj, self.view.matrix);
             self.taa.frame = self.taa.frame.wrapping_add(1);
             if self.taa.enabled {
                 self.taa.dst = 1 - self.taa.dst;
@@ -1015,7 +1021,7 @@ impl MtlContext {
             for (prev, obj) in self
                 .prev_draw_models
                 .iter_mut()
-                .zip(self.draw_objects.iter())
+                .zip(self.draw.objects.iter())
             {
                 *prev = obj.model;
             }
@@ -1024,7 +1030,7 @@ impl MtlContext {
                 .clone_from(&self.skinned.joint_matrices);
         }
 
-        self.visible_scratch = visible;
+        self.draw.visible_scratch = visible;
         Ok(())
     }
 
@@ -1167,7 +1173,7 @@ impl MtlContext {
                     .accel
                     .as_ref()
                     .expect("rt_accel is Some (checked above)")
-                    .transforms_dirty(&self.draw_objects);
+                    .transforms_dirty(&self.draw.objects);
                 if dirty {
                     self.rebuild_rt_tlas(albedo_count)?;
                 }
@@ -1199,7 +1205,7 @@ impl MtlContext {
         let vbuf = self.vertex_buffer.retained();
         let ibuf = self.index_buffer.retained();
         let exclude_seethrough = self.seethrough_meshes_enabled();
-        let draw_objects = std::mem::take(&mut self.draw_objects);
+        let draw_objects = std::mem::take(&mut self.draw.objects);
         let res = self
             .rt
             .accel
@@ -1223,7 +1229,7 @@ impl MtlContext {
                     frame_id,
                 },
             );
-        self.draw_objects = draw_objects;
+        self.draw.objects = draw_objects;
         res
     }
 
@@ -1266,8 +1272,8 @@ impl MtlContext {
                 index_buffer: &self.index_buffer,
             },
             super::raytrace::RtSceneGeometry {
-                draw_objects: &self.draw_objects,
-                clusters: &self.instanced_clusters,
+                draw_objects: &self.draw.objects,
+                clusters: &self.instanced.clusters,
             },
             super::raytrace::RtTextureCounts { albedo_count },
             skinned,
@@ -1303,7 +1309,7 @@ impl MtlContext {
         ) else {
             return Ok(());
         };
-        let draw_objects = std::mem::take(&mut self.draw_objects);
+        let draw_objects = std::mem::take(&mut self.draw.objects);
         let skinned = SkinnedRtInputs {
             objects: &self.skinned.draw_objects,
             vertex_buffer: &svb,
@@ -1328,7 +1334,7 @@ impl MtlContext {
                 super::raytrace::RtTextureCounts { albedo_count },
                 frame,
             );
-        self.draw_objects = draw_objects;
+        self.draw.objects = draw_objects;
         res
     }
 
@@ -1340,14 +1346,14 @@ impl MtlContext {
     fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.command_queue.clone();
-        let draw_objects = std::mem::take(&mut self.draw_objects);
+        let draw_objects = std::mem::take(&mut self.draw.objects);
         let res = self
             .rt
             .accel
             .as_mut()
             .expect("rt_accel is Some (checked by caller)")
             .rebuild_tlas(&device, &queue, &draw_objects, albedo_count);
-        self.draw_objects = draw_objects;
+        self.draw.objects = draw_objects;
         res
     }
 

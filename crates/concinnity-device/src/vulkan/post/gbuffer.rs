@@ -427,7 +427,7 @@ pub(in crate::vulkan) struct GbufferBindlessDescriptors {
 
 // Scene sizing that dimensions the per-frame prev_model SSBOs. `instance_models`
 // are the per-instance current transforms written once into the immutable
-// instance region; `n_objects` is the static prefix length that region starts
+// instance region; `draw.n_objects` is the static prefix length that region starts
 // after; `n_cull` is the total cull-record count (the SSBO stride); `frames` is
 // the number of frames in flight.
 pub(in crate::vulkan) struct GbufferBindlessScene<'a> {
@@ -439,7 +439,7 @@ pub(in crate::vulkan) struct GbufferBindlessScene<'a> {
 
 // Build the GPU-driven G-buffer pre-pass pipeline + its per-frame previous-frame
 // model SSBOs + descriptor sets. The previous-frame model buffers' instance
-// region `[n_objects, n_objects + n_instances)` is written once here (immutable,
+// region `[draw.n_objects, draw.n_objects + n_instances)` is written once here (immutable,
 // camera-only motion); the static + skinned regions are rewritten each frame by
 // `build_gbuffer_prev_models`. Set 0 = G-buffer view UBO + prev_model SSBO; set 1
 // = the shared bindless GpuObjectData set (object id via gl_InstanceIndex).
@@ -1228,7 +1228,7 @@ impl VkContext {
             jittered_vp,
             cur_vp,
             prev_vp,
-            view: self.view_matrix,
+            view: self.view.matrix,
         };
         gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
@@ -1332,10 +1332,10 @@ impl VkContext {
 
         // Static geometry: same visible set + LOD pick as the main pass so the
         // G-buffer covers exactly what main rasterised.
-        let last_obj = self.draw_objects.len().saturating_sub(1);
+        let last_obj = self.draw.objects.len().saturating_sub(1);
         for &draw_idx in visible {
             let i = (draw_idx as usize).min(last_obj);
-            let obj = match self.draw_objects.get(i) {
+            let obj = match self.draw.objects.get(i) {
                 Some(o) => o,
                 None => continue,
             };
@@ -1676,7 +1676,7 @@ impl VkContext {
         // once the ring is primed (a prior frame posed that slot); before then (or
         // when velocity is inactive) it is the current buffer, so prev_pos ==
         // cur_pos gives a harmless zero skinned motion vector.
-        if self.n_skinned > 0
+        if self.draw.n_skinned > 0
             && let Some(cur) = self.skinned.deformed.get(frame_idx)
         {
             let frames = self.frames_in_flight.max(1);
@@ -1706,7 +1706,7 @@ impl VkContext {
                     cmd,
                     indirect,
                     (self.skinned_record_base() * stride as usize) as u64,
-                    self.n_skinned as u32,
+                    self.draw.n_skinned as u32,
                     stride,
                 );
             }
@@ -1718,14 +1718,14 @@ impl VkContext {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Legacy extra: streamed chunks + runtime clones (records past `n_objects`)
+        // Legacy extra: streamed chunks + runtime clones (records past `draw.n_objects`)
         // are not in the GpuObjectData buffer, so draw them with the legacy
         // per-object pipeline into the same MRT.
         self.encode_gbuffer_legacy_extra(gb, cmd, frame_idx, visible, cam_pos, velocity_active);
     }
 
     // Legacy per-object G-buffer draws for runtime clones past the bindless range
-    // (`i >= n_objects` AND in `clone_slot_by_draw_idx`). Streamed VoxelWorld chunks
+    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
     // now fold into the GPU-driven cull records (drawn by the prefix indirect draw),
     // so they are skipped here. Mirrors the legacy static loop, appending into the
     // same MRT after the indirect draws. A no-op for worlds with no clones.
@@ -1738,7 +1738,7 @@ impl VkContext {
         cam_pos: [f32; 3],
         velocity_active: bool,
     ) {
-        if self.clone_slot_by_draw_idx.is_empty() {
+        if self.clone.slot_by_draw_idx.is_empty() {
             return;
         }
         let device = &self.device;
@@ -1768,13 +1768,13 @@ impl VkContext {
         }
         for &draw_idx in visible {
             let i = draw_idx as usize;
-            if i < self.n_objects {
+            if i < self.draw.n_objects {
                 continue; // build-time object, already drawn via indirect
             }
-            if !self.clone_slot_by_draw_idx.contains_key(&i) {
+            if !self.clone.slot_by_draw_idx.contains_key(&i) {
                 continue; // streamed chunk -> folded into the cull records
             }
-            let Some(obj) = self.draw_objects.get(i) else {
+            let Some(obj) = self.draw.objects.get(i) else {
                 continue;
             };
             if !obj.visible || !obj.resident {
@@ -1820,7 +1820,7 @@ impl VkContext {
 
     // Fill this frame's previous-frame model SSBO for the GPU-driven G-buffer
     // velocity. Indexed by cull record id, parallel to the GpuObjectData buffer:
-    // the static prefix `[0, n_objects)` gets last frame's model (so a moving
+    // the static prefix `[0, draw.n_objects)` gets last frame's model (so a moving
     // static object reprojects correctly), the skinned tail gets the current model
     // (skinned deformation motion comes from the previous-frame deformed buffer,
     // not the model matrix). The instance region is init-written + immutable
@@ -1837,7 +1837,13 @@ impl VkContext {
             return;
         };
         let stride = std::mem::size_of::<[[f32; 4]; 4]>();
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             let prev = if velocity_active {
                 gb.prev_models.get(i).copied().unwrap_or(obj.model)
             } else {
@@ -1857,7 +1863,7 @@ impl VkContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             // Skinned motion is per-vertex (previous deformed buffer), so the model

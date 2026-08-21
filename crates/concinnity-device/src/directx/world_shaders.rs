@@ -36,7 +36,7 @@ impl DxContext {
             .ok_or_else(|| "shader buckets need the bindless main pass".to_string())?;
         let pso = build_bucket_pipeline(
             &self.device,
-            self.info_queue.as_ref(),
+            self.diagnostics.info_queue.as_ref(),
             &root_sig,
             bucket as usize,
             shader,

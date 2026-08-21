@@ -34,7 +34,7 @@ impl DxContext {
     {
         for &draw_idx in visible {
             let i = draw_idx as usize;
-            let Some(obj) = self.draw_objects.get(i) else {
+            let Some(obj) = self.draw.objects.get(i) else {
                 continue;
             };
             if !obj.visible || !obj.resident {
@@ -47,7 +47,7 @@ impl DxContext {
     }
 
     // Walk the resident streamed-chunk draw objects -- the build-time-geometry
-    // tail past `n_objects` that are NOT runtime clones -- invoking `emit` with the
+    // tail past `draw.n_objects` that are NOT runtime clones -- invoking `emit` with the
     // chunk's reserve index `k` (0-based, into `[chunk_record_base() + k]`) and the
     // `DrawObject`. Chunk geometry already lives in the shared VB/IB, so chunks
     // fold into the static+instance prefix indirect draw as plain records (with
@@ -56,26 +56,32 @@ impl DxContext {
     // path. Non-resident slots are skipped too: chunks and clones now share the
     // draw-slot free list, so a retired clone leaves a non-resident gap in this
     // tail (no longer in `slot_by_draw_idx`); counting those gaps toward `k` could
-    // push a live chunk past `n_chunk` and silently drop it. Only resident chunks
-    // consume a reserve index, bounded by the streaming window (<= `n_chunk`).
+    // push a live chunk past `draw.n_chunk` and silently drop it. Only resident chunks
+    // consume a reserve index, bounded by the streaming window (<= `draw.n_chunk`).
     // Returns the number of chunk records emitted, so the caller can disable the
     // unused reserve tail.
     pub(in crate::directx) fn for_each_chunk_record<F>(&self, mut emit: F) -> usize
     where
         F: FnMut(usize, &DrawObject),
     {
-        if self.n_chunk == 0 {
+        if self.draw.n_chunk == 0 {
             return 0;
         }
         let mut k = 0;
-        for (i, obj) in self.draw_objects.iter().enumerate().skip(self.n_objects) {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .enumerate()
+            .skip(self.draw.n_objects)
+        {
             if self.clone.slot_by_draw_idx.contains_key(&i) {
                 continue; // runtime clone -> legacy per-object path
             }
             if !obj.resident {
                 continue; // retired chunk / clone gap -- not a live chunk
             }
-            if k >= self.n_chunk {
+            if k >= self.draw.n_chunk {
                 break;
             }
             emit(k, obj);

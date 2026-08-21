@@ -103,7 +103,7 @@ impl MtlContext {
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     fn shade_mode(&self) -> f32 {
-        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
             1.0
         } else {
             0.0
@@ -149,7 +149,7 @@ impl MtlContext {
             && object_buffer.is_some()
             && self.cull.pipeline_phase2.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.clear_color;
+        let [r, g, b, a] = self.view.clear_color;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -191,7 +191,7 @@ impl MtlContext {
             da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::Main);
         }
         // ScopedEncoder ends the main HDR pass (MSAA resolves into hdr_resolve)
@@ -204,13 +204,13 @@ impl MtlContext {
         );
         // Wireframe view: fill mode is encoder state that indirect commands
         // inherit, so the one call covers the ICB sub-paths too.
-        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
         let view_uniforms = ViewUniforms {
             vp,
-            view: self.view_matrix,
+            view: self.view.matrix,
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
@@ -287,7 +287,7 @@ impl MtlContext {
             skinned_joint_bufs,
         } = draw_inputs;
         let desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.clear_color;
+        let [r, g, b, a] = self.view.clear_color;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -414,7 +414,7 @@ impl MtlContext {
             da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::Main2);
         }
         let encoder = ScopedEncoder::new(
@@ -423,13 +423,13 @@ impl MtlContext {
                 .ok_or("failed to get render encoder")?,
             "main2 pass",
         );
-        if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
         let view_uniforms = ViewUniforms {
             vp,
-            view: self.view_matrix,
+            view: self.view.matrix,
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
@@ -623,20 +623,20 @@ impl MtlContext {
         // array is a discrete texture on the legacy path only; the bindless
         // path reaches it through the BindlessTextures argument buffer,
         // because discrete texture bindings break ICB compatibility.
-        enc.set_fragment_buffer(&self.spot_shadow_buffer, 0, 13);
+        enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, 13);
         // Rect area-light extents at fragment buffer(14), indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
         enc.set_fragment_buffer(&self.area_light_buffer, 0, 14);
-        enc.set_fragment_value(&self.shadow_uniforms, 5);
-        enc.set_fragment_texture(self.shadow_map.as_ref(), 2);
-        enc.set_fragment_texture(self.spot_shadow_map.as_ref(), 14);
+        enc.set_fragment_value(&self.shadow.uniforms, 5);
+        enc.set_fragment_texture(self.shadow.map.as_ref(), 2);
+        enc.set_fragment_texture(self.spot_shadow.map.as_ref(), 14);
         // Area-light LTC tables. The cube sampler at sampler(2) is a plain
         // linear clamp-to-edge, which is what the lookup wants, so no extra
         // sampler slot is needed.
         enc.set_fragment_texture(self.ltc_matrix_texture.as_ref(), 15);
         enc.set_fragment_texture(self.ltc_magnitude_texture.as_ref(), 16);
-        enc.set_fragment_sampler(self.shadow_sampler.as_ref(), 1);
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 1);
         // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
         // and a shared linear-clamp sampler at sampler(2). Always bound; the
         // shader uses prefilter_mip_count == 0 to detect the fallback case.
@@ -661,7 +661,7 @@ impl MtlContext {
         // Reflection-probe set (count + per-probe parallax boxes) at fragment
         // buffer(6) (a buffer slot, distinct from the texture(6) array). `EMPTY`
         // until a bake; the shader weights every box covering the surface.
-        enc.set_fragment_value(&self.probe_set, 6);
+        enc.set_fragment_value(&self.probe.set, 6);
         true
     }
 
@@ -751,7 +751,7 @@ impl MtlContext {
         view_uniforms: &ViewUniforms,
         prepared: &super::super::instanced::PreparedInstances,
     ) -> u32 {
-        let Some(inst_ps) = self.instanced_pipeline_state.clone() else {
+        let Some(inst_ps) = self.instanced.pipeline_state.clone() else {
             return 0;
         };
         if prepared.clusters.is_empty() {
@@ -766,7 +766,7 @@ impl MtlContext {
         // SSR / SSAO / velocity pre-passes + shadow still consume `prepared`
         // through the legacy instanced path. Instance-
         // only worlds (no static geometry) keep the legacy draw here.
-        if self.bindless && !self.draw_objects.is_empty() {
+        if self.bindless && !self.draw.objects.is_empty() {
             return 0;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main instanced"));
@@ -822,10 +822,10 @@ impl MtlContext {
         // When the GPU-driven skinned fold is active (bindless + static
         // geometry), skinned objects were pre-skinned into the deformed buffer
         // and drawn by the bindless ICB's skinned tail, so this legacy VS-skinned
-        // draw would double-draw them. `n_skinned > 0` is set in `upload_skinned`
+        // draw would double-draw them. `draw.n_skinned > 0` is set in `upload_skinned`
         // under exactly that condition, mirroring the instanced gate. A pure-
-        // skinned or non-bindless world keeps `n_skinned == 0` and draws here.
-        if self.n_skinned > 0 {
+        // skinned or non-bindless world keeps `draw.n_skinned == 0` and draws here.
+        if self.draw.n_skinned > 0 {
             return 0;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main skinned"));

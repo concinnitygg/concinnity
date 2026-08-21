@@ -7,7 +7,7 @@
 // Bloom, Velocity, TaaResolve, SsrResolve, ParticlesDraw, Fog, Decals,
 // SsrPrepass, and SsaoBlur are the dispatchable PassIds. PassIds
 // `ParticlesSim`, `SsaoPrepass`, and `SsaoKernel` are timing-only:
-// their per-pass timing slots fire from `pass_timing.attach_*` calls
+// their per-pass timing slots fire from `diagnostics.pass_timing.attach_*` calls
 // inside the bundled `encode_particles` / `encode_ssao` Rust functions,
 // but they must never appear as graph nodes (the executor rejects them
 // with a clear error if mis-added). `ParticlesDraw` dispatches the
@@ -220,7 +220,9 @@ impl MtlContext {
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
         let particle_frame = self.prepare_particle_pass(params.elapsed);
-        self.draw_calls_accum.store(0, Ordering::Relaxed);
+        self.diagnostics
+            .draw_calls_accum
+            .store(0, Ordering::Relaxed);
 
         let composite_idx = graph
             .passes
@@ -248,7 +250,7 @@ impl MtlContext {
         // Cloned before the parallel borrow so the commit loop's per-pass
         // fault-logging handlers can share the throttle without re-borrowing
         // `self` while `ctx_ref` is live.
-        let pass_fault_count = std::sync::Arc::clone(&self.pass_fault_count);
+        let pass_fault_count = std::sync::Arc::clone(&self.diagnostics.pass_fault_count);
         let ctx_ref = ParallelCtxRef::new(self);
         crate::jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -281,7 +283,9 @@ impl MtlContext {
                         };
                         match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
                             Ok(count) => {
-                                ctx.draw_calls_accum.fetch_add(count, Ordering::Relaxed);
+                                ctx.diagnostics
+                                    .draw_calls_accum
+                                    .fetch_add(count, Ordering::Relaxed);
                                 let mut lock = worker_slots_ref.lock().unwrap();
                                 lock[idx] = Some(SendableCmdBuf(cmd_buf));
                             }
@@ -356,10 +360,13 @@ impl MtlContext {
                 params,
                 particle_frame.as_ref(),
             )?;
-            self.draw_calls_accum.fetch_add(count, Ordering::Relaxed);
+            self.diagnostics
+                .draw_calls_accum
+                .fetch_add(count, Ordering::Relaxed);
         }
 
-        self.frame_stats.draw_calls += self.draw_calls_accum.load(Ordering::Relaxed);
+        self.diagnostics.frame_stats.draw_calls +=
+            self.diagnostics.draw_calls_accum.load(Ordering::Relaxed);
         Ok(())
     }
 
@@ -453,7 +460,7 @@ impl MtlContext {
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: params.elapsed,
                     vp: params.vp,
-                    view: self.view_matrix,
+                    view: self.view.matrix,
                     cam_pos: params.cam_pos,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
@@ -491,7 +498,7 @@ impl MtlContext {
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: params.elapsed,
                     vp: params.vp,
-                    view: self.view_matrix,
+                    view: self.view.matrix,
                     cam_pos: params.cam_pos,
                 },
                 crate::metal::draw::main::DrawInputs {
@@ -531,7 +538,7 @@ impl MtlContext {
                         jittered_vp: v.jittered_vp,
                         cur_vp: v.cur_vp,
                         prev_vp: v.prev_vp,
-                        view: self.view_matrix,
+                        view: self.view.matrix,
                     },
                     // Velocity inactive: cur == prev so the motion channel is a
                     // harmless zero (no consumer reads it).
@@ -539,7 +546,7 @@ impl MtlContext {
                         jittered_vp: params.vp,
                         cur_vp: params.vp,
                         prev_vp: params.vp,
-                        view: self.view_matrix,
+                        view: self.view.matrix,
                     },
                 };
                 self.encode_gbuffer_prepass(
@@ -603,7 +610,7 @@ impl MtlContext {
                 // Bundled inside `encode_ssao` (dispatched via
                 // PassId::SsaoBlur). These PassIds keep their
                 // per-pass timing slots via inline
-                // `pass_timing.attach_render` calls inside
+                // `diagnostics.pass_timing.attach_render` calls inside
                 // encode_ssao, but they must not appear as their
                 // own graph nodes: same pattern as
                 // PassId::ParticlesSim.
@@ -658,8 +665,8 @@ impl MtlContext {
                 // timing wiring. Only `PassId::ParticlesDraw` is a
                 // graph node: `PassId::ParticlesSim` remains a
                 // timing-only PassId. Per-frame particle-state
-                // mutations (`particle_last_elapsed`,
-                // `particle_frame_index`, per-emitter spawn budget)
+                // mutations (`particle.last_elapsed`,
+                // `particle.frame_index`, per-emitter spawn budget)
                 // were run on `&mut self` before this loop via
                 // `prepare_particle_pass`; the read-only encode here
                 // consumes the precomputed tuple.
@@ -679,7 +686,7 @@ impl MtlContext {
             // ParticlesSim is bundled inside `encode_particles`
             // (dispatched via `PassId::ParticlesDraw`), so it has
             // no separate graph node. It keeps its per-pass timing
-            // slot via the inline `pass_timing.attach_compute` call.
+            // slot via the inline `diagnostics.pass_timing.attach_compute` call.
             PassId::ParticlesSim => {
                 return Err(format!(
                     "graph executor: pass {} is bundled inside ParticlesDraw \

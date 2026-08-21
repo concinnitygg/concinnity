@@ -13,7 +13,7 @@
 // dispatch writes one `ExecuteIndirect` region per cascade and each cascade is
 // issued with a single `ExecuteIndirect` over the static + skinned records (the
 // same cull buffers the main pass uses), instead of the CPU per-object loop.
-// Streamed chunks / runtime clones (records past `n_objects`) keep the legacy
+// Streamed chunks / runtime clones (records past `draw.n_objects`) keep the legacy
 // per-object loop. A non-bindless world (custom shader) keeps the legacy path
 // entirely.
 
@@ -249,7 +249,7 @@ impl DxContext {
         // Skinned tail: a second `ExecuteIndirect` per cascade over the deformed
         // VB + skinned u16 IB, reading each cascade region from `skinned_record_base()`
         // on. No depth clear -- appends to the static depth via the LESS test.
-        if self.n_skinned > 0
+        if self.draw.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
@@ -277,7 +277,7 @@ impl DxContext {
                     let byte_off = ((cascade_idx * n_cull + prefix) * stride) as u64;
                     cmd.ExecuteIndirect(
                         sb_sig,
-                        self.n_skinned as u32,
+                        self.draw.n_skinned as u32,
                         indirect,
                         byte_off,
                         None::<&ID3D12Resource>,
@@ -304,7 +304,7 @@ impl DxContext {
     }
 
     // Legacy per-object casters for runtime clones past the bindless record range
-    // (`i >= n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
+    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
     // now fold into the GPU-driven cull records (drawn by the per-cascade indirect
     // draw), so they are skipped here. Mirrors the legacy static loop, appending
     // into each re-rendered cascade's depth (no re-clear). A no-op for worlds with
@@ -341,8 +341,8 @@ impl DxContext {
                 // Append to the GPU-driven cascade depth (no re-clear).
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
             }
-            for (i, obj) in self.draw_objects.iter().enumerate() {
-                if i < self.n_objects || !obj.visible || !obj.resident {
+            for (i, obj) in self.draw.objects.iter().enumerate() {
+                if i < self.draw.n_objects || !obj.visible || !obj.resident {
                     continue;
                 }
                 if !self.clone.slot_by_draw_idx.contains_key(&i) {
@@ -397,7 +397,7 @@ impl DxContext {
             cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
             cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
 
-            for obj in &self.draw_objects {
+            for obj in &self.draw.objects {
                 // A non-resident streamed mesh has no geometry in the shared
                 // buffers yet -- skip it everywhere.
                 if !obj.visible || !obj.resident {

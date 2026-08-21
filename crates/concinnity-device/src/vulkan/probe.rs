@@ -91,7 +91,7 @@ impl VkContext {
     // converted to `ProbePlacement`s by the graphics system). An empty list
     // auto-seeds a grid from the scene bounds, so existing scenes still get local
     // reflections without authoring. Capped at the cube array's descriptor count,
-    // so `probe_set.count` can never index past what the shader declares. Pushed
+    // so `probe.set.count` can never index past what the shader declares. Pushed
     // once after construction; the cube capture that fills the probe set runs
     // across later frames (next slice).
     pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
@@ -101,7 +101,8 @@ impl VkContext {
                     // Object AABBs as occupancy so a probe is not auto-captured from
                     // inside a wall; skip degenerate (non-finite) boxes.
                     let occupancy: Vec<([f32; 3], [f32; 3])> = self
-                        .draw_objects
+                        .draw
+                        .objects
                         .iter()
                         .map(|o| (o.bb_min, o.bb_max))
                         .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
@@ -136,32 +137,32 @@ impl VkContext {
         // when a capture is in flight (its targets may still be on the GPU) or cubes
         // exist (the forward shader may sample them), reset every cube-array slot back
         // to the sky so none dangles, then drop the in-flight bake + the cubes. The
-        // common first call has an empty queue + `probe_maps`, so it skips all of this.
-        if self.probe_rendering.is_some() || !self.probe_maps.is_empty() {
+        // common first call has an empty queue + `probe.maps`, so it skips all of this.
+        if self.probe.rendering.is_some() || !self.probe.maps.is_empty() {
             self.wait_idle();
         }
         let device = self.device.clone();
-        if let Some(rendering) = self.probe_rendering.take() {
+        if let Some(rendering) = self.probe.rendering.take() {
             rendering.destroy(&device, self.commands.command_pool);
         }
-        self.probe_converting = None;
-        if !self.probe_maps.is_empty() {
+        self.probe.converting = None;
+        if !self.probe.maps.is_empty() {
             self.reset_probe_cube_slots_to_sky();
-            self.probe_maps.clear();
+            self.probe.maps.clear();
         }
-        self.probe_placements = placements;
-        self.probe_set = ProbeSet::EMPTY;
+        self.probe.placements = placements;
+        self.probe.set = ProbeSet::EMPTY;
         // Enqueue the placements; `bake_pending_probes` (driven each frame from
         // `draw_frame`) renders + installs them staggered across later frames, so the
         // construction call no longer blocks on the capture.
-        self.probe_bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe_placements.len());
+        self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
     }
 
     // World-space bounds over every static draw object, skipping degenerate
     // (non-finite) AABBs. `None` for an empty scene. Mirrors
     // `directx/probe.rs::scene_world_bounds`.
     pub(super) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        reflection_probe::fold_world_bounds(self.draw_objects.iter().map(|o| (o.bb_min, o.bb_max)))
+        reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
     }
 
     // Point every probe-cube-array slot (binding 8) of every frame's global set
@@ -206,9 +207,9 @@ impl VkContext {
     //     like the DX / Metal first-frame bake.
     pub(super) fn bake_pending_probes(&mut self) -> Result<(), String> {
         // Nothing queued and nothing in flight: cheap early-out once the bake drains.
-        if !self.probe_bake_queue.pending()
-            && self.probe_rendering.is_none()
-            && self.probe_converting.is_none()
+        if !self.probe.bake_queue.pending()
+            && self.probe.rendering.is_none()
+            && self.probe.converting.is_none()
         {
             return Ok(());
         }
@@ -220,25 +221,26 @@ impl VkContext {
             || self.cull.cull_pipeline.is_none()
             || self.cull.bindless_pipeline.is_none()
         {
-            if self.probe_rendering.is_some() {
+            if self.probe.rendering.is_some() {
                 self.wait_idle();
             }
             let device = self.device.clone();
-            if let Some(rendering) = self.probe_rendering.take() {
+            if let Some(rendering) = self.probe.rendering.take() {
                 rendering.destroy(&device, self.commands.command_pool);
             }
-            self.probe_converting = None;
-            self.probe_bake_queue.abort();
+            self.probe.converting = None;
+            self.probe.bake_queue.abort();
             return Ok(());
         }
 
         // Converting slot first: install the convolved cube once the worker finishes,
         // freeing the slot so the rendering slot can read its finished capture back
-        // this same frame (keeps installs in queue order -> `probe_maps` aligned with
+        // this same frame (keeps installs in queue order -> `probe.maps` aligned with
         // the placement list).
-        let converting_occupied = self.probe_converting.is_some();
+        let converting_occupied = self.probe.converting.is_some();
         let payload_ready = self
-            .probe_converting
+            .probe
+            .converting
             .as_ref()
             .is_some_and(|c| c.payload.get().is_some());
         let install = reflection_probe::next_bake_action(
@@ -262,12 +264,13 @@ impl VkContext {
         // Rendering slot: submit one face per frame; once all six retired on the GPU
         // (the last face's fence signalled) AND the converting slot is free, read the
         // faces back and hand them to the worker, or start the next placement.
-        let rendering_occupied = self.probe_rendering.is_some();
+        let rendering_occupied = self.probe.rendering.is_some();
         let more_faces = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
-        let done = self.probe_rendering.as_ref().is_some_and(|r| {
+        let done = self.probe.rendering.as_ref().is_some_and(|r| {
             r.cursor >= PROBE_FACE_COUNT
                 // SAFETY: the fence was created from this device; the query only reads.
                 && unsafe { self.device.get_fence_status(r.face_fences[r.last_fence()]) }
@@ -284,7 +287,7 @@ impl VkContext {
             },
             done && converting_free,
             false,
-            self.probe_bake_queue.pending(),
+            self.probe.bake_queue.pending(),
             eligible,
             more_faces,
         ) {
@@ -310,24 +313,24 @@ impl VkContext {
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started, so
-    // aborting (cursor -> end) keeps `probe_maps` aligned with the placement list.
+    // aborting (cursor -> end) keeps `probe.maps` aligned with the placement list.
     fn fail_bake(&mut self, e: String) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
-            self.probe_maps.len()
+            self.probe.maps.len()
         );
         // Idle before dropping the in-flight capture's GPU resources: its command
         // buffers may still be executing. A bake failure is rare (allocation / device
         // error), so the one-time stall is acceptable.
-        if self.probe_rendering.is_some() {
+        if self.probe.rendering.is_some() {
             self.wait_idle();
         }
         let device = self.device.clone();
-        if let Some(rendering) = self.probe_rendering.take() {
+        if let Some(rendering) = self.probe.rendering.take() {
             rendering.destroy(&device, self.commands.command_pool);
         }
-        self.probe_converting = None;
-        self.probe_bake_queue.abort();
+        self.probe.converting = None;
+        self.probe.bake_queue.abort();
     }
 
     // Begin baking the next pending placement: build the bake-owned capture resources
@@ -336,10 +339,10 @@ impl VkContext {
     // re-runs only the cull with its own frustum). No face is submitted here; the six
     // follow one per frame via `probe_render_next_face`.
     fn probe_start_next(&mut self) -> Result<(), String> {
-        let Some(index) = self.probe_bake_queue.take_next() else {
+        let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
-        let placement = self.probe_placements[index];
+        let placement = self.probe.placements[index];
         let eye = placement.position;
         let bake = BakeResources::new(self)?;
 
@@ -377,7 +380,7 @@ impl VkContext {
             bake.view_bufs[face].write_val(0, &view);
         }
 
-        self.probe_rendering = Some(RenderingBake {
+        self.probe.rendering = Some(RenderingBake {
             index,
             placement,
             eye,
@@ -430,7 +433,7 @@ impl VkContext {
             width: PROBE_FACE_SIZE,
             height: PROBE_FACE_SIZE,
         };
-        // Copy the bake handles out (all Copy) so no borrow of `self.probe_rendering`
+        // Copy the bake handles out (all Copy) so no borrow of `self.probe.rendering`
         // is held across the `&self` encode calls below.
         let (
             face,
@@ -445,7 +448,8 @@ impl VkContext {
             readback,
         ) = {
             let r = self
-                .probe_rendering
+                .probe
+                .rendering
                 .as_ref()
                 .ok_or("probe: render face with no bake in flight")?;
             let b = &r.bake;
@@ -504,7 +508,8 @@ impl VkContext {
         };
         {
             let r = self
-                .probe_rendering
+                .probe
+                .rendering
                 .as_mut()
                 .ok_or("probe: render face slot vanished")?;
             r.face_cmds.push(cmd);
@@ -631,7 +636,8 @@ impl VkContext {
         // advance the cursor now that this face submitted, so `last_fence()` points at
         // it and `done` polls the right fence.
         let r = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_mut()
             .ok_or("probe: render face slot vanished")?;
         r.cursor += 1;
@@ -644,7 +650,8 @@ impl VkContext {
     // the render thread. Moves the bake to the Converting slot.
     fn probe_readback_and_convolve(&mut self) -> Result<(), String> {
         let rendering = self
-            .probe_rendering
+            .probe
+            .rendering
             .take()
             .ok_or("probe: readback with no bake in flight")?;
         let device = self.device.clone();
@@ -688,7 +695,7 @@ impl VkContext {
             let _ = slot.set(bytes);
         });
 
-        self.probe_converting = Some(ConvertingBake {
+        self.probe.converting = Some(ConvertingBake {
             index,
             placement,
             payload,
@@ -699,7 +706,7 @@ impl VkContext {
     // The off-thread convolution finished: deserialise the worker's payload, upload
     // the prefiltered radiance cube, and install it as probe `index` -- point this
     // probe's slot in every frame's cube array at the baked cube and record its
-    // parallax box, bumping `probe_set.count` so the forward specular samples it.
+    // parallax box, bumping `probe.set.count` so the forward specular samples it.
     // Leaves `env_map` / the sky untouched. Mirrors `directx/probe.rs::probe_install`.
     fn probe_install(&mut self) -> Result<(), String> {
         let ConvertingBake {
@@ -707,7 +714,8 @@ impl VkContext {
             placement: p,
             payload,
         } = self
-            .probe_converting
+            .probe
+            .converting
             .take()
             .ok_or("probe: install with no bake in flight")?;
         let bytes = payload.get().ok_or("probe: install before payload ready")?;
@@ -750,19 +758,19 @@ impl VkContext {
 
         // Installs run in queue order, so the cube array stays aligned with the
         // placement list.
-        debug_assert_eq!(index, self.probe_maps.len());
-        self.probe_maps.push(cube);
-        self.probe_set.probes[index] = ProbeUniforms {
+        debug_assert_eq!(index, self.probe.maps.len());
+        self.probe.maps.push(cube);
+        self.probe.set.probes[index] = ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
         };
-        self.probe_set.count = self.probe_maps.len() as u32;
-        if !self.probe_bake_queue.pending() && self.probe_rendering.is_none() {
+        self.probe.set.count = self.probe.maps.len() as u32;
+        if !self.probe.bake_queue.pending() && self.probe.rendering.is_none() {
             tracing::info!(
                 "reflection probes: baked {}/{}",
-                self.probe_maps.len(),
-                self.probe_placements.len()
+                self.probe.maps.len(),
+                self.probe.placements.len()
             );
         }
         Ok(())
@@ -867,7 +875,7 @@ impl VkContext {
             return;
         };
         let device = &self.device;
-        let [r, g, b, a] = self.clear_color;
+        let [r, g, b, a] = self.view.clear_color;
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -934,7 +942,7 @@ impl VkContext {
     }
 }
 
-// One in-flight probe's GPU capture state, held on `VkContext::probe_rendering`
+// One in-flight probe's GPU capture state, held on `VkContext`'s `probe.rendering`
 // while its six faces submit one per frame. Reuses one `BakeResources` (built in
 // `probe_start_next`, freed in `probe_readback_and_convolve`) across the faces; the
 // per-face command buffers + fences accumulate until readback, when the last face's

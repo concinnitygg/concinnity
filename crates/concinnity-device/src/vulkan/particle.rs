@@ -300,7 +300,7 @@ impl ParticleResources {
 
     // Free every owned handle. Called from `Drop for VkContext` after
     // `device_wait_idle`. Per-emitter pools + counters live in
-    // `VkContext::particle_emitter_state`; their destruction is the
+    // `VkContext`'s `particle.emitter_state`; their destruction is the
     // caller's responsibility.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
@@ -766,7 +766,7 @@ fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> 
 impl VkContext {
     // Mutating prelude for the particle pass, run on `&mut self` before the
     // render-graph fan-out: advance the frame `dt` (against
-    // `particle_last_elapsed`), the monotonic `particle_frame_index`, and each
+    // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
     // emitter's fractional spawn accumulator, returning the per-frame
     // `(dt, frame_index, per_emitter_spawn_budgets)` the read-only
     // `encode_particles` then consumes. Split out so `encode_particles` can
@@ -777,20 +777,21 @@ impl VkContext {
         &mut self,
         elapsed: f32,
     ) -> Option<(f32, u32, Vec<u32>)> {
-        self.particle_resources.as_ref()?;
-        if self.particles.is_empty() || self.particle_emitter_state.is_empty() {
+        self.particle.resources.as_ref()?;
+        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return None;
         }
-        let dt = (elapsed - self.particle_last_elapsed.get()).max(0.0);
-        self.particle_last_elapsed.set(elapsed);
-        let frame_index = self.particle_frame_index.get().wrapping_add(1);
-        self.particle_frame_index.set(frame_index);
+        let dt = (elapsed - self.particle.last_elapsed.get()).max(0.0);
+        self.particle.last_elapsed.set(elapsed);
+        let frame_index = self.particle.frame_index.get().wrapping_add(1);
+        self.particle.frame_index.set(frame_index);
 
-        let mut budgets = Vec::with_capacity(self.particles.len());
+        let mut budgets = Vec::with_capacity(self.particle.records.len());
         for (rec_slot, gpu_slot) in self
-            .particles
+            .particle
+            .records
             .iter()
-            .zip(self.particle_emitter_state.iter())
+            .zip(self.particle.emitter_state.iter())
         {
             let budget = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
                 (Some(rec), Some(gpu)) => {
@@ -821,10 +822,10 @@ impl VkContext {
         vp: [[f32; 4]; 4],
         frustum: &crate::gfx::frustum::Frustum,
     ) {
-        let Some(resources) = self.particle_resources.as_ref() else {
+        let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
-        if self.particles.is_empty() || self.particle_emitter_state.is_empty() {
+        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return;
         }
         let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
@@ -837,7 +838,8 @@ impl VkContext {
         // emitters stay in a realistic mid-life state when the camera
         // turns back. Tombstoned (None) slots are always invisible.
         let visible: Vec<bool> = self
-            .particles
+            .particle
+            .records
             .iter()
             .map(|slot| match slot {
                 Some(r) => {
@@ -852,7 +854,7 @@ impl VkContext {
         // view matrix's 3×3 are the world-space right and up vectors (the
         // view matrix is column-major, so we read those rows out
         // element-wise). Mirrors metal/directx particle encoders.
-        let v = self.view_matrix;
+        let v = self.view.matrix;
         let cam_right = [v[0][0], v[1][0], v[2][0]];
         let cam_up = [v[0][1], v[1][1], v[2][1]];
         let view_uni = ParticleView {
@@ -871,11 +873,12 @@ impl VkContext {
         // budget; the vertex stage zeroes its copy since it only reads
         // gradient + size fields).
         let mut params_per_emitter: Vec<Option<(ParticleParams, u32)>> =
-            Vec::with_capacity(self.particles.len());
+            Vec::with_capacity(self.particle.records.len());
         for (i, (rec_slot, gpu_slot)) in self
-            .particles
+            .particle
+            .records
             .iter()
-            .zip(self.particle_emitter_state.iter())
+            .zip(self.particle.emitter_state.iter())
             .enumerate()
         {
             let (rec, _gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
@@ -927,7 +930,7 @@ impl VkContext {
         }
         for (data, gpu_slot) in params_per_emitter
             .iter()
-            .zip(self.particle_emitter_state.iter())
+            .zip(self.particle.emitter_state.iter())
         {
             let (Some((_, spawn_budget)), Some(gpu)) = (data.as_ref(), gpu_slot.as_ref()) else {
                 continue;
@@ -978,10 +981,10 @@ impl VkContext {
             let Some((params, _)) = data.as_ref() else {
                 continue;
             };
-            let Some(gpu) = self.particle_emitter_state[i].as_ref() else {
+            let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
                 continue;
             };
-            let Some(rec) = self.particles[i].as_ref() else {
+            let Some(rec) = self.particle.records[i].as_ref() else {
                 continue;
             };
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -1090,10 +1093,10 @@ impl VkContext {
             let Some((params, _)) = data.as_ref() else {
                 continue;
             };
-            let Some(gpu) = self.particle_emitter_state[i].as_ref() else {
+            let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
                 continue;
             };
-            let Some(rec) = self.particles[i].as_ref() else {
+            let Some(rec) = self.particle.records[i].as_ref() else {
                 continue;
             };
             // Vertex stage reads only gradient + size fields; sending the
@@ -1144,7 +1147,7 @@ impl VkContext {
         &mut self,
         record: ParticleEmitterRecord,
     ) -> Result<usize, String> {
-        if self.particle_resources.is_none() {
+        if self.particle.resources.is_none() {
             let hdr_resolve_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
             let resources = ParticleResources::new(
@@ -1157,14 +1160,14 @@ impl VkContext {
                 self.frames_in_flight,
                 &hdr_resolve_views,
                 self.render_extent,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
-            self.particle_resources = Some(resources);
+            self.particle.resources = Some(resources);
         }
 
         // Reuse a tombstoned slot if available; otherwise grow the vec.
         // The cap check is independent of slot availability.
-        let live_count = self.particles.iter().filter(|s| s.is_some()).count();
+        let live_count = self.particle.records.iter().filter(|s| s.is_some()).count();
         if live_count >= MAX_EMITTERS {
             return Err(format!(
                 "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
@@ -1178,7 +1181,8 @@ impl VkContext {
                 command_pool: self.commands.command_pool,
                 queue: self.graphics_queue,
             },
-            self.particle_resources
+            self.particle
+                .resources
                 .as_ref()
                 .expect("particle resources are live"),
             &record,
@@ -1188,7 +1192,8 @@ impl VkContext {
         let last_tex = self.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
         let sampler = self
-            .particle_resources
+            .particle
+            .resources
             .as_ref()
             .expect("particle resources are live")
             .sampler
@@ -1200,24 +1205,24 @@ impl VkContext {
             sampler,
         );
 
-        let id = if let Some(slot) = self.particle_free_slots.pop() {
+        let id = if let Some(slot) = self.particle.free_slots.pop() {
             // Slot recycle: destroy any leftover state (none today,
             // since `remove_emitter` already destroyed it) and overwrite.
-            self.particles[slot] = Some(record);
+            self.particle.records[slot] = Some(record);
             let new_state = ParticleEmitterGpuState {
                 texture_slot: tex_idx,
                 ..gpu_state
             };
-            self.particle_emitter_state[slot] = Some(new_state);
+            self.particle.emitter_state[slot] = Some(new_state);
             slot
         } else {
             let new_state = ParticleEmitterGpuState {
                 texture_slot: tex_idx,
                 ..gpu_state
             };
-            self.particles.push(Some(record));
-            self.particle_emitter_state.push(Some(new_state));
-            self.particles.len() - 1
+            self.particle.records.push(Some(record));
+            self.particle.emitter_state.push(Some(new_state));
+            self.particle.records.len() - 1
         };
         Ok(id)
     }
@@ -1234,14 +1239,15 @@ impl VkContext {
         emitter_id: usize,
     ) -> Result<(), String> {
         let rec_slot = self
-            .particles
+            .particle
+            .records
             .get_mut(emitter_id)
             .ok_or_else(|| format!("remove_emitter: id {emitter_id} out of range"))?;
         if rec_slot.is_none() {
             return Err(format!("remove_emitter: id {emitter_id} already removed"));
         }
         *rec_slot = None;
-        if let Some(gpu_slot) = self.particle_emitter_state.get_mut(emitter_id)
+        if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id)
             && let Some(state) = gpu_slot.take()
         {
             // Drain the queue before freeing the pool/counter so an
@@ -1261,7 +1267,7 @@ impl VkContext {
             // the slot's sets until the context dies is safe; the
             // freelist guarantees we never exceed the cap.)
         }
-        self.particle_free_slots.push(emitter_id);
+        self.particle.free_slots.push(emitter_id);
         Ok(())
     }
 
@@ -1301,19 +1307,20 @@ impl VkContext {
     // drain the device before rewriting.
     pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
         let last = self.textures.len().saturating_sub(1);
-        self.particle_emitter_state
+        self.particle
+            .emitter_state
             .iter()
             .flatten()
             .any(|state| state.texture_slot.min(last) == slot)
     }
 
     pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
-        let Some(resources) = self.particle_resources.as_ref() else {
+        let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
         let last = self.textures.len().saturating_sub(1);
         let view = self.textures[slot].view;
-        for state in self.particle_emitter_state.iter().flatten() {
+        for state in self.particle.emitter_state.iter().flatten() {
             if state.texture_slot.min(last) == slot {
                 write_render_albedo_binding(
                     &self.device,
@@ -1331,7 +1338,7 @@ impl VkContext {
     pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
         // The pooled per-emitter buffers retire through the allocator as the
         // states drop.
-        self.particle_emitter_state.clear();
+        self.particle.emitter_state.clear();
     }
 }
 

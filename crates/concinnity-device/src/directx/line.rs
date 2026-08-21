@@ -312,7 +312,7 @@ impl DxContext {
         if !has_lines || self.lines.resources.is_some() || self.lines.build_failed {
             return;
         }
-        let info_queue = self.info_queue.clone();
+        let info_queue = self.diagnostics.info_queue.clone();
         match LineResources::new(
             &self.alloc,
             self.hdr.msaa_samples,
@@ -388,8 +388,8 @@ impl DxContext {
         // and the next consumer's barrier takes it back out.
         let scene_rtv = self.hdr_scene_rtv();
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

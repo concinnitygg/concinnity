@@ -24,7 +24,7 @@
 // Send + Sync` below - is:
 //   1. `draw_calls_accum` (`AtomicU32`) - bumped by `inc_draw_calls`; atomic,
 //      so concurrent bumps are sound.
-//   2. Particle `Cell` state (`particle_last_elapsed` / `particle_frame_index`
+//   2. Particle `Cell` state (`particle.last_elapsed` / `particle.frame_index`
 //      / per-emitter `spawn_state`) - hoisted to `prepare_particle_pass`
 //      (`&mut self`, before the fan-out), so the workers never touch it.
 //   3. The device allocator (`DeviceAllocator`'s `Rc<RefCell<Inner>>`),
@@ -35,7 +35,7 @@
 //      the main thread (not fanned out). A pass that touches a pooled
 //      resource's lifetime -- not just its cached handles -- must never migrate
 //      onto the fan-out.
-//   4. The text-upload ring (`text_upload`'s `RefCell<Slot>` slots and their
+//   4. The text-upload ring (`text.upload`'s `RefCell<Slot>` slots and their
 //      map pointers) - reserved and appended to by the Composite pass alone,
 //      which stays on the main thread.
 //   5. `skinned.deformed_primed` (`AtomicBool`) - the G-buffer pass's

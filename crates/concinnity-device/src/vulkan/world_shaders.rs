@@ -39,7 +39,7 @@ impl VkContext {
                 render_pass: self.main_render_pass.handle(),
                 layout: layout.handle(),
                 msaa_samples: self.msaa_samples,
-                swapchain_format: self.swapchain_format,
+                swapchain_format: self.swapchain.format,
             },
             bucket as usize,
             shader,

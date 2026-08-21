@@ -139,16 +139,16 @@ impl MtlContext {
     // that reached this point is drawn.
     //
     // `elapsed` is the same value the rest of the frame already computed:
-    // the previous-frame snapshot lives in `particle_last_elapsed`, and the
+    // the previous-frame snapshot lives in `particle.last_elapsed`, and the
     // diff is the frame `dt` driving spawn rates + integration.
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     // Bundles ParticlesSim (compute) + ParticlesDraw (render); the
     // graph only adds a node for `PassId::ParticlesDraw`, but the
     // bundled sim sub-pass keeps its own per-pass timing slot via the
-    // inline `pass_timing.attach_compute` call below.
+    // inline `diagnostics.pass_timing.attach_compute` call below.
     // Mutate the per-frame particle state (dt against
-    // `particle_last_elapsed`, monotonic `particle_frame_index`,
+    // `particle.last_elapsed`, monotonic `particle.frame_index`,
     // per-emitter spawn budgets) and write each emitter's spawn-counter
     // slot in place. Returns the [`ParticleFrame`] the read-only
     // `encode_particles` then consumes. Split out so `encode_particles` can
@@ -254,7 +254,7 @@ impl MtlContext {
         // Camera basis for camera-facing billboards: rows 0 and 1 of the view
         // matrix's 3×3 are the world-space right and up vectors (the view
         // matrix is column-major, so we read those rows out element-wise).
-        let v = self.view_matrix;
+        let v = self.view.matrix;
         let cam_right = [v[0][0], v[1][0], v[2][0]];
         let cam_up = [v[0][1], v[1][1], v[2][1]];
         let view = ParticleView {
@@ -269,7 +269,7 @@ impl MtlContext {
         // dispatch per emitter; cheap enough to not bother packing them.
         {
             let sim_desc = MTLComputePassDescriptor::new();
-            if let Some(t) = &self.pass_timing {
+            if let Some(t) = &self.diagnostics.pass_timing {
                 t.attach_compute(&sim_desc, super::pass_timing::PassId::ParticlesSim);
             }
             // Guard drops at the end of this block, ending the compute pass
@@ -331,7 +331,7 @@ impl MtlContext {
             ca.setStoreAction(MTLStoreAction::Store);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::ParticlesDraw);
         }
         let enc = ScopedEncoder::new(

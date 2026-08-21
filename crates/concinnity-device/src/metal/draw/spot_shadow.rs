@@ -1,14 +1,14 @@
 // src/metal/draw/spot_shadow.rs
 //
 // Spot shadow pass: one depth-only render per shadow-casting spot light into its
-// slice of `spot_shadow_map`. Structurally the cascade pass with a different
+// slice of `spot_shadow.map`. Structurally the cascade pass with a different
 // projection source -- each slice reuses the same depth-only shadow pipeline and
 // the same static / instanced / skinned caster sub-encoders, driven by a
 // `ShadowPassBinding` whose uniforms hold that spot's light-space matrix in slot
 // 0 rather than the CSM cascade set.
 //
 // Local lights are static, so the matrices are built once at init and only the
-// depth contents refresh here. `spot_shadow_render_mask` (from
+// depth contents refresh here. `spot_shadow.render_mask` (from
 // `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
 // depth it last rendered, which stays correct until a caster moves.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -28,11 +28,12 @@ use super::shadow::ShadowPassBinding;
 impl MtlContext {
     // Choose which spot shadow slices to re-render this frame and advance the
     // round-robin clock. Called once per frame from draw_frame; the result is
-    // stashed in `spot_shadow_render_mask` for encode_spot_shadow_pass.
+    // stashed in `spot_shadow.render_mask` for encode_spot_shadow_pass.
     pub(in crate::metal) fn next_spot_shadow_mask(&mut self) -> u32 {
-        let every_frame = matches!(self.shadow_update, crate::assets::ShadowUpdate::EveryFrame);
-        self.spot_shadow_scheduler
-            .next_mask(every_frame, self.spot_shadow_count as usize)
+        let every_frame = matches!(self.shadow.update, crate::assets::ShadowUpdate::EveryFrame);
+        self.spot_shadow
+            .scheduler
+            .next_mask(every_frame, self.spot_shadow.count as usize)
     }
 
     // pub(in crate::metal) so the render-graph executor can dispatch this pass.
@@ -42,25 +43,25 @@ impl MtlContext {
         skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         cam_pos: [f32; 3],
     ) -> Result<u32, String> {
-        let Some(shadow_pipeline) = self.shadow_pipeline_state.clone() else {
+        let Some(shadow_pipeline) = self.shadow.pipeline_state.clone() else {
             return Ok(0);
         };
-        if self.spot_shadow_count == 0 {
+        if self.spot_shadow.count == 0 {
             return Ok(0);
         }
 
-        let all = if self.spot_shadow_count >= 32 {
+        let all = if self.spot_shadow.count >= 32 {
             u32::MAX
         } else {
-            (1_u32 << self.spot_shadow_count) - 1
+            (1_u32 << self.spot_shadow.count) - 1
         };
         // Defensive fallback to every slice if no mask was set this frame.
-        let mask = if self.spot_shadow_render_mask == 0 {
+        let mask = if self.spot_shadow.render_mask == 0 {
             all
         } else {
-            self.spot_shadow_render_mask
+            self.spot_shadow.render_mask
         };
-        let rendered: Vec<u32> = (0..self.spot_shadow_count)
+        let rendered: Vec<u32> = (0..self.spot_shadow.count)
             .filter(|i| mask & (1u32 << i) != 0)
             .collect();
         let first_rendered = rendered.first().copied();
@@ -70,7 +71,7 @@ impl MtlContext {
         for &slice in &rendered {
             let pass_desc = MTLRenderPassDescriptor::new();
             let depth_attach = pass_desc.depthAttachment();
-            depth_attach.setTexture(Some(self.spot_shadow_map.as_ref()));
+            depth_attach.setTexture(Some(self.spot_shadow.map.as_ref()));
             depth_attach.setSlice(slice as usize);
             depth_attach.setLoadAction(MTLLoadAction::Clear);
             depth_attach.setStoreAction(MTLStoreAction::Store);
@@ -78,7 +79,7 @@ impl MtlContext {
 
             // Timing spans the first to the last slice actually rendered, the
             // same shape the cascade pass uses.
-            if let Some(t) = &self.pass_timing {
+            if let Some(t) = &self.diagnostics.pass_timing {
                 let id = super::super::pass_timing::PassId::SpotShadow;
                 let is_first = Some(slice) == first_rendered;
                 let is_last = Some(slice) == last_rendered;
@@ -138,12 +139,12 @@ impl MtlContext {
     // is Shared storage and written once at init, so this is a plain read of
     // memory the GPU only ever reads.
     fn spot_shadow_data(&self, slice: u32) -> SpotShadowData {
-        debug_assert!(slice < self.spot_shadow_count);
+        debug_assert!(slice < self.spot_shadow.count);
         // SAFETY: the buffer was created from a `&[SpotShadowData]` of exactly
-        // `spot_shadow_count` elements and is never resized; `slice` is bounded
+        // `spot_shadow.count` elements and is never resized; `slice` is bounded
         // by that count above.
         unsafe {
-            let base = self.spot_shadow_buffer.contents().as_ptr() as *const SpotShadowData;
+            let base = self.spot_shadow.buffer.contents().as_ptr() as *const SpotShadowData;
             *base.add(slice as usize)
         }
     }

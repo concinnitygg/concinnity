@@ -366,7 +366,7 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // and skips every draw (the masked graph drops all other world passes), so
     // nothing of the world renders behind the menu.
     pub world_hidden: bool,
-    // CPU visibility list (BVH-culled cullables + always_draw fallback).
+    // CPU visibility list (BVH-culled cullables + draw.always fallback).
     // Consumed by Main's legacy + instanced fallback passes and the
     // unified G-buffer pre-pass.
     pub visible: &'a [u32],
@@ -756,7 +756,8 @@ impl VkContext {
             )),
             // The volumetric-fog scatter volume: one array layer (the 3D volume).
             "fog_froxel_volume" => self
-                .fog_resources
+                .fog
+                .resources
                 .as_ref()
                 .map(|f| image(f.volume.image(), 1, 1, VkResting::Sampled)),
             // Main depth, one image per frame in flight. Rests discarded: the main

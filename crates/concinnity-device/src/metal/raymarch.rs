@@ -618,7 +618,7 @@ impl MtlContext {
         view: &RaymarchView,
         frustum: &crate::gfx::frustum::Frustum,
     ) -> Result<u32, String> {
-        if self.raymarch_volumes.is_empty() {
+        if self.raymarch.volumes.is_empty() {
             return Ok(0);
         }
         // Frustum-cull each volume's world-space AABB up front. A volume that
@@ -626,7 +626,8 @@ impl MtlContext {
         // the scene-copy blit + render encoder below. Mirrors the decal /
         // particle passes' pre-pass visibility mask.
         let visible: Vec<bool> = self
-            .raymarch_volumes
+            .raymarch
+            .volumes
             .iter()
             .map(|v| v.visible && volume_in_frustum(v.world_centre, v.world_extent, frustum))
             .collect();
@@ -634,17 +635,19 @@ impl MtlContext {
             return Ok(0);
         }
         let vbuf = self
-            .raymarch_cube_vertex_buffer
+            .raymarch
+            .cube_vertex_buffer
             .as_ref()
             .ok_or("raymarch cube vertex buffer missing")?;
         let ibuf = self
-            .raymarch_cube_index_buffer
+            .raymarch
+            .cube_index_buffer
             .as_ref()
             .ok_or("raymarch cube index buffer missing")?;
         let depth_sampler = self.post_sampler.as_ref();
 
         let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
-        let shadow_uniforms = self.shadow_uniforms;
+        let shadow_uniforms = self.shadow.uniforms;
 
         // Refraction support: snapshot the pre-raymarch
         // `hdr_resolve` into `hdr_resolve_copy` so user SDF shaders can
@@ -690,7 +693,7 @@ impl MtlContext {
             da.setLoadAction(MTLLoadAction::Load);
             da.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Raymarch);
         }
         // Blit above is ended explicitly; this render encoder spans to the end
@@ -722,7 +725,7 @@ impl MtlContext {
         // Cascade-shadow uniforms at buffer(3).
         // Always bound; the helper falls back to `shadow = 1.0`
         // when `vol.receive_shadows == 0` or when the world has no
-        // shadow stage (in which case `shadow_map` is the 1×1
+        // shadow stage (in which case `shadow.map` is the 1×1
         // fallback texture and the cascade compare returns full
         // light).
         enc.set_fragment_value(&shadow_uniforms, 3);
@@ -739,7 +742,7 @@ impl MtlContext {
         // CSM shadow map array + IBL cubes.
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.
-        enc.set_fragment_texture(self.shadow_map.as_ref(), 1);
+        enc.set_fragment_texture(self.shadow.map.as_ref(), 1);
         enc.set_fragment_texture(self.env_map.irradiance.as_ref(), 2);
         enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
         // Pre-raymarch scene snapshot for refraction
@@ -750,14 +753,14 @@ impl MtlContext {
         // volume PSO doesn't need a "refraction enabled" variant.
         enc.set_fragment_texture(self.hdr_targets.hdr_resolve_copy.as_ref(), 4);
         enc.set_fragment_sampler(depth_sampler, 0);
-        enc.set_fragment_sampler(self.shadow_sampler.as_ref(), 1);
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 1);
         enc.set_fragment_sampler(self.cube_sampler.as_ref(), 2);
         // Reuse the linear-clamp post sampler for the scene-copy
         // tap: same filter the existing water + bloom passes use.
         enc.set_fragment_sampler(depth_sampler, 3);
 
         let mut draws: u32 = 0;
-        for (i, vol) in self.raymarch_volumes.iter().enumerate() {
+        for (i, vol) in self.raymarch.volumes.iter().enumerate() {
             if !visible[i] {
                 continue;
             }
@@ -802,7 +805,8 @@ impl MtlContext {
     // `RaymarchView` and dispatches `encode_sdf_shadow_casters` only when this
     // holds. Mirrors `directx::raymarch`'s `any_shadow_casters`.
     pub(in crate::metal) fn any_raymarch_shadow_casters(&self) -> bool {
-        self.raymarch_volumes
+        self.raymarch
+            .volumes
             .iter()
             .any(|v| v.visible && v.cast_shadows && v.shadow_pipeline.is_some())
     }
@@ -811,7 +815,7 @@ impl MtlContext {
     // `encode_shadow_pass` after the rasterised + skinned casters, on the same
     // command buffer so the writes land before the Main pass samples the
     // shadow map. For each cascade this opens a depth-only render pass on that
-    // `shadow_map` slice with `Load` / `Store` (keeping the rasterised depth
+    // `shadow.map` slice with `Load` / `Store` (keeping the rasterised depth
     // already written into the slice), then draws each caster's proxy cube
     // with front faces culled. The depth-only fragment cone-marches the SDF
     // from the light side and writes the hit's NDC.z via `[[depth(less)]]`;
@@ -827,24 +831,26 @@ impl MtlContext {
             return Ok(0);
         }
         let vbuf = self
-            .raymarch_cube_vertex_buffer
+            .raymarch
+            .cube_vertex_buffer
             .as_ref()
             .ok_or("raymarch shadow: cube vertex buffer missing")?;
         let ibuf = self
-            .raymarch_cube_index_buffer
+            .raymarch
+            .cube_index_buffer
             .as_ref()
             .ok_or("raymarch shadow: cube index buffer missing")?;
         let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
-        let shadow_uniforms = self.shadow_uniforms;
+        let shadow_uniforms = self.shadow.uniforms;
 
         let mut draws: u32 = 0;
         // Only cast into cascades the rasterised shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last
         // fully rendered (raster + SDF), so we neither clear nor add to it.
-        let render_mask = if self.shadow_render_mask == 0 {
+        let render_mask = if self.shadow.render_mask == 0 {
             (1u32 << NUM_SHADOW_CASCADES) - 1
         } else {
-            self.shadow_render_mask
+            self.shadow.render_mask
         };
         for cascade_idx in 0..NUM_SHADOW_CASCADES {
             if render_mask & (1u32 << cascade_idx) == 0 {
@@ -852,7 +858,7 @@ impl MtlContext {
             }
             let pass_desc = MTLRenderPassDescriptor::new();
             let da = pass_desc.depthAttachment();
-            da.setTexture(Some(self.shadow_map.as_ref()));
+            da.setTexture(Some(self.shadow.map.as_ref()));
             da.setSlice(cascade_idx);
             // Load the rasterised depth this cascade already holds, draw the
             // SDF casters on top, and keep the merged depth for the Main pass.
@@ -889,7 +895,7 @@ impl MtlContext {
             enc.set_fragment_value(&cascade, 4);
             enc.set_vertex_buffer(vbuf, 0, 2);
 
-            for vol in &self.raymarch_volumes {
+            for vol in &self.raymarch.volumes {
                 if !vol.visible || !vol.cast_shadows {
                     continue;
                 }

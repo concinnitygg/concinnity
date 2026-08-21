@@ -678,7 +678,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
         let device = &self.ctx.device;
         // The view→world rotation is the transpose of the view matrix's
         // orthonormal 3×3, embedded in a 4×4.
-        let v = self.ctx.view_matrix;
+        let v = self.ctx.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],

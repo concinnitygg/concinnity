@@ -2,12 +2,12 @@
 //
 // Cascaded shadow-map pass: one depth-only render per CSM cascade slice.
 // Draws static objects, instanced clusters, and (when present) skinned
-// meshes into each slice of `shadow_map`. Skipped entirely when no shadow
+// meshes into each slice of `shadow.map`. Skipped entirely when no shadow
 // pipeline is configured.
 //
 // Within each cascade the three sub-paths run sequentially on a single
 // `MTLRenderCommandEncoder`. Each cascade is its own render pass (`setSlice`
-// targets a different shadow_map array slice). The per-path helpers below
+// targets a different shadow.map array slice). The per-path helpers below
 // stay split out so the dispatch shape is ready once a Metal-side parallel
 // path proves safe; see [`encode_main_pass`](../draw/main.rs) for the
 // matching note on why the earlier `MTLParallelRenderCommandEncoder` landing
@@ -44,11 +44,12 @@ impl MtlContext {
     // Choose which shadow cascades to re-render this frame and advance the
     // round-robin clock. Delegates to the shared `ShadowCascadeScheduler`
     // (`gfx::shadow_schedule`, unit-tested there). Called once per frame from
-    // draw_frame; the result is stashed in `shadow_render_mask` for
+    // draw_frame; the result is stashed in `shadow.render_mask` for
     // encode_shadow_pass and used to gate which cascade VPs refresh.
     pub(in crate::metal) fn next_shadow_cascade_mask(&mut self) -> u32 {
-        self.shadow_scheduler
-            .next_mask(self.shadow_update, self.shadow_cascades)
+        self.shadow
+            .scheduler
+            .next_mask(self.shadow.update, self.shadow.cascades)
     }
 
     // pub(in crate::metal) so the render-graph executor in
@@ -76,7 +77,7 @@ impl MtlContext {
         // into `cast_shadows`. Mirrors the DirectX shadow pass.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
     ) -> Result<u32, String> {
-        let Some(shadow_pipeline) = self.shadow_pipeline_state.clone() else {
+        let Some(shadow_pipeline) = self.shadow.pipeline_state.clone() else {
             return Ok(0);
         };
         // GPU-driven path: when the bindless cull ran this frame and the
@@ -85,7 +86,7 @@ impl MtlContext {
         // `encode_shadow_culls` compute prologue filled. Otherwise fall back to
         // the legacy per-cascade CPU loop (custom-shader / non-bindless /
         // pure-skinned worlds). `object_buffer.is_some()` is exactly the main
-        // bindless gate (`bindless && !draw_objects.is_empty()`).
+        // bindless gate (`bindless && !draw.objects.is_empty()`).
         let gpu_driven = self.cull.shadow_bindless_pipeline.is_some() && object_buffer.is_some();
         let mut total_draws: u32 = 0;
 
@@ -94,10 +95,10 @@ impl MtlContext {
         // it was last rendered, so the Main pass still samples it consistently.
         // Defensive fallback to all cascades if no mask was set this frame.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow_render_mask == 0 {
+        let mask = if self.shadow.render_mask == 0 {
             all
         } else {
-            self.shadow_render_mask
+            self.shadow.render_mask
         };
         let rendered: Vec<usize> = (0..NUM_SHADOW_CASCADES)
             .filter(|i| mask & (1u32 << i) != 0)
@@ -108,7 +109,7 @@ impl MtlContext {
         for &cascade_idx in &rendered {
             let shadow_pass_desc = MTLRenderPassDescriptor::new();
             let depth_attach = shadow_pass_desc.depthAttachment();
-            depth_attach.setTexture(Some(self.shadow_map.as_ref()));
+            depth_attach.setTexture(Some(self.shadow.map.as_ref()));
             depth_attach.setSlice(cascade_idx);
             depth_attach.setLoadAction(MTLLoadAction::Clear);
             depth_attach.setStoreAction(MTLStoreAction::Store);
@@ -117,7 +118,7 @@ impl MtlContext {
             // Per-pass GPU timing spans the first to the last cascade actually
             // rendered this frame (the set varies with the update policy):
             // attach the start sample to the first and the end to the last.
-            if let Some(t) = &self.pass_timing {
+            if let Some(t) = &self.diagnostics.pass_timing {
                 let id = super::super::pass_timing::PassId::Shadow;
                 let is_first = Some(cascade_idx) == first_rendered;
                 let is_last = Some(cascade_idx) == last_rendered;
@@ -144,7 +145,7 @@ impl MtlContext {
             let slope_bias = 1.0 + cascade_idx as f32 * 0.5;
             let bind = ShadowPassBinding {
                 pipeline: &shadow_pipeline,
-                uniforms: &self.shadow_uniforms,
+                uniforms: &self.shadow.uniforms,
                 push: ShadowPassPush {
                     cascade_idx: cascade_idx as u32,
                     _pad: [0; 3],
@@ -240,7 +241,7 @@ impl MtlContext {
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
         // these bindings; the cull baked base_instance = record id, so the VS
         // reads `objects[id].model`.
-        enc.set_vertex_value(&self.shadow_uniforms, 0);
+        enc.set_vertex_value(&self.shadow.uniforms, 0);
         enc.set_vertex_value(push, 7);
         enc.set_vertex_buffer(object_buffer, 0, 9);
         enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
@@ -305,7 +306,7 @@ impl MtlContext {
         self.bind_shadow_pass_shared(enc, bind);
 
         let mut draw_calls: u32 = 0;
-        for obj in &self.draw_objects {
+        for obj in &self.draw.objects {
             if !obj.visible || !obj.resident {
                 continue;
             }
@@ -349,14 +350,14 @@ impl MtlContext {
         bind: &ShadowPassBinding,
         cam_pos: [f32; 3],
     ) -> u32 {
-        if self.instanced_clusters.is_empty() {
+        if self.instanced.clusters.is_empty() {
             return 0;
         }
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("shadow instanced"));
         self.bind_shadow_pass_shared(enc, bind);
 
         let mut draw_calls: u32 = 0;
-        for cluster in &self.instanced_clusters {
+        for cluster in &self.instanced.clusters {
             // Shadows only read each bucket's matrices (per-instance vertex
             // bytes), so borrow them: no LOD-bucket clone, which otherwise
             // recurred once per cascade.

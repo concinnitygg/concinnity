@@ -52,9 +52,11 @@ impl MtlContext {
 
         // Seed the chunk allocators with the appended headroom. retire_frame 0:
         // nothing has been drawn, so the space is reusable immediately.
-        self.chunk_vtx_alloc
+        self.geometry_alloc
+            .chunk_vtx
             .free(old_v_len as u64, chunk_vtx_bytes as u64, 0);
-        self.chunk_idx_alloc
+        self.geometry_alloc
+            .chunk_idx
             .free(old_i_len as u64, chunk_idx_bytes as u64, 0);
         Ok(())
     }
@@ -62,7 +64,7 @@ impl MtlContext {
     // Place one streamed chunk's geometry in the chunk headroom region and
     // write its `DrawObject` at the engine-allocated destination slot.
     //
-    // The chunk is non-cullable and joins the `always_draw` set: the streaming
+    // The chunk is non-cullable and joins the `draw.always` set: the streaming
     // window already bounds the resident chunk count, so the renderer draws
     // every resident chunk. `frame` reclaims retired deferred frees first.
     pub fn add_chunk_mesh(
@@ -82,8 +84,8 @@ impl MtlContext {
         if vertices.is_empty() || indices.is_empty() {
             return Err("add_chunk_mesh: empty chunk geometry".to_string());
         }
-        self.chunk_vtx_alloc.reclaim(frame);
-        self.chunk_idx_alloc.reclaim(frame);
+        self.geometry_alloc.chunk_vtx.reclaim(frame);
+        self.geometry_alloc.chunk_idx.reclaim(frame);
 
         let v_len = std::mem::size_of_val(vertices);
         // The shared index buffer is u32-typed; the input `indices` are u16 and
@@ -91,16 +93,22 @@ impl MtlContext {
         // stride. Sizing against the u16 source would alloc half the bytes the
         // write needs and corrupt the next chunk's indices.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self.chunk_vtx_alloc.alloc(v_len as u64).ok_or_else(|| {
-            format!(
-                "add_chunk_mesh: no free chunk vertex space for {} bytes",
-                v_len
-            )
-        })? as usize;
-        let i_off = match self.chunk_idx_alloc.alloc(i_len as u64) {
+        let v_off = self
+            .geometry_alloc
+            .chunk_vtx
+            .alloc(v_len as u64)
+            .ok_or_else(|| {
+                format!(
+                    "add_chunk_mesh: no free chunk vertex space for {} bytes",
+                    v_len
+                )
+            })? as usize;
+        let i_off = match self.geometry_alloc.chunk_idx.alloc(i_len as u64) {
             Some(o) => o as usize,
             None => {
-                self.chunk_vtx_alloc.free(v_off as u64, v_len as u64, 0);
+                self.geometry_alloc
+                    .chunk_vtx
+                    .free(v_off as u64, v_len as u64, 0);
                 return Err(format!(
                     "add_chunk_mesh: no free chunk index space for {} bytes",
                     i_len
@@ -149,7 +157,7 @@ impl MtlContext {
 
         // ensure_always_draw adds a slot recycled from a culled static prop
         // (not yet a member); a slot reused from another chunk is already in
-        // always_draw and is left alone.
+        // draw.always and is left alone.
         let draw_idx = self.place_draw_object(obj, model, dst);
         self.ensure_always_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
@@ -163,13 +171,13 @@ impl MtlContext {
     //
     // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
     // command buffer never has the freed region overwritten by a later
-    // `add_chunk_mesh`. The slot stays in `draw_objects` / `always_draw` but
+    // `add_chunk_mesh`. The slot stays in `draw.objects` / `draw.always` but
     // is marked non-resident and invisible, so every pass skips it.
     pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw_objects
-            .get_mut(draw_idx)
-            .ok_or_else(|| format!("remove_chunk_mesh: draw object {} out of range", draw_idx))?;
+        let obj =
+            self.draw.objects.get_mut(draw_idx).ok_or_else(|| {
+                format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
+            })?;
         let v_off = obj.vertex_offset;
         let v_len = obj.vertex_count * std::mem::size_of::<Vertex>();
         let i_off = obj.index_offset * std::mem::size_of::<u32>();
@@ -178,9 +186,11 @@ impl MtlContext {
         obj.resident = false;
         zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
         zero_buffer_region(&self.index_buffer, i_off, i_len)?;
-        self.chunk_vtx_alloc
+        self.geometry_alloc
+            .chunk_vtx
             .free(v_off as u64, v_len as u64, retire_frame);
-        self.chunk_idx_alloc
+        self.geometry_alloc
+            .chunk_idx
             .free(i_off as u64, i_len as u64, retire_frame);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
@@ -200,7 +210,8 @@ impl MtlContext {
     // motion across an origin shift.
     pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get_mut(draw_idx)
             .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
         obj.model = model;

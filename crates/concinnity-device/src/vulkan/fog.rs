@@ -894,12 +894,12 @@ fn create_fog_pipeline(
 impl VkContext {
     // Hot-reload entry point for the volumetric-fog tunables (driven by
     // `world.jsonl` hot-reload under `cn debug`). Writes the new
-    // `Option<FogSettings>` into `self.fog_settings`; the next frame's graph
+    // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
     // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
     // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
     // Mirrors `MtlContext::update_fog_settings`.
     //
-    // If the world started with no `VolumetricFog` (so `fog_resources` is
+    // If the world started with no `VolumetricFog` (so `fog.resources` is
     // `None`), a `Some` update logs once and is dropped: re-enabling fog
     // mid-run requires a relaunch (the froxel pipeline + volume were never
     // built).
@@ -914,7 +914,7 @@ impl VkContext {
         &mut self,
         settings: Option<crate::gfx::volumetric_fog::FogSettings>,
     ) {
-        if settings.is_some() && self.fog_resources.is_none() {
+        if settings.is_some() && self.fog.resources.is_none() {
             tracing::warn!(
                 "VolumetricFog hot-reload: world started without fog, so the fog \
                  pipeline + froxel volume were never built: re-enabling fog mid-run \
@@ -922,7 +922,7 @@ impl VkContext {
             );
             return;
         }
-        self.fog_settings = settings;
+        self.fog.settings = settings;
     }
 
     // Encode the volumetric-fog froxel-volume compute pass. Populates the 3D
@@ -938,11 +938,11 @@ impl VkContext {
         vp: [[f32; 4]; 4],
         cam_pos: [f32; 3],
     ) {
-        let fog_settings = match &self.fog_settings {
+        let fog_settings = match &self.fog.settings {
             Some(s) => *s,
             None => return,
         };
-        let fog = match &self.fog_resources {
+        let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,
         };
@@ -959,15 +959,15 @@ impl VkContext {
         let params = fog_settings.params(
             inv_vp,
             cam_pos,
-            self.fog_sun_dir,
-            self.fog_sun_color,
+            self.fog.sun_dir,
+            self.fog.sun_color,
             viewport_pix,
         );
         // Per-frame FogFroxelParams: world->view matrix + the volume's discrete
         // dimensions + the linear-Z `[near, max_distance]` mapping. `near` is
         // clamped to >= 1e-3 so the linear-Z reconstruction stays finite.
         let froxel_params = FogFroxelParams {
-            view: self.view_matrix,
+            view: self.view.matrix,
             froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
             _pad_align: 0,
             z_near: near.max(1e-3),
@@ -1028,10 +1028,10 @@ impl VkContext {
         _vp: [[f32; 4]; 4],
         _cam_pos: [f32; 3],
     ) {
-        if self.fog_settings.is_none() {
+        if self.fog.settings.is_none() {
             return;
         }
-        let fog = match &self.fog_resources {
+        let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,
         };

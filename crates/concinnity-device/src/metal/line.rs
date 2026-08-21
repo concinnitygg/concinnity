@@ -55,7 +55,7 @@ impl MtlContext {
         if !has_lines || self.lines.pipeline.is_some() || self.lines.build_failed {
             return;
         }
-        match build_line_pipeline(&self.device, self.hot_reload) {
+        match build_line_pipeline(&self.device, self.hot_reload.enabled) {
             Ok(ps) => self.lines.pipeline = Some(ps),
             Err(e) => {
                 self.lines.build_failed = true;
@@ -110,7 +110,7 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Lines);
         }
         let enc = ScopedEncoder::new(

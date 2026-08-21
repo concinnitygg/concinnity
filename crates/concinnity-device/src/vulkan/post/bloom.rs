@@ -371,13 +371,13 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
 // The bloom chain orchestration lives once in `gfx::fullscreen`; this impl binds
 // + draws each sub-pass in Vulkan. `Args` is the frame-in-flight index selecting
 // the per-frame framebuffers + descriptor sets (the scene input is pre-wired into
-// `bloom_input_sets[frame_idx][0]`, so prefilter needs no extra argument).
+// `bloom.input_sets[frame_idx][0]`, so prefilter needs no extra argument).
 impl crate::gfx::fullscreen::BloomEncoder for VkContext {
     type Rec = vk::CommandBuffer;
     type Args = usize;
 
     fn bloom_mip_count(&self) -> usize {
-        self.bloom_mip_extents.len()
+        self.bloom.mip_extents.len()
     }
 
     // Vulkan has no per-encode preamble; render-pass state is set per sub-pass.
@@ -388,11 +388,11 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_write_pass.handle(),
-            self.bloom_write_framebuffers[f][0].handle(),
-            self.bloom_mip_extents[0],
-            &self.bloom_pipeline_prefilter,
-            self.bloom_input_sets[f][0],
+            self.bloom.write_pass.handle(),
+            self.bloom.write_framebuffers[f][0].handle(),
+            self.bloom.mip_extents[0],
+            &self.bloom.pipeline_prefilter,
+            self.bloom.input_sets[f][0],
         );
     }
 
@@ -401,11 +401,11 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_write_pass.handle(),
-            self.bloom_write_framebuffers[f][dst].handle(),
-            self.bloom_mip_extents[dst],
-            &self.bloom_pipeline_downsample,
-            self.bloom_input_sets[f][dst],
+            self.bloom.write_pass.handle(),
+            self.bloom.write_framebuffers[f][dst].handle(),
+            self.bloom.mip_extents[dst],
+            &self.bloom.pipeline_downsample,
+            self.bloom.input_sets[f][dst],
         );
     }
 
@@ -414,11 +414,11 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_blend_pass.handle(),
-            self.bloom_blend_framebuffers[f][dst].handle(),
-            self.bloom_mip_extents[dst],
-            &self.bloom_pipeline_upsample,
-            self.bloom_input_sets[f][dst + 2],
+            self.bloom.blend_pass.handle(),
+            self.bloom.blend_framebuffers[f][dst].handle(),
+            self.bloom.mip_extents[dst],
+            &self.bloom.pipeline_upsample,
+            self.bloom.input_sets[f][dst + 2],
         );
     }
 }
@@ -426,7 +426,7 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
 impl VkContext {
     // Encode the bloom prefilter, downsample, and additive upsample passes for
     // frame slot `frame_idx` via the shared `gfx::fullscreen` driver. On return
-    // `bloom_mips[frame_idx][0]` holds the accumulated bloom the composite pass
+    // `bloom.mips[frame_idx][0]` holds the accumulated bloom the composite pass
     // samples. Called only when `post_process.bloom_intensity > 0`.
     pub(in crate::vulkan) fn encode_bloom(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
         crate::gfx::fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
@@ -477,14 +477,14 @@ impl VkContext {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.bloom_pipeline_layout.handle(),
+                self.bloom.pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&input_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                self.bloom_pipeline_layout.handle(),
+                self.bloom.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 push_bytes,

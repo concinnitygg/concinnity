@@ -56,7 +56,7 @@ macro_rules! rebuild_if_live {
 
 // Live watcher handle. Held by `MtlContext` purely to keep the watcher
 // thread alive; dropping it stops the watcher. The flag itself is shared
-// via [`MtlContext::shader_reload_pending`].
+// via `MtlContext`'s `hot_reload.reload_pending`.
 pub(crate) struct WatcherHandle {
     // We don't read `_watcher` after construction; notify keeps its own
     // listener thread for as long as the handle is alive.
@@ -229,7 +229,8 @@ impl MtlContext {
     // at the top of `draw_frame`. Returns false when hot-reload is off so
     // the production path never enters the reload branch.
     pub(super) fn shader_reload_requested(&self) -> bool {
-        self.shader_reload_pending
+        self.hot_reload
+            .reload_pending
             .as_ref()
             .map(|f| f.load(Ordering::SeqCst))
             .unwrap_or(false)
@@ -238,7 +239,7 @@ impl MtlContext {
     // Clear the pending-reload flag. Called after `reload_shaders` regardless
     // of outcome so a failed rebuild does not loop forever.
     pub(super) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.shader_reload_pending {
+        if let Some(flag) = &self.hot_reload.reload_pending {
             flag.store(false, Ordering::SeqCst);
         }
     }
@@ -258,7 +259,7 @@ impl MtlContext {
     // reload through [`Self::update_world_shader_pipelines`] alongside the
     // static main pipeline.
     pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
-        if !self.hot_reload {
+        if !self.hot_reload.enabled {
             return Ok(());
         }
         let device = &self.device;
@@ -275,7 +276,7 @@ impl MtlContext {
         );
 
         let text = rebuild_if_live!(
-            self.text_pipeline_state.is_some(),
+            self.text.pipeline_state.is_some(),
             build_text_pipeline(device, self.swap_pixel_format, hr)
         );
         let taa = rebuild_if_live!(
@@ -400,7 +401,7 @@ impl MtlContext {
         // shadow pipeline shares the 56-byte static layout; the skinned one
         // rides the 80-byte skinned layout.
         let shadow = rebuild_if_live!(
-            self.shadow_pipeline_state.is_some(),
+            self.shadow.pipeline_state.is_some(),
             build_shadow_pipeline(device, &static_vdesc, hr)
         );
         let skinned_shadow = rebuild_if_live!(
@@ -433,7 +434,7 @@ impl MtlContext {
             self.bloom_pipelines = Some(b);
         }
         if let Some(p) = text {
-            self.text_pipeline_state = Some(p);
+            self.text.pipeline_state = Some(p);
         }
         if let Some(p) = taa {
             self.taa.pipeline_state = Some(p);
@@ -510,7 +511,7 @@ impl MtlContext {
             self.gbuffer.skinned_pipeline = Some(p);
         }
         if let Some(p) = shadow {
-            self.shadow_pipeline_state = Some(p);
+            self.shadow.pipeline_state = Some(p);
         }
         if let Some(p) = skinned_shadow {
             self.skinned.shadow_pipeline_state = Some(p);
@@ -578,7 +579,7 @@ impl MtlContext {
                 &vert_desc,
                 vert_bytes,
                 frag_bytes,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?)
         } else {
             None
@@ -588,8 +589,8 @@ impl MtlContext {
         // the (potentially fresh) fragment bytes. Rebuilt only when an
         // instanced pipeline is currently live AND the caller supplied new
         // instanced vertex bytes: a world without an instanced stage keeps
-        // `instanced_pipeline_state == None` and skips this branch.
-        let new_instanced = if self.instanced_pipeline_state.is_some() {
+        // `instanced.pipeline_state == None` and skips this branch.
+        let new_instanced = if self.instanced.pipeline_state.is_some() {
             let inst_bytes = vert_instanced_bytes.ok_or_else(|| {
                 "instanced vertex shader bytes are required when an instanced pipeline is live"
                     .to_string()
@@ -646,7 +647,7 @@ impl MtlContext {
                 &self.device,
                 enc,
                 &self.sampler,
-                &self.shadow_sampler,
+                &self.shadow.sampler,
                 &self.cube_sampler,
             )?),
             None => None,
@@ -696,7 +697,7 @@ impl MtlContext {
         }
 
         if let Some(ps) = new_instanced {
-            self.instanced_pipeline_state = Some(ps);
+            self.instanced.pipeline_state = Some(ps);
         }
         if let Some(ps) = new_skinned_main {
             self.skinned.pipeline_state = Some(ps);

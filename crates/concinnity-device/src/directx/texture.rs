@@ -228,7 +228,7 @@ pub(super) fn upload_buffer_padded(
 
 // Texture helpers
 
-// A streamed texture swap's GPU debris, released once `DxContext::stream_frame`
+// A streamed texture swap's GPU debris, released once `DxContext`'s `stream.frame`
 // reaches `retire_at`: the replaced pool resource (pending lists may still
 // sample it, and the per-frame flat-pool copies re-point over the next FRAMES
 // ticks) plus the upload's staging buffer and one-shot allocator + list (still

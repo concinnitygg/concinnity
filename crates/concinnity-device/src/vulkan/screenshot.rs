@@ -14,7 +14,7 @@
 // then maps + decodes + PNG-encodes on the CPU. The read-back buffer and the
 // per-pixel decode both follow the swapchain format (4-byte SDR `BGRA8` or
 // 8-byte HDR `RGBA16F`), not a fixed texel size. A swapchain rebuild clears
-// `last_present_index`, so a capture in the brief window before the next present
+// `swapchain.last_present_index`, so a capture in the brief window before the next present
 // returns a clean error rather than reading an unrendered image.
 
 use ash::vk;
@@ -31,15 +31,16 @@ impl VkContext {
     // is reached only through the `RenderBackend` vtable (bin-only `cn debug`).
     #[allow(dead_code)]
     pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
-        let Some(image_index) = self.last_present_index else {
+        let Some(image_index) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());
         };
         let src_image = *self
-            .swapchain_images
+            .swapchain
+            .images
             .get(image_index as usize)
             .ok_or("screenshot: stale swapchain image index")?;
-        let width = self.swapchain_extent.width;
-        let height = self.swapchain_extent.height;
+        let width = self.swapchain.extent.width;
+        let height = self.swapchain.extent.height;
         if width == 0 || height == 0 {
             return Err("screenshot: zero-sized swapchain".into());
         }
@@ -55,7 +56,7 @@ impl VkContext {
         // the HDR swapchain is `R16G16B16A16_SFLOAT` (8 B/px); sizing this for a
         // fixed 4 B/px overflows the `vkCmdCopyImageToBuffer` on the HDR path and
         // loses the device, so derive it from the actual format.
-        let bytes_per_pixel = swapchain_bytes_per_pixel(self.swapchain_format) as u64;
+        let bytes_per_pixel = swapchain_bytes_per_pixel(self.swapchain.format) as u64;
         let byte_size = (width as u64) * (height as u64) * bytes_per_pixel;
         let readback = self.alloc.create_buffer(
             byte_size,
@@ -148,7 +149,7 @@ impl VkContext {
                 HdrOutputMode::Sdr => None,
             };
             let rgba =
-                image_decode::decode_to_rgba8(raw, classify(self.swapchain_format, encoding));
+                image_decode::decode_to_rgba8(raw, classify(self.swapchain.format, encoding));
             encode_png(path, width, height, &rgba)
         });
         result.map(|()| path.to_string())

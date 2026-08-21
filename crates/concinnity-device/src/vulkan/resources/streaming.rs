@@ -219,22 +219,22 @@ impl VkContext {
         };
 
         // Write at the engine-allocated destination slot. A slot recycled from
-        // a culled static prop is not yet in `always_draw`;
+        // a culled static prop is not yet in `draw.always`;
         // `ensure_always_draw` adds it, while one recycled from another chunk /
         // clone already is.
         let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
+                self.draw.objects[slot] = obj;
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
-                    self.draw_objects.len(),
+                    self.draw.objects.len(),
                     "appended draw slot must match the draw-object count"
                 );
-                self.draw_objects.push(obj);
-                self.always_draw_member.push(false);
+                self.draw.objects.push(obj);
+                self.draw.always_member.push(false);
                 slot
             }
         };
@@ -256,17 +256,17 @@ impl VkContext {
     // Free a streamed chunk's geometry region and retire its `DrawObject`
     // slot for reuse.
     pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw_objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("remove_chunk_mesh: draw object {} out of range", draw_idx))?;
+        let obj =
+            self.draw.objects.get(draw_idx).ok_or_else(|| {
+                format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
+            })?;
         let v_off = obj.vertex_offset as u64;
         let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
         let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
         let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
         self.chunk_stream.vtx_alloc.free(v_off, v_len, retire_frame);
         self.chunk_stream.idx_alloc.free(i_off, i_len, retire_frame);
-        let obj = &mut self.draw_objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx];
         obj.visible = false;
         obj.resident = false;
         // The removed chunk leaves the RT-relevant draw set; the next RT update
@@ -278,7 +278,8 @@ impl VkContext {
     // Rewrite a resident chunk's model matrix.
     pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get_mut(draw_idx)
             .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
         obj.model = model;

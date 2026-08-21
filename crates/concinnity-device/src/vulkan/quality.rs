@@ -102,7 +102,7 @@ impl VkContext {
                     self.post_process.bloom_intensity > 0.0,
                     true,
                     self.render_extent,
-                    self.swapchain_extent,
+                    self.swapchain.extent,
                 )?,
             )?;
             let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
@@ -125,8 +125,8 @@ impl VkContext {
                     // Skinned variant is built lazily by `upload_skinned`, as at init.
                     skinned: None,
                 },
-                self.draw_objects.len(),
-                self.hot_reload,
+                self.draw.objects.len(),
+                self.hot_reload.enabled,
                 &pooled,
             )?;
             self.gbuffer = Some(gb);
@@ -145,9 +145,9 @@ impl VkContext {
                 self.render_extent,
                 &super::post::taa::TaaSceneInputs {
                     hdr_resolve_images: &self.hdr_resolve_images,
-                    sampler: self.composite_sampler.handle(),
+                    sampler: self.composite.sampler.handle(),
                 },
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.taa = Some(taa);
         } else if !desired_taa && self.taa.is_some() {
@@ -183,7 +183,7 @@ impl VkContext {
                     global_set_layout: self.descriptors.global_set_layout.handle(),
                     probe_cube_count: self.descriptors.probe_cube_count,
                 },
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.ssr = Some(ssr);
         } else if !ssr_needed && self.ssr.is_some() {
@@ -212,7 +212,7 @@ impl VkContext {
                     hdr_resolve_views: &hdr_views,
                     gbuffer_view: nd_views[0],
                 },
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {
@@ -223,7 +223,7 @@ impl VkContext {
         // Auto-exposure. When it turns off the static authored EV drives exposure
         // again (the GraphicsSystem re-pushes `update_post_process` after this
         // call), so only the GPU state is swapped here.
-        if desired_ae && self.auto_exposure.is_none() {
+        if desired_ae && self.auto_exposure.resources.is_none() {
             let settings = q
                 .auto_exposure
                 .as_ref()
@@ -234,18 +234,22 @@ impl VkContext {
                 self.frames_in_flight,
                 &hdr_views,
                 self.linear_sampler.handle(),
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
-            self.auto_exposure = Some(resources);
-            self.auto_exposure_state =
+            self.auto_exposure.resources = Some(resources);
+            self.auto_exposure.state =
                 Some(crate::gfx::auto_exposure::AutoExposureState::new(settings));
-            self.auto_exposure_settings = q.auto_exposure;
-            self.auto_exposure_bias_ev = q.auto_exposure_bias_ev;
-        } else if !desired_ae && self.auto_exposure.is_some() {
-            let mut ae = self.auto_exposure.take().expect("auto-exposure present");
+            self.auto_exposure.settings = q.auto_exposure;
+            self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
+        } else if !desired_ae && self.auto_exposure.resources.is_some() {
+            let mut ae = self
+                .auto_exposure
+                .resources
+                .take()
+                .expect("auto-exposure present");
             ae.destroy(&self.device);
-            self.auto_exposure_settings = None;
-            self.auto_exposure_state = None;
+            self.auto_exposure.settings = None;
+            self.auto_exposure.state = None;
         }
 
         // SSAO. Its occlusion target is the transient pool's per-frame
@@ -268,7 +272,7 @@ impl VkContext {
                     self.post_process.bloom_intensity > 0.0,
                     self.gbuffer.is_some(),
                     self.render_extent,
-                    self.swapchain_extent,
+                    self.swapchain.extent,
                 )?,
             )?;
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
@@ -285,7 +289,7 @@ impl VkContext {
                 self.frames_in_flight,
                 settings,
                 &ao_views,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.ssao = Some(ssao);
         } else if !desired_ssao && self.ssao.is_some() {
@@ -347,7 +351,7 @@ impl VkContext {
                     normal_depth_views: &nd_views,
                     roughness_views: &rough_views,
                 },
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?;
             self.reflection_composite = Some(rc);
         } else if !reflection_active && self.reflection_composite.is_some() {
@@ -394,13 +398,13 @@ impl VkContext {
             crate::vulkan::raytrace::RtSceneGeometry {
                 vertex_buffer: self.geometry.vertex_buffer.buffer(),
                 index_buffer: self.geometry.index_buffer.buffer(),
-                draw_objects: &self.draw_objects,
+                draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
                 total_vertices: self.rt_static_vertex_count,
             },
             self.frames_in_flight,
-            self.hot_reload,
+            self.hot_reload.enabled,
         ) {
             Ok(Some(accel)) => accel,
             Ok(None) => {
@@ -459,7 +463,7 @@ impl VkContext {
                 global_set_layout: self.descriptors.global_set_layout.handle(),
                 probe_cube_count: self.descriptors.probe_cube_count,
                 pool_size: bindless_pool_size,
-                hot_reload: self.hot_reload,
+                hot_reload: self.hot_reload.enabled,
             },
         ) {
             Ok(rt) => rt,

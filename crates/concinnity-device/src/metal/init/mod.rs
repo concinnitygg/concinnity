@@ -1166,10 +1166,12 @@ impl MtlContext {
             device,
             command_queue,
             swap_pixel_format,
-            max_edr,
-            hdr_encoding,
-            hdr_display_requested,
-            hdr_pq_requested,
+            hdr: super::context::HdrState {
+                max_edr,
+                encoding: hdr_encoding,
+                display_requested: hdr_display_requested,
+                pq_requested: hdr_pq_requested,
+            },
             last_present_texture: None,
             pipeline_state,
             world_pipelines,
@@ -1207,61 +1209,80 @@ impl MtlContext {
             depth_state_read_only,
             vertex_buffer,
             index_buffer,
-            draw_objects,
-            cull_bvh,
-            always_draw,
-            always_draw_member,
-            visible_scratch: Vec::new(),
-            instanced_clusters,
-            n_instances,
-            instance_records,
-            instance_draw_args,
-            // Set by `upload_skinned` (when bindless + static geometry present);
-            // 0 keeps the skinned fold inactive until a SkinnedMesh uploads.
-            n_skinned: 0,
-            instanced_pipeline_state,
-            clear_color,
-            scene_fade: 0.0,
+            draw: super::context::DrawState {
+                objects: draw_objects,
+                bvh: cull_bvh,
+                always: always_draw,
+                always_member: always_draw_member,
+                visible_scratch: Vec::new(),
+                graph_cache: None,
+                n_instances,
+                // Set by `upload_skinned` (when bindless + static geometry
+                // present); 0 keeps the skinned fold inactive until a
+                // SkinnedMesh uploads.
+                n_skinned: 0,
+            },
+            instanced: super::context::InstancedState {
+                clusters: instanced_clusters,
+                records: instance_records,
+                draw_args: instance_draw_args,
+                pipeline_state: instanced_pipeline_state,
+            },
+            view: super::context::ViewState {
+                clear_color,
+                scene_fade: 0.0,
+                mode: Default::default(),
+                far: 1.0,
+                matrix: IDENTITY4,
+            },
             geometry_less,
-            view_matrix: IDENTITY4,
             allocator,
             textures: gpu_textures,
             normal_map_textures: gpu_normal_maps,
             light_uniforms,
             local_light_buffer,
             sampler,
-            shadow_pipeline_state,
-            shadow_map,
-            shadow_map_size: effective_shadow_size,
-            shadow_update,
-            shadow_distance,
-            shadow_cascades,
-            shadow_scheduler: Default::default(),
-            shadow_render_mask: 0,
-            shadow_sampler,
+            shadow: super::context::ShadowState {
+                pipeline_state: shadow_pipeline_state,
+                map: shadow_map,
+                map_size: effective_shadow_size,
+                update: shadow_update,
+                distance: shadow_distance,
+                cascades: shadow_cascades,
+                scheduler: Default::default(),
+                render_mask: 0,
+                sampler: shadow_sampler,
+                uniforms: shadow_uniforms_init,
+                light_dir: shadow_light_dir,
+            },
+            spot_shadow: super::context::SpotShadowState {
+                map: spot_shadow_map,
+                buffer: spot_shadow_buffer,
+                count: spot_shadow_count,
+                scheduler: Default::default(),
+                render_mask: 0,
+            },
             area_light_buffer,
             ltc_matrix_texture,
             ltc_magnitude_texture,
-            spot_shadow_map,
-            spot_shadow_buffer,
-            spot_shadow_count,
-            spot_shadow_scheduler: Default::default(),
-            spot_shadow_render_mask: 0,
-            shadow_uniforms: shadow_uniforms_init,
-            shadow_light_dir,
             env_map,
-            probe_placements: Vec::new(),
-            probe_maps: Vec::new(),
-            // Empty until `set_reflection_probes` supplies placements.
-            probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
-            probe_set: concinnity_render::uniforms::ProbeSet::EMPTY,
-            probe_rendering: None,
-            probe_converting: None,
-            probe_retire_pool: super::transient::RetirePool::new(),
+            probe: super::context::ProbeState {
+                placements: Vec::new(),
+                maps: Vec::new(),
+                // Empty until `set_reflection_probes` supplies placements.
+                bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
+                set: concinnity_render::uniforms::ProbeSet::EMPTY,
+                rendering: None,
+                converting: None,
+                retire_pool: super::transient::RetirePool::new(),
+            },
             cube_sampler,
-            text_pipeline_state,
-            text_atlas_textures: gpu_text_atlases,
-            text_sampler,
+            text: super::context::TextState {
+                pipeline_state: text_pipeline_state,
+                atlas_textures: gpu_text_atlases,
+                sampler: text_sampler,
+                upload: super::text_upload::TextUploadRing::new(frames_in_flight),
+            },
             hdr_targets,
             post_pipeline_state,
             post_sampler,
@@ -1340,10 +1361,12 @@ impl MtlContext {
                 output: auto_exposure_output,
                 last_elapsed: 0.0,
             },
-            hot_reload,
+            hot_reload: super::context::HotReloadState {
+                enabled: hot_reload,
+                reload_pending: shader_reload_pending,
+                watcher: shader_watcher,
+            },
             capture,
-            shader_reload_pending,
-            shader_watcher,
             prev_draw_models,
             skinned: super::resources::skinning::SkinnedState {
                 pipeline_state: None,
@@ -1359,35 +1382,42 @@ impl MtlContext {
                 morphs: Vec::new(),
                 morph_weights: Vec::new(),
             },
-            mesh_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            mesh_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            chunk_vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            chunk_idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            win: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
-                window,
-                // The shared layer drives the view through NSView alone; the
-                // MTKView below stays for drawable acquisition.
-                view: objc2::rc::Retained::into_super(mtk_view.clone()),
-                title_bar,
-                pump_events,
-                fullscreen,
-                window_delegate,
-            }),
-            mtk_view,
-            // A freshly built context owns its window; a live reload flips the
-            // outgoing context's flag off before handing this one the window.
-            owns_window: true,
-            was_visible: false,
-            frame_stats: crate::gfx::profile::RenderStats::default(),
-            gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            device_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            pass_fault_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            pass_timing,
-            pass_times_us: std::sync::Arc::new(std::array::from_fn(|_| {
-                std::sync::atomic::AtomicU32::new(0)
-            })),
-            draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
+            geometry_alloc: super::context::GeometryAllocators {
+                mesh_vtx: crate::suballoc::range_alloc::RangeAllocator::new(),
+                mesh_idx: crate::suballoc::range_alloc::RangeAllocator::new(),
+                chunk_vtx: crate::suballoc::range_alloc::RangeAllocator::new(),
+                chunk_idx: crate::suballoc::range_alloc::RangeAllocator::new(),
+            },
+            window: super::context::WindowState {
+                appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
+                    window,
+                    // The shared layer drives the view through NSView alone; the
+                    // MTKView below stays for drawable acquisition.
+                    view: objc2::rc::Retained::into_super(mtk_view.clone()),
+                    title_bar,
+                    pump_events,
+                    fullscreen,
+                    window_delegate,
+                }),
+                view: mtk_view,
+                // A freshly built context owns its window; a live reload flips
+                // the outgoing context's flag off before handing this one the
+                // window.
+                owns: true,
+                was_visible: false,
+            },
+            diagnostics: super::context::Diagnostics {
+                frame_stats: crate::gfx::profile::RenderStats::default(),
+                gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                device_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                pass_fault_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                pass_timing,
+                pass_times_us: std::sync::Arc::new(std::array::from_fn(|_| {
+                    std::sync::atomic::AtomicU32::new(0)
+                })),
+                draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
+            },
             frame_pacing: super::frame_pacing::FrameInFlight::new(frames_in_flight),
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
@@ -1399,35 +1429,39 @@ impl MtlContext {
             // frame never overwrites, keeping the bake's CPU-written buffers valid
             // across its asynchronous (no `waitUntilCompleted`) GPU capture. See
             // metal/probe.rs `bake_ring_slot`.
-            object_ring: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-            draw_args_ring: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-            prev_model_ring: super::transient::TransientRing::new(frames_in_flight),
-            bindless_tex_ring: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-            joint_ring: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
-            prev_joint_ring: super::transient::JointRing::new(frames_in_flight),
-            instance_ring: super::transient::InstanceRing::new(frames_in_flight),
-            text_upload: super::text_upload::TextUploadRing::new(frames_in_flight),
-            object_scratch: Vec::new(),
-            draw_args_scratch: Vec::new(),
-            prev_model_scratch: Vec::new(),
-            frame_graph_cache: None,
-            view_mode: Default::default(),
-            view_far: 1.0,
-            water_pipeline,
-            water_pipeline_rt,
-            water_pipeline_rt_textured,
-            water_surfaces: water_records,
+            rings: super::context::FrameRings {
+                object: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
+                draw_args: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
+                prev_model: super::transient::TransientRing::new(frames_in_flight),
+                bindless_tex: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
+                joint: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
+                prev_joint: super::transient::JointRing::new(frames_in_flight),
+                instance: super::transient::InstanceRing::new(frames_in_flight),
+                object_scratch: Vec::new(),
+                draw_args_scratch: Vec::new(),
+                prev_model_scratch: Vec::new(),
+            },
+            water: super::context::WaterState {
+                pipeline: water_pipeline,
+                pipeline_rt: water_pipeline_rt,
+                pipeline_rt_textured: water_pipeline_rt_textured,
+                surfaces: water_records,
+            },
             planar_reflection,
-            glass_pipeline,
-            glass_pipeline_rt,
-            glass_pipeline_rt_textured,
-            glass_mesh_pipeline_rt,
-            glass_mesh_pipeline_rt_textured,
-            seethrough_mesh_indices,
-            glass_panels: glass_records,
-            raymarch_volumes: raymarch_records,
-            raymarch_cube_vertex_buffer,
-            raymarch_cube_index_buffer,
+            glass: super::context::GlassState {
+                pipeline: glass_pipeline,
+                pipeline_rt: glass_pipeline_rt,
+                pipeline_rt_textured: glass_pipeline_rt_textured,
+                mesh_pipeline_rt: glass_mesh_pipeline_rt,
+                mesh_pipeline_rt_textured: glass_mesh_pipeline_rt_textured,
+                seethrough_mesh_indices,
+                panels: glass_records,
+            },
+            raymarch: super::context::RaymarchState {
+                volumes: raymarch_records,
+                cube_vertex_buffer: raymarch_cube_vertex_buffer,
+                cube_index_buffer: raymarch_cube_index_buffer,
+            },
         };
         let pooled = ctx.allocator.stats();
         tracing::info!(
@@ -1462,13 +1496,13 @@ impl MtlContext {
     ) -> Result<(), String> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
-        let h = self.win.handles_for_reuse();
+        let h = self.window.appkit.handles_for_reuse();
         let reuse = ReuseHandles {
             device: self.device.clone(),
             command_queue: self.command_queue.clone(),
             existing: window::ExistingWindow {
                 window: h.window,
-                mtk_view: self.mtk_view.clone(),
+                mtk_view: self.window.view.clone(),
                 pump_events: h.pump_events,
                 fullscreen: h.fullscreen,
                 window_delegate: h.window_delegate,
@@ -1477,10 +1511,13 @@ impl MtlContext {
         let mut rebuilt = MtlContext::build(init, Some(reuse))?;
         // Carry over the live window state the fresh build resets but a reload
         // must keep (see `AppKitWindow::adopt_live_state`).
-        rebuilt.win.adopt_live_state(&mut self.win);
+        rebuilt
+            .window
+            .appkit
+            .adopt_live_state(&mut self.window.appkit);
         // Hand the window over: the outgoing context (dropped by the assignment
         // below) must not close the shared window -- `rebuilt` owns it now.
-        self.owns_window = false;
+        self.window.owns = false;
         *self = rebuilt;
         Ok(())
     }

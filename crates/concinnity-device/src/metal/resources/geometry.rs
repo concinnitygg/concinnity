@@ -22,8 +22,8 @@ impl MtlContext {
     // pointers are CPU-readable) and copied with index rebasing. New
     // `MTLBuffer`s are created at the post-rebuild size and swapped in
     // after `wait_idle` so no in-flight command buffer touches the old
-    // resource pair. Streaming sub-allocators (`mesh_vtx_alloc`,
-    // `mesh_idx_alloc`) are reset to the new buffer's full extent -- any
+    // resource pair. Streaming sub-allocators (`geometry_alloc.mesh_vtx`,
+    // `geometry_alloc.mesh_idx`) are reset to the new buffer's full extent -- any
     // streaming uploads in flight would be invalidated by the swap, so
     // the caller is expected to gate this on a quiet renderer (the
     // asset-hot-reload path already is -- it runs at frame start before
@@ -65,12 +65,12 @@ impl MtlContext {
 
         let mut new_vertices: Vec<Vertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
-        // Captured per-draw new layout (applied to `draw_objects` after the
+        // Captured per-draw new layout (applied to `draw.objects` after the
         // read-only walk to avoid aliasing `self`).
         type DrawLayout = (usize, usize, usize, usize, i32, Vec<LodSlice>);
-        let mut new_layouts: Vec<DrawLayout> = Vec::with_capacity(self.draw_objects.len());
+        let mut new_layouts: Vec<DrawLayout> = Vec::with_capacity(self.draw.objects.len());
 
-        for (draw_idx, obj) in self.draw_objects.iter().enumerate() {
+        for (draw_idx, obj) in self.draw.objects.iter().enumerate() {
             let new_v_byte_off = new_vertices.len() * std::mem::size_of::<Vertex>();
             let new_i_elem_off = new_indices.len();
             let new_base_u32 = new_vertices.len() as u32;
@@ -229,7 +229,7 @@ impl MtlContext {
         for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in
             new_layouts.into_iter().enumerate()
         {
-            let obj = &mut self.draw_objects[i];
+            let obj = &mut self.draw.objects[i];
             obj.vertex_offset = v_off;
             obj.vertex_count = v_count;
             obj.index_offset = i_off;

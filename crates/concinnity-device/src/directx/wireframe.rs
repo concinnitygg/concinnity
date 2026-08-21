@@ -37,7 +37,7 @@ impl DxContext {
     // they are not built yet. Called from `draw_frame` before the frame is
     // recorded, so the `&self` pass encoders can just read them.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.view_mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -57,7 +57,7 @@ impl DxContext {
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
         let device = self.device.clone();
-        let iq = self.info_queue.clone();
+        let iq = self.diagnostics.info_queue.clone();
         let msaa = self.hdr.msaa_samples;
         let mut built = DxWireframe {
             built: true,
@@ -135,7 +135,7 @@ impl DxContext {
         twin: Option<&'a ID3D12PipelineState>,
     ) -> &'a ID3D12PipelineState {
         match twin {
-            Some(w) if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
+            Some(w) if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
             _ => solid,
         }
     }

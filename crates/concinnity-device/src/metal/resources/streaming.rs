@@ -32,7 +32,8 @@ impl MtlContext {
         frame: u64,
     ) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
         if vertices.len() != obj.vertex_count {
@@ -55,26 +56,32 @@ impl MtlContext {
         // Reclaim frees whose in-flight frames have retired, then place the
         // geometry. A zero-length mesh would not occupy the buffers, but
         // build_draw_list never emits one, so treat it as a hard error.
-        self.mesh_vtx_alloc.reclaim(frame);
-        self.mesh_idx_alloc.reclaim(frame);
+        self.geometry_alloc.mesh_vtx.reclaim(frame);
+        self.geometry_alloc.mesh_idx.reclaim(frame);
         let v_len = std::mem::size_of_val(vertices);
         // The shared index buffer is u32-typed; the input `indices` are u16 and
         // get widened on write below, so size the allocation against the u32
         // stride. Sizing against the u16 source would alloc half the bytes the
         // write needs and corrupt whatever sub-allocation followed.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self.mesh_vtx_alloc.alloc(v_len as u64).ok_or_else(|| {
-            format!(
-                "upload_mesh: draw {}: no free vertex space for {} bytes",
-                draw_idx, v_len
-            )
-        })? as usize;
-        let i_off = match self.mesh_idx_alloc.alloc(i_len as u64) {
+        let v_off = self
+            .geometry_alloc
+            .mesh_vtx
+            .alloc(v_len as u64)
+            .ok_or_else(|| {
+                format!(
+                    "upload_mesh: draw {}: no free vertex space for {} bytes",
+                    draw_idx, v_len
+                )
+            })? as usize;
+        let i_off = match self.geometry_alloc.mesh_idx.alloc(i_len as u64) {
             Some(o) => o as usize,
             None => {
                 // hand the vertex region back so a half-failed upload leaks no
                 // space (frame 0: it was never written or drawn)
-                self.mesh_vtx_alloc.free(v_off as u64, v_len as u64, 0);
+                self.geometry_alloc
+                    .mesh_vtx
+                    .free(v_off as u64, v_len as u64, 0);
                 return Err(format!(
                     "upload_mesh: draw {}: no free index space for {} bytes",
                     draw_idx, i_len
@@ -93,7 +100,7 @@ impl MtlContext {
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&rebased))?;
 
-        let obj = &mut self.draw_objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx];
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
@@ -120,10 +127,10 @@ impl MtlContext {
         idx_offset: u64,
         idx_bytes: u64,
     ) {
-        self.mesh_vtx_alloc.free(vtx_offset, vtx_bytes, 0);
-        self.mesh_vtx_alloc.reclaim(0);
-        self.mesh_idx_alloc.free(idx_offset, idx_bytes, 0);
-        self.mesh_idx_alloc.reclaim(0);
+        self.geometry_alloc.mesh_vtx.free(vtx_offset, vtx_bytes, 0);
+        self.geometry_alloc.mesh_vtx.reclaim(0);
+        self.geometry_alloc.mesh_idx.free(idx_offset, idx_bytes, 0);
+        self.geometry_alloc.mesh_idx.reclaim(0);
     }
 
     // Clear a streamed mesh's geometry region to zero, return its space to the
@@ -139,7 +146,8 @@ impl MtlContext {
     // stale triangles.
     pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
         let v_off = obj.vertex_offset;
@@ -148,11 +156,13 @@ impl MtlContext {
         let i_len = obj.index_count * std::mem::size_of::<u32>();
         zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
         zero_buffer_region(&self.index_buffer, i_off, i_len)?;
-        self.mesh_vtx_alloc
+        self.geometry_alloc
+            .mesh_vtx
             .free(v_off as u64, v_len as u64, retire_frame);
-        self.mesh_idx_alloc
+        self.geometry_alloc
+            .mesh_idx
             .free(i_off as u64, i_len as u64, retire_frame);
-        self.draw_objects[draw_idx].resident = false;
+        self.draw.objects[draw_idx].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;
@@ -190,7 +200,7 @@ impl MtlContext {
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> Result<(), String> {
-        let obj = self.draw_objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
             format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
@@ -273,7 +283,7 @@ impl MtlContext {
         }
         // Refresh the per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw_objects[draw_idx];
+        let slot = &mut self.draw.objects[draw_idx];
         for ((switch_distance, _), slice) in
             lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
         {

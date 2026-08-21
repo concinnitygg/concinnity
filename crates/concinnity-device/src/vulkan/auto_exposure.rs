@@ -430,13 +430,13 @@ impl VkContext {
     // `elapsed` is the total elapsed seconds since startup; the per-call
     // diff drives `dt` for the EMA.
     pub(in crate::vulkan) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
-        let Some(settings) = self.auto_exposure_settings else {
+        let Some(settings) = self.auto_exposure.settings else {
             return;
         };
-        let Some(resources) = self.auto_exposure.as_ref() else {
+        let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let Some(state) = self.auto_exposure_state.as_mut() else {
+        let Some(state) = self.auto_exposure.state.as_mut() else {
             return;
         };
         let Some(readback) = resources.readback_buffers.get(frame_idx) else {
@@ -456,10 +456,10 @@ impl VkContext {
             crate::gfx::auto_exposure::LUM_LOG2_MIN
         };
 
-        let dt = (elapsed - self.auto_exposure_last_elapsed).max(0.0);
-        self.auto_exposure_last_elapsed = elapsed;
+        let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
+        self.auto_exposure.last_elapsed = elapsed;
 
-        let adapted_ev = state.update(avg_log_lum, self.auto_exposure_bias_ev, &settings, dt);
+        let adapted_ev = state.update(avg_log_lum, self.auto_exposure.bias_ev, &settings, dt);
         // `self.post_process.exposure` is the linear multiplier the bloom
         // prefilter and composite consume. `state.update` already folds the
         // bias into the target EV; re-adding it would double the bias.
@@ -475,7 +475,7 @@ impl VkContext {
     // CPU's EMA step at the top of a later frame. A no-op when
     // auto-exposure is disabled.
     pub(in crate::vulkan) fn encode_auto_exposure(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        let Some(resources) = self.auto_exposure.as_ref() else {
+        let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
         let device = &self.device;

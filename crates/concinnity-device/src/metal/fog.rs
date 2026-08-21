@@ -103,7 +103,7 @@ impl MtlContext {
             ca.setStoreAction(MTLStoreAction::Store);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Fog);
         }
         let enc = ScopedEncoder::new(
@@ -159,7 +159,7 @@ impl MtlContext {
 
         let cmd_buf_dyn: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer> = cmd_buf;
         let desc = objc2_metal::MTLComputePassDescriptor::computePassDescriptor();
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&desc, super::pass_timing::PassId::FogFroxel);
         }
         let enc = ScopedEncoder::new(
@@ -174,14 +174,14 @@ impl MtlContext {
         enc.set_value(froxel_params, 1);
         // ShadowUniforms at buffer(2) so the kernel can pick a CSM cascade per
         // froxel.
-        enc.set_value(&self.shadow_uniforms, 2);
-        enc.set_texture(self.shadow_map.as_ref(), 0);
+        enc.set_value(&self.shadow.uniforms, 2);
+        enc.set_texture(self.shadow.map.as_ref(), 0);
         enc.set_texture(volume.as_ref(), 1);
         // The per-slab CSM tap's comparison sampler, which the shader used
-        // to declare inline as a constexpr sampler. `shadow_sampler` is the
+        // to declare inline as a constexpr sampler. `shadow.sampler` is the
         // same linear / clamp-to-edge / less-equal state the main pass taps
         // the cascades with.
-        enc.set_sampler(self.shadow_sampler.as_ref(), 0);
+        enc.set_sampler(self.shadow.sampler.as_ref(), 0);
 
         // One thread per (x, y) tile; the kernel walks Z internally.
         // Threadgroup of 8x8x1 keeps occupancy high without thrashing

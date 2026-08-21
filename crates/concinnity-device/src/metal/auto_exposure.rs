@@ -144,7 +144,7 @@ impl MtlContext {
         }
 
         let ae_desc = MTLComputePassDescriptor::new();
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&ae_desc, super::pass_timing::PassId::AutoExposure);
         }
         let enc = ScopedEncoder::new(

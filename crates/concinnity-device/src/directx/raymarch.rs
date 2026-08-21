@@ -1266,7 +1266,7 @@ impl DxContext {
         //   * hdr_color (no MSAA): PIXEL_SHADER_RESOURCE.
         //   * hdr_resolve:       PIXEL_SHADER_RESOURCE  (AutoExposure
         //                        sampled it; only present when MSAA on).
-        //   * depth_resource:    DEPTH_WRITE.
+        //   * depth.resource:    DEPTH_WRITE.
         //
         // We snapshot the single-sample scene for the refraction SRV,
         // then render the raymarch into the MSAA `hdr_color` target
@@ -1275,7 +1275,7 @@ impl DxContext {
         // single-sample post-stack passes (Decals, Fog, SsrResolve,
         // TaaResolve, Bloom, Composite) pick up the raymarched
         // colour AND the raymarched-surface depth (which flowed into
-        // `depth_resource` via SV_DepthLessEqual). The MSAA-off path
+        // `depth.resource` via SV_DepthLessEqual). The MSAA-off path
         // skips the resolve and renders into hdr_color directly.
         let msaa = self.hdr.resolve.is_some();
 
@@ -1319,12 +1319,12 @@ impl DxContext {
         // on. Depth stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
         // test composites against existing rasterised depth.
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&self.depth_dsv));
+            cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&self.depth.dsv));
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

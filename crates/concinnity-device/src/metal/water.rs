@@ -188,13 +188,13 @@ impl MtlContext {
         let rt_on = self.rt.accel.is_some();
         let pipeline = match (
             rt_on && bindless,
-            &self.water_pipeline_rt_textured,
+            &self.water.pipeline_rt_textured,
             rt_on,
-            &self.water_pipeline_rt,
+            &self.water.pipeline_rt,
         ) {
             (true, Some(p), _, _) => p,
             (_, _, true, Some(p)) => p,
-            _ => match &self.water_pipeline {
+            _ => match &self.water.pipeline {
                 Some(p) => p,
                 None => return,
             },
@@ -202,7 +202,7 @@ impl MtlContext {
         let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
-        for surface in &self.water_surfaces {
+        for surface in &self.water.surfaces {
             // Rebuild params with the current prefilter mip count; everything
             // else is asset-side-static.
             let mut params = surface.params;

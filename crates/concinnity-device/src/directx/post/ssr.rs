@@ -613,7 +613,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
     fn draw(&self, cmd: &Self::Rec) {
         // Build the per-frame SsrParams: turn the view matrix's 3x3 into the
         // view→world rotation (its transpose, embedded in a 4x4), then upload.
-        let v = self.ctx.view_matrix;
+        let v = self.ctx.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -654,7 +654,7 @@ impl FullscreenPass for SsrResolvePass<'_> {
             cmd.SetGraphicsRootDescriptorTable(5, self.ctx.probe_cube_table_gpu());
             cmd.SetGraphicsRootConstantBufferView(
                 6,
-                com::gpu_va(&self.ctx.probe_set_cbvs[self.frame_idx]),
+                com::gpu_va(&self.ctx.probe.set_cbvs[self.frame_idx]),
             );
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,

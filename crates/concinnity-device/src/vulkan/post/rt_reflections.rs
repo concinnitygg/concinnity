@@ -977,7 +977,7 @@ impl VkContext {
                     pd,
                 },
                 cmd,
-                &self.draw_objects,
+                &self.draw.objects,
                 super::super::raytrace::RtDynamicInputs {
                     policy: super::super::raytrace::RtRebuildPolicy {
                         mode,
@@ -1053,7 +1053,7 @@ impl VkContext {
         // The view->world rotation is the transpose of the view matrix's
         // orthonormal 3x3; `params` fills in the camera-position translation
         // column to complete the camera-to-world transform.
-        let v = self.view_matrix;
+        let v = self.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -1065,8 +1065,8 @@ impl VkContext {
             aspect,
             inv_view_rot,
             cam_pos,
-            sun_dir: self.fog_sun_dir,
-            sun_color: self.fog_sun_color,
+            sun_dir: self.fog.sun_dir,
+            sun_color: self.fog.sun_color,
             prefilter_mip_count: self.prefilter_mip_count as f32,
         });
         rt.params_buffers[frame_idx].write_val(0, &params);

@@ -128,7 +128,7 @@ impl MtlContext {
             ca.setStoreAction(MTLStoreAction::Store);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::Decals);
         }
         let enc = ScopedEncoder::new(

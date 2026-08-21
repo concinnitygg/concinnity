@@ -15,7 +15,7 @@
 // `GetCopyableFootprints` (D3D12 aligns each row to
 // `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` = 256), so the per-row de-pad below
 // strips that padding back to a tight RGBA8 image. A swapchain rebuild clears
-// `last_present_index`, so a capture in the brief window before the next
+// `swapchain.last_present_index`, so a capture in the brief window before the next
 // present returns a clean error rather than reading an unrendered buffer.
 
 use windows::Win32::Graphics::Direct3D12::*;
@@ -35,16 +35,17 @@ impl DxContext {
     // is reached only through the `RenderBackend` vtable (bin-only `cn debug`).
     #[allow(dead_code)]
     pub fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
-        let Some(back_idx) = self.last_present_index else {
+        let Some(back_idx) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());
         };
         let back_buffer = self
+            .swapchain
             .back_buffers
             .get(back_idx)
             .ok_or("screenshot: stale back-buffer index")?
             .clone();
-        let width = self.output_width;
-        let height = self.output_height;
+        let width = self.extent.output_width;
+        let height = self.extent.output_height;
         if width == 0 || height == 0 {
             return Err("screenshot: zero-sized swapchain".into());
         }
@@ -62,7 +63,7 @@ impl DxContext {
             Height: height,
             DepthOrArraySize: 1,
             MipLevels: 1,
-            Format: self.swap_format,
+            Format: self.swapchain.format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -160,8 +161,10 @@ impl DxContext {
         // this call.
         unsafe { readback.Unmap(0, None) };
 
-        let rgba =
-            image_decode::decode_to_rgba8(&packed, classify(self.swap_format, self.hdr_encoding));
+        let rgba = image_decode::decode_to_rgba8(
+            &packed,
+            classify(self.swapchain.format, self.hdr_encoding),
+        );
         encode_png(path, width, height, &rgba)?;
         Ok(path.to_string())
     }

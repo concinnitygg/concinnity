@@ -319,20 +319,20 @@ impl MtlContext {
         let rt_on = self.rt.accel.is_some();
         let pipeline = match (
             rt_on && bindless,
-            &self.glass_pipeline_rt_textured,
+            &self.glass.pipeline_rt_textured,
             rt_on,
-            &self.glass_pipeline_rt,
+            &self.glass.pipeline_rt,
         ) {
             (true, Some(p), _, _) => p,
             (_, _, true, Some(p)) => p,
-            _ => match &self.glass_pipeline {
+            _ => match &self.glass.pipeline {
                 Some(p) => p,
                 None => return,
             },
         };
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
-        for panel in &self.glass_panels {
+        for panel in &self.glass.panels {
             if !panel.visible {
                 continue;
             }
@@ -384,7 +384,7 @@ impl MtlContext {
     // a scene with no see-through material (e.g. Bistro) never engages Layer 2 and
     // its transparent glass stays Layer 1 (opaque, low roughness, reflective).
     pub(in crate::metal) fn seethrough_meshes_enabled(&self) -> bool {
-        !self.seethrough_mesh_indices.is_empty() && self.glass_mesh_pipeline_rt.is_some()
+        !self.glass.seethrough_mesh_indices.is_empty() && self.glass.mesh_pipeline_rt.is_some()
     }
 
     // Whether the transparent-mesh (Layer 2) path is live this frame: a material
@@ -416,17 +416,17 @@ impl MtlContext {
         // Textured trace in a bindless world (reflected hits carry their textures),
         // else the flat trace (reflected-hit material tint). `mesh_glass_active`
         // guarantees the flat pipeline exists.
-        let pipeline = match (bindless, &self.glass_mesh_pipeline_rt_textured) {
+        let pipeline = match (bindless, &self.glass.mesh_pipeline_rt_textured) {
             (true, Some(p)) => p,
-            _ => match &self.glass_mesh_pipeline_rt {
+            _ => match &self.glass.mesh_pipeline_rt {
                 Some(p) => p,
                 None => return,
             },
         };
         let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
-        for &idx in &self.seethrough_mesh_indices {
-            let Some(obj) = self.draw_objects.get(idx) else {
+        for &idx in &self.glass.seethrough_mesh_indices {
+            let Some(obj) = self.draw.objects.get(idx) else {
                 continue;
             };
             if !obj.visible || !obj.resident {

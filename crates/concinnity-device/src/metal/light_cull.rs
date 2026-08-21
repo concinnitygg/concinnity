@@ -46,7 +46,7 @@ impl MtlContext {
         };
 
         let desc = objc2_metal::MTLComputePassDescriptor::computePassDescriptor();
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&desc, super::pass_timing::PassId::LightCull);
         }
         let enc = ScopedEncoder::new(

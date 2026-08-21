@@ -77,7 +77,7 @@ pub(crate) struct CullState {
     // kernel skips the Hi-Z test. Flipped `true` after the first build.
     pub hiz_valid: bool,
     // GPU-driven cascaded shadow. All `Some` only on the bindless
-    // path with shadows enabled (`bindless && shadow_map_size > 0`); non-bindless
+    // path with shadows enabled (`bindless && shadow.map_size > 0`); non-bindless
     // / custom-shader worlds leave them `None` and keep the legacy per-cascade
     // CPU shadow loop. The frustum-only `cull_encode_shadow` kernel
     // (`shadow_pipeline`) writes per-cascade indirect commands into one shadow
@@ -298,7 +298,8 @@ impl MtlContext {
         &mut self,
         ring_slot: usize,
     ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        self.joint_ring
+        self.rings
+            .joint
             .write_all(&self.device, ring_slot, &self.skinned.joint_matrices)
     }
 
@@ -309,7 +310,8 @@ impl MtlContext {
         &mut self,
         ring_slot: usize,
     ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        self.prev_joint_ring
+        self.rings
+            .prev_joint
             .write_all(&self.device, ring_slot, &self.skinned.prev_joint_matrices)
     }
 
@@ -324,16 +326,16 @@ impl MtlContext {
         ring_slot: usize,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
         use crate::gfx::render_types::GpuObjectData;
-        if self.draw_objects.is_empty() {
+        if self.draw.objects.is_empty() {
             return Ok(None);
         }
         let texture_count = self.textures.len();
         // Reuse a persistent scratch Vec across frames; `mem::take` lifts it out
-        // so the build loop borrows only `draw_objects` while the ring + device
+        // so the build loop borrows only `draw.objects` while the ring + device
         // borrows below stay on disjoint fields.
-        let mut objects = std::mem::take(&mut self.object_scratch);
+        let mut objects = std::mem::take(&mut self.rings.object_scratch);
         objects.clear();
-        for obj in &self.draw_objects {
+        for obj in &self.draw.objects {
             // Shared-pool indices (each the texture's own handle, a normal-less
             // draw's normal being the flat-normal fallback slot, all clamped to
             // the cap); the identical mapping the folded instance records use, so
@@ -371,25 +373,25 @@ impl MtlContext {
         // dispatch + one indirect draw cover both (the ring auto-grows to the
         // written slice). The records are static (built once at init), so this
         // is a memcpy. `objects` was `mem::take`n, so this borrows only
-        // `instance_records`, leaving the other fields free.
-        if self.n_instances > 0 {
-            objects.extend_from_slice(&self.instance_records);
+        // `instanced.records`, leaving the other fields free.
+        if self.draw.n_instances > 0 {
+            objects.extend_from_slice(&self.instanced.records);
         }
         // Append a record per skinned object: the compute-deformed
         // geometry draws as rigid static geometry, so it folds into the same
         // cull. Rebuilt every frame (the record's AABB + model follow obj.model,
         // which animates), unlike the cached static instance records.
-        if self.n_skinned > 0 {
+        if self.draw.n_skinned > 0 {
             for obj in &self.skinned.draw_objects {
                 objects.push(metal_skinned_record(obj, texture_count));
             }
         }
-        let result = self.object_ring.write(
+        let result = self.rings.object.write(
             &self.device,
             ring_slot,
             super::context::bytes_of_slice(&objects),
         );
-        self.object_scratch = objects;
+        self.rings.object_scratch = objects;
         result.map(Some)
     }
 
@@ -406,7 +408,7 @@ impl MtlContext {
         ring_slot: usize,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
         use crate::gfx::render_types::{GpuDrawArgs, draw_args_flags};
-        if self.draw_objects.is_empty() {
+        if self.draw.objects.is_empty() {
             return Ok(None);
         }
         // A transparent glass mesh (Layer 2) is disabled in the opaque pass when
@@ -416,9 +418,9 @@ impl MtlContext {
         // nor occludes the refraction snapshot. The object keeps its slot, so every
         // parallel cull / object-buffer / prev-model index stays intact.
         let mesh_glass_active = self.mesh_glass_active();
-        let mut args = std::mem::take(&mut self.draw_args_scratch);
+        let mut args = std::mem::take(&mut self.rings.draw_args_scratch);
         args.clear();
-        for obj in &self.draw_objects {
+        for obj in &self.draw.objects {
             // Pick this frame's active LOD by camera distance: the bindless
             // main pass then renders the chosen slice with no shader-side
             // change. Objects with no alternates fall straight through to LOD0.
@@ -437,11 +439,11 @@ impl MtlContext {
             });
         }
         // Append the instances' draw args in the SAME cluster-then-instance
-        // order as `instance_records`, so cull index `draw_objects.len() + k`
+        // order as `instanced.records`, so cull index `draw.objects.len() + k`
         // reads matching object + draw-args records. Static (base LOD only),
         // so a memcpy; per-instance LOD would move this build per-frame.
-        if self.n_instances > 0 {
-            args.extend_from_slice(&self.instance_draw_args);
+        if self.draw.n_instances > 0 {
+            args.extend_from_slice(&self.instanced.draw_args);
         }
         // Skinned draw args: one per skinned object, the active-LOD
         // slice into the skinned u16 index buffer with base_vertex 0 (the
@@ -449,7 +451,7 @@ impl MtlContext {
         // obj.visible; rebuilt every frame (pose-driven LOD + visibility). The
         // cull kernel routes records at/after `skinned_record_base()` through the
         // skinned index buffer (see encode_cull's `skinned_base`).
-        if self.n_skinned > 0 {
+        if self.draw.n_skinned > 0 {
             for obj in &self.skinned.draw_objects {
                 let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
@@ -461,12 +463,12 @@ impl MtlContext {
                 });
             }
         }
-        let result = self.draw_args_ring.write(
+        let result = self.rings.draw_args.write(
             &self.device,
             ring_slot,
             super::context::bytes_of_slice(&args),
         );
-        self.draw_args_scratch = args;
+        self.rings.draw_args_scratch = args;
         result.map(Some)
     }
 
@@ -644,7 +646,7 @@ impl MtlContext {
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
-        if let (Some(t), Some(id)) = (&self.pass_timing, timing) {
+        if let (Some(t), Some(id)) = (&self.diagnostics.pass_timing, timing) {
             t.attach_compute(&cull_pass_desc, id);
         }
         let enc = ScopedEncoder::new(
@@ -763,7 +765,7 @@ impl MtlContext {
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_compute(&cull_pass_desc, super::pass_timing::PassId::Cull2);
         }
         let enc = ScopedEncoder::new(
@@ -808,7 +810,7 @@ impl MtlContext {
 
     // Encode the GPU-driven cascaded-shadow cull: one
     // `cull_encode_shadow` dispatch per re-rendered cascade (gated by
-    // `shadow_render_mask`), each frustum-testing every record against that
+    // `shadow.render_mask`), each frustum-testing every record against that
     // cascade's LIGHT frustum and encoding survivors into the cascade's slice of
     // the shared shadow ICB (`cascade_base = c * cull_count()`). Hi-Z + distance
     // are off (frustum only). A no-op when the shadow-bindless path is inactive
@@ -846,10 +848,10 @@ impl MtlContext {
         // cascade keeps its prior depth slice, so its cull dispatch + ICB region
         // are left untouched.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow_render_mask == 0 {
+        let mask = if self.shadow.render_mask == 0 {
             all
         } else {
-            self.shadow_render_mask
+            self.shadow.render_mask
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -881,7 +883,7 @@ impl MtlContext {
             // view-projection (the caster-extent near push baked into light_vps
             // survives, so off-screen / tall casters are kept).
             let frustum = crate::gfx::frustum::Frustum::from_view_projection(
-                self.shadow_uniforms.light_vps[c],
+                self.shadow.uniforms.light_vps[c],
             );
             let mut planes = [[0.0f32; 4]; 6];
             for (i, p) in frustum.planes.iter().enumerate() {
@@ -946,7 +948,7 @@ impl MtlContext {
         // Ring slot, grown to the encoder's `encodedLength()` instead of a fresh
         // allocation each frame. The argument encoder rewrites it in place; the
         // fence guarantees the prior user of this slot has retired on the GPU.
-        let buf = self.bindless_tex_ring.slot(&self.device, ring_slot, len)?;
+        let buf = self.rings.bindless_tex.slot(&self.device, ring_slot, len)?;
         // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and every
         // texture index below is within the `BindlessTextures` layout.
         unsafe {
@@ -975,7 +977,7 @@ impl MtlContext {
         // argument ids match the layout the shaders declare: `count` shadow map, then irradiance,
         // prefilter, AO, and `MAX_PROBES` probe cubes.
         unsafe {
-            enc.setTexture_atIndex(Some(self.shadow_map.as_ref()), count);
+            enc.setTexture_atIndex(Some(self.shadow.map.as_ref()), count);
             enc.setTexture_atIndex(Some(self.env_map.irradiance.as_ref()), count + 1);
             enc.setTexture_atIndex(Some(self.env_map.prefilter.as_ref()), count + 2);
             // SSAO occlusion: the blurred AO when SSAO is on, else 1×1 white.
@@ -989,7 +991,7 @@ impl MtlContext {
             // Spot shadow map array (1x1 fallback when nothing casts), just past
             // the probe cubes.
             enc.setTexture_atIndex(
-                Some(self.spot_shadow_map.as_ref()),
+                Some(self.spot_shadow.map.as_ref()),
                 count + 4 + concinnity_render::uniforms::MAX_PROBES,
             );
             // The two area-light LTC tables follow the spot shadow array.
@@ -1021,8 +1023,8 @@ impl MtlContext {
             );
         }
         for tex in [
-            self.shadow_map.as_ref(),
-            self.spot_shadow_map.as_ref(),
+            self.shadow.map.as_ref(),
+            self.spot_shadow.map.as_ref(),
             self.ltc_matrix_texture.as_ref(),
             self.ltc_magnitude_texture.as_ref(),
             self.env_map.irradiance.as_ref(),

@@ -363,7 +363,7 @@ impl MtlContext {
             // Stored (not DontCare): the MetalFX upscaler samples this depth.
             da.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&desc, crate::metal::pass_timing::PassId::GBufferPrepass);
         }
         let enc = ScopedEncoder::new(
@@ -591,15 +591,15 @@ impl MtlContext {
         ring_slot: usize,
         velocity_active: bool,
     ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
-        if self.draw_objects.is_empty() {
+        if self.draw.objects.is_empty() {
             return Ok(None);
         }
-        let mut models = std::mem::take(&mut self.prev_model_scratch);
+        let mut models = std::mem::take(&mut self.rings.prev_model_scratch);
         models.clear();
         // Static + chunks + clones: index-parallel to build_object_buffer's
-        // draw_objects loop. `velocity_active` gates last-frame vs current model
+        // draw.objects loop. `velocity_active` gates last-frame vs current model
         // (current -> zero model-delta motion, a harmless zero no consumer reads).
-        for (i, obj) in self.draw_objects.iter().enumerate() {
+        for (i, obj) in self.draw.objects.iter().enumerate() {
             models.push(if velocity_active {
                 self.prev_draw_models[i]
             } else {
@@ -607,20 +607,20 @@ impl MtlContext {
             });
         }
         // Instances: transforms are immutable, so cur == prev (camera-only motion).
-        if self.n_instances > 0 {
-            models.extend(self.instance_records.iter().map(|r| r.model));
+        if self.draw.n_instances > 0 {
+            models.extend(self.instanced.records.iter().map(|r| r.model));
         }
         // Skinned: the model matrix is static (cur == prev); per-vertex motion
         // comes from the previous-frame deformed buffer, not the model.
-        if self.n_skinned > 0 {
+        if self.draw.n_skinned > 0 {
             models.extend(self.skinned.draw_objects.iter().map(|o| o.model));
         }
-        let result = self.prev_model_ring.write(
+        let result = self.rings.prev_model.write(
             &self.device,
             ring_slot,
             crate::metal::context::bytes_of_slice(&models),
         );
-        self.prev_model_scratch = models;
+        self.rings.prev_model_scratch = models;
         result.map(Some)
     }
 }

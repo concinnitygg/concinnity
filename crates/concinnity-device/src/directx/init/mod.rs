@@ -95,12 +95,12 @@ impl DxContext {
                     // shared cull / object / draw-args / indirect buffers for the
                     // merged total at init (`n_objects + n_instances +
                     // n_skinned`); the skinned geometry itself is uploaded later
-                    // by `upload_skinned`, which sets the live `self.n_skinned`.
+                    // by `upload_skinned`, which sets the live `self.draw.n_skinned`.
                     n_skinned,
                     // Reserves a chunk record region in the shared cull buffers
                     // at init (`[n_objects + n_instances, +n_chunk_max)`);
                     // resident chunks fold into the indirect path each frame.
-                    // Sets the live `self.n_chunk`.
+                    // Sets the live `self.draw.n_chunk`.
                     n_chunk_max,
                 },
             shaders: world_shaders,
@@ -2210,10 +2210,16 @@ impl DxContext {
             alloc,
             swapchain_config,
             hdr_mode,
-            swapchain,
-            back_buffers,
-            rtv_heap,
-            rtv_descriptor_size,
+            swapchain: super::context::SwapchainState {
+                handle: swapchain,
+                back_buffers,
+                rtv_heap,
+                rtv_descriptor_size,
+                format: swapchain_format,
+                present_sync_interval,
+                allow_tearing,
+                last_present_index: None,
+            },
             hdr: super::context::HdrState {
                 color: hdr_color,
                 color_rtv: hdr_color_rtv,
@@ -2222,19 +2228,23 @@ impl DxContext {
                 srv_gpu: hdr_srv_gpu,
                 msaa_samples,
             },
-            render_width: render_w,
-            render_height: render_h,
-            output_width: width,
-            output_height: height,
+            extent: super::context::Extents {
+                render_width: render_w,
+                render_height: render_h,
+                output_width: width,
+                output_height: height,
+            },
             upscale: super::context::UpscaleState {
                 backend: upscaler,
                 requested: upscale_backend,
                 jitter: std::cell::Cell::new([0.0, 0.0]),
                 prev_elapsed: std::cell::Cell::new(0.0),
             },
-            depth_dsv: main_dsv_cpu,
-            depth_resource,
-            dsv_heap,
+            depth: super::context::DepthState {
+                dsv: main_dsv_cpu,
+                resource: depth_resource,
+                heap: dsv_heap,
+            },
             shadow: super::context::ShadowState {
                 resource: shadow_resource_opt,
                 dsvs: shadow_dsvs,
@@ -2282,18 +2292,6 @@ impl DxContext {
                 text_atlas_textures: gpu_text_atlases,
                 text_atlas_srv_gpus,
             },
-            n_objects,
-            n_instances,
-            // Streamed-chunk record reserve (fixed at init = the worst-case
-            // resident chunk window). The cull buffers reserve
-            // `[n_objects + n_instances, +n_chunk)`; resident chunks are folded in
-            // per frame and the unused tail is disabled. 0 for a non-voxel world.
-            n_chunk: n_chunk_max,
-            // Set in `upload_skinned` once skinned geometry is resident; the cull
-            // buffers reserve the tail at init via the threaded `n_skinned`
-            // capacity, but `cull_count()` reads this runtime count.
-            n_skinned: 0,
-            n_clusters,
             geometry: DxGeometry {
                 vertex_buffer,
                 index_buffer,
@@ -2380,10 +2378,15 @@ impl DxContext {
             },
             shadow_root_sig,
             shadow_pso,
-            text_root_sig,
-            text_pso,
-            composite_root_sig,
-            composite_pso,
+            text: super::context::TextState {
+                root_sig: text_root_sig,
+                pso: text_pso,
+                upload: super::upload_ring::UploadRing::new(FRAMES),
+            },
+            composite: super::context::CompositeState {
+                root_sig: composite_root_sig,
+                pso: composite_pso,
+            },
             bloom: BloomState {
                 mips: bloom_mips,
                 mip_rtvs: bloom_mip_rtvs,
@@ -2449,7 +2452,6 @@ impl DxContext {
                 end_command_allocators,
                 end_command_lists,
             },
-            draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
             frame_sync: DxFrameSync {
                 fence,
                 fence_values,
@@ -2457,15 +2459,33 @@ impl DxContext {
                 fence_event,
             },
             current_frame: 0,
-            pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(FRAMES),
-            stream_frame: 0,
-            stream_retires: Vec::new(),
-            cull_bvh,
-            always_draw,
-            always_draw_member,
-            visible_scratch: RefCell::new(Vec::new()),
-            frame_graph_cache: RefCell::new(None),
-            draw_objects,
+            stream: super::context::StreamState {
+                pool_rewrites: crate::gfx::slot_rewrites::SlotRewriteQueue::new(FRAMES),
+                frame: 0,
+                retires: Vec::new(),
+            },
+            draw: super::context::DrawState {
+                n_objects,
+                objects: draw_objects,
+                bvh: cull_bvh,
+                always: always_draw,
+                always_member: always_draw_member,
+                visible_scratch: RefCell::new(Vec::new()),
+                graph_cache: RefCell::new(None),
+                n_instances,
+                // Streamed-chunk record reserve (fixed at init = the worst-case
+                // resident chunk window). The cull buffers reserve
+                // `[n_objects + n_instances, +n_chunk)`; resident chunks are
+                // folded in per frame and the unused tail is disabled. 0 for a
+                // non-voxel world.
+                n_chunk: n_chunk_max,
+                // Set in `upload_skinned` once skinned geometry is resident; the
+                // cull buffers reserve the tail at init via the threaded
+                // `n_skinned` capacity, but `cull_count()` reads this runtime
+                // count.
+                n_skinned: 0,
+                n_clusters,
+            },
             instanced: DxInstanced {
                 root_sig: main_instanced_root_sig,
                 pso: main_instanced_pso,
@@ -2479,18 +2499,22 @@ impl DxContext {
                 // instances stay empty.
                 bucket_layouts: std::sync::RwLock::new(vec![Vec::new(); n_clusters]),
             },
-            clear_color,
-            scene_fade: 0.0,
-            view_mode: Default::default(),
-            view_show: Default::default(),
-            view_far: 1.0,
+            view: super::context::ViewState {
+                clear_color,
+                scene_fade: 0.0,
+                mode: Default::default(),
+                show: Default::default(),
+                far: 1.0,
+                matrix: IDENTITY4,
+            },
             wireframe: Default::default(),
-            view_matrix: IDENTITY4,
-            text_upload: super::upload_ring::UploadRing::new(FRAMES),
-            info_queue,
+            diagnostics: super::context::Diagnostics {
+                frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
+                draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
+                info_queue,
+            },
             bindless_main_shaders,
             adapter,
-            frame_stats: std::cell::Cell::new(crate::gfx::profile::RenderStats::default()),
             timestamps: TimestampState {
                 query_heap: timestamp_query_heap,
                 readback: timestamp_readback,
@@ -2508,14 +2532,10 @@ impl DxContext {
                 crate::gfx::hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
                 crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
             },
-            swap_format: swapchain_format,
-            present_sync_interval,
-            allow_tearing,
             hdr_encoding: match hdr_mode {
                 crate::gfx::hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
                 crate::gfx::hdr_output::HdrOutputMode::Sdr => None,
             },
-            last_present_index: None,
             hot_reload: super::context::HotReloadState {
                 enabled: hot_reload,
                 reload_pending: shader_reload_pending,
@@ -2526,15 +2546,17 @@ impl DxContext {
             rt_static_vertex_count: vertices.len(),
             // Reflection probes: empty until `set_reflection_probes` supplies
             // placements (declared or auto-seeded). See [`super::context`].
-            probe_placements: Vec::new(),
-            probe_bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
-            probe_set: concinnity_render::uniforms::ProbeSet::EMPTY,
-            probe_rendering: None,
-            probe_converting: None,
-            probe_maps: Vec::new(),
-            probe_set_cbvs,
-            probe_set_cbv_ptrs,
-            probe_set_empty_cbv,
+            probe: super::context::ProbeState {
+                placements: Vec::new(),
+                bake_queue: crate::gfx::reflection_probe::ProbeBakeQueue::new(0),
+                set: concinnity_render::uniforms::ProbeSet::EMPTY,
+                rendering: None,
+                converting: None,
+                maps: Vec::new(),
+                set_cbvs: probe_set_cbvs,
+                set_cbv_ptrs: probe_set_cbv_ptrs,
+                set_empty_cbv: probe_set_empty_cbv,
+            },
         })
     }
 }
@@ -2567,11 +2589,11 @@ impl DxContext {
                 .take()
                 .ok_or("apply_world_reload: window already taken")?,
             device: self.device.clone(),
-            info_queue: self.info_queue.clone(),
+            info_queue: self.diagnostics.info_queue.clone(),
             command_queue: self.command_queue.clone(),
-            swapchain: self.swapchain.clone(),
-            swapchain_format: self.swap_format,
-            allow_tearing: self.allow_tearing,
+            swapchain: self.swapchain.handle.clone(),
+            swapchain_format: self.swapchain.format,
+            allow_tearing: self.swapchain.allow_tearing,
             msaa_samples: self.hdr.msaa_samples,
             adapter: self.adapter.clone(),
             hdr_mode: self.hdr_mode,

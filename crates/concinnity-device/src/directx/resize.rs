@@ -42,10 +42,10 @@ impl DxContext {
             return Ok(());
         }
         // Compare against the *drawable* dims, not the render dims; with
-        // temporal upscaling on, `render_width`/`render_height` are a
+        // temporal upscaling on, `extent.render_width`/`extent.render_height` are a
         // fraction of the window size and would never equal it, firing a
         // pointless rebuild every frame.
-        if new_w == self.output_width && new_h == self.output_height {
+        if new_w == self.extent.output_width && new_h == self.extent.output_height {
             return Ok(());
         }
         self.handle_resize(new_w, new_h)
@@ -54,24 +54,24 @@ impl DxContext {
     // (Re)acquire the swapchain back buffers and write their RTVs into the
     // pre-reserved RTV heap slots. Used by the resize path on both success (the
     // freshly-sized buffers) and failure (the unchanged old buffers), so a
-    // failed `ResizeBuffers` never leaves `back_buffers` empty.
+    // failed `ResizeBuffers` never leaves `swapchain.back_buffers` empty.
     fn populate_back_buffers(&mut self) -> Result<(), String> {
-        self.back_buffers.clear();
+        self.swapchain.back_buffers.clear();
         // SAFETY: a property query on a live descriptor heap; it only reads.
-        let rtv_base = unsafe { self.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         for i in 0..FRAMES {
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
-            let buf: ID3D12Resource = unsafe { self.swapchain.GetBuffer(i as u32) }
+            let buf: ID3D12Resource = unsafe { self.swapchain.handle.GetBuffer(i as u32) }
                 .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: rtv_base.ptr + i * self.rtv_descriptor_size,
+                ptr: rtv_base.ptr + i * self.swapchain.rtv_descriptor_size,
             };
             // SAFETY: the view descriptor and the resource it names are live for the call, and the
             // destination handle addresses a slot this context reserved for the view in a heap it
             // owns.
             unsafe { self.device.CreateRenderTargetView(&buf, None, rtv_handle) };
-            self.back_buffers.push(buf);
+            self.swapchain.back_buffers.push(buf);
         }
         Ok(())
     }
@@ -80,7 +80,7 @@ impl DxContext {
     // non-zero and differ from the live size. The flow mirrors the Vulkan
     // rebuild: `wait_idle`, drop the old resources, recreate at the new
     // resolution, rewrite every dependent SRV/RTV/DSV at its existing heap
-    // slot, and refresh `render_width` / `render_height`.
+    // slot, and refresh `extent.render_width` / `extent.render_height`.
     fn handle_resize(&mut self, new_w: u32, new_h: u32) -> Result<(), String> {
         self.wait_idle();
 
@@ -126,7 +126,7 @@ impl DxContext {
 
         // 1) Swapchain back-buffers. `ResizeBuffers` requires every reference to
         //    the back-buffer resources to be released first. Besides the
-        //    `back_buffers` Vec, the composite pass records each back buffer onto
+        //    `swapchain.back_buffers` Vec, the composite pass records each back buffer onto
         //    its slot's end command list, and those recorded references persist
         //    until the list is reset. `maybe_handle_resize` runs at the top of
         //    `draw_frame` before this frame's lists are reset, so every in-flight
@@ -147,10 +147,10 @@ impl DxContext {
                 }
             }
         }
-        self.back_buffers.clear();
+        self.swapchain.back_buffers.clear();
         // ResizeBuffers must be passed the same flags the swapchain was created
         // with, so an ALLOW_TEARING (uncapped) swapchain keeps the flag here.
-        let resize_flags = if self.allow_tearing {
+        let resize_flags = if self.swapchain.allow_tearing {
             DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
         } else {
             DXGI_SWAP_CHAIN_FLAG(0)
@@ -158,18 +158,18 @@ impl DxContext {
         // SAFETY: the swapchain is live, every back-buffer reference this context held was dropped
         // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {
-            self.swapchain.ResizeBuffers(
+            self.swapchain.handle.ResizeBuffers(
                 FRAMES as u32,
                 new_w,
                 new_h,
-                self.swap_format,
+                self.swapchain.format,
                 resize_flags,
             )
         } {
             // The resize failed; `ResizeBuffers` leaves the swapchain at its
             // current size, so re-acquire the existing back buffers + RTVs. This
             // keeps the renderer presenting at the old size instead of indexing
-            // an empty `back_buffers` (a panic) on the next frame; the resize
+            // an empty `swapchain.back_buffers` (a panic) on the next frame; the resize
             // poll retries on the following frame.
             self.populate_back_buffers()?;
             return Err(format!("ResizeBuffers: {e}"));
@@ -178,7 +178,7 @@ impl DxContext {
         // The recreated back buffers invalidate any previously captured present
         // index; a `screenshot` before the next present then returns a clean
         // error instead of reading a stale buffer.
-        self.last_present_index = None;
+        self.swapchain.last_present_index = None;
 
         // 2) Main HDR colour + (optional) HDR resolve + depth. The HDR scene
         //    SRV (`hdr_srv_gpu`) and the decal/fog main-depth SRV
@@ -191,7 +191,7 @@ impl DxContext {
             render_h,
             self.hdr.msaa_samples,
             self.hdr.color_rtv,
-            self.clear_color,
+            self.view.clear_color,
         )?;
         if self.hdr.msaa_samples > 1 {
             let resolve = create_hdr_resolve_target(&self.device, render_w, render_h)?;
@@ -216,11 +216,11 @@ impl DxContext {
         }
         // Recreate main depth (shader-readable so the decal/fog/auto-exposure
         // paths can sample it). The DSV is rewritten at the same slot.
-        self.depth_resource = create_main_depth_texture(
+        self.depth.resource = create_main_depth_texture(
             &self.device,
             render_w,
             render_h,
-            self.depth_dsv,
+            self.depth.dsv,
             self.hdr.msaa_samples,
             true,
         )?;
@@ -259,7 +259,7 @@ impl DxContext {
         if let Some(decals) = self.decal.state.as_ref() {
             crate::directx::decal::write_main_depth_srv(
                 &self.device,
-                &self.depth_resource,
+                &self.depth.resource,
                 srv_cpu_of(decals.depth_srv_gpu),
                 self.hdr.msaa_samples,
             );
@@ -417,10 +417,10 @@ impl DxContext {
         //    viewports + the sub-pixel jitter; `output_*` drives the
         //    composite viewport and is what the next resize poll compares
         //    against. They differ only while temporal upscaling is active.
-        self.render_width = render_w;
-        self.render_height = render_h;
-        self.output_width = new_w;
-        self.output_height = new_h;
+        self.extent.render_width = render_w;
+        self.extent.render_height = render_h;
+        self.extent.output_width = new_w;
+        self.extent.output_height = new_h;
 
         // 9) Reset the swapchain back-buffer index. After `ResizeBuffers` the
         //    swapchain's notion of "current back buffer" is the next one to be

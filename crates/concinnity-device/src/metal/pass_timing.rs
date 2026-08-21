@@ -1,7 +1,7 @@
 // src/metal/pass_timing.rs
 //
 // Per-pass GPU timing on Metal via `MTLCounterSampleBuffer`. The whole-frame
-// timer in `MtlContext.gpu_time_us` only captures `GPUStartTime` /
+// timer in `MtlContext.diagnostics.gpu_time_us` only captures `GPUStartTime` /
 // `GPUEndTime`; this module supplements it with one start + end timestamp
 // per pass so the profiler overlay can attribute milliseconds to shadow /
 // main / SSAO / SSR / etc.

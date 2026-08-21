@@ -519,7 +519,7 @@ pub(super) struct RtAccelData {
     frames_in_flight: u64,
 
     // Per-frame update state.
-    // Indices into the frame's `draw_objects` for the participating objects, in
+    // Indices into the frame's `draw.objects` for the participating objects, in
     // BLAS / instance order. Lets a rebuild re-read current transforms in build
     // order and detect a changed draw list.
     object_indices: Vec<usize>,
@@ -2771,13 +2771,13 @@ impl super::context::VkContext {
             RtSceneGeometry {
                 vertex_buffer: self.geometry.vertex_buffer.buffer(),
                 index_buffer: self.geometry.index_buffer.buffer(),
-                draw_objects: &self.draw_objects,
+                draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.textures.len(),
                 total_vertices: self.rt_static_vertex_count,
             },
             self.frames_in_flight,
-            self.hot_reload,
+            self.hot_reload.enabled,
         ) {
             Ok(accel) => accel,
             Err(e) => {
@@ -2812,7 +2812,7 @@ impl super::context::VkContext {
     // descriptor sets pointing at [skinned bind-pose VB, this object's joint
     // buffer, this frame's deformed buffer]. The deformed + joint buffers are
     // stable for the world's lifetime, so the sets are written once here (no
-    // per-frame re-point). Sets `self.n_skinned`, which engages the fold. Called
+    // per-frame re-point). Sets `self.draw.n_skinned`, which engages the fold. Called
     // from `upload_skinned` when the bindless cull path is active. Mirrors the
     // DirectX `upload_skinned` skin block.
     pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> Result<(), String> {
@@ -2823,7 +2823,7 @@ impl super::context::VkContext {
             return Ok(());
         }
 
-        let mut skin = build_skin_pipeline(&self.alloc, &device, self.hot_reload)?;
+        let mut skin = build_skin_pipeline(&self.alloc, &device, self.hot_reload.enabled)?;
         ensure_skin_sets(&device, &mut skin, frames, n)?;
         let deformed = self.build_deformed_ring(&skin.sets, vertex_total)?;
 
@@ -2868,7 +2868,7 @@ impl super::context::VkContext {
 
         self.skinned.skin = Some(skin);
         self.skinned.deformed = deformed;
-        self.n_skinned = n;
+        self.draw.n_skinned = n;
         Ok(())
     }
 
@@ -2959,7 +2959,7 @@ impl super::context::VkContext {
         let Some(skin) = self.skinned.skin.as_ref() else {
             return;
         };
-        if self.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
+        if self.draw.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
             return;
         }
         let device = &self.device;
@@ -2973,7 +2973,7 @@ impl super::context::VkContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             let params = SkinParams {

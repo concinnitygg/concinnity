@@ -35,7 +35,7 @@ impl VkContext {
         let n = draw_objects.len();
 
         let (skinned_vs, skinned_shadow_vs, frag_spv) =
-            compile_skinned_shaders(self.hot_reload, frag_bytes)?;
+            compile_skinned_shaders(self.hot_reload.enabled, frag_bytes)?;
 
         let joint_set_layout = create_descriptor_set_layout(
             &self.device,
@@ -263,7 +263,7 @@ impl VkContext {
 
         // GPU-driven main-pass skinning fold: when the bindless cull path is active,
         // build the `rt_skin` compute pipeline + per-frame deformed-vertex buffers +
-        // their descriptor sets, and set `self.n_skinned` (which engages the fold so
+        // their descriptor sets, and set `self.draw.n_skinned` (which engages the fold so
         // `cull_count()` reserves the skinned tail). A build failure leaves it 0 and
         // the legacy skinned main pass runs. Mirrors the DirectX `upload_skinned`.
         if self.cull.bindless_pipeline.is_some()

@@ -589,16 +589,16 @@ impl MtlContext {
             &vdesc,
             vert_lib_bytes,
             frag_lib_bytes,
-            self.hot_reload,
+            self.hot_reload.enabled,
         )?;
 
         // Skinned shadow pipeline: built only when the static shadow pass is
         // active, so a skinned mesh casts a correctly deformed shadow.
-        let skinned_shadow_ps = if self.shadow_pipeline_state.is_some() {
+        let skinned_shadow_ps = if self.shadow.pipeline_state.is_some() {
             Some(build_skinned_shadow_pipeline(
                 &self.device,
                 &vdesc,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?)
         } else {
             None
@@ -618,7 +618,7 @@ impl MtlContext {
                 &self.device,
                 &vdesc,
                 &crate::metal::slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
-                self.hot_reload,
+                self.hot_reload.enabled,
             )?);
         }
 
@@ -653,12 +653,14 @@ impl MtlContext {
         // per-frame pre-skin so skinned objects draw as rigid deformed geometry
         // through the unified cull, exactly like DX/VK. A pure-skinned or
         // non-bindless world leaves these unset and keeps the legacy skinned VS
-        // draw (the main-pass gate falls back when `!bindless || draw_objects
+        // draw (the main-pass gate falls back when `!bindless || draw.objects
         // empty`). The skin pipeline is built independently of RT; RT keeps its
         // own skin pipeline + deformed buffer.
-        if self.bindless && !self.draw_objects.is_empty() {
-            let skin_pipeline =
-                crate::metal::raytrace::build_rt_skin_pipeline(&self.device, self.hot_reload)?;
+        if self.bindless && !self.draw.objects.is_empty() {
+            let skin_pipeline = crate::metal::raytrace::build_rt_skin_pipeline(
+                &self.device,
+                self.hot_reload.enabled,
+            )?;
             // One deformed buffer per frame-in-flight (the skin write and the
             // main-pass read live in separate command buffers, so a per-frame
             // ring lets frames pipeline without the next frame's skin racing this
@@ -689,7 +691,7 @@ impl MtlContext {
             // The count `cull_count()` reads: now the skinned records ride the
             // unified cull + bindless ICB, and the legacy skinned main draw is
             // gated off.
-            self.n_skinned = draw_objects.len();
+            self.draw.n_skinned = draw_objects.len();
         }
 
         self.skinned.pipeline_state = Some(skinned_ps);

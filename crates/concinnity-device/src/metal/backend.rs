@@ -63,20 +63,20 @@ macro_rules! forward {
 macro_rules! forward_win {
     () => {};
     (fn $name:ident(&self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
-        fn $name(&self $(, $arg: $ty)*) -> $ret { self.win.$name($($arg),*) }
+        fn $name(&self $(, $arg: $ty)*) -> $ret { self.window.appkit.$name($($arg),*) }
         forward_win!($($rest)*);
     };
     (fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) -> $ret {
             debug_assert_main_thread(stringify!($name));
-            self.win.$name($($arg),*)
+            self.window.appkit.$name($($arg),*)
         }
         forward_win!($($rest)*);
     };
     (fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?); $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) {
             debug_assert_main_thread(stringify!($name));
-            self.win.$name($($arg),*)
+            self.window.appkit.$name($($arg),*)
         }
         forward_win!($($rest)*);
     };
@@ -277,19 +277,22 @@ impl RenderBackend for MtlContext {
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.shader_reload_pending
+        self.hot_reload
+            .reload_pending
             .as_ref()
             .map(std::sync::Arc::clone)
     }
 
     fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
-        self.draw_objects
+        self.draw
+            .objects
             .get(draw_idx)
             .map(|o| (o.vertex_count, o.index_count))
     }
 
     fn draw_lod_index_counts(&self, draw_idx: usize) -> Option<Vec<usize>> {
-        self.draw_objects
+        self.draw
+            .objects
             .get(draw_idx)
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }
@@ -301,8 +304,8 @@ impl RenderBackend for MtlContext {
     fn hot_swap_config(&self) -> Option<crate::gfx::backend_init::SwapchainConfig> {
         Some(crate::gfx::backend_init::SwapchainConfig {
             frames_in_flight: self.frames_in_flight,
-            hdr_display: self.hdr_display_requested,
-            hdr_pq: self.hdr_pq_requested,
+            hdr_display: self.hdr.display_requested,
+            hdr_pq: self.hdr.pq_requested,
         })
     }
 

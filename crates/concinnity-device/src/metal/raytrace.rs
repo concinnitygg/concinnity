@@ -170,7 +170,7 @@ struct TopologyPlan {
 
 // Decide, for the draw-object BLAS head only, which BLAS to reuse, which to
 // build, and which to retire when the participating draw set changes. Matches
-// old and new slots by `draw_objects` index AND geometry signature: a slot whose
+// old and new slots by `draw.objects` index AND geometry signature: a slot whose
 // geometry moved (a chunk slot recycled for a different chunk) does not match, so
 // it rebuilds. Pure so it is unit-testable without Metal.
 fn plan_topology_refresh(
@@ -180,7 +180,7 @@ fn plan_topology_refresh(
     new_sigs: &[GeomSig],
 ) -> TopologyPlan {
     use std::collections::HashMap;
-    // draw_objects index -> (position in the old draw BLAS head, its signature).
+    // draw.objects index -> (position in the old draw BLAS head, its signature).
     // `object_indices` entries are unique (one per draw slot), so this is 1:1.
     let mut by_idx: HashMap<usize, (usize, GeomSig)> = HashMap::with_capacity(old_indices.len());
     for (k, (&idx, &sig)) in old_indices.iter().zip(old_sigs).enumerate() {
@@ -237,7 +237,7 @@ pub(crate) struct RtAccelData {
     pub geom_table: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Per-frame update state.
-    // Indices into the frame's `draw_objects` for the objects that participate,
+    // Indices into the frame's `draw.objects` for the objects that participate,
     // in BLAS / instance order. Lets an update re-read current transforms in
     // the exact order the BLAS were built, and detect a changed draw list.
     object_indices: Vec<usize>,
@@ -923,7 +923,7 @@ pub(crate) fn build_rt_accel(
     // route through the transparent pass with their own per-pixel trace, so glass
     // does not reflect glass and the trace never self-hits); otherwise (Layer 1)
     // they stay in so opaque glass reflects + is reflected normally. Track the
-    // participating indices into `draw_objects` so a per-frame update re-reads
+    // participating indices into `draw.objects` so a per-frame update re-reads
     // transforms in BLAS-build order.
     let object_indices: Vec<usize> = draw_objects
         .iter()

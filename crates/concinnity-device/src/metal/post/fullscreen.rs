@@ -209,7 +209,7 @@ impl MtlContext {
             ca.setLoadAction(load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             match timer {
                 PassTimer::None => {}
                 PassTimer::Whole(id) => t.attach_render(&desc, id),

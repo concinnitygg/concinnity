@@ -903,7 +903,7 @@ impl DxContext {
             jittered_vp,
             cur_vp,
             prev_vp,
-            view: self.view_matrix,
+            view: self.view.matrix,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
@@ -917,8 +917,8 @@ impl DxContext {
         }
         let view_gva = com::gpu_va(&gb.view_ubo_resources[frame_idx]);
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
 
         // The three colour targets are one graph resource (`gbuffer`), so the
         // executor has already put them in RENDER_TARGET for this pass's write
@@ -1186,7 +1186,7 @@ impl DxContext {
     // (slot 1), so per-vertex skin deformation produces a correct motion vector.
     // model + roughness ride the per-frame GpuObjectData buffer; the previous-frame
     // model rides a parallel buffer. Streamed chunks / runtime clones (records past
-    // `n_objects`) keep a legacy per-object loop. The CPU never walks the static /
+    // `draw.n_objects`) keep a legacy per-object loop. The CPU never walks the static /
     // skinned draw lists.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
@@ -1262,7 +1262,7 @@ impl DxContext {
         // base_vertex = 0 (global skinned indexing). When velocity is inactive the
         // previous deformed VB is the current one, so prev_pos == cur_pos and the
         // motion channel stays zero (GbView prev_vp also equals cur_vp).
-        if self.n_skinned > 0
+        if self.draw.n_skinned > 0
             && let Some(cur_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
             // Read the previous frame's deformed pose only once the ring has been
@@ -1294,7 +1294,7 @@ impl DxContext {
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    self.n_skinned as u32,
+                    self.draw.n_skinned as u32,
                     indirect,
                     (prefix * stride) as u64,
                     None::<&ID3D12Resource>,
@@ -1309,14 +1309,14 @@ impl DxContext {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Legacy extra: streamed chunks + runtime clones (records past `n_objects`)
+        // Legacy extra: streamed chunks + runtime clones (records past `draw.n_objects`)
         // are not in the GpuObjectData buffer, so draw them with the legacy
         // per-object pipeline into the same MRT. Converged by the chunk phase.
         self.encode_gbuffer_legacy_extra(cmd, view_gva, visible, cam_pos, velocity_active);
     }
 
     // Legacy per-object G-buffer draws for runtime clones past the bindless range
-    // (`i >= n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
+    // (`i >= draw.n_objects` AND in `clone.slot_by_draw_idx`). Streamed VoxelWorld chunks
     // now fold into the GPU-driven cull records (drawn by the prefix indirect draw),
     // so they are skipped here. Mirrors the legacy static loop, appending into the
     // same MRT after the indirect draws (no re-clear). A no-op for worlds with no
@@ -1347,7 +1347,7 @@ impl DxContext {
         }
         let prev_models = gb.prev_models.borrow();
         self.draw_static_objects(visible, cam_pos, |obj, i, index_offset, index_count| {
-            if i < self.n_objects {
+            if i < self.draw.n_objects {
                 return; // build-time object, already drawn via ExecuteIndirect
             }
             if !self.clone.slot_by_draw_idx.contains_key(&i) {
@@ -1387,14 +1387,14 @@ impl DxContext {
 
     // Fill this frame's previous-frame model buffer for the GPU-driven G-buffer
     // velocity. Indexed by cull record id, parallel to the GpuObjectData buffer:
-    // the static prefix `[0, n_objects)` gets last frame's model (so a moving
+    // the static prefix `[0, draw.n_objects)` gets last frame's model (so a moving
     // static object reprojects correctly), the chunk region
-    // `[chunk_record_base(), +n_chunk)` gets the chunk's current model (camera-only
+    // `[chunk_record_base(), +draw.n_chunk)` gets the chunk's current model (camera-only
     // velocity -- chunk terrain is static-in-world; the camera-relative origin
     // rebase nets to zero screen motion, matching the legacy chunk path), the
     // skinned tail `[skinned_record_base(), cull_count())` gets the current model
     // (skinned deformation motion comes from the previous-frame deformed buffer).
-    // The instance region `[n_objects, chunk_record_base())` is init-written +
+    // The instance region `[draw.n_objects, chunk_record_base())` is init-written +
     // immutable. When velocity is inactive every written record gets its current
     // model, so the motion channel stays zero (GbView prev_vp also equals cur_vp).
     // Mirrors build_object_buffer's record indexing.
@@ -1407,14 +1407,20 @@ impl DxContext {
         };
         let stride = std::mem::size_of::<[[f32; 4]; 4]>();
         let prev_models = gb.prev_models.borrow();
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             let prev = if velocity_active {
                 prev_models.get(i).copied().unwrap_or(obj.model)
             } else {
                 obj.model
             };
             // SAFETY: the buffer was sized for `cull_count()` records and the loop
-            // is bounded by `take(n_objects)`, so `i * stride` is in range.
+            // is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &prev as *const [[f32; 4]; 4] as *const u8,
@@ -1429,7 +1435,7 @@ impl DxContext {
         let chunk_base = self.chunk_record_base();
         self.for_each_chunk_record(|k, obj| {
             let prev = obj.model;
-            // SAFETY: `for_each_chunk_record` caps `k < n_chunk`, so
+            // SAFETY: `for_each_chunk_record` caps `k < draw.n_chunk`, so
             // `chunk_base + k < skinned_record_base()`, in range for `cull_count()`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -1444,15 +1450,15 @@ impl DxContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             // Skinned motion is per-vertex (previous deformed buffer), so the model
             // matrix is the current one (cur == prev model, like the legacy path).
             let prev = obj.model;
-            // SAFETY: the buffer reserved `n_skinned` records past
+            // SAFETY: the buffer reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.draw_objects.len() == self.n_skinned`.
+            // `self.skinned.draw_objects.len() == self.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &prev as *const [[f32; 4]; 4] as *const u8,

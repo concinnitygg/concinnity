@@ -419,8 +419,8 @@ impl DxContext {
             cmd.SetComputeRootDescriptorTable(1, self.hdr.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(2, histogram_gva);
 
-            let groups_x = self.render_width.div_ceil(16);
-            let groups_y = self.render_height.div_ceil(16);
+            let groups_x = self.extent.render_width.div_ceil(16);
+            let groups_y = self.extent.render_height.div_ceil(16);
             cmd.Dispatch(groups_x, groups_y, 1);
         }
 

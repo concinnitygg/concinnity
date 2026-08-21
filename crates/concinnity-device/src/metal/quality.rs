@@ -33,7 +33,7 @@ impl MtlContext {
     // specific: Vulkan reaches the same end by rebuilding the swapchain with a
     // different present mode, so this does not live on the shared window layer.
     pub fn set_vsync(&mut self, on: bool) {
-        super::init::set_display_sync(&self.mtk_view, on);
+        super::init::set_display_sync(&self.window.view, on);
     }
 
     // Replace the live post-process parameters. They are pushed to the bloom
@@ -56,26 +56,26 @@ impl MtlContext {
     }
 
     // Set the live shadow cascade re-render cadence. The scheduler reads
-    // `shadow_update` at the start of each shadow pass, so a change takes effect
+    // `shadow.update` at the start of each shadow pass, so a change takes effect
     // on the next draw. Every cascade is already primed, so switching policy never
     // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
     pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
-        self.shadow_update = update;
+        self.shadow.update = update;
     }
 
     // Set the live shadow distance (world units). The per-frame cascade-split
-    // computation reads `shadow_distance` each draw, so a change takes effect on
+    // computation reads `shadow.distance` each draw, so a change takes effect on
     // the next frame with no allocation (it sizes no GPU resource).
     pub fn set_shadow_distance(&mut self, distance: u32) {
-        self.shadow_distance = distance;
+        self.shadow.distance = distance;
     }
 
     // Set the live shadow cascade count (1..=4). The per-frame split + schedule
-    // read `shadow_cascades` each draw; only the first `count` of the four slots
+    // read `shadow.cascades` each draw; only the first `count` of the four slots
     // are rendered + sampled, so a change takes effect on the next frame with no
     // resize (the shadow-map array stays sized for the 4-cascade capacity).
     pub fn set_shadow_cascades(&mut self, count: u32) {
-        self.shadow_cascades = count;
+        self.shadow.cascades = count;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -124,7 +124,7 @@ impl MtlContext {
         let upscaling_active = self.upscale.scaler.is_some();
         let taa_effective = q.taa && !upscaling_active;
         let needs_velocity = taa_effective || upscaling_active;
-        let has_instanced = self.instanced_pipeline_state.is_some();
+        let has_instanced = self.instanced.pipeline_state.is_some();
         // Output dimensions come from the live bloom chain, which was built at
         // them; the rebuilt pool sizes `bloom_top` off the same pair, so the new
         // top mip drops back into the chain unchanged below.
@@ -152,7 +152,7 @@ impl MtlContext {
                 taa_enabled: taa_effective,
                 needs_velocity,
                 has_instanced,
-                hot_reload: self.hot_reload,
+                hot_reload: self.hot_reload.enabled,
             },
         ) {
             Ok(b) => b,
@@ -188,7 +188,7 @@ impl MtlContext {
                 &self.device,
                 &make_skinned_vertex_descriptor(),
                 &slang_shaders::GBUFFER_PREPASS_VERT_SKINNED,
-                self.hot_reload,
+                self.hot_reload.enabled,
             ) {
                 Ok(p) => gbuffer.skinned_pipeline = Some(p),
                 Err(e) => {
@@ -243,8 +243,8 @@ impl MtlContext {
                         index_buffer: &self.index_buffer,
                     },
                     RtSceneGeometry {
-                        draw_objects: &self.draw_objects,
-                        clusters: &self.instanced_clusters,
+                        draw_objects: &self.draw.objects,
+                        clusters: &self.instanced.clusters,
                     },
                     RtTextureCounts {
                         albedo_count: self.textures.len(),

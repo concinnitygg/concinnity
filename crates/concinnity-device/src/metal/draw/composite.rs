@@ -6,7 +6,7 @@
 // after in the same render pass so it sits on top of the tonemapped image in
 // display-referred LDR space; its geometry comes from sub-ranges of this
 // frame's text-upload slot, filled by `draw_frame` before the graph ran (see
-// [`crate::metal::text_upload::TextUploadRing`]).
+// [`crate::metal::text.upload::TextUploadRing`]).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
@@ -31,7 +31,8 @@ impl MtlContext {
         text_calls: &[TextDrawCall],
     ) -> Result<u32, String> {
         let composite_pass_desc = self
-            .mtk_view
+            .window
+            .view
             .currentRenderPassDescriptor()
             .ok_or("no current render pass descriptor")?;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
@@ -44,7 +45,7 @@ impl MtlContext {
             ca.setStoreAction(MTLStoreAction::Store);
         }
 
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(
                 &composite_pass_desc,
                 super::super::pass_timing::PassId::Composite,
@@ -62,8 +63,8 @@ impl MtlContext {
         post_encoder.set_pipeline(&self.post_pipeline_state);
         // A G-buffer channel view swaps the fragment onto its visualization
         // branch; Lit / Unlit / Wireframe all take the normal scene path.
-        let channel_view = if self.view_mode.is_gbuffer_channel() {
-            self.view_mode as u32
+        let channel_view = if self.view.mode.is_gbuffer_channel() {
+            self.view.mode as u32
         } else {
             0
         };
@@ -98,9 +99,9 @@ impl MtlContext {
         // fade at buffer(0).
         let composite = crate::gfx::render_types::CompositeParams {
             post: self.post_process,
-            fade: self.scene_fade,
+            fade: self.view.scene_fade,
             view_mode: channel_view,
-            far: self.view_far,
+            far: self.view.far,
         };
         post_encoder.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
@@ -114,11 +115,11 @@ impl MtlContext {
 
         // Text overlay: rendered in the same composite pass so it sits on
         // top of the tonemapped image in display-referred LDR space.
-        if let Some(text_ps) = self.text_pipeline_state.clone()
-            && let Some((text_buffer, text_ranges)) = self.text_upload.binding()
-            && !self.text_atlas_textures.is_empty()
+        if let Some(text_ps) = self.text.pipeline_state.clone()
+            && let Some((text_buffer, text_ranges)) = self.text.upload.binding()
+            && !self.text.atlas_textures.is_empty()
         {
-            let logical = self.mtk_view.bounds().size;
+            let logical = self.window.view.bounds().size;
             let win_w = logical.width as f32;
             let win_h = logical.height as f32;
             let text_uniforms = crate::gfx::render_types::TextUniforms {
@@ -180,9 +181,9 @@ impl MtlContext {
                         });
                     }
                 }
-                let atlas_idx = call.atlas_slot.min(self.text_atlas_textures.len() - 1);
-                post_encoder.set_fragment_texture(self.text_atlas_textures[atlas_idx].as_ref(), 0);
-                post_encoder.set_fragment_sampler(&self.text_sampler, 0);
+                let atlas_idx = call.atlas_slot.min(self.text.atlas_textures.len() - 1);
+                post_encoder.set_fragment_texture(self.text.atlas_textures[atlas_idx].as_ref(), 0);
+                post_encoder.set_fragment_sampler(&self.text.sampler, 0);
 
                 post_encoder.set_vertex_value(&text_uniforms, 0);
                 post_encoder.set_vertex_buffer(text_buffer, range.vertex_offset, 1);

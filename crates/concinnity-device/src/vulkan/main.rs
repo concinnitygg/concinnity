@@ -9,7 +9,7 @@
 //   1. Bindless build-time statics via `cmd_draw_indexed_indirect` over
 //      the GPU-cull-written indirect buffer.
 //   2. Legacy per-draw fallback (custom shaders + streamed `VoxelWorld`
-//      chunks past `n_objects`).
+//      chunks past `draw.n_objects`).
 //   3. Instanced clusters via per-instance storage buffers.
 //   4. Skinned meshes via LBS vertex shader + per-object joint sets.
 //
@@ -128,7 +128,7 @@ impl VkContext {
         // resolve attachment doesn't need a clear (resolve overwrites);
         // a `ClearValue::default()` placeholder keeps the slice index
         // aligned with `main_render_pass`'s attachment count.
-        let [r, g, b, a] = self.clear_color;
+        let [r, g, b, a] = self.view.clear_color;
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -277,7 +277,7 @@ impl VkContext {
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
                 );
             }
-            // GPU expands the indirect buffer to up to `n_objects` draw
+            // GPU expands the indirect buffer to up to `draw.n_objects` draw
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors DirectX / Metal.
             self.inc_draw_calls(1);
@@ -305,7 +305,7 @@ impl VkContext {
         // otherwise only runtime clones (streamed VoxelWorld chunks now fold into
         // the bindless indirect draw as their own records). Shared with the
         // instanced + skinned passes' fragment shader.
-        let legacy_needed = !use_bindless || !self.clone_slot_by_draw_idx.is_empty();
+        let legacy_needed = !use_bindless || !self.clone.slot_by_draw_idx.is_empty();
         if legacy_needed {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
@@ -327,16 +327,16 @@ impl VkContext {
             }
             for &draw_idx in visible {
                 let i = draw_idx as usize;
-                if use_bindless && i < self.n_objects {
+                if use_bindless && i < self.draw.n_objects {
                     continue; // build-time object, already drawn bindless
                 }
                 if use_bindless
-                    && i >= self.n_objects
-                    && !self.clone_slot_by_draw_idx.contains_key(&i)
+                    && i >= self.draw.n_objects
+                    && !self.clone.slot_by_draw_idx.contains_key(&i)
                 {
                     continue; // streamed chunk, already drawn bindless (folded record)
                 }
-                let obj = &self.draw_objects[i];
+                let obj = &self.draw.objects[i];
                 if !obj.visible || !obj.resident {
                     continue;
                 }
@@ -347,11 +347,11 @@ impl VkContext {
                 // chunk material; build-time objects use their own baked
                 // (albedo, normal) set; runtime clones (from
                 // `clone_static_draw_object`) carry their own per-clone set
-                // stored in `clone_object_sets` and looked up via
-                // `clone_slot_by_draw_idx`.
-                let obj_set = if i >= self.n_objects {
-                    if let Some(&offset) = self.clone_slot_by_draw_idx.get(&i) {
-                        match self.clone_object_sets.get(offset) {
+                // stored in `clone.object_sets` and looked up via
+                // `clone.slot_by_draw_idx`.
+                let obj_set = if i >= self.draw.n_objects {
+                    if let Some(&offset) = self.clone.slot_by_draw_idx.get(&i) {
+                        match self.clone.object_sets.get(offset) {
                             Some(&s) => s,
                             None => continue,
                         }
@@ -380,7 +380,7 @@ impl VkContext {
                 }
 
                 // Per-frame active LOD pick. Streamed VoxelWorld chunks
-                // (past `n_objects`) never declare LOD alternates, so the
+                // (past `draw.n_objects`) never declare LOD alternates, so the
                 // pick collapses to LOD0 for them.
                 let d = crate::gfx::lod::camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
@@ -422,7 +422,7 @@ impl VkContext {
         }
 
         // Instanced clusters main pass. Skipped when the bindless merge is active:
-        // each instance is then a `GpuObjectData` record at `n_objects + k` in the
+        // each instance is then a `GpuObjectData` record at `draw.n_objects + k` in the
         // cull buffers, drawn by the bindless `cmd_draw_indexed_indirect` above.
         if let (Some(inst_pipeline), Some(inst_pipeline_layout)) = (
             self.instanced.pipeline.as_ref(),
@@ -546,7 +546,7 @@ impl VkContext {
         // `encode_skin` compute pass (Cull graph arm) has already posed the deformed
         // buffer. Otherwise the legacy per-draw skinned pass runs (custom-shader
         // worlds, or a pure-skinned world with no static geometry to engage bindless).
-        if use_bindless && self.n_skinned > 0 {
+        if use_bindless && self.draw.n_skinned > 0 {
             if let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
                 self.cull.bindless_pipeline.as_ref(),
                 self.cull.bindless_pipeline_layout.as_ref(),
@@ -594,7 +594,7 @@ impl VkContext {
                         cmd,
                         self.cull.indirect_buffers[frame_idx].buffer(),
                         (self.skinned_record_base() * cmd_stride) as u64,
-                        self.n_skinned as u32,
+                        self.draw.n_skinned as u32,
                         cmd_stride as u32,
                     );
                 }
@@ -715,7 +715,7 @@ impl VkContext {
             return;
         };
         let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
-        if self.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
+        if self.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
             return;
         }
         let device = self.device.clone();
@@ -824,7 +824,7 @@ impl VkContext {
         // The descriptor sets bound above persist, so only the pipeline (a bucket
         // may have replaced it) and the vertex/index buffers rebind. Skinned draws
         // always render bucket 0.
-        if self.n_skinned > 0
+        if self.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
@@ -848,7 +848,7 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers2[frame_idx].buffer(),
                     (self.skinned_record_base() * cmd_stride) as u64,
-                    self.n_skinned as u32,
+                    self.draw.n_skinned as u32,
                     cmd_stride as u32,
                 );
             }

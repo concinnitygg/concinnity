@@ -128,7 +128,7 @@ impl MtlContext {
 
         let rgba = image_decode::decode_to_rgba8(
             &raw,
-            classify(self.swap_pixel_format, self.hdr_encoding),
+            classify(self.swap_pixel_format, self.hdr.encoding),
         );
         encode_png(path, width as u32, height as u32, &rgba)?;
         Ok(path.to_string())

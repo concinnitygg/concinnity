@@ -1543,7 +1543,7 @@ impl VkContext {
                 .rt
                 .as_ref()
                 .ok_or("glass rt_live but rt pipelines missing")?;
-            let v = self.view_matrix;
+            let v = self.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -1555,8 +1555,8 @@ impl VkContext {
                 aspect,
                 inv_view_rot,
                 cam_pos: cam,
-                sun_dir: self.fog_sun_dir,
-                sun_color: self.fog_sun_color,
+                sun_dir: self.fog.sun_dir,
+                sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.prefilter_mip_count as f32,
             });
             glass_rt.params_buffers[frame_idx].write_val(0, &params);

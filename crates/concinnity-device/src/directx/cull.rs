@@ -223,14 +223,14 @@ pub(in crate::directx) fn create_cull_command_signature(
 impl DxContext {
     // Total records the GPU-driven cull + bindless main pass processes: the
     // build-time static objects, the instanced-cluster instances folded in after
-    // them, then the skinned objects (`n_objects + n_instances + n_skinned`). The
+    // them, then the skinned objects (`draw.n_objects + draw.n_instances + draw.n_skinned`). The
     // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
     // count this; the main pass then draws the static+instance prefix and the
     // skinned tail with two `ExecuteIndirect` calls. With no instanced props /
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
-    // equal to the static `n_objects`.
+    // equal to the static `draw.n_objects`.
     pub(in crate::directx) fn cull_count(&self) -> usize {
-        self.n_objects + self.n_instances + self.n_chunk + self.n_skinned
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk + self.draw.n_skinned
     }
 
     // Buffer index of the first streamed-chunk record. The chunk reserve is
@@ -239,7 +239,7 @@ impl DxContext {
     // the static + instance prefix `ExecuteIndirect` (their geometry already lives
     // in the shared VB/IB), so this is just the instance tail.
     pub(in crate::directx) fn chunk_record_base(&self) -> usize {
-        self.n_objects + self.n_instances
+        self.draw.n_objects + self.draw.n_instances
     }
 
     // Buffer index of the first skinned record. The static + instance + chunk
@@ -248,7 +248,7 @@ impl DxContext {
     // the per-frame deformed VB). The chunk reserve sits inside the prefix, so the
     // skinned base is past it.
     pub(in crate::directx) fn skinned_record_base(&self) -> usize {
-        self.n_objects + self.n_instances + self.n_chunk
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk
     }
 
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -268,7 +268,7 @@ impl DxContext {
     // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
     // the indexed-draw arguments the kernel encodes plus the per-frame
     // cull-decision bits (`update_visibility` / streaming residency). Streamed
-    // chunks (past `n_objects`) are skipped; a no-op when the bindless pass is
+    // chunks (past `draw.n_objects`) are skipped; a no-op when the bindless pass is
     // inactive. The per-object `(index_offset, index_count)` is the active LOD
     // slice picked by camera distance, so the bindless main pass renders the
     // chosen LOD with no shader-side change. Mirrors `metal/cull.rs`.
@@ -278,7 +278,13 @@ impl DxContext {
             return;
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
-        for (i, obj) in self.draw_objects.iter().take(self.n_objects).enumerate() {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .take(self.draw.n_objects)
+            .enumerate()
+        {
             // Per-frame active LOD pick. Objects with no alternates fall
             // straight through to LOD0.
             let d = crate::gfx::lod::camera_distance(obj, cam_pos);
@@ -292,8 +298,8 @@ impl DxContext {
                 flags: draw_args_flags(obj.visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(obj.shader_bucket),
             };
-            // SAFETY: the buffer was sized for `n_objects` records and the
-            // loop is bounded by `take(n_objects)`, so `i * stride` is in range.
+            // SAFETY: the buffer was sized for `draw.n_objects` records and the
+            // loop is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,
@@ -322,8 +328,8 @@ impl DxContext {
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(obj.visible, obj.resident, obj.cullable()),
             };
-            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + n_chunk)` and
-            // `for_each_chunk_record` caps `k < n_chunk`, so the write is in range.
+            // SAFETY: the chunk reserve is `[chunk_base, chunk_base + draw.n_chunk)` and
+            // `for_each_chunk_record` caps `k < draw.n_chunk`, so the write is in range.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,
@@ -340,8 +346,8 @@ impl DxContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_chunks..self.n_chunk {
-            // SAFETY: `k < n_chunk`, so `chunk_base + k < skinned_record_base()`.
+        for k in n_resident_chunks..self.draw.n_chunk {
+            // SAFETY: `k < draw.n_chunk`, so `chunk_base + k < skinned_record_base()`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &disabled as *const GpuDrawArgs as *const u8,
@@ -362,7 +368,7 @@ impl DxContext {
             .skinned
             .draw_objects
             .iter()
-            .take(self.n_skinned)
+            .take(self.draw.n_skinned)
             .enumerate()
         {
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
@@ -376,9 +382,9 @@ impl DxContext {
                 // cull kernel frustum/Hi-Z tests them like any static object.
                 flags: draw_args_flags(obj.visible, true, true),
             };
-            // SAFETY: the buffers reserved `n_skinned` records past
+            // SAFETY: the buffers reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init (threaded capacity), and the loop
-            // is bounded by `self.skinned.draw_objects.len() == self.n_skinned`.
+            // is bounded by `self.skinned.draw_objects.len() == self.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,

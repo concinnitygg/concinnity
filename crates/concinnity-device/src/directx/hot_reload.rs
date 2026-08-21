@@ -210,7 +210,7 @@ impl DxContext {
             return Ok(());
         }
         let device = &self.device;
-        let info_queue = self.info_queue.as_ref();
+        let info_queue = self.diagnostics.info_queue.as_ref();
         let hr = true;
 
         // Build every replacement into a temporary first. A `?` early-return
@@ -224,24 +224,24 @@ impl DxContext {
             info_queue,
             super::pipeline::create_composite_pso(
                 device,
-                &self.composite_root_sig,
+                &self.composite.root_sig,
                 &composite_vs,
                 &composite_ps,
-                self.swap_format,
+                self.swapchain.format,
             ),
         )?;
 
         // Text (only when the world declared text atlases).
-        let text_pso = rebuild_if_live!(self.text_pso.is_some(), {
+        let text_pso = rebuild_if_live!(self.text.pso.is_some(), {
             let (text_vs, text_ps) = super::pipeline::compile_text_shaders(hr)?;
             super::context::dump_on_err(
                 info_queue,
                 super::pipeline::create_text_pso(
                     device,
-                    &self.text_root_sig,
+                    &self.text.root_sig,
                     &text_vs,
                     &text_ps,
-                    self.swap_format,
+                    self.swapchain.format,
                     1,
                 ),
             )
@@ -578,9 +578,9 @@ impl DxContext {
         // All builds succeeded; swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
-        self.composite_pso = composite_pso;
+        self.composite.pso = composite_pso;
         if let Some(p) = text_pso {
-            self.text_pso = Some(p);
+            self.text.pso = Some(p);
         }
         self.bloom.pso_prefilter = bloom_prefilter;
         self.bloom.pso_downsample = bloom_downsample;

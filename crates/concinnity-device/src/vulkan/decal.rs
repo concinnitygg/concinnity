@@ -739,18 +739,19 @@ impl VkContext {
         vp: [[f32; 4]; 4],
         frustum: &crate::gfx::frustum::Frustum,
     ) {
-        let decals = match &self.decals_state {
+        let decals = match &self.decal.resources {
             Some(s) => s,
             None => return,
         };
-        if self.decals.iter().all(|slot| slot.is_none()) {
+        if self.decal.records.iter().all(|slot| slot.is_none()) {
             return;
         }
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
         // barriers. Tombstoned (None) slots are always invisible.
         let visible_count = self
-            .decals
+            .decal
+            .records
             .iter()
             .filter(|slot| {
                 slot.as_ref()
@@ -782,7 +783,7 @@ impl VkContext {
         // Upload per-decal params slots for every live record (visible or
         // not; easier to skip the visibility check here and pay one
         // 160-byte write per slot).
-        for (i, slot) in self.decals.iter().enumerate() {
+        for (i, slot) in self.decal.records.iter().enumerate() {
             let d = match slot {
                 Some(d) => d,
                 None => continue,
@@ -838,7 +839,7 @@ impl VkContext {
             );
         }
 
-        for (i, slot) in self.decals.iter().enumerate() {
+        for (i, slot) in self.decal.records.iter().enumerate() {
             let d = match slot {
                 Some(d) => d,
                 None => continue,
@@ -891,22 +892,23 @@ impl VkContext {
         let last_tex = self.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
-        let id = if let Some(slot) = self.decal_free_slots.pop() {
-            self.decals[slot] = Some(record);
+        let id = if let Some(slot) = self.decal.free_slots.pop() {
+            self.decal.records[slot] = Some(record);
             slot
         } else {
-            if self.decals.len() >= MAX_DECALS {
+            if self.decal.records.len() >= MAX_DECALS {
                 return Err(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"));
             }
-            self.decals.push(Some(record));
-            self.decals.len() - 1
+            self.decal.records.push(Some(record));
+            self.decal.records.len() - 1
         };
 
         // Write the albedo descriptor for this slot. The texture pool
         // entry is referenced live; a future eviction routes through
         // `rewrite_texture_slot` to re-point.
         let decals = self
-            .decals_state
+            .decal
+            .resources
             .as_ref()
             .ok_or_else(|| "add_decal: decal pipeline unavailable".to_string())?;
         write_albedo_set(
@@ -927,15 +929,16 @@ impl VkContext {
     #[allow(dead_code)]
     pub fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
         let slot = self
-            .decals
+            .decal
+            .records
             .get_mut(decal_id)
             .ok_or_else(|| format!("remove_decal: id {decal_id} out of range"))?;
         if slot.is_none() {
             return Err(format!("remove_decal: id {decal_id} already removed"));
         }
         *slot = None;
-        self.decal_free_slots.push(decal_id);
-        if let Some(decals) = &self.decals_state {
+        self.decal.free_slots.push(decal_id);
+        if let Some(decals) = &self.decal.resources {
             let mut slots = decals.decal_texture_slots.get();
             slots[decal_id] = usize::MAX;
             decals.decal_texture_slots.set(slots);
@@ -946,21 +949,21 @@ impl VkContext {
     // Re-point every decal albedo set that pointed at texture-pool slot
     // `slot` to the new `GpuImage` at that slot. Called from the
     // streaming-texture path when an evicted slot is replaced. Walks
-    // `decals_state.decal_texture_slots` so a world with no decals pays
+    // `decal.resources.decal_texture_slots` so a world with no decals pays
     // nothing.
     // Whether any live decal's albedo set samples texture-pool `slot`. The
     // streaming fast path checks this: decal sets are single-copy and bound
     // whenever the decal pass runs, so a swap of a slot they sample must
     // drain the device before rewriting.
     pub(in crate::vulkan) fn decal_samples_slot(&self, slot: usize) -> bool {
-        match &self.decals_state {
+        match &self.decal.resources {
             Some(s) => s.decal_texture_slots.get().contains(&slot),
             None => false,
         }
     }
 
     pub(in crate::vulkan) fn rewrite_decal_albedo_slot(&self, slot: usize) {
-        let decals = match &self.decals_state {
+        let decals = match &self.decal.resources {
             Some(s) => s,
             None => return,
         };
@@ -1000,7 +1003,7 @@ fn write_albedo_set(
 impl VkContext {
     // Push every world-authored `DecalRecord` through `add_decal` so its
     // albedo descriptor lands in the reserved slot. Called once from
-    // `VkContext::new` after `decals_state` is built.
+    // `VkContext::new` after `decal.resources` is built.
     pub(in crate::vulkan) fn upload_initial_decals(
         &mut self,
         records: Vec<DecalRecord>,

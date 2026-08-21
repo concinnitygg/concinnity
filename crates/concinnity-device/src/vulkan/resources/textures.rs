@@ -98,7 +98,7 @@ impl VkContext {
             .descriptors
             .object_sets
             .iter()
-            .zip(self.draw_objects.iter())
+            .zip(self.draw.objects.iter())
         {
             if obj.texture_slot.min(last) == slot {
                 self.write_object_image(*set, 0, view);
@@ -165,14 +165,14 @@ impl VkContext {
         // (albedo, normal) descriptor sets, so re-point those that sample this
         // slot as either.
         let last = self.textures.len().saturating_sub(1);
-        for (offset, &clone_tex) in self.clone_texture_slots.iter().enumerate() {
-            let Some(&set) = self.clone_object_sets.get(offset) else {
+        for (offset, &clone_tex) in self.clone.texture_slots.iter().enumerate() {
+            let Some(&set) = self.clone.object_sets.get(offset) else {
                 continue;
             };
             if clone_tex.min(last) == slot {
                 self.write_object_image(set, 0, view);
             }
-            if let Some(&clone_nms) = self.clone_normal_map_slots.get(offset)
+            if let Some(&clone_nms) = self.clone.normal_map_slots.get(offset)
                 && self.normal_is_slot(clone_nms, slot)
             {
                 self.write_object_image(set, 1, view);
@@ -206,12 +206,14 @@ impl VkContext {
             return true;
         }
         let last = self.textures.len().saturating_sub(1);
-        let clone_samples_slot = self.clone_slot_by_draw_idx.values().any(|&offset| {
-            self.clone_texture_slots
+        let clone_samples_slot = self.clone.slot_by_draw_idx.values().any(|&offset| {
+            self.clone
+                .texture_slots
                 .get(offset)
                 .is_some_and(|&t| t.min(last) == slot)
                 || self
-                    .clone_normal_map_slots
+                    .clone
+                    .normal_map_slots
                     .get(offset)
                     .is_some_and(|&n| self.normal_is_slot(n, slot))
         });
@@ -226,7 +228,7 @@ impl VkContext {
     // safely), the legacy object sets are re-pointed immediately (unbound
     // while the bindless pass drives every draw), the per-frame bindless pool
     // copies re-point one per frame as their fences retire, and the old image
-    // plus upload transients are parked on `stream_retires` until every
+    // plus upload transients are parked on `stream.retires` until every
     // consumer provably moved off them. When a pending-referenced single-copy
     // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
     // drains the device and rewrites everything in place, matching the
@@ -262,23 +264,23 @@ impl VkContext {
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every per-frame pool copy, so any
             // propagation queued for this slot is already satisfied.
-            self.pool_rewrites.remove(slot);
+            self.stream.pool_rewrites.remove(slot);
             drop(old);
             return Ok(());
         }
         let (img, in_flight) = upload_texture_image_deferred(&ctx, image)?;
         let old = std::mem::replace(&mut self.textures[slot], img);
         self.rewrite_legacy_object_sets(slot);
-        self.pool_rewrites.queue(slot);
+        self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
         // is the one signalled by the NEXT draw -- waited `frames_in_flight`
         // ticks after that draw's own tick.
-        self.stream_retires.push(StreamedUploadRetire {
+        self.stream.retires.push(StreamedUploadRetire {
             _image: old,
             _staging: in_flight.staging,
             cmd: in_flight.cmd,
-            retire_at: self.stream_frame + self.frames_in_flight as u64 + 1,
+            retire_at: self.stream.frame + self.frames_in_flight as u64 + 1,
         });
         Ok(())
     }
@@ -295,24 +297,24 @@ impl VkContext {
     // every command buffer that binds this copy), then free retires whose
     // covering fence has signalled.
     pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
-        self.stream_frame += 1;
-        if !self.pool_rewrites.is_empty() {
+        self.stream.frame += 1;
+        if !self.stream.pool_rewrites.is_empty() {
             let last = self.textures.len().saturating_sub(1);
-            for slot in self.pool_rewrites.begin_frame() {
+            for slot in self.stream.pool_rewrites.begin_frame() {
                 let view = self.textures[slot.min(last)].view;
                 if let Some(&set) = self.cull.bindless_sets.get(frame) {
                     self.write_pool_image(set, slot as u32, view);
                 }
             }
         }
-        if !self.stream_retires.is_empty() {
-            let now = self.stream_frame;
+        if !self.stream.retires.is_empty() {
+            let now = self.stream.frame;
             let device = self.device.clone();
             let pool = self.commands.command_pool;
             let mut i = 0;
-            while i < self.stream_retires.len() {
-                if self.stream_retires[i].retire_at <= now {
-                    self.stream_retires.swap_remove(i).destroy(&device, pool);
+            while i < self.stream.retires.len() {
+                if self.stream.retires[i].retire_at <= now {
+                    self.stream.retires.swap_remove(i).destroy(&device, pool);
                 } else {
                     i += 1;
                 }
@@ -326,7 +328,7 @@ impl VkContext {
     pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
         let device = self.device.clone();
         let pool = self.commands.command_pool;
-        for retire in self.stream_retires.drain(..) {
+        for retire in self.stream.retires.drain(..) {
             retire.destroy(&device, pool);
         }
     }
@@ -359,11 +361,11 @@ impl VkContext {
         // the texture-pool rewires above for the rationale.
         let new_view = new_lut.view;
         let old = std::mem::replace(&mut self.color_lut, new_lut);
-        for &set in &self.composite_sets {
+        for &set in &self.composite.sets {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_view)
-                .sampler(self.composite_sampler.handle());
+                .sampler(self.composite.sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(2)
@@ -503,12 +505,12 @@ impl VkContext {
     // material, and cull distance. Driven by `world.jsonl` hot-reload
     // (`cn debug` only) when a newly authored Prop references a Mesh /
     // Model already present in the init world. The clone is non-cullable
-    // (sentinel AABB) and joins `always_draw` since the init-time BVH
+    // (sentinel AABB) and joins `draw.always` since the init-time BVH
     // cannot refit; the dynamically added prop is drawn every frame,
     // like a streamed `VoxelWorld` chunk. Allocates the clone's (albedo,
     // normal) descriptor set from a `MAX_CLONE_DRAWS`-deep pool reserved
     // at init, and records `draw_idx → clone_offset` in
-    // `clone_slot_by_draw_idx` so the legacy main pass + the texture-pool
+    // `clone.slot_by_draw_idx` so the legacy main pass + the texture-pool
     // rewires above can find it. Mirrors
     // `DxContext::clone_static_draw_object`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
@@ -521,7 +523,7 @@ impl VkContext {
     ) -> Result<(), String> {
         use super::super::context::MAX_CLONE_DRAWS;
 
-        let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
+        let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
@@ -547,7 +549,7 @@ impl VkContext {
             visible: true,
             resident: true,
             // Sentinel AABB so the init-time BVH cull skips this draw; it
-            // joins `always_draw` and is drawn every frame. Matches the
+            // joins `draw.always` and is drawn every frame. Matches the
             // chunk pattern.
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
@@ -565,23 +567,23 @@ impl VkContext {
         // (its prior occupant was drawn before being retired), so drain the GPU
         // before re-pointing it, then always overwrite its (albedo, normal)
         // bindings with this clone's views.
-        let clone_offset = if let Some(offset) = self.clone_free_offsets.pop() {
+        let clone_offset = if let Some(offset) = self.clone.free_offsets.pop() {
             self.wait_idle();
-            let set = self.clone_object_sets[offset];
+            let set = self.clone.object_sets[offset];
             self.write_object_image(set, 0, albedo_view);
             self.write_object_image(set, 1, normal_view);
-            self.clone_texture_slots[offset] = texture_slot;
-            self.clone_normal_map_slots[offset] = normal_map_slot;
+            self.clone.texture_slots[offset] = texture_slot;
+            self.clone.normal_map_slots[offset] = normal_map_slot;
             offset
         } else {
-            if self.clone_object_sets.len() >= MAX_CLONE_DRAWS {
+            if self.clone.object_sets.len() >= MAX_CLONE_DRAWS {
                 return Err(format!(
                     "clone_static_draw_object: MAX_CLONE_DRAWS ({MAX_CLONE_DRAWS}) exceeded"
                 ));
             }
             // Lazily build the clone descriptor pool on first call. Sized for
             // MAX_CLONE_DRAWS (albedo, normal) sets: two samplers each.
-            if self.clone_descriptor_pool.is_none() {
+            if self.clone.descriptor_pool.is_none() {
                 let pool_sizes = [vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .descriptor_count((MAX_CLONE_DRAWS * 2) as u32)];
@@ -593,10 +595,11 @@ impl VkContext {
                             .max_sets(MAX_CLONE_DRAWS as u32),
                     )
                     .map_err(|e| format!("clone descriptor pool: {e}"))?;
-                self.clone_descriptor_pool = Some(pool);
+                self.clone.descriptor_pool = Some(pool);
             }
             let pool = self
-                .clone_descriptor_pool
+                .clone
+                .descriptor_pool
                 .as_ref()
                 .expect("clone descriptor pool built above")
                 .handle();
@@ -612,17 +615,17 @@ impl VkContext {
             self.write_object_image(set, 0, albedo_view);
             self.write_object_image(set, 1, normal_view);
 
-            let offset = self.clone_object_sets.len();
-            self.clone_object_sets.push(set);
-            self.clone_texture_slots.push(texture_slot);
-            self.clone_normal_map_slots.push(normal_map_slot);
+            let offset = self.clone.object_sets.len();
+            self.clone.object_sets.push(set);
+            self.clone.texture_slots.push(texture_slot);
+            self.clone.normal_map_slots.push(normal_map_slot);
             offset
         };
 
         // Write at the engine-allocated destination slot.
         let new_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
+                self.draw.objects[slot] = obj;
                 // Seed the velocity prepass's previous-model snapshot so a
                 // recycled slot does not ghost from the prior occupant's
                 // transform for one frame. A slot past the snapshot's end (one
@@ -638,16 +641,16 @@ impl VkContext {
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
-                    self.draw_objects.len(),
+                    self.draw.objects.len(),
                     "appended draw slot must match the draw-object count"
                 );
-                self.draw_objects.push(obj);
-                self.always_draw_member.push(false);
+                self.draw.objects.push(obj);
+                self.draw.always_member.push(false);
                 slot
             }
         };
         self.ensure_always_draw(new_idx);
-        self.clone_slot_by_draw_idx.insert(new_idx, clone_offset);
+        self.clone.slot_by_draw_idx.insert(new_idx, clone_offset);
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).

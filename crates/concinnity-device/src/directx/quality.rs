@@ -76,8 +76,8 @@ impl DxContext {
         self.wait_idle();
 
         let hot_reload = self.hot_reload.enabled;
-        let render_w = self.render_width;
-        let render_h = self.render_height;
+        let render_w = self.extent.render_width;
+        let render_h = self.extent.render_height;
         let slots = self.quality_slots;
 
         // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
@@ -127,12 +127,12 @@ impl DxContext {
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.alloc,
-                    info_queue: self.info_queue.as_ref(),
+                    info_queue: self.diagnostics.info_queue.as_ref(),
                 },
                 super::post::gbuffer::GbufferExtent {
                     width: render_w,
                     height: render_h,
-                    need_instanced: self.n_clusters > 0,
+                    need_instanced: self.draw.n_clusters > 0,
                     // Skinned variant builds lazily in `upload_skinned`, as at init.
                     need_skinned: false,
                     hot_reload,
@@ -151,7 +151,7 @@ impl DxContext {
                 render_h,
                 slots.taa_history_rtv,
                 slots.taa_history_srv,
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 hot_reload,
             )?;
             self.taa = Some(taa);
@@ -172,7 +172,7 @@ impl DxContext {
                     output_rtv: slots.ssr_output_rtv,
                     output_srv: slots.ssr_output_srv,
                 },
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 hot_reload,
             )?;
             self.ssr = Some(ssr);
@@ -186,7 +186,7 @@ impl DxContext {
             let ssgi = super::post::ssgi::SsgiResources::new(
                 super::post::ssgi::SsgiDevice {
                     alloc: &self.alloc,
-                    info_queue: self.info_queue.as_ref(),
+                    info_queue: self.diagnostics.info_queue.as_ref(),
                 },
                 render_w,
                 render_h,
@@ -232,7 +232,7 @@ impl DxContext {
                 render_h,
                 q.reflection_blur_scale,
                 slots.refl_composite,
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 hot_reload,
             )?;
             self.reflection_composite = Some(rc);
@@ -280,7 +280,7 @@ impl DxContext {
             let ssao = super::post::ssao::SsaoResources::new(
                 super::post::ssao::SsaoDeviceCtx {
                     device: &self.device,
-                    info_queue: self.info_queue.as_ref(),
+                    info_queue: self.diagnostics.info_queue.as_ref(),
                 },
                 render_w,
                 render_h,
@@ -321,7 +321,7 @@ impl DxContext {
             alloc: &self.alloc,
             vertex_buffer: &self.geometry.vertex_buffer,
             index_buffer: &self.geometry.index_buffer,
-            draw_objects: &self.draw_objects,
+            draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
@@ -348,8 +348,8 @@ impl DxContext {
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {
                 alloc: &self.alloc,
-                width: self.render_width,
-                height: self.render_height,
+                width: self.extent.render_width,
+                height: self.extent.render_height,
             },
             settings,
             super::post::rt_reflections::RtOutputDescriptors {
@@ -357,7 +357,7 @@ impl DxContext {
                 output_srv: slots.rt_output_srv,
             },
             super::post::rt_reflections::RtBuildInit {
-                info_queue: self.info_queue.as_ref(),
+                info_queue: self.diagnostics.info_queue.as_ref(),
                 hot_reload,
             },
         ) {
@@ -392,8 +392,8 @@ impl DxContext {
             &super::transient_pool::transient_slots(
                 ssao_on,
                 gbuffer_on,
-                (self.render_width, self.render_height),
-                (self.output_width, self.output_height),
+                (self.extent.render_width, self.extent.render_height),
+                (self.extent.output_width, self.extent.output_height),
             )?,
         )?;
         if let Some(pooled) = self.transient_pool.gbuffer_pooled() {
@@ -423,8 +423,8 @@ impl DxContext {
                 .clone();
             let (mips, extents) = create_bloom_mips_at(
                 &self.device,
-                self.output_width,
-                self.output_height,
+                self.extent.output_width,
+                self.extent.output_height,
                 bloom_count,
                 bloom_top,
             )?;

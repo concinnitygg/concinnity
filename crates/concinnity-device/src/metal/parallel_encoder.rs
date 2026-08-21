@@ -15,8 +15,8 @@
 // without a hand claim. The wrappers below adopt that claim at the
 // parallel-dispatch boundary. Workers reach `&MtlContext` through
 // `ParallelCtxRef::as_ctx()` for strictly read-only encode work; the
-// lone `&mut self` mutations (`frame_stats.draw_calls`,
-// `particle_last_elapsed`, `particle_frame_index`, the per-emitter
+// lone `&mut self` mutations (`diagnostics.frame_stats.draw_calls`,
+// `particle.last_elapsed`, `particle.frame_index`, the per-emitter
 // `spawn_state`) all happen on the main thread before the fan-out.
 
 use objc2::rc::Retained;
@@ -56,7 +56,7 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 
 // SAFETY: see the type-level safety contract above. Workers reach `&MtlContext`
 // for strictly read-only encode work; the lone `&mut self` mutations
-// (`frame_stats.draw_calls`, `particle_last_elapsed`, `particle_frame_index`,
+// (`diagnostics.frame_stats.draw_calls`, `particle.last_elapsed`, `particle.frame_index`,
 // the per-emitter `spawn_state`) all happen on the main thread before the
 // fan-out, and Apple's Metal device, queue, buffers, textures, and pipeline
 // states are thread-safe for shared read.

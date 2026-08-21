@@ -47,7 +47,7 @@ pub(super) struct PreparedBucket {
 
 // One visible cluster prepared for this frame.
 pub(super) struct PreparedCluster {
-    // Index into [`MtlContext::instanced_clusters`], so a pass can read the
+    // Index into `MtlContext`'s `instanced.clusters`, so a pass can read the
     // cluster's material / texture slots in its per-cluster closure.
     cluster_index: usize,
     buckets: Vec<PreparedBucket>,
@@ -72,22 +72,22 @@ impl MtlContext {
         cam_pos: [f32; 3],
         frustum: &Frustum,
     ) -> Result<PreparedInstances, String> {
-        if self.instanced_clusters.is_empty() {
+        if self.instanced.clusters.is_empty() {
             return Ok(PreparedInstances {
                 clusters: Vec::new(),
             });
         }
-        self.instance_ring.begin_frame(ring_slot);
+        self.rings.instance.begin_frame(ring_slot);
         let mut clusters = Vec::new();
         // Bind the ring + device to locals up front: the per-bucket closure
         // below writes the ring while borrowing the cluster's instances, and
-        // these are disjoint fields from `instanced_clusters`, so binding them
+        // these are disjoint fields from `instanced.clusters`, so binding them
         // separately lets the closure capture them without colliding with the
         // cluster borrow.
-        let instance_ring = &mut self.instance_ring;
+        let instance_ring = &mut self.rings.instance;
         let device = &self.device;
-        for ci in 0..self.instanced_clusters.len() {
-            let cluster = &self.instanced_clusters[ci];
+        for ci in 0..self.instanced.clusters.len() {
+            let cluster = &self.instanced.clusters[ci];
             if cluster.instances.is_empty() {
                 continue;
             }
@@ -151,7 +151,7 @@ impl MtlContext {
     {
         let mut draws = 0u32;
         for pc in &prepared.clusters {
-            let cluster = &self.instanced_clusters[pc.cluster_index];
+            let cluster = &self.instanced.clusters[pc.cluster_index];
             per_cluster(enc, cluster);
             for b in &pc.buckets {
                 let index_byte_offset = b.index_offset * std::mem::size_of::<u32>();
@@ -181,7 +181,7 @@ impl MtlContext {
     // `visible` iteration, the `obj.visible && obj.resident` filter, the
     // camera-distance LOD pick (`active_lod`), and the `baseVertex` indexed draw
     // into the shared u32 index buffer. `per_draw` receives the object and its
-    // index into `draw_objects` (so a pass can look up parallel arrays like
+    // index into `draw.objects` (so a pass can look up parallel arrays like
     // `prev_draw_models`) and sets the only thing that varies by pass (the
     // model / material / texture bindings) before the draw is issued. The
     // caller binds the pipeline + shared vertex buffer + per-frame view uniforms
@@ -204,7 +204,7 @@ impl MtlContext {
         // CPU-driven capture path.
         let skip_seethrough = self.mesh_glass_active();
         for &draw_idx in visible {
-            let obj = &self.draw_objects[draw_idx as usize];
+            let obj = &self.draw.objects[draw_idx as usize];
             if !obj.visible || !obj.resident || (skip_seethrough && obj.material.see_through != 0) {
                 continue;
             }

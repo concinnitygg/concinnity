@@ -588,7 +588,7 @@ impl VkContext {
                 },
                 self.frames_in_flight,
                 self.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                self.hot_reload,
+                self.hot_reload.enabled,
             );
             match built {
                 Ok(r) => self.lines.resources = Some(r),

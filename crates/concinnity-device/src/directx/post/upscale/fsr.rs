@@ -353,7 +353,7 @@ pub(in crate::directx) struct FsrUpscaler {
     pub(in crate::directx) output_height: u32,
 
     // Number of FFX-prescribed jitter phases for the current
-    // (render_width, output_width) pair. The engine reads
+    // (extent.render_width, extent.output_width) pair. The engine reads
     // `jitter_index % phase_count` per frame and asks FFX for the
     // matching offset via `ffxQuery`.
     pub(in crate::directx) jitter_phase_count: i32,

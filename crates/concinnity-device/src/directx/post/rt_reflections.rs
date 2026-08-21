@@ -458,7 +458,7 @@ impl DxContext {
         // rotation (the transpose of the view matrix's orthonormal 3x3), same as
         // the SSR resolve; `params` then fills in the camera-position translation
         // column to complete the camera-to-world transform.
-        let v = self.view_matrix;
+        let v = self.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -505,8 +505,8 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -559,7 +559,7 @@ impl DxContext {
             // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
             // so a probe-less world is byte-identical to before.
             cmd.SetGraphicsRootDescriptorTable(12, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(13, com::gpu_va(&self.probe_set_cbvs[frame_idx]));
+            cmd.SetGraphicsRootConstantBufferView(13, com::gpu_va(&self.probe.set_cbvs[frame_idx]));
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

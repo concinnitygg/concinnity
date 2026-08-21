@@ -483,8 +483,8 @@ impl DxContext {
             None => return,
         };
         let params = ssao.settings.params(fov_y_radians, aspect);
-        let w = self.render_width;
-        let h = self.render_height;
+        let w = self.extent.render_width;
+        let h = self.extent.render_height;
 
         // The kernel + blur are fullscreen passes; restore the viewport /
         // scissor / primitive topology the (now removed) geometry pre-pass used

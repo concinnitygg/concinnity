@@ -26,7 +26,7 @@
 //   * Converting  -- the six faces are read back (`CopyTextureRegion` into READBACK
 //                    buffers, fence-gated) and the GGX prefilter convolution runs on a
 //                    WORKER THREAD.
-//   * (install)   -- the convolved cube is uploaded into `probe_maps` + `probe_set`.
+//   * (install)   -- the convolved cube is uploaded into `probe.maps` + `probe.set`.
 //
 // Known V1 simplifications (documented intentionally; mirror Metal where noted):
 //   * Static + instanced geometry only -- skinned meshes are not captured into the
@@ -169,7 +169,8 @@ impl DxContext {
                     // Object AABBs as occupancy so a probe is not auto-captured from
                     // inside a wall; skip degenerate (non-finite) boxes.
                     let occupancy: Vec<([f32; 3], [f32; 3])> = self
-                        .draw_objects
+                        .draw
+                        .objects
                         .iter()
                         .map(|o| (o.bb_min, o.bb_max))
                         .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
@@ -193,15 +194,15 @@ impl DxContext {
         // free capture resources the GPU may still be reading. Idle the GPU first so
         // the dropped command lists + reserved-slot buffers are safe to release. The
         // first call has nothing in flight, so it never idles.
-        if self.probe_rendering.is_some() {
+        if self.probe.rendering.is_some() {
             self.wait_idle();
         }
-        self.probe_placements = placements;
-        self.probe_maps.clear();
-        self.probe_set = ProbeSet::EMPTY;
-        self.probe_bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe_placements.len());
-        self.probe_rendering = None;
-        self.probe_converting = None;
+        self.probe.placements = placements;
+        self.probe.maps.clear();
+        self.probe.set = ProbeSet::EMPTY;
+        self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
+        self.probe.rendering = None;
+        self.probe.converting = None;
     }
 
     // The reserved transient-ring slot the asynchronous bake builds its bindless
@@ -266,9 +267,9 @@ impl DxContext {
         far: f32,
     ) -> Result<(), String> {
         let _ = elapsed;
-        if !self.probe_bake_queue.pending()
-            && self.probe_rendering.is_none()
-            && self.probe_converting.is_none()
+        if !self.probe.bake_queue.pending()
+            && self.probe.rendering.is_none()
+            && self.probe.converting.is_none()
         {
             return Ok(());
         }
@@ -276,18 +277,19 @@ impl DxContext {
         // the capture renders through the bindless cull. Abandon the queue rather than
         // re-checking forever.
         if self.env_map.prefilter_mip_count <= 1 || !self.probe_capture_supported() {
-            self.probe_rendering = None;
-            self.probe_converting = None;
-            self.probe_bake_queue.abort();
+            self.probe.rendering = None;
+            self.probe.converting = None;
+            self.probe.bake_queue.abort();
             return Ok(());
         }
 
         // Converting slot first: install the convolved cube once the worker finishes,
         // freeing the slot so the rendering slot can read its finished capture back
         // this same frame.
-        let converting_occupied = self.probe_converting.is_some();
+        let converting_occupied = self.probe.converting.is_some();
         let payload_ready = self
-            .probe_converting
+            .probe
+            .converting
             .as_ref()
             .is_some_and(|c| c.payload.get().is_some());
         let install = reflection_probe::next_bake_action(
@@ -311,12 +313,13 @@ impl DxContext {
         // Rendering slot: submit one face per frame; once all six are done on the GPU
         // (the fence reached the last face's value) AND the converting slot is free,
         // read the faces back and hand them to the worker; or start the next placement.
-        let rendering_occupied = self.probe_rendering.is_some();
+        let rendering_occupied = self.probe.rendering.is_some();
         let more_faces = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .is_some_and(|r| r.cursor < PROBE_FACE_COUNT);
-        let done = self.probe_rendering.as_ref().is_some_and(|r| {
+        let done = self.probe.rendering.as_ref().is_some_and(|r| {
             r.cursor >= PROBE_FACE_COUNT
                 // SAFETY: the fence and the event were created from this device and are live for
                 // the call.
@@ -333,7 +336,7 @@ impl DxContext {
             },
             done && converting_free,
             false,
-            self.probe_bake_queue.pending(),
+            self.probe.bake_queue.pending(),
             eligible,
             more_faces,
         ) {
@@ -359,21 +362,21 @@ impl DxContext {
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started, so
-    // aborting (cursor -> end) keeps `probe_maps` aligned with the placement list.
+    // aborting (cursor -> end) keeps `probe.maps` aligned with the placement list.
     fn fail_bake(&mut self, e: String) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
-            self.probe_maps.len()
+            self.probe.maps.len()
         );
         // Idle before dropping the in-flight capture's GPU resources: its command
         // lists may still be executing. A bake failure is rare (allocation / device
         // error), so the one-time stall is acceptable.
-        if self.probe_rendering.is_some() {
+        if self.probe.rendering.is_some() {
             self.wait_idle();
         }
-        self.probe_rendering = None;
-        self.probe_converting = None;
-        self.probe_bake_queue.abort();
+        self.probe.rendering = None;
+        self.probe.converting = None;
+        self.probe.bake_queue.abort();
     }
 
     // Begin baking the next pending placement: build the reserved-slot bindless
@@ -381,10 +384,10 @@ impl DxContext {
     // targets + per-face view CBVs + readback buffers. No face is submitted here; the
     // faces follow one per frame via `probe_render_next_face`.
     fn probe_start_next(&mut self, near: f32, far: f32) -> Result<(), String> {
-        let Some(index) = self.probe_bake_queue.take_next() else {
+        let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
-        let placement = self.probe_placements[index];
+        let placement = self.probe.placements[index];
         let eye = placement.position;
         let slot = self.bake_ring_slot();
 
@@ -407,7 +410,7 @@ impl DxContext {
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let dsv = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
         let color =
-            create_hdr_color_target(device, size, size, sample_count, rtv, self.clear_color)?;
+            create_hdr_color_target(device, size, size, sample_count, rtv, self.view.clear_color)?;
         let depth = create_bake_depth(device, size, sample_count, dsv)?;
         // A single-sample resolve target only when MSAA is on.
         let resolve = if sample_count > 1 {
@@ -529,7 +532,7 @@ impl DxContext {
             )?);
         }
 
-        self.probe_rendering = Some(RenderingBake {
+        self.probe.rendering = Some(RenderingBake {
             index,
             placement,
             cursor: 0,
@@ -568,7 +571,8 @@ impl DxContext {
         let slot = self.bake_ring_slot();
         let (face, eye, near, far, sample_count, view_gva, light_gva, shadow_gva) = {
             let bake = self
-                .probe_rendering
+                .probe
+                .rendering
                 .as_ref()
                 .ok_or("probe: render face with no capture in flight")?;
             (
@@ -607,7 +611,8 @@ impl DxContext {
         self.encode_probe_cull(&cmd, slot, &frustum, eye);
         let (rtv, dsv) = {
             let bake = self
-                .probe_rendering
+                .probe
+                .rendering
                 .as_ref()
                 .expect("probe bake targets are live while a bake is recording");
             (bake.rtv, bake.dsv)
@@ -652,7 +657,7 @@ impl DxContext {
         unsafe { self.command_queue.Signal(&self.frame_sync.fence, fence_val) }
             .map_err(|e| format!("probe: face signal: {e}"))?;
 
-        if let Some(bake) = self.probe_rendering.as_mut() {
+        if let Some(bake) = self.probe.rendering.as_mut() {
             bake.cmd_allocs.push(alloc);
             bake.cmd_lists.push(cmd);
             bake.last_fence_value = fence_val;
@@ -671,7 +676,8 @@ impl DxContext {
         sample_count: u32,
     ) -> Result<(), String> {
         let bake = self
-            .probe_rendering
+            .probe
+            .rendering
             .as_ref()
             .expect("probe bake targets are live while a bake is recording");
         let layout = bake.readback_layout;
@@ -762,7 +768,8 @@ impl DxContext {
     // convolution off the render thread. Moves the bake to Converting.
     fn probe_readback_and_convolve(&mut self) -> Result<(), String> {
         let bake = self
-            .probe_rendering
+            .probe
+            .rendering
             .take()
             .ok_or("probe: readback with no bake in flight")?;
         let row_pitch = bake.readback_layout.Footprint.RowPitch as usize;
@@ -796,7 +803,7 @@ impl DxContext {
             let _ = slot.set(bytes);
         });
 
-        self.probe_converting = Some(ConvertingBake {
+        self.probe.converting = Some(ConvertingBake {
             index,
             placement,
             payload,
@@ -805,7 +812,7 @@ impl DxContext {
     }
 
     // The off-thread convolution finished: deserialise its payload, upload the
-    // prefiltered radiance cube, and install it into `probe_maps` + `probe_set` (the
+    // prefiltered radiance cube, and install it into `probe.maps` + `probe.set` (the
     // specular reflection source), leaving `env_map` / the sky untouched.
     fn probe_install(&mut self) -> Result<(), String> {
         let ConvertingBake {
@@ -813,7 +820,8 @@ impl DxContext {
             placement: p,
             payload,
         } = self
-            .probe_converting
+            .probe
+            .converting
             .take()
             .ok_or("probe: install with no bake in flight")?;
         let bytes = payload.get().ok_or("probe: install before payload ready")?;
@@ -830,7 +838,7 @@ impl DxContext {
         )?;
 
         // Point this probe's slot in the cube array at the baked cube (it held the
-        // sky prefilter until now). The forward shader samples it once `probe_set.count`
+        // sky prefilter until now). The forward shader samples it once `probe.set.count`
         // covers this index.
         super::texture::write_cube_srv_mips(
             &self.device,
@@ -839,21 +847,21 @@ impl DxContext {
             self.probe_cube_slot_cpu(index),
         );
 
-        debug_assert_eq!(index, self.probe_maps.len());
-        self.probe_maps.push(ProbeCube {
+        debug_assert_eq!(index, self.probe.maps.len());
+        self.probe.maps.push(ProbeCube {
             prefilter,
             mip_count,
         });
-        self.probe_set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
+        self.probe.set.probes[index] = concinnity_render::uniforms::ProbeUniforms {
             box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
             box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
         };
-        self.probe_set.count = self.probe_maps.len() as u32;
+        self.probe.set.count = self.probe.maps.len() as u32;
         tracing::info!(
             "reflection probes: baked {}/{}",
             index + 1,
-            self.probe_placements.len()
+            self.probe.placements.len()
         );
         Ok(())
     }
@@ -909,7 +917,7 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
-            cmd.ClearRenderTargetView(rtv, &self.clear_color, None);
+            cmd.ClearRenderTargetView(rtv, &self.view.clear_color, None);
             cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -967,7 +975,7 @@ impl DxContext {
             // ProbeSet (count 0), so a probe face samples only the sky, not other
             // probes, and never reads the live ProbeSet ring while it is rewritten.
             cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(11, com::gpu_va(&self.probe_set_empty_cbv));
+            cmd.SetGraphicsRootConstantBufferView(11, com::gpu_va(&self.probe.set_empty_cbv));
             // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
             // omitted (not captured into the probe in V1).
             cmd.ExecuteIndirect(
@@ -986,7 +994,7 @@ impl DxContext {
     // (non-finite) AABBs. `None` for an empty scene. Mirrors
     // `metal/probe.rs::scene_world_bounds`.
     pub(super) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        reflection_probe::fold_world_bounds(self.draw_objects.iter().map(|o| (o.bb_min, o.bb_max)))
+        reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
     }
 }
 

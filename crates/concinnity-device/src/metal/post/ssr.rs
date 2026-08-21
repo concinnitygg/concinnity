@@ -226,7 +226,7 @@ impl MtlContext {
                 enc.set_fragment_value(ssr_params, 0);
                 // Reflection-probe set (count + per-probe parallax boxes) at
                 // buffer(1); count == 0 keeps the sky fallback above.
-                enc.set_fragment_value(&self.probe_set, 1);
+                enc.set_fragment_value(&self.probe.set, 1);
             },
         )?;
         // Blur by roughness + composite the reflection over the scene -> output.

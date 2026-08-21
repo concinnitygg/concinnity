@@ -185,7 +185,8 @@ impl VkContext {
     // called at the top of `draw_frame`. Returns false when hot-reload is
     // off so the production path never enters the reload branch.
     pub(in crate::vulkan) fn shader_reload_requested(&self) -> bool {
-        self.shader_reload_pending
+        self.hot_reload
+            .reload_pending
             .as_ref()
             .map(|f| f.load(Ordering::SeqCst))
             .unwrap_or(false)
@@ -194,7 +195,7 @@ impl VkContext {
     // Clear the pending-reload flag. Called after `reload_shaders`
     // regardless of outcome so a failed rebuild does not loop forever.
     pub(in crate::vulkan) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.shader_reload_pending {
+        if let Some(flag) = &self.hot_reload.reload_pending {
             flag.store(false, Ordering::SeqCst);
         }
     }
@@ -217,7 +218,7 @@ impl VkContext {
     // has already `device_wait_idle`'d so swapping pipelines out from
     // under in-flight command buffers is safe.
     pub(in crate::vulkan) fn reload_shaders(&mut self) -> Result<(), String> {
-        if !self.hot_reload {
+        if !self.hot_reload.enabled {
             return Ok(());
         }
         let device = self.device.clone();
@@ -233,19 +234,19 @@ impl VkContext {
         let (composite_vs, composite_ps) = compile_composite_shaders(hr)?;
         let composite_pipeline = create_composite_pipeline(
             device,
-            self.composite_render_pass.handle(),
-            self.composite_pipeline_layout.handle(),
+            self.composite.render_pass.handle(),
+            self.composite.pipeline_layout.handle(),
             &composite_vs,
             &composite_ps,
         )?;
 
         // Text (only when the world declared text atlases).
-        let text_pipeline = rebuild_if_live!(self.text_pipeline.is_some(), {
+        let text_pipeline = rebuild_if_live!(self.text.pipeline.is_some(), {
             let (tv, tf) = compile_text_shaders(hr)?;
             create_text_pipeline(
                 device,
-                self.composite_render_pass.handle(),
-                self.text_pipeline_layout.handle(),
+                self.composite.render_pass.handle(),
+                self.text.pipeline_layout.handle(),
                 &tv,
                 &tf,
                 vk::SampleCountFlags::TYPE_1,
@@ -256,24 +257,24 @@ impl VkContext {
         let bloom_shaders = compile_bloom_shaders(hr)?;
         let bloom_prefilter = create_bloom_pipeline(
             device,
-            self.bloom_write_pass.handle(),
-            self.bloom_pipeline_layout.handle(),
+            self.bloom.write_pass.handle(),
+            self.bloom.pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.prefilter,
             false,
         )?;
         let bloom_downsample = create_bloom_pipeline(
             device,
-            self.bloom_write_pass.handle(),
-            self.bloom_pipeline_layout.handle(),
+            self.bloom.write_pass.handle(),
+            self.bloom.pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.downsample,
             false,
         )?;
         let bloom_upsample = create_bloom_pipeline(
             device,
-            self.bloom_blend_pass.handle(),
-            self.bloom_pipeline_layout.handle(),
+            self.bloom.blend_pass.handle(),
+            self.bloom.pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.upsample,
             true,
@@ -302,7 +303,7 @@ impl VkContext {
                         frag_spv: &bps,
                     },
                     self.msaa_samples,
-                    self.swapchain_format,
+                    self.swapchain.format,
                 )
             }
         );
@@ -351,9 +352,10 @@ impl VkContext {
         // Auto-exposure (gated on the post-process config). Builds the histogram
         // + average compute pipelines; the trailing `.map` tuples them so the
         // whole build is one Result expression for the macro.
-        let auto_exposure_pipelines = rebuild_if_live!(self.auto_exposure.is_some(), {
+        let auto_exposure_pipelines = rebuild_if_live!(self.auto_exposure.resources.is_some(), {
             let ae = self
                 .auto_exposure
+                .resources
                 .as_ref()
                 .expect("auto-exposure resources are live");
             let (build_cs, average_cs) = compile_auto_exposure_shaders(hr)?;
@@ -373,10 +375,10 @@ impl VkContext {
         // Decal (always built when DecalResources exists, which is
         // unconditional in `VkContext::new`).
         let decal_pipeline = rebuild_if_live!(
-            self.decals_state.is_some(),
+            self.decal.resources.is_some(),
             super::decal::rebuild_decal_pipeline(
                 device,
-                self.decals_state.as_ref().expect("decal state is live"),
+                self.decal.resources.as_ref().expect("decal state is live"),
                 self.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )
@@ -399,8 +401,8 @@ impl VkContext {
         // Fog (only when the world declared a VolumetricFog). Rebuilds both the
         // fullscreen render pipeline and the froxel-volume compute kernel; the
         // trailing `.map` tuples them into one Result for the macro.
-        let fog_pipelines = rebuild_if_live!(self.fog_resources.is_some(), {
-            let fog = self.fog_resources.as_ref().expect("fog resources are live");
+        let fog_pipelines = rebuild_if_live!(self.fog.resources.is_some(), {
+            let fog = self.fog.resources.as_ref().expect("fog resources are live");
             let render = super::fog::rebuild_fog_pipeline(
                 device,
                 fog,
@@ -495,8 +497,9 @@ impl VkContext {
         // added at runtime). Rebuilds the compute + render pipelines in
         // one shot.
         let particle_rebuilt = rebuild_if_live!(
-            self.particle_resources.is_some(),
-            self.particle_resources
+            self.particle.resources.is_some(),
+            self.particle
+                .resources
                 .as_ref()
                 .expect("particle resources are live")
                 .rebuild_pipelines(device, hr)
@@ -506,15 +509,15 @@ impl VkContext {
         // assignment drops the pipeline it displaces, which retires it through
         // the device's queue rather than destroying it under a submission that
         // may still name it.
-        self.composite_pipeline = composite_pipeline;
+        self.composite.pipeline = composite_pipeline;
 
         if let Some(new_pipeline) = text_pipeline {
-            self.text_pipeline = Some(new_pipeline);
+            self.text.pipeline = Some(new_pipeline);
         }
 
-        self.bloom_pipeline_prefilter = bloom_prefilter;
-        self.bloom_pipeline_downsample = bloom_downsample;
-        self.bloom_pipeline_upsample = bloom_upsample;
+        self.bloom.pipeline_prefilter = bloom_prefilter;
+        self.bloom.pipeline_downsample = bloom_downsample;
+        self.bloom.pipeline_upsample = bloom_upsample;
 
         if let Some(new_pipeline) = bindless_main_pipeline {
             self.cull.bindless_pipeline = Some(new_pipeline);
@@ -532,19 +535,21 @@ impl VkContext {
             hiz.swap_pipelines(init, downsample);
         }
 
-        if let (Some((build, average)), Some(ae)) =
-            (auto_exposure_pipelines, self.auto_exposure.as_mut())
-        {
+        if let (Some((build, average)), Some(ae)) = (
+            auto_exposure_pipelines,
+            self.auto_exposure.resources.as_mut(),
+        ) {
             ae.swap_pipelines(build, average);
         }
 
-        if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decals_state.as_mut()) {
+        if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decal.resources.as_mut())
+        {
             decals.pipeline = new_pipeline;
         }
         if let (Some(new_pipeline), Some(lines)) = (line_pipeline, self.lines.resources.as_mut()) {
             lines.pipeline = new_pipeline;
         }
-        if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog_resources.as_mut()) {
+        if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog.resources.as_mut()) {
             fog.pipeline = render;
             fog.froxel_pipeline = froxel;
         }
@@ -572,7 +577,7 @@ impl VkContext {
         if let (Some(rebuilt), Some(gb)) = (gbuffer_rebuilt, self.gbuffer.as_mut()) {
             gb.swap_pipelines(rebuilt);
         }
-        if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle_resources.as_mut()) {
+        if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
             p.swap_pipelines(cp, rp);
         }
         Ok(())
@@ -623,7 +628,7 @@ impl VkContext {
 
         let device = self.device.clone();
         let device = &device;
-        let hr = self.hot_reload;
+        let hr = self.hot_reload.enabled;
 
         // Resolve the world bytes to SPIR-V. The hot-reload recompile always
         // hands us SPIR-V, so `resolve_main_shaders` passes them through; the
@@ -640,7 +645,7 @@ impl VkContext {
                 frag_spv: &frag_spv,
             },
             self.msaa_samples,
-            self.swapchain_format,
+            self.swapchain.format,
         )?;
 
         // Instanced pipeline: rebuilt only when one is live. Needs the world's
@@ -667,7 +672,7 @@ impl VkContext {
                     frag_spv: &frag_spv,
                 },
                 self.msaa_samples,
-                self.swapchain_format,
+                self.swapchain.format,
             )?)
         } else {
             None

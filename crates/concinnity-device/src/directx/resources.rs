@@ -312,8 +312,9 @@ impl DxContext {
     fn rewrite_legacy_object_pairs(&self, slot: usize) {
         let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
-        for (obj_idx, obj) in self.draw_objects.iter().enumerate() {
-            if self.clone.slot_by_draw_idx.contains_key(&obj_idx) || obj_idx >= self.n_objects {
+        for (obj_idx, obj) in self.draw.objects.iter().enumerate() {
+            if self.clone.slot_by_draw_idx.contains_key(&obj_idx) || obj_idx >= self.draw.n_objects
+            {
                 continue;
             }
             let pair_base = 3 + obj_idx * 2;
@@ -324,7 +325,7 @@ impl DxContext {
                 write_texture_srv(&self.device, resource, self.srv_slot_cpu(pair_base + 1));
             }
         }
-        let cluster_base = 3 + self.n_objects * 2;
+        let cluster_base = 3 + self.draw.n_objects * 2;
         for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
             let pair_base = cluster_base + cluster_idx * 2;
             if cluster.texture_slot.min(last) == slot {
@@ -353,7 +354,7 @@ impl DxContext {
         let last = self.descriptors.textures.len() - 1;
         let resource = &self.descriptors.textures[slot];
         for (&obj_idx, &clone_offset) in self.clone.slot_by_draw_idx.iter() {
-            let Some(obj) = self.draw_objects.get(obj_idx) else {
+            let Some(obj) = self.draw.objects.get(obj_idx) else {
                 continue;
             };
             let pair_base = self.clone.srv_base_slot + clone_offset * 2;
@@ -403,7 +404,7 @@ impl DxContext {
         }
         let last = self.descriptors.textures.len().saturating_sub(1);
         self.clone.slot_by_draw_idx.keys().any(|&draw_idx| {
-            self.draw_objects.get(draw_idx).is_some_and(|obj| {
+            self.draw.objects.get(draw_idx).is_some_and(|obj| {
                 obj.texture_slot.min(last) == slot || self.normal_is_slot(obj.normal_map_slot, slot)
             })
         })
@@ -422,7 +423,7 @@ impl DxContext {
     // immediately (undereferenced while the bindless pass drives every draw),
     // the per-frame flat-pool copies re-point one per frame as their fences
     // retire, and the old resource plus upload transients are parked on
-    // `stream_retires` until every consumer provably moved off them. When a
+    // `stream.retires` until every consumer provably moved off them. When a
     // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
     // the swap instead drains the device and rewrites everything in place,
     // matching the hot-reload paths below.
@@ -445,24 +446,25 @@ impl DxContext {
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every flat-pool copy, so any propagation
             // queued for this slot is already satisfied.
-            self.pool_rewrites.remove(slot);
+            self.stream.pool_rewrites.remove(slot);
             return Ok(());
         }
         let (texture, in_flight) = upload_texture_image_deferred(&self.alloc, image)?;
         let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
         self.rewrite_legacy_object_pairs(slot);
-        self.pool_rewrites.queue(slot);
+        self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
         // is the one signalled by the NEXT draw -- waited FRAMES ticks after
         // that draw's own tick.
-        self.stream_retires
+        self.stream
+            .retires
             .push(super::texture::StreamedUploadRetire {
                 texture: old,
                 upload: in_flight.upload,
                 allocator: in_flight.allocator,
                 cmd: in_flight.cmd,
-                retire_at: self.stream_frame + FRAMES as u64 + 1,
+                retire_at: self.stream.frame + FRAMES as u64 + 1,
             });
         Ok(())
     }
@@ -473,10 +475,10 @@ impl DxContext {
     // list that dereferences this copy), then release retires whose covering
     // fence has signalled (dropping the entry releases the COM references).
     pub(super) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
-        self.stream_frame += 1;
-        if !self.pool_rewrites.is_empty() {
+        self.stream.frame += 1;
+        if !self.stream.pool_rewrites.is_empty() {
             let last = self.descriptors.textures.len().saturating_sub(1);
-            for slot in self.pool_rewrites.begin_frame() {
+            for slot in self.stream.pool_rewrites.begin_frame() {
                 let resource = &self.descriptors.textures[slot.min(last)];
                 write_texture_srv(
                     &self.device,
@@ -485,8 +487,8 @@ impl DxContext {
                 );
             }
         }
-        let now = self.stream_frame;
-        self.stream_retires.retain(|r| r.retire_at > now);
+        let now = self.stream.frame;
+        self.stream.retires.retain(|r| r.retire_at > now);
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
@@ -585,7 +587,7 @@ impl DxContext {
     // distance. Driven by `world.jsonl` hot-reload (`cn debug` only) when a
     // newly authored Prop references a Mesh / Model already present in the
     // init world. The clone is non-cullable (sentinel AABB) and joins
-    // `always_draw` since the init-time BVH cannot refit; the dynamically
+    // `draw.always` since the init-time BVH cannot refit; the dynamically
     // added prop is drawn every frame, like a streamed `VoxelWorld` chunk.
     // Bakes the clone's (albedo, normal) SRV pair at the next free slot in
     // the clone descriptor pool reserved at init (`MAX_CLONE_DRAWS` pairs),
@@ -603,7 +605,7 @@ impl DxContext {
         model: [[f32; 4]; 4],
         dst: crate::gfx::draw_slot::SlotAlloc,
     ) -> Result<(), String> {
-        let src = self.draw_objects.get(src_draw_idx).ok_or_else(|| {
+        let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
             format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
@@ -629,7 +631,7 @@ impl DxContext {
             visible: true,
             resident: true,
             // Sentinel AABB so the init-time BVH cull skips the new draw:
-            // it joins `always_draw` and is drawn every frame regardless of
+            // it joins `draw.always` and is drawn every frame regardless of
             // camera position. Matches the runtime-streamed chunk pattern.
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
@@ -682,7 +684,7 @@ impl DxContext {
         // Write at the engine-allocated destination slot.
         let new_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
+                self.draw.objects[slot] = obj;
                 // Seed the velocity prepass's previous-model snapshot so a
                 // recycled slot does not ghost from the prior occupant's
                 // transform for one frame. A slot past the snapshot's end (one
@@ -699,11 +701,11 @@ impl DxContext {
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
-                    self.draw_objects.len(),
+                    self.draw.objects.len(),
                     "appended draw slot must match the draw-object count"
                 );
-                self.draw_objects.push(obj);
-                self.always_draw_member.push(false);
+                self.draw.objects.push(obj);
+                self.draw.always_member.push(false);
                 slot
             }
         };
@@ -784,7 +786,8 @@ impl DxContext {
         frame: u64,
     ) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
         let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
@@ -865,7 +868,7 @@ impl DxContext {
             idx_bytes,
         )?;
 
-        let obj = &mut self.draw_objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx];
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
@@ -898,7 +901,7 @@ impl DxContext {
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> Result<(), String> {
-        let obj = self.draw_objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
             format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
@@ -997,7 +1000,7 @@ impl DxContext {
         }
         // Refresh the per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw_objects[draw_idx];
+        let slot = &mut self.draw.objects[draw_idx];
         for ((switch_distance, _), slice) in
             lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
         {
@@ -1025,7 +1028,8 @@ impl DxContext {
     // bytes, and every raster pass skips a non-resident draw.
     pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get(draw_idx)
             .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
         let v_off = obj.vertex_offset as u64;
@@ -1034,7 +1038,7 @@ impl DxContext {
         let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
         self.mesh_stream.vtx_alloc.free(v_off, v_len, retire_frame);
         self.mesh_stream.idx_alloc.free(i_off, i_len, retire_frame);
-        self.draw_objects[draw_idx].resident = false;
+        self.draw.objects[draw_idx].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
         self.rt_topology_dirty = true;
@@ -1190,7 +1194,7 @@ impl DxContext {
     // Place one streamed chunk's geometry in the chunk headroom region and
     // write its `DrawObject` at the engine-allocated destination slot.
     //
-    // The chunk is non-cullable and joins the `always_draw` set: the streaming
+    // The chunk is non-cullable and joins the `draw.always` set: the streaming
     // window already bounds the resident chunk count. Indices stay
     // mesh-relative (0-based) and the draw passes the vertex region's base as
     // `base_vertex`, so a chunk placed past the 65 535-vertex `u16` index
@@ -1293,22 +1297,22 @@ impl DxContext {
         };
 
         // Write at the engine-allocated destination slot. A slot recycled from
-        // a culled static prop is not yet in `always_draw`;
+        // a culled static prop is not yet in `draw.always`;
         // `ensure_always_draw` adds it, while one recycled from another chunk /
         // clone already is.
         let draw_idx = match dst {
             crate::gfx::draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw_objects[slot] = obj;
+                self.draw.objects[slot] = obj;
                 slot
             }
             crate::gfx::draw_slot::SlotAlloc::Append(slot) => {
                 debug_assert_eq!(
                     slot,
-                    self.draw_objects.len(),
+                    self.draw.objects.len(),
                     "appended draw slot must match the draw-object count"
                 );
-                self.draw_objects.push(obj);
-                self.always_draw_member.push(false);
+                self.draw.objects.push(obj);
+                self.draw.always_member.push(false);
                 slot
             }
         };
@@ -1334,23 +1338,23 @@ impl DxContext {
     //
     // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
     // command list never has the freed region overwritten by a later
-    // `add_chunk_mesh`. The slot stays in `draw_objects` / `always_draw` but
+    // `add_chunk_mesh`. The slot stays in `draw.objects` / `draw.always` but
     // is marked non-resident and invisible, so every pass skips it. The region
     // is not zeroed -- a non-resident draw is skipped everywhere and an
     // `alloc` hands back exactly `size` bytes that `add_chunk_mesh` fully
     // overwrites.
     pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw_objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("remove_chunk_mesh: draw object {} out of range", draw_idx))?;
+        let obj =
+            self.draw.objects.get(draw_idx).ok_or_else(|| {
+                format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
+            })?;
         let v_off = obj.vertex_offset as u64;
         let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
         let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
         let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
         self.chunk_stream.vtx_alloc.free(v_off, v_len, retire_frame);
         self.chunk_stream.idx_alloc.free(i_off, i_len, retire_frame);
-        let obj = &mut self.draw_objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx];
         obj.visible = false;
         obj.resident = false;
         // The removed chunk leaves the RT-relevant draw set; the next RT update
@@ -1367,7 +1371,8 @@ impl DxContext {
     // where it was uploaded.
     pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
         let obj = self
-            .draw_objects
+            .draw
+            .objects
             .get_mut(draw_idx)
             .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
         obj.model = model;
@@ -1409,11 +1414,11 @@ impl DxContext {
         // Main skinned pipeline: reuses the instanced root signature (its root
         // SRV at t3 carries the joint matrices) and the off-screen HDR target.
         let skinned_root_sig = dump_on_err(
-            self.info_queue.as_ref(),
+            self.diagnostics.info_queue.as_ref(),
             create_main_instanced_root_signature(&self.device),
         )?;
         let skinned_pso = dump_on_err(
-            self.info_queue.as_ref(),
+            self.diagnostics.info_queue.as_ref(),
             create_skinned_pso(
                 &self.device,
                 &skinned_root_sig,
@@ -1428,11 +1433,11 @@ impl DxContext {
         // active, so a skinned mesh casts a correctly deformed shadow.
         let (skinned_shadow_root_sig, skinned_shadow_pso) = if self.shadow_pso.is_some() {
             let sr = dump_on_err(
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 create_skinned_shadow_root_signature(&self.device),
             )?;
             let sp = dump_on_err(
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
                 create_skinned_shadow_pso(&self.device, &sr, &skinned_shadow_vs),
             )?;
             (Some(sr), Some(sp))
@@ -1565,7 +1570,7 @@ impl DxContext {
         // to all skinned verts. Each frame `encode_skin` poses the bind-pose verts
         // into this frame's buffer and the bindless main pass's 2nd ExecuteIndirect
         // draws the skinned records the cull buffers reserved. Setting
-        // `self.n_skinned` here (not at init) engages the fold; a build failure
+        // `self.draw.n_skinned` here (not at init) engages the fold; a build failure
         // (e.g. DXC unavailable) leaves it 0 and the legacy skinned main pass runs.
         // The cull / object / draw-args / indirect buffers already reserved the
         // skinned tail at init via the threaded `n_skinned` capacity.
@@ -1613,7 +1618,7 @@ impl DxContext {
                     self.skinned
                         .deformed_primed
                         .store(false, std::sync::atomic::Ordering::Relaxed);
-                    self.n_skinned = self.skinned.draw_objects.len();
+                    self.draw.n_skinned = self.skinned.draw_objects.len();
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -1634,7 +1639,7 @@ impl DxContext {
             gbuffer.ensure_skinned_pso(
                 &self.device,
                 self.hot_reload.enabled,
-                self.info_queue.as_ref(),
+                self.diagnostics.info_queue.as_ref(),
             )?;
         }
 
@@ -1909,7 +1914,7 @@ impl DxContext {
                 }
             }
         }
-        // Pad the tail morphless if `morphs` was shorter than `draw_objects`.
+        // Pad the tail morphless if `morphs` was shorter than `draw.objects`.
         while delta_buffers.len() < n {
             delta_buffers.push(None);
             target_counts.push(0);
@@ -2035,7 +2040,7 @@ impl DxContext {
         let frag = frag_bytes.ok_or_else(|| {
             "update_world_shader_pipelines: fragment shader bytes are required".to_string()
         })?;
-        let iq = self.info_queue.as_ref();
+        let iq = self.diagnostics.info_queue.as_ref();
         let msaa = self.hdr.msaa_samples;
 
         // Legacy static main pipeline (the path a custom-shader world uses; the

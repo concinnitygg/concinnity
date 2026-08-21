@@ -157,8 +157,8 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.probe_set as *const concinnity_render::uniforms::ProbeSet as *const u8,
-                self.probe_set_cbv_ptrs[frame_idx],
+                &self.probe.set as *const concinnity_render::uniforms::ProbeSet as *const u8,
+                self.probe.set_cbv_ptrs[frame_idx],
                 std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
             );
         }
@@ -304,13 +304,13 @@ impl DxContext {
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
         let seed_inputs =
-            crate::gfx::render_graph::apply_view(&seed_inputs, self.view_mode, self.view_show);
+            crate::gfx::render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
 
         // Compute the camera VPs the main + velocity passes consume.
         let proj = perspective(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.view_matrix);
+        let cur_vp = mat4_mul(proj, self.view.matrix);
         // When TAA is on, offset the projection by a sub-pixel Halton jitter so
         // the accumulation has fresh sample positions each frame. The jitter is
         // applied to the z-coefficients of clip x/y, so subtracting it shifts
@@ -351,7 +351,7 @@ impl DxContext {
             }
             (None, None) => proj,
         };
-        let vp_mat = mat4_mul(render_proj, self.view_matrix);
+        let vp_mat = mat4_mul(render_proj, self.view.matrix);
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -363,13 +363,13 @@ impl DxContext {
         // re-renders bind (written once at init).
         let clustered = self.light_cull.pso.is_some();
         let cluster_params = ClusterParams {
-            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view_matrix)),
+            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
             cam_pos,
             z_near: near.max(1e-3),
             view_forward: [
-                -self.view_matrix[0][2],
-                -self.view_matrix[1][2],
-                -self.view_matrix[2][2],
+                -self.view.matrix[0][2],
+                -self.view.matrix[1][2],
+                -self.view.matrix[2][2],
             ],
             z_far: far,
             grid_x: CLUSTER_GRID_X,
@@ -396,7 +396,7 @@ impl DxContext {
             };
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view: self.view_matrix,
+            view: self.view.matrix,
             elapsed,
             reflections_enabled,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
@@ -421,15 +421,16 @@ impl DxContext {
         // since record_frame errors are exceptional). RefCell because
         // record_frame is &self (matches the deferred_buffers pattern).
         let frustum = crate::gfx::frustum::Frustum::from_view_projection(vp_mat);
-        let mut visible = self.visible_scratch.replace(Vec::new());
+        let mut visible = self.draw.visible_scratch.replace(Vec::new());
         visible.clear();
         // Left empty while the world is hidden behind an opaque menu so the
         // Main pass draws nothing behind it.
         if !world_hidden {
-            self.cull_bvh
+            self.draw
+                .bvh
                 .query(&frustum, cam_pos, |idx| visible.push(idx));
             visible.sort_unstable();
-            visible.extend_from_slice(&self.always_draw);
+            visible.extend_from_slice(&self.draw.always);
         }
 
         let (view_gva, light_gva, local_lights_gva) = (
@@ -469,7 +470,7 @@ impl DxContext {
         // feature toggles or a target resizes). `take`n out of the cache (the
         // `borrow_mut` guard drops at the end of this statement) so the owned graph
         // no longer borrows `self`; a mismatch (or a cold cache) rebuilds.
-        let cached_graph = self.frame_graph_cache.borrow_mut().take();
+        let cached_graph = self.draw.graph_cache.borrow_mut().take();
         let frame_graph = match cached_graph {
             Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
             _ => {
@@ -507,7 +508,7 @@ impl DxContext {
         let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with
         // matching inputs skips the rebuild.
-        *self.frame_graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
+        *self.draw.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
         // The Hi-Z reduction that feeds next frame's cull is the graph's
         // terminal `HizFinal` pass, so it has already been recorded; `hiz_valid`
@@ -543,10 +544,10 @@ impl DxContext {
             *gb.prev_view_proj.borrow_mut() = cur_vp;
             let mut prev_models = gb.prev_models.borrow_mut();
             prev_models.clear();
-            prev_models.extend(self.draw_objects.iter().map(|o| o.model));
+            prev_models.extend(self.draw.objects.iter().map(|o| o.model));
         }
 
-        self.visible_scratch.replace(visible);
+        self.draw.visible_scratch.replace(visible);
         Ok(pass_cmd_lists)
     }
 }

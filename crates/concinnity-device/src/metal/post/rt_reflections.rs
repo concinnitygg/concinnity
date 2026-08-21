@@ -110,7 +110,7 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::DontCare);
             ca.setStoreAction(MTLStoreAction::Store);
         }
-        if let Some(t) = &self.pass_timing {
+        if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&desc, crate::metal::pass_timing::PassId::RtReflections);
         }
         let enc = ScopedEncoder::new(
@@ -163,7 +163,7 @@ impl MtlContext {
         // Reflection-probe set (count + per-probe parallax boxes) at buffer(8);
         // count == 0 keeps the sky miss fallback. (buffer(7) is the bindless
         // texture pool, bound only on the textured path below.)
-        enc.set_fragment_value(&self.probe_set, 8);
+        enc.set_fragment_value(&self.probe.set, 8);
         // Textured path: bind the bindless albedo pool at buffer(7) (the
         // same index the main pass uses) and declare its textures resident.
         if textured && let Some(tex_args) = bindless_tex_args {

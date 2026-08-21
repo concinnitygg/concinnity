@@ -663,7 +663,7 @@ pub(super) struct RtAccelData {
     tlas_size: u64,
 
     // Per-frame update state.
-    // Indices into the frame's `draw_objects` for the participating objects, in
+    // Indices into the frame's `draw.objects` for the participating objects, in
     // BLAS / instance order. Lets a rebuild re-read current transforms in build
     // order and detect a changed draw list.
     object_indices: Vec<usize>,
@@ -2091,7 +2091,7 @@ impl super::context::DxContext {
         accel.dynamic_update(
             &self.alloc,
             cmd,
-            &self.draw_objects,
+            &self.draw.objects,
             RtDynamicInputs {
                 mode: self.rt_dynamic_mode,
                 skinned,
@@ -2133,7 +2133,7 @@ impl super::context::DxContext {
             alloc: &self.alloc,
             vertex_buffer: &self.geometry.vertex_buffer,
             index_buffer: &self.geometry.index_buffer,
-            draw_objects: &self.draw_objects,
+            draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
             total_vertices: self.rt_static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,

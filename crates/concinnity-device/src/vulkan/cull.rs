@@ -37,14 +37,14 @@ pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
 impl VkContext {
     // Total records the GPU-driven cull + bindless main pass processes: the
     // build-time static objects, the instanced-cluster instances folded in after
-    // them, then the skinned objects (`n_objects + n_instances + n_skinned`). The
+    // them, then the skinned objects (`draw.n_objects + n_instances + n_skinned`). The
     // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
     // count this; the main pass draws the static+instance prefix and the skinned
     // tail with two `cmd_draw_indexed_indirect` calls. With no instanced props /
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
     // equal to the static `n_objects`. Mirrors `directx/cull.rs::cull_count`.
     pub(in crate::vulkan) fn cull_count(&self) -> usize {
-        self.n_objects + self.n_instances + self.n_chunk + self.n_skinned
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk + self.draw.n_skinned
     }
 
     // Buffer index of the first streamed-chunk record. The chunk reserve is
@@ -53,7 +53,7 @@ impl VkContext {
     // static+instance prefix indirect draw (their geometry lives in the shared
     // VB/IB), so this is just the instance tail. Mirrors `directx/cull.rs`.
     pub(in crate::vulkan) fn chunk_record_base(&self) -> usize {
-        self.n_objects + self.n_instances
+        self.draw.n_objects + self.draw.n_instances
     }
 
     // Buffer index of the first skinned record: the static + instance + chunk
@@ -61,7 +61,7 @@ impl VkContext {
     // `[skinned_record_base(), cull_count())` is the second indirect draw. The
     // chunk reserve sits inside the prefix, so the skinned base is past it.
     pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
-        self.n_objects + self.n_instances + self.n_chunk
+        self.draw.n_objects + self.draw.n_instances + self.draw.n_chunk
     }
 
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -79,15 +79,15 @@ impl VkContext {
     }
 
     // Walk the resident streamed-chunk draw objects -- the build-time-geometry tail
-    // past `n_objects` that are NOT runtime clones -- invoking `emit` with the
+    // past `draw.n_objects` that are NOT runtime clones -- invoking `emit` with the
     // chunk's reserve index `k` (into `[chunk_record_base() + k]`) + the DrawObject.
     // Chunk geometry already lives in the shared VB/IB, so chunks fold into the
     // static+instance prefix indirect draw as plain records (with their own
-    // `base_vertex` + flat-pool material). Runtime clones (in `clone_slot_by_draw_idx`)
+    // `base_vertex` + flat-pool material). Runtime clones (in `clone.slot_by_draw_idx`)
     // are skipped -- they keep the legacy per-object path. Non-resident slots are
     // skipped too: chunks and clones now share the draw-slot free list, so a retired
     // clone leaves a non-resident gap in this tail (no longer in
-    // `clone_slot_by_draw_idx`); counting those gaps toward `k` could push a live
+    // `clone.slot_by_draw_idx`); counting those gaps toward `k` could push a live
     // chunk past `n_chunk` and silently drop it. Only resident chunks consume a
     // reserve index, bounded by the streaming window (<= `n_chunk`). Returns the
     // number of chunk records emitted (so the caller can disable the unused reserve
@@ -96,18 +96,24 @@ impl VkContext {
     where
         F: FnMut(usize, &crate::gfx::render_types::DrawObject),
     {
-        if self.n_chunk == 0 {
+        if self.draw.n_chunk == 0 {
             return 0;
         }
         let mut k = 0;
-        for (i, obj) in self.draw_objects.iter().enumerate().skip(self.n_objects) {
-            if self.clone_slot_by_draw_idx.contains_key(&i) {
+        for (i, obj) in self
+            .draw
+            .objects
+            .iter()
+            .enumerate()
+            .skip(self.draw.n_objects)
+        {
+            if self.clone.slot_by_draw_idx.contains_key(&i) {
                 continue; // runtime clone -> legacy per-object path
             }
             if !obj.resident {
                 continue; // retired chunk / clone gap -- not a live chunk
             }
-            if k >= self.n_chunk {
+            if k >= self.draw.n_chunk {
                 break;
             }
             emit(k, obj);

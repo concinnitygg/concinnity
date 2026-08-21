@@ -2,7 +2,7 @@
 //
 // Composite (post-process) pass + text overlay. The post-process pipeline
 // reads the post-stack scene texture (TAA output > SSR output > HDR resolve,
-// wired to `composite_sets` at init / on resize), the bloom mip-0 target, and
+// wired to `composite.sets` at init / on resize), the bloom mip-0 target, and
 // the 3D colour-grading LUT, then writes ACES tonemap + gamma + FXAA into the
 // swapchain image. Text is drawn after in the same render pass so it sits on
 // top of the tonemapped image in display-referred LDR space.
@@ -31,8 +31,8 @@ pub struct VkCompositeArgs {
 
 // The composite + text orchestration lives once in `gfx::fullscreen`; this impl
 // drives each step in Vulkan. The composite pipeline samples the post-stack scene
-// texture via `composite_sets[frame_idx]` (wired at init / on resize) and writes
-// the ACES + gamma + FXAA tonemap into `composite_framebuffers[image_index]`;
+// texture via `composite.sets[frame_idx]` (wired at init / on resize) and writes
+// the ACES + gamma + FXAA tonemap into `composite.framebuffers[image_index]`;
 // text is drawn after in the same render pass so it sits on top in LDR space.
 impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     type Rec = vk::CommandBuffer;
@@ -40,10 +40,10 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
 
     fn begin_composite(&self, cmd: &Self::Rec, args: &Self::Args) {
         let device = &self.device;
-        let extent = self.swapchain_extent;
+        let extent = self.swapchain.extent;
         let composite_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.composite_render_pass.handle())
-            .framebuffer(self.composite_framebuffers[args.image_index].handle())
+            .render_pass(self.composite.render_pass.handle())
+            .framebuffer(self.composite.framebuffers[args.image_index].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // The composite pass uses a standard positive-height viewport: the HDR
         // image is already upright, so it is a plain copy + post.
@@ -73,14 +73,14 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             device.cmd_bind_pipeline(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.composite_pipeline.handle(),
+                self.composite.pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.composite_pipeline_layout.handle(),
+                self.composite.pipeline_layout.handle(),
                 0,
-                std::slice::from_ref(&self.composite_sets[args.frame_idx]),
+                std::slice::from_ref(&self.composite.sets[args.frame_idx]),
                 &[],
             );
             // Post-process tunables (bloom intensity, exposure, vignette) plus
@@ -90,17 +90,17 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             // composite the scene.
             let composite = CompositeParams {
                 post: self.post_process,
-                fade: self.scene_fade,
-                view_mode: if self.view_mode.is_gbuffer_channel() {
-                    self.view_mode as u32
+                fade: self.view.scene_fade,
+                view_mode: if self.view.mode.is_gbuffer_channel() {
+                    self.view.mode as u32
                 } else {
                     0
                 },
-                far: self.view_far,
+                far: self.view.far,
             };
             device.cmd_push_constants(
                 *cmd,
-                self.composite_pipeline_layout.handle(),
+                self.composite.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -115,10 +115,10 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     }
 
     fn begin_text(&self, cmd: &Self::Rec, _args: &Self::Args) -> bool {
-        let Some(text_pipeline) = self.text_pipeline.as_ref() else {
+        let Some(text_pipeline) = self.text.pipeline.as_ref() else {
             return false;
         };
-        if self.text_atlas_textures.is_empty() {
+        if self.text.atlas_textures.is_empty() {
             return false;
         }
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -143,7 +143,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             return Ok(());
         }
         let device = &self.device;
-        let extent = self.swapchain_extent;
+        let extent = self.swapchain.extent;
         // The text vertices are in overlay units (mapped to NDC by the shader's
         // divide by win_width/height); the scissor is in attachment pixels, so a
         // per-call clip rect scales between the two.
@@ -186,10 +186,12 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         // persistent upload buffer (sized up front by `reserve` in
         // `encode_composite_and_text`) and bind sub-ranges of it.
         let (vert_buf, vert_offset) = self
-            .text_upload
+            .text
+            .upload
             .push(args.frame_idx, bytemuck::cast_slice(&call.vertices))?;
         let (idx_buf, idx_offset) = self
-            .text_upload
+            .text
+            .upload
             .push(args.frame_idx, bytemuck::cast_slice(&call.indices))?;
 
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
@@ -198,14 +200,14 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.text_pipeline_layout.handle(),
+                self.text.pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&self.descriptors.text_atlas_sets[atlas_idx]),
                 &[],
             );
             device.cmd_push_constants(
                 *cmd,
-                self.text_pipeline_layout.handle(),
+                self.text.pipeline_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 std::slice::from_raw_parts(
@@ -246,7 +248,8 @@ impl VkContext {
         // frame fence waited before this frame's recording has already confirmed
         // the GPU is done with this slot, so resetting / growing it is race-free.
         let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
-        self.text_upload
+        self.text
+            .upload
             .reserve(&self.alloc, frame_idx, text_bytes)?;
 
         let args = VkCompositeArgs {
