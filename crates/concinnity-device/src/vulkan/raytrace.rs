@@ -53,7 +53,11 @@
 // binding table) would only be worth it if a feature needs recursive tracing or
 // per-material hit shaders, which screen-space reflections do not.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::gfx::rt_geom::{cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry};
@@ -200,16 +204,16 @@ struct DeviceBufferRef {
 // push-constant block. Built in `build_rt_accel` (gated on RT) and held on
 // `RtAccelData`; mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
-    set_layout: vk::DescriptorSetLayout,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+    set_layout: OwnedSetLayout,
+    pipeline_layout: OwnedPipelineLayout,
+    pipeline: OwnedPipeline,
     // Per-(frame, object) compute descriptor sets, sized + allocated lazily on
     // the first `rebuild_skinned` (the skinned object count is unknown at init,
     // before `upload_skinned` runs). Indexed `[frame_idx][object]`; rewritten in
     // place each rebuild at the current frame's slot (fence-gated, so safe, like
     // the RT resolve set's per-frame re-point). `upload_skinned_morphs` re-points
     // the morph bindings (3, 4) on the main fold's sets.
-    descriptor_pool: vk::DescriptorPool,
+    descriptor_pool: OwnedDescriptorPool,
     pub(in crate::vulkan) sets: Vec<Vec<vk::DescriptorSet>>,
     // The [source verts, joint palette, deformed output] triple each set was last
     // pointed at, parallel to `sets`. The RT skin path re-points a set only when
@@ -225,18 +229,7 @@ pub(super) struct SkinPipeline {
 }
 
 impl SkinPipeline {
-    pub(super) fn destroy(&self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.set_layout, None);
-            if self.descriptor_pool != vk::DescriptorPool::null() {
-                device.destroy_descriptor_pool(self.descriptor_pool, None);
-            }
-        }
-    }
+    pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
 // Whether a skin descriptor set can be left alone: it already names `want`, and
@@ -733,7 +726,7 @@ fn tlas_geometry(instance_address: u64) -> vk::AccelerationStructureGeometryKHR<
 
 // Device address of a buffer (core in Vulkan 1.2; the device enables
 // `bufferDeviceAddress` for the RT path).
-fn buffer_address(device: &Device, buffer: vk::Buffer) -> u64 {
+fn buffer_address(device: &VkDevice, buffer: vk::Buffer) -> u64 {
     // SAFETY: `buffer` was created from this device with SHADER_DEVICE_ADDRESS usage and the info
     // struct borrows it for the call; the query only reads.
     unsafe {
@@ -860,7 +853,7 @@ fn ensure_accel(
 fn ensure_device_buffer(
     slot: &mut Option<DeviceBuffer>,
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     size: u64,
     retire: RetireSink,
 ) -> Result<bool, String> {
@@ -880,7 +873,7 @@ fn ensure_device_buffer(
 // device address.
 fn create_device_buffer(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     size: u64,
 ) -> Result<DeviceBuffer, String> {
     let size = size.max(VERTEX_STRIDE);
@@ -910,7 +903,7 @@ fn create_device_buffer(
 // first `rebuild_skinned`, when the skinned object count is known.
 pub(super) fn build_skin_pipeline(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     hot_reload: bool,
 ) -> Result<SkinPipeline, String> {
     let spv = super::builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
@@ -927,37 +920,30 @@ pub(super) fn build_skin_pipeline(
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
         })
         .collect();
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let set_layout = unsafe {
-        device.create_descriptor_set_layout(
+    let set_layout = device
+        .create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-            None,
         )
-    }
-    .map_err(|e| format!("rt skin descriptor set layout: {e}"))?;
+        .map_err(|e| format!("rt skin descriptor set layout: {e}"))?;
 
     let pc = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
         .size(std::mem::size_of::<SkinParams>() as u32);
-    let set_layouts = [set_layout];
+    let set_layouts = [set_layout.handle()];
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    let pipeline_layout = unsafe {
-        device.create_pipeline_layout(
+    let pipeline_layout = device
+        .create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&pc)),
-            None,
         )
-    }
-    .map_err(|e| {
-        // SAFETY: the set layout was created from this device and is destroyed exactly once here,
-        // with no pipeline layout referencing it yet.
-        unsafe { device.destroy_descriptor_set_layout(set_layout, None) };
-        format!("rt skin pipeline layout: {e}")
-    })?;
+        .map_err(|e| {
+            // SAFETY: the set layout was created from this device and is destroyed exactly once here,
+            // with no pipeline layout referencing it yet.
+            format!("rt skin pipeline layout: {e}")
+        })?;
 
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -966,22 +952,9 @@ pub(super) fn build_skin_pipeline(
         .name(&entry);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
-        .layout(pipeline_layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    };
-    let pipeline = pipeline.map_err(|(_, e)| {
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_pipeline_layout(pipeline_layout, None);
-            device.destroy_descriptor_set_layout(set_layout, None);
-        }
-        format!("create rt skin pipeline: {e}")
-    })?[0];
+        .layout(pipeline_layout.handle());
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info);
+    let pipeline = pipeline.map_err(|e| format!("create rt skin pipeline: {e}"))?;
 
     // Sized to one `MorphDelta` (two packed float3s) so even a stray read of
     // slot 0 stays in bounds; `target_count == 0` keeps it unread.
@@ -991,23 +964,13 @@ pub(super) fn build_skin_pipeline(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )
-        .map_err(|e| {
-            // SAFETY: every handle here was created from this device and is destroyed exactly once;
-            // the caller has already waited for the device to go idle, so no submission still
-            // references them.
-            unsafe {
-                device.destroy_pipeline(pipeline, None);
-                device.destroy_pipeline_layout(pipeline_layout, None);
-                device.destroy_descriptor_set_layout(set_layout, None);
-            }
-            format!("rt skin morph dummy buffer: {e}")
-        })?;
+        .map_err(|e| format!("rt skin morph dummy buffer: {e}"))?;
 
     Ok(SkinPipeline {
         set_layout,
         pipeline_layout,
         pipeline,
-        descriptor_pool: vk::DescriptorPool::null(),
+        descriptor_pool: OwnedDescriptorPool::null(),
         sets: Vec::new(),
         wired: Vec::new(),
         morph_dummy: morph_dummy_pooled.buffer(),
@@ -1018,7 +981,7 @@ pub(super) fn build_skin_pipeline(
 // A global acceleration-structure-build memory barrier: orders one build's
 // writes before the next build reads/writes (shared scratch reuse + TLAS reading
 // the just-built BLAS). Mirrors the DXR UAV barrier between builds.
-fn build_barrier(device: &Device, cmd: vk::CommandBuffer) {
+fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer) {
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
         .dst_access_mask(
@@ -1057,7 +1020,7 @@ fn scratch_alignment(instance: &ash::Instance, pd: vk::PhysicalDevice) -> u64 {
 pub(in crate::vulkan) struct RtDeviceCtx<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) instance: &'a ash::Instance,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
     pub(in crate::vulkan) pd: vk::PhysicalDevice,
 }
 
@@ -2176,8 +2139,8 @@ impl RtAccelData {
             .skin
             .as_ref()
             .ok_or("rebuild_skinned called without a skin pipeline")?;
-        let pipeline = skin.pipeline;
-        let pipeline_layout = skin.pipeline_layout;
+        let pipeline = skin.pipeline.handle();
+        let pipeline_layout = skin.pipeline_layout.handle();
 
         // Deformed-vertex buffer: the skin pass writes posed `Vertex`s here,
         // mirroring the skinned VB's indexing so the u16 index buffer addresses it
@@ -2652,7 +2615,7 @@ impl RtAccelData {
     fn grow_scratch(
         &mut self,
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         required: u64,
         align: u64,
     ) -> Result<(), String> {
@@ -2674,7 +2637,7 @@ impl RtAccelData {
     // Ensure the per-(frame, object) compute descriptor sets cover `object_count`
     // skinned objects. Allocated lazily on the first skinned rebuild (the count
     // is unknown at init, before `upload_skinned`). Idempotent once sized.
-    fn ensure_skin_sets(&mut self, device: &Device, object_count: usize) -> Result<(), String> {
+    fn ensure_skin_sets(&mut self, device: &VkDevice, object_count: usize) -> Result<(), String> {
         let frames = self.frames_in_flight_usize;
         let skin = self
             .skin
@@ -2685,7 +2648,7 @@ impl RtAccelData {
 
     // Destroy every acceleration-structure resource. The caller has already
     // idled the device.
-    pub(super) fn destroy(&mut self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &VkDevice) {
         for r in self.retire.drain(..) {
             r.destroy(&self.as_loader);
         }
@@ -2710,7 +2673,7 @@ impl RtAccelData {
 // by the RT skin path (`RtAccelData::ensure_skin_sets`) and the GPU-driven main-pass
 // skin fold (`VkContext::build_main_skin`).
 pub(super) fn ensure_skin_sets(
-    device: &Device,
+    device: &VkDevice,
     skin: &mut SkinPipeline,
     frames: usize,
     object_count: usize,
@@ -2723,38 +2686,28 @@ pub(super) fn ensure_skin_sets(
     // old pool's sets are only ever bound on the frame's own command buffer, which
     // has completed (the per-frame fence gated the frame at the top of
     // `draw_frame`), so freeing the old pool here is safe.
-    // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-    // caller has already waited for the device to go idle, so no submission still references them.
-    unsafe {
-        if skin.descriptor_pool != vk::DescriptorPool::null() {
-            device.destroy_descriptor_pool(skin.descriptor_pool, None);
-        }
-    }
     let total = (frames * object_count) as u32;
     let pool_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(total * 5);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let pool = unsafe {
-        device.create_descriptor_pool(
+    let pool = device
+        .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(std::slice::from_ref(&pool_size))
                 .max_sets(total),
-            None,
         )
-    }
-    .map_err(|e| format!("skin descriptor pool: {e}"))?;
+        .map_err(|e| format!("skin descriptor pool: {e}"))?;
     let mut sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let layouts: Vec<vk::DescriptorSetLayout> =
-            (0..object_count).map(|_| skin.set_layout).collect();
+        let layouts: Vec<vk::DescriptorSetLayout> = (0..object_count)
+            .map(|_| skin.set_layout.handle())
+            .collect();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let alloc = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(pool)
+                    .descriptor_pool(pool.handle())
                     .set_layouts(&layouts),
             )
         }
@@ -3014,7 +2967,7 @@ impl super::context::VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, skin.pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, skin.pipeline.handle());
         }
         for (o, obj) in self
             .skinned
@@ -3049,14 +3002,14 @@ impl super::context::VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    skin.pipeline_layout,
+                    skin.pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&frame_sets[o]),
                     &[],
                 );
                 device.cmd_push_constants(
                     cmd,
-                    skin.pipeline_layout,
+                    skin.pipeline_layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
                     0,
                     bytes,

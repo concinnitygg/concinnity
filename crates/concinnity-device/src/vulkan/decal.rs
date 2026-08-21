@@ -15,7 +15,12 @@
 use std::cell::Cell;
 use std::ffi::CString;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::decal::DecalRecord;
 
@@ -91,12 +96,12 @@ struct DecalParams {
 //   * **set 1** (per-decal, MAX_DECALS sets):
 //       - binding 0: COMBINED_IMAGE_SAMPLER, decal albedo
 pub(in crate::vulkan) struct DecalResources {
-    pub(in crate::vulkan) render_pass: vk::RenderPass,
-    pub(in crate::vulkan) pipeline: vk::Pipeline,
-    pub(in crate::vulkan) pipeline_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) view_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) albedo_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) render_pass: OwnedRenderPass,
+    pub(in crate::vulkan) pipeline: OwnedPipeline,
+    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) _albedo_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) _descriptor_pool: OwnedDescriptorPool,
 
     // Unit-cube vertex + index buffers (shared across frames).
     pub(in crate::vulkan) vertex_buffer: PooledBuffer,
@@ -119,7 +124,7 @@ pub(in crate::vulkan) struct DecalResources {
 
     // One framebuffer per frame-in-flight slot, each binding its frame
     // slot's `hdr_resolve_images[i].view` as the sole colour attachment.
-    pub(in crate::vulkan) framebuffers: Vec<vk::Framebuffer>,
+    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     pub(in crate::vulkan) sampler: vk::Sampler,
 
@@ -135,7 +140,7 @@ pub(in crate::vulkan) struct DecalResources {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct DecalDeviceContext<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,
 }
@@ -179,12 +184,20 @@ impl DecalResources {
         } = targets;
         let render_pass = create_decal_render_pass(device, hdr_format)?;
         let (view_set_layout, albedo_set_layout) = create_decal_set_layouts(device)?;
-        let pipeline_layout =
-            create_decal_pipeline_layout(device, view_set_layout, albedo_set_layout)?;
+        let pipeline_layout = create_decal_pipeline_layout(
+            device,
+            view_set_layout.handle(),
+            albedo_set_layout.handle(),
+        )?;
 
         let (vert_spv, frag_spv) = compile_decal_shaders(hot_reload, msaa)?;
-        let pipeline =
-            create_decal_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
+        let pipeline = create_decal_pipeline(
+            device,
+            render_pass.handle(),
+            pipeline_layout.handle(),
+            &vert_spv,
+            &frag_spv,
+        )?;
 
         // Unit-cube vertex + index buffers (single device-local upload).
         let vertex_buffer = upload_static_buffer(
@@ -229,8 +242,8 @@ impl DecalResources {
         let descriptor_pool = create_decal_descriptor_pool(device, frames)?;
 
         // Per-frame view sets (one per frame slot).
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
-        let view_sets = alloc_descriptor_sets(device, descriptor_pool, &view_layouts)?;
+        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
+        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(
                 device,
@@ -243,8 +256,10 @@ impl DecalResources {
         }
 
         // Per-decal albedo sets (MAX_DECALS sets, pre-allocated).
-        let albedo_layouts: Vec<_> = (0..MAX_DECALS).map(|_| albedo_set_layout).collect();
-        let albedo_sets = alloc_descriptor_sets(device, descriptor_pool, &albedo_layouts)?;
+        let albedo_layouts: Vec<_> = (0..MAX_DECALS)
+            .map(|_| albedo_set_layout.handle())
+            .collect();
+        let albedo_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &albedo_layouts)?;
 
         // Per-frame framebuffers (one per frame slot binding that slot's
         // hdr_resolve view as the colour attachment).
@@ -252,14 +267,13 @@ impl DecalResources {
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
+                .render_pass(render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("decal framebuffer: {e}"))?;
             framebuffers.push(fb);
         }
@@ -268,9 +282,9 @@ impl DecalResources {
             render_pass,
             pipeline,
             pipeline_layout,
-            view_set_layout,
-            albedo_set_layout,
-            descriptor_pool,
+            _view_set_layout: view_set_layout,
+            _albedo_set_layout: albedo_set_layout,
+            _descriptor_pool: descriptor_pool,
             vertex_buffer,
             index_buffer,
             view_ubos,
@@ -290,29 +304,22 @@ impl DecalResources {
     // per-decal albedo sets all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> Result<(), String> {
-        for &fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass)
+                .render_pass(self.render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("decal framebuffer (rebuild): {e}"))?;
             self.framebuffers.push(fb);
         }
@@ -338,20 +345,7 @@ impl DecalResources {
     // Destroy every GPU resource. Called from `VkContext::destroy` after
     // `wait_idle`; the pooled buffers retire through the allocator as their
     // fields clear.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_descriptor_set_layout(self.view_set_layout, None);
-            device.destroy_descriptor_set_layout(self.albedo_set_layout, None);
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
         self.view_ubos.clear();
         self.params_ubos.clear();
@@ -362,7 +356,10 @@ impl DecalResources {
 
 // Render pass / pipeline construction
 
-fn create_decal_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass, String> {
+fn create_decal_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+) -> Result<OwnedRenderPass, String> {
     // One colour attachment: the resolved HDR scene. The main pass left
     // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
     // during the subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so
@@ -416,14 +413,12 @@ fn create_decal_render_pass(device: &Device, format: vk::Format) -> Result<vk::R
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }.map_err(|e| format!("decal render pass: {e}"))
+    device
+        .create_render_pass(&info)
+        .map_err(|e| format!("decal render pass: {e}"))
 }
 
-fn create_decal_set_layouts(
-    device: &Device,
-) -> Result<(vk::DescriptorSetLayout, vk::DescriptorSetLayout), String> {
+fn create_decal_set_layouts(device: &VkDevice) -> Result<(OwnedSetLayout, OwnedSetLayout), String> {
     // set 0: per-frame view UBO + per-decal params dynamic UBO + depth.
     let view_bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -443,9 +438,8 @@ fn create_decal_set_layouts(
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let view_set_layout = unsafe { device.create_descriptor_set_layout(&view_info, None) }
+    let view_set_layout = device
+        .create_descriptor_set_layout(&view_info)
         .map_err(|e| format!("decal view set layout: {e}"))?;
 
     // set 1: per-decal albedo sampler.
@@ -455,31 +449,29 @@ fn create_decal_set_layouts(
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
     let albedo_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&albedo_bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let albedo_set_layout = unsafe { device.create_descriptor_set_layout(&albedo_info, None) }
+    let albedo_set_layout = device
+        .create_descriptor_set_layout(&albedo_info)
         .map_err(|e| format!("decal albedo set layout: {e}"))?;
 
     Ok((view_set_layout, albedo_set_layout))
 }
 
 fn create_decal_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
     albedo_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let set_layouts = [view_set_layout, albedo_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("decal pipeline layout: {e}"))
 }
 
 fn create_decal_descriptor_pool(
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
-) -> Result<vk::DescriptorPool, String> {
+) -> Result<OwnedDescriptorPool, String> {
     let frames = frames as u32;
     let max_decals = MAX_DECALS as u32;
     // Pool sizing: FRAMES sets for view + (MAX_DECALS) sets for albedo.
@@ -503,14 +495,13 @@ fn create_decal_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames + max_decals)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_pool(&info, None) }
+    device
+        .create_descriptor_pool(&info)
         .map_err(|e| format!("decal descriptor pool: {e}"))
 }
 
 fn alloc_descriptor_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
 ) -> Result<Vec<vk::DescriptorSet>, String> {
@@ -524,7 +515,7 @@ fn alloc_descriptor_sets(
 }
 
 fn write_view_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view_ubo: vk::Buffer,
     params_ubo: vk::Buffer,
@@ -586,28 +577,28 @@ fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u
 // responsible for destroying the previous pipeline only after this call
 // succeeds.
 pub(in crate::vulkan) fn rebuild_decal_pipeline(
-    device: &Device,
+    device: &VkDevice,
     decals: &DecalResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let (vert_spv, frag_spv) = compile_decal_shaders(hot_reload, msaa)?;
     create_decal_pipeline(
         device,
-        decals.render_pass,
-        decals.pipeline_layout,
+        decals.render_pass.handle(),
+        decals.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
     )
 }
 
 fn create_decal_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert = spv_module(device, vert_spv)?;
     let frag = spv_module(device, frag_spv)?;
     let entry = CString::new("main").unwrap();
@@ -684,15 +675,8 @@ fn create_decal_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create decal pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create decal pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -700,7 +684,7 @@ fn create_decal_pipeline(
 
 fn upload_static_buffer(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     data: &[u8],
@@ -816,8 +800,8 @@ impl VkContext {
         // the graph declares this pass's depth read and the executor emits the
         // transition ahead of this command buffer.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(decals.render_pass)
-            .framebuffer(decals.framebuffers[frame_idx])
+            .render_pass(decals.render_pass.handle())
+            .framebuffer(decals.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
 
         // Negative-height viewport matches the main pass so the
@@ -840,7 +824,11 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, decals.pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                decals.pipeline.handle(),
+            );
             device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]);
             device.cmd_bind_index_buffer(
                 cmd,
@@ -866,7 +854,7 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout,
+                    decals.pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&decals.view_sets[frame_idx]),
                     std::slice::from_ref(&dynamic_offset),
@@ -874,7 +862,7 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout,
+                    decals.pipeline_layout.handle(),
                     1,
                     std::slice::from_ref(&decals.albedo_sets[i]),
                     &[],
@@ -988,7 +976,7 @@ impl VkContext {
 }
 
 fn write_albedo_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
     sampler: vk::Sampler,

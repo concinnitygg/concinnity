@@ -16,7 +16,12 @@
 // translucent geometry up unchanged. Water is a separate (Metal-only) producer
 // and is not ported here; the transparent slot on Vulkan is glass-only.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::assets::GlassPanel;
@@ -176,7 +181,7 @@ fn compile_glass_rt_shaders(
 // and the deformed skinned verts (5) + u16 skinned indices (6). Mirrors
 // `post::rt_reflections`'s set 0, minus the fullscreen pass's screen-space scene /
 // gbuffer / roughness inputs (glass traces off the pane surface point).
-fn create_rt_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     create_descriptor_set_layout(
         device,
@@ -196,7 +201,7 @@ impl GlassRt {
     // Write the per-frame static RT bindings: the RtParams UBO (0) + the shared
     // static verts (3) + u32 indices (4). The TLAS / geom table / skinned buffers
     // (1/2/5/6) are filled by `wire_dynamic`. Called once at init.
-    fn wire_static(&self, device: &Device, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer) {
+    fn wire_static(&self, device: &VkDevice, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer) {
         for (i, &set) in self.sets.iter().enumerate() {
             let ubo_info = vk::DescriptorBufferInfo::default()
                 .buffer(self.params_buffers[i].buffer())
@@ -219,7 +224,7 @@ impl GlassRt {
     // hot-reload replaces the shared geometry buffers under the pass.
     fn rewire_geometry(
         &self,
-        device: &Device,
+        device: &VkDevice,
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
     ) {
@@ -257,7 +262,7 @@ impl GlassRt {
     // dummy when there is no skinned geometry); `skinned_indices` is null until the
     // first skinned rebuild, in which case the 1-element dummy SSBO binds so the
     // descriptor stays valid. Mirrors `post::rt_reflections::wire_dynamic`.
-    fn wire_dynamic(&self, device: &Device, frame_idx: usize, dynamic: GlassRtDynamic) {
+    fn wire_dynamic(&self, device: &VkDevice, frame_idx: usize, dynamic: GlassRtDynamic) {
         let GlassRtDynamic {
             tlas,
             geom_buffer,
@@ -316,22 +321,7 @@ impl GlassRt {
         };
     }
 
-    fn destroy(&mut self, device: &Device) {
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_pipeline(self.flat_pso, None);
-            if let Some(p) = self.textured_pso.take() {
-                device.destroy_pipeline(p, None);
-            }
-            device.destroy_pipeline_layout(self.layout_flat, None);
-            if let Some(l) = self.layout_textured.take() {
-                device.destroy_pipeline_layout(l, None);
-            }
-            device.destroy_descriptor_set_layout(self.set_layout, None);
-            device.destroy_descriptor_pool(self.pool, None);
-        }
+    fn destroy(&mut self, _device: &VkDevice) {
         self.params_buffers.clear();
         self.dummy_ssbo = PooledBuffer::null();
     }
@@ -384,7 +374,7 @@ struct GlassRtGeometry {
 fn build_glass_rt(
     alloc: &DeviceAllocator,
     instance: &ash::Instance,
-    device: &Device,
+    device: &VkDevice,
     physical_device: vk::PhysicalDevice,
     config: GlassRtPipelineConfig,
     layouts: GlassRtSetLayouts,
@@ -416,17 +406,11 @@ fn build_glass_rt(
         view_set_layout,
         params_set_layout,
         global_set_layout,
-        set_layout,
+        set_layout.handle(),
     ];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let layout_flat = unsafe {
-        device.create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts),
-            None,
-        )
-    }
-    .map_err(|e| format!("glass rt flat pipeline layout: {e}"))?;
+    let layout_flat = device
+        .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts))
+        .map_err(|e| format!("glass rt flat pipeline layout: {e}"))?;
     // The textured variant binds 5 sets (view / params / global / rt-geom / bindless
     // pool); the flat variant binds 4. The Vulkan spec only guarantees
     // `maxBoundDescriptorSets >= 4`, so on a device that reports exactly 4 fall back
@@ -443,19 +427,15 @@ fn build_glass_rt(
                 view_set_layout,
                 params_set_layout,
                 global_set_layout,
-                set_layout,
+                set_layout.handle(),
                 bsl,
             ];
             Some(
-                // SAFETY: the create-info and every slice it borrows are live for the call, and
-                // each handle it names belongs to this device.
-                unsafe {
-                    device.create_pipeline_layout(
+                device
+                    .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
-                        None,
                     )
-                }
-                .map_err(|e| format!("glass rt textured pipeline layout: {e}"))?,
+                    .map_err(|e| format!("glass rt textured pipeline layout: {e}"))?,
             )
         }
         _ => None,
@@ -464,15 +444,15 @@ fn build_glass_rt(
     let flat_pso = create_pipeline(
         device,
         render_pass,
-        layout_flat,
+        layout_flat.handle(),
         &shaders.vs,
         &shaders.flat_fs,
     )?;
-    let textured_pso = match (layout_textured, &shaders.textured_fs) {
+    let textured_pso = match (layout_textured.as_ref(), &shaders.textured_fs) {
         (Some(layout), Some(fs)) => Some(create_pipeline(
             device,
             render_pass,
-            layout,
+            layout.handle(),
             &shaders.vs,
             fs,
         )?),
@@ -504,19 +484,15 @@ fn build_glass_rt(
             .ty(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(f * 5),
     ];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let pool = unsafe {
-        device.create_descriptor_pool(
+    let pool = device
+        .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(&pool_sizes)
                 .max_sets(f),
-            None,
         )
-    }
-    .map_err(|e| format!("glass rt descriptor pool: {e}"))?;
-    let layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-    let sets = alloc_descriptor_sets(device, pool, &layouts)?;
+        .map_err(|e| format!("glass rt descriptor pool: {e}"))?;
+    let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+    let sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
 
     // 1-element dummy SSBO for the skinned-index binding when there is no skinned
     // geometry.
@@ -527,14 +503,14 @@ fn build_glass_rt(
     )?;
 
     let rt = GlassRt {
-        set_layout,
+        _set_layout: set_layout,
         layout_flat,
         layout_textured,
         flat_pso,
         textured_pso,
         params_buffers,
         sets,
-        pool,
+        _pool: pool,
         dummy_ssbo,
     };
     rt.wire_static(device, vertex_buffer, index_buffer);
@@ -577,12 +553,12 @@ struct GlassPanelRecord {
 // `GlassPanel`; `VkContext::glass` stays `None` otherwise and the Transparent
 // pass is omitted from the frame graph.
 pub(in crate::vulkan) struct GlassResources {
-    render_pass: vk::RenderPass,
-    pipeline: vk::Pipeline,
-    pipeline_layout: vk::PipelineLayout,
-    view_set_layout: vk::DescriptorSetLayout,
-    params_set_layout: vk::DescriptorSetLayout,
-    descriptor_pool: vk::DescriptorPool,
+    render_pass: OwnedRenderPass,
+    pipeline: OwnedPipeline,
+    pipeline_layout: OwnedPipelineLayout,
+    _view_set_layout: OwnedSetLayout,
+    _params_set_layout: OwnedSetLayout,
+    _descriptor_pool: OwnedDescriptorPool,
 
     // Per-frame `TransparentView` UBO ring. Persistently mapped; the encoder
     // memcpys this frame's view into `view_ubo_buffers[frame_idx].mapped_ptr()` before binding.
@@ -594,7 +570,7 @@ pub(in crate::vulkan) struct GlassResources {
     // `hdr_resolve_images[i]`. The framebuffer targets the view; the snapshot
     // copy reads the image.
     scene_images: Vec<vk::Image>,
-    framebuffers: Vec<vk::Framebuffer>,
+    framebuffers: Vec<OwnedFramebuffer>,
 
     // Pre-transparent HDR scene snapshot for the refraction tap. The encoder
     // copies the scene image into this at the head of the pass; sized to render
@@ -624,13 +600,13 @@ pub(in crate::vulkan) struct GlassResources {
 // implies the rest), so `GlassResources::rt_pipelines_ready` gates on the outer
 // `Option`. Mirrors the RT fields of `directx::glass::GlassResources`.
 struct GlassRt {
-    set_layout: vk::DescriptorSetLayout,
-    layout_flat: vk::PipelineLayout,
+    _set_layout: OwnedSetLayout,
+    layout_flat: OwnedPipelineLayout,
     // The textured layout / PSO are `Some` only when the bindless texture pool is
     // live (the same gate the bindless static + RT-reflection passes use).
-    layout_textured: Option<vk::PipelineLayout>,
-    flat_pso: vk::Pipeline,
-    textured_pso: Option<vk::Pipeline>,
+    layout_textured: Option<OwnedPipelineLayout>,
+    flat_pso: OwnedPipeline,
+    textured_pso: Option<OwnedPipeline>,
 
     // Per-frame RtParams UBO ring (144 B, host-mapped). The encoder fills this
     // frame's slot (sun + ray tunables) before binding, mirroring
@@ -642,7 +618,7 @@ struct GlassRt {
     // deformed verts / skinned indices (bindings 1/2/5/6) are re-pointed every
     // frame by `wire_dynamic` because a dynamic rebuild fresh-allocates them.
     sets: Vec<vk::DescriptorSet>,
-    pool: vk::DescriptorPool,
+    _pool: OwnedDescriptorPool,
 
     // 1-element dummy SSBO bound to the skinned vertex/index bindings (5/6) when
     // the scene carries no skinned geometry (the accel data's skinned-index handle
@@ -655,7 +631,10 @@ struct GlassRt {
 // post-SSR scene rests in SHADER_READ_ONLY) with no depth attachment (the
 // fragment shader does the manual occlusion test). Mirrors the decal render
 // pass shape.
-fn create_glass_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass, String> {
+fn create_glass_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+) -> Result<OwnedRenderPass, String> {
     let color = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -689,12 +668,12 @@ fn create_glass_render_pass(device: &Device, format: vk::Format) -> Result<vk::R
         .attachments(std::slice::from_ref(&color))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }.map_err(|e| format!("glass render pass: {e}"))
+    device
+        .create_render_pass(&info)
+        .map_err(|e| format!("glass render pass: {e}"))
 }
 
-fn create_view_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -714,13 +693,12 @@ fn create_view_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, St
             .stage_flags(frag),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("glass view set layout: {e}"))
 }
 
-fn create_params_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_params_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         // 0: the per-panel GlassParams UBO.
         vk::DescriptorSetLayoutBinding::default()
@@ -736,17 +714,16 @@ fn create_params_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, 
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("glass params set layout: {e}"))
 }
 
 fn create_descriptor_pool(
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
     panels: usize,
-) -> Result<vk::DescriptorPool, String> {
+) -> Result<OwnedDescriptorPool, String> {
     let f = frames as u32;
     let p = panels as u32;
     let sizes = [
@@ -764,14 +741,13 @@ fn create_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f + p)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_pool(&info, None) }
+    device
+        .create_descriptor_pool(&info)
         .map_err(|e| format!("glass descriptor pool: {e}"))
 }
 
 fn alloc_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
 ) -> Result<Vec<vk::DescriptorSet>, String> {
@@ -787,7 +763,7 @@ fn alloc_sets(
 // Write one per-frame view set: the view UBO (binding 0), the shared scene
 // snapshot (binding 1), and this frame's main-depth view (binding 2).
 fn write_view_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view_ubo: vk::Buffer,
     snapshot_view: vk::ImageView,
@@ -832,7 +808,7 @@ fn write_view_set(
 // reflection target it samples (binding 1) -- its slot's mirror render, or the
 // snapshot stand-in for a slotless pane (the shader gates on the `planar` flag).
 fn write_params_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     params_ubo: vk::Buffer,
     planar_view: vk::ImageView,
@@ -869,12 +845,12 @@ fn write_params_set(
 // The standard engine `Vertex` stride is bound with only the position attribute
 // (location 0) fetched. Negative-height viewport applied dynamically at encode.
 fn create_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert = spv_module(device, vert_spv)?;
     let frag = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -947,15 +923,8 @@ fn create_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create glass pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create glass pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -965,7 +934,7 @@ fn create_pipeline(
 // scene snapshot.
 fn create_snapshot(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     width: u32,
@@ -1046,7 +1015,7 @@ fn build_panel_buffers(
 pub(in crate::vulkan) struct GlassDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
     pub instance: &'a ash::Instance,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
@@ -1177,17 +1146,26 @@ impl GlassResources {
         let render_pass = create_glass_render_pass(device, HDR_FORMAT)?;
         let view_set_layout = create_view_set_layout(device)?;
         let params_set_layout = create_params_set_layout(device)?;
-        let set_layouts = [view_set_layout, params_set_layout, global_set_layout];
+        let set_layouts = [
+            view_set_layout.handle(),
+            params_set_layout.handle(),
+            global_set_layout,
+        ];
         let pipeline_layout = {
             let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe { device.create_pipeline_layout(&info, None) }
+            device
+                .create_pipeline_layout(&info)
                 .map_err(|e| format!("glass pipeline layout: {e}"))?
         };
 
         let (vert_spv, frag_spv) = compile_glass_shaders(hot_reload, msaa, probe_cube_count)?;
-        let pipeline = create_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
+        let pipeline = create_pipeline(
+            device,
+            render_pass.handle(),
+            pipeline_layout.handle(),
+            &vert_spv,
+            &frag_spv,
+        )?;
 
         // Per-pixel RT glass pipelines, when the device is RT-capable. A compile /
         // build failure leaves `rt` `None` and the probe / planar glass path runs
@@ -1199,14 +1177,14 @@ impl GlassResources {
                 device,
                 physical_device,
                 GlassRtPipelineConfig {
-                    render_pass,
+                    render_pass: render_pass.handle(),
                     frames,
                     msaa,
                     hot_reload,
                 },
                 GlassRtSetLayouts {
-                    view: view_set_layout,
-                    params: params_set_layout,
+                    view: view_set_layout.handle(),
+                    params: params_set_layout.handle(),
                     global: global_set_layout,
                     probe_cube_count,
                     bindless: bindless_set_layout,
@@ -1244,8 +1222,8 @@ impl GlassResources {
         }
 
         let descriptor_pool = create_descriptor_pool(device, frames, panels.len())?;
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
-        let view_sets = alloc_sets(device, descriptor_pool, &view_layouts)?;
+        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
+        let view_sets = alloc_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(
                 device,
@@ -1258,7 +1236,8 @@ impl GlassResources {
         }
 
         // Per-frame framebuffers targeting the scene image for that slot.
-        let framebuffers = create_framebuffers(device, render_pass, scene_views, width, height)?;
+        let framebuffers =
+            create_framebuffers(device, render_pass.handle(), scene_views, width, height)?;
 
         // Per-panel records: quad buffers + static params UBO + descriptor set.
         let mut records: Vec<GlassPanelRecord> = Vec::with_capacity(panels.len());
@@ -1277,7 +1256,11 @@ impl GlassResources {
             let planar_view = planar_slot
                 .and_then(|s| planar_target_views.get(s).copied())
                 .unwrap_or(snapshot.view);
-            let params_set = alloc_sets(device, descriptor_pool, &[params_set_layout])?[0];
+            let params_set = alloc_sets(
+                device,
+                descriptor_pool.handle(),
+                &[params_set_layout.handle()],
+            )?[0];
             write_params_set(
                 device,
                 params_set,
@@ -1302,9 +1285,9 @@ impl GlassResources {
             render_pass,
             pipeline,
             pipeline_layout,
-            view_set_layout,
-            params_set_layout,
-            descriptor_pool,
+            _view_set_layout: view_set_layout,
+            _params_set_layout: params_set_layout,
+            _descriptor_pool: descriptor_pool,
             view_ubos,
             view_sets,
             scene_images: scene_images.to_vec(),
@@ -1330,7 +1313,7 @@ impl GlassResources {
     // the glass trace samples the same per-frame acceleration structure.
     pub(in crate::vulkan) fn wire_rt_dynamic(
         &self,
-        device: &Device,
+        device: &VkDevice,
         frame_idx: usize,
         dynamic: GlassRtDynamic,
     ) {
@@ -1344,7 +1327,7 @@ impl GlassResources {
     // when the RT pipelines are absent.
     pub(in crate::vulkan) fn wire_rt_geometry(
         &self,
-        device: &Device,
+        device: &VkDevice,
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
     ) {
@@ -1391,15 +1374,13 @@ impl GlassResources {
         );
         drop(old);
 
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-        }
-        self.framebuffers =
-            create_framebuffers(device, self.render_pass, scene_views, width, height)?;
+        self.framebuffers = create_framebuffers(
+            device,
+            self.render_pass.handle(),
+            scene_views,
+            width,
+            height,
+        )?;
         self.scene_images = scene_images.to_vec();
 
         for (i, &set) in self.view_sets.iter().enumerate() {
@@ -1434,22 +1415,9 @@ impl GlassResources {
 
     // Destroy every owned GPU resource. The `sampler` is borrowed from
     // `VkContext` and is not destroyed here.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         if let Some(mut rt) = self.rt.take() {
             rt.destroy(device);
-        }
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_descriptor_set_layout(self.view_set_layout, None);
-            device.destroy_descriptor_set_layout(self.params_set_layout, None);
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
         }
         self.panels.clear();
         self.view_ubos.clear();
@@ -1462,12 +1430,12 @@ impl GlassResources {
 // One framebuffer per frame slot, each binding that slot's scene image view as
 // the sole colour attachment.
 fn create_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     scene_views: &[vk::ImageView],
     width: u32,
     height: u32,
-) -> Result<Vec<vk::Framebuffer>, String> {
+) -> Result<Vec<OwnedFramebuffer>, String> {
     let mut out = Vec::with_capacity(scene_views.len());
     for &view in scene_views {
         let info = vk::FramebufferCreateInfo::default()
@@ -1476,9 +1444,8 @@ fn create_framebuffers(
             .width(width.max(1))
             .height(height.max(1))
             .layers(1);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let fb = unsafe { device.create_framebuffer(&info, None) }
+        let fb = device
+            .create_framebuffer(&info)
             .map_err(|e| format!("glass framebuffer: {e}"))?;
         out.push(fb);
     }
@@ -1715,8 +1682,8 @@ impl VkContext {
         // pass so the manual depth test + refraction taps line up at pixel
         // coordinates.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(glass.render_pass)
-            .framebuffer(glass.framebuffers[frame_idx])
+            .render_pass(glass.render_pass.handle())
+            .framebuffer(glass.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         let vp = vk::Viewport {
             x: 0.0,
@@ -1735,12 +1702,16 @@ impl VkContext {
         // geometry (set 3) and, for the textured variant, the bindless pool (set 4).
         let (pipeline, layout) = match (rt_live, glass.rt.as_ref()) {
             (true, Some(r)) if textured => (
-                r.textured_pso.expect("textured implies a textured pso"),
+                r.textured_pso
+                    .as_ref()
+                    .expect("textured implies a textured pso"),
                 r.layout_textured
-                    .expect("textured implies a textured layout"),
+                    .as_ref()
+                    .expect("textured implies a textured layout")
+                    .handle(),
             ),
-            (true, Some(r)) => (r.flat_pso, r.layout_flat),
-            _ => (glass.pipeline, glass.pipeline_layout),
+            (true, Some(r)) => (&r.flat_pso, r.layout_flat.handle()),
+            _ => (&glass.pipeline, glass.pipeline_layout.handle()),
         };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -1748,7 +1719,7 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,

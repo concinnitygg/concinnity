@@ -2,7 +2,7 @@
 //
 // Canonical descriptor-set binding tables for the geometry render path, kept in
 // one place so the `layout(set = N, binding = M)` indices the GLSL shaders use
-// stay greppable and locked. `init.rs` builds the real `vk::DescriptorSetLayout`s
+// stay greppable and locked. `init.rs` builds the real `OwnedSetLayout`s
 // from these via `create_descriptor_set_layout`, and the per-frame descriptor
 // writes target the same binding numbers. The unit tests below assert each table
 // is gap-free + unique and pin the binding -> (type, stage) contract, so a

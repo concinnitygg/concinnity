@@ -3,7 +3,9 @@
 // SPIR-V at context init time via shaderc, unless the caller supplies valid
 // SPIR-V bytes directly.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 
 use super::builtins;
 
@@ -148,10 +150,10 @@ pub(in crate::vulkan) fn inject_define(src: &str, define: &str) -> String {
 // descriptor set (set 0: object SSBO, draw-args SSBO, indirect-command SSBO)
 // and the `CullParams` push-constant range.
 pub(super) fn create_cull_pipeline(
-    device: &Device,
+    device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -161,12 +163,8 @@ pub(super) fn create_cull_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    }
-    .map_err(|(_, e)| format!("create cull pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
+        .map_err(|e| format!("create cull pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -291,7 +289,7 @@ fn compile_glsl_rt_uncached(
 // A shader module scoped to pipeline creation: destroyed on drop, so the
 // early-return error paths between module and pipeline creation cannot leak it.
 pub(in crate::vulkan) struct SpvModule<'d> {
-    device: &'d Device,
+    device: &'d VkDevice,
     module: vk::ShaderModule,
 }
 
@@ -328,7 +326,7 @@ fn spirv_words(spv: &[u8]) -> Result<Vec<u32>, String> {
 }
 
 pub(in crate::vulkan) fn spv_module<'d>(
-    device: &'d Device,
+    device: &'d VkDevice,
     spv: &[u8],
 ) -> Result<SpvModule<'d>, String> {
     let code = spirv_words(spv).map_err(|e| format!("shader module: {e}"))?;
@@ -617,12 +615,12 @@ pub(super) struct BucketPipelineTargets {
 // bytes and the engine's already-compiled bindless SPIR-V stands in -- the same
 // substitution bucket 0 makes for a built-in world.
 pub(super) fn build_bucket_pipeline(
-    device: &Device,
+    device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
     shader: crate::gfx::backend_init::ShaderBytes<'_>,
     engine_default: &(Vec<u8>, Vec<u8>),
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let use_default = shader.vert.is_empty();
     let (vert_spv, frag_spv) = if use_default {
         (engine_default.0.as_slice(), engine_default.1.as_slice())
@@ -651,11 +649,11 @@ pub(super) fn build_bucket_pipeline(
 // streaming pump installs later (its Shader is owned by a scene that has not
 // pinned, so `decode_shaders` deferred its payload).
 pub(super) fn build_world_pipeline_table(
-    device: &Device,
+    device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket_shaders: &[crate::gfx::backend_init::ShaderBytes<'_>],
     engine_default: &(Vec<u8>, Vec<u8>),
-) -> Result<Vec<Option<vk::Pipeline>>, String> {
+) -> Result<Vec<Option<OwnedPipeline>>, String> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
         if shader.deferred {
@@ -674,11 +672,11 @@ pub(super) fn build_world_pipeline_table(
 }
 
 pub(super) fn create_main_pipeline(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::FILL)
 }
 
@@ -687,21 +685,21 @@ pub(super) fn create_main_pipeline(
 // needs its own pipeline per main-pass path; see [`super::wireframe`]. Requires
 // the `fillModeNonSolid` device feature.
 pub(super) fn create_main_pipeline_wireframe(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::LINE)
 }
 
 fn create_main_pipeline_filled(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     _surface_format: vk::Format,
     polygon_mode: vk::PolygonMode,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let MeshPipelineTargets {
         render_pass,
         layout,
@@ -786,15 +784,8 @@ fn create_main_pipeline_filled(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create main pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create main pipeline: {e}"))?;
 
     Ok(pipeline)
 }
@@ -803,20 +794,20 @@ fn create_main_pipeline_filled(
 // caller is responsible for using a pipeline layout that includes the
 // per-instance storage buffer descriptor set (set=2).
 pub(super) fn create_instanced_pipeline(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     create_main_pipeline(device, targets, msaa, surface_format)
 }
 
 pub(super) fn create_shadow_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
 
@@ -889,15 +880,8 @@ pub(super) fn create_shadow_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create shadow pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create shadow pipeline: {e}"))?;
 
     Ok(pipeline)
 }
@@ -906,29 +890,29 @@ pub(super) fn create_shadow_pipeline(
 // layout) paired with the standard fragment shader. The caller passes a
 // pipeline layout that includes the joint storage-buffer descriptor set.
 pub(super) fn create_skinned_pipeline(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     create_skinned_pipeline_filled(device, targets, msaa, vk::PolygonMode::FILL)
 }
 
 // The Wireframe view mode's variant of `create_skinned_pipeline`; see
 // [`super::wireframe`]. Requires the `fillModeNonSolid` device feature.
 pub(super) fn create_skinned_pipeline_wireframe(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     create_skinned_pipeline_filled(device, targets, msaa, vk::PolygonMode::LINE)
 }
 
 fn create_skinned_pipeline_filled(
-    device: &Device,
+    device: &VkDevice,
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     polygon_mode: vk::PolygonMode,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let MeshPipelineTargets {
         render_pass,
         layout,
@@ -1013,15 +997,8 @@ fn create_skinned_pipeline_filled(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create skinned pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create skinned pipeline: {e}"))?;
 
     Ok(pipeline)
 }
@@ -1029,11 +1006,11 @@ fn create_skinned_pipeline_filled(
 // Shadow-pass pipeline for skinned geometry: the skinned shadow vertex shader
 // (80-byte layout, depth-only).
 pub(super) fn create_skinned_shadow_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
 
@@ -1099,27 +1076,20 @@ pub(super) fn create_skinned_shadow_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create skinned shadow pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create skinned shadow pipeline: {e}"))?;
 
     Ok(pipeline)
 }
 
 pub(super) fn create_text_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
     msaa: vk::SampleCountFlags,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -1199,15 +1169,8 @@ pub(super) fn create_text_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create text pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create text pipeline: {e}"))?;
 
     Ok(pipeline)
 }
@@ -1216,12 +1179,12 @@ pub(super) fn create_text_pipeline(
 // triangle that samples the resolved HDR target and applies ACES + gamma +
 // FXAA. Targets the single-sample swapchain backbuffer; no depth attachment.
 pub(super) fn create_composite_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -1292,15 +1255,8 @@ pub(super) fn create_composite_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create composite pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create composite pipeline: {e}"))?;
 
     Ok(pipeline)
 }

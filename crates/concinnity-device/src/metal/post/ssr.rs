@@ -9,13 +9,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
+    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
+    MTLTextureUsage,
 };
 
 use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
@@ -193,18 +194,15 @@ impl MtlContext {
                 pipeline: resolve_ps,
                 label: "SSR resolve",
             },
-            // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
-            // texture indices the shader declares; `probe_cube_or_sky` returns the sky for unbaked
-            // slots, so all MAX_PROBES slots are live.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 1);
-                enc.setFragmentTexture_atIndex(Some(gb_roughness), 2);
+            |enc| {
+                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 0);
+                enc.set_fragment_texture(gb_normal_depth, 1);
+                enc.set_fragment_texture(gb_roughness, 2);
                 // The IBL prefilter cubemap is the miss / screen-edge fallback.
                 // It is always valid (a grey fallback when no EnvironmentMap is
                 // bound); `SsrParams.prefilter_mip_count == 0` tells the shader to
                 // ignore it in that case.
-                enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 3);
+                enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
                 // Local reflection-probe cubes at texture(4..4+MAX_PROBES): when a
                 // probe is baked a missed/edge ray reflects its box-projected scene
                 // capture instead of the foreign sky HDR (the source the forward IBL
@@ -212,7 +210,7 @@ impl MtlContext {
                 // unbaked slots, so binding all MAX_PROBES is always valid; the
                 // ProbeSet's `count` gates whether the shader samples them.
                 for i in 0..concinnity_render::uniforms::MAX_PROBES {
-                    enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 4 + i);
+                    enc.set_fragment_texture(self.probe_cube_or_sky(i), 4 + i);
                 }
                 // The screen sources take the post sampler at 0..2; the
                 // prefilter cube and every probe cube take the cube sampler at
@@ -225,18 +223,10 @@ impl MtlContext {
                     3,
                     1 + concinnity_render::uniforms::MAX_PROBES,
                 );
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(ssr_params).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::SsrParams>(),
-                    0,
-                );
+                enc.set_fragment_value(ssr_params, 0);
                 // Reflection-probe set (count + per-probe parallax boxes) at
                 // buffer(1); count == 0 keeps the sky fallback above.
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&self.probe_set).cast(),
-                    std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
-                    1,
-                );
+                enc.set_fragment_value(&self.probe_set, 1);
             },
         )?;
         // Blur by roughness + composite the reflection over the scene -> output.
@@ -274,11 +264,9 @@ impl MtlContext {
                 pipeline: blur_ps,
                 label: "reflection blur",
             },
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gb_roughness), 1);
+            |enc| {
+                enc.set_fragment_texture(targets.reflection.as_ref(), 0);
+                enc.set_fragment_texture(gb_roughness, 1);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
             },
         )?;
@@ -293,14 +281,12 @@ impl MtlContext {
                 pipeline: composite_ps,
                 label: "reflection composite",
             },
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(targets.reflection.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 1);
-                enc.setFragmentTexture_atIndex(Some(gb_normal_depth), 2);
-                enc.setFragmentTexture_atIndex(Some(gb_roughness), 3);
-                enc.setFragmentTexture_atIndex(Some(targets.blur.as_ref()), 4);
+            |enc| {
+                enc.set_fragment_texture(targets.reflection.as_ref(), 0);
+                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 1);
+                enc.set_fragment_texture(gb_normal_depth, 2);
+                enc.set_fragment_texture(gb_roughness, 3);
+                enc.set_fragment_texture(targets.blur.as_ref(), 4);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 5);
             },
         )?;

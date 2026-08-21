@@ -31,8 +31,10 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 
+use ash::vk;
 use ash::vk::Handle;
-use ash::{Device, vk};
+
+use crate::vulkan::owned::VkDevice;
 
 use super::{UpscaleCamera, UpscaleInputs, UpscalerGpu, VkUpscaleBackend};
 use crate::vulkan::texture::GpuImage;
@@ -743,7 +745,7 @@ impl VkUpscaleBackend for FsrUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, _device: &Device) {
+    fn destroy(&mut self, _device: &VkDevice) {
         if !self.ctx.is_null() {
             // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
             // matches the SDK's declared signature; the context and every descriptor / out-param it

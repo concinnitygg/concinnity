@@ -12,7 +12,7 @@
 // place this diverges from Metal's encoder-state fill mode. A device without
 // `fillModeNonSolid` gets no variants and keeps solid fill.
 
-use ash::vk;
+use crate::vulkan::owned::OwnedPipeline;
 
 use super::context::VkContext;
 use super::pipeline::{
@@ -26,26 +26,17 @@ use super::pipeline::{
 // live either (or its build failed), in which case the pass keeps the solid one.
 #[derive(Default)]
 pub(super) struct VkWireframe {
-    pub(super) bindless: Option<vk::Pipeline>,
-    pub(super) main: Option<vk::Pipeline>,
-    pub(super) instanced: Option<vk::Pipeline>,
-    pub(super) skinned: Option<vk::Pipeline>,
+    pub(super) bindless: Option<OwnedPipeline>,
+    pub(super) main: Option<OwnedPipeline>,
+    pub(super) instanced: Option<OwnedPipeline>,
+    pub(super) skinned: Option<OwnedPipeline>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
 }
 
 impl VkWireframe {
-    // Destroy every built pipeline. The caller must have drained the GPU.
-    pub(super) fn destroy(&mut self, device: &ash::Device) {
-        for p in [self.bindless, self.main, self.instanced, self.skinned]
-            .into_iter()
-            .flatten()
-        {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_pipeline(p, None) };
-        }
+    // Retire every built pipeline, leaving the set unbuilt.
+    pub(super) fn destroy(&mut self) {
         *self = VkWireframe::default();
     }
 }
@@ -81,8 +72,7 @@ impl VkContext {
     // against the current shaders. Called wherever a main-pass pipeline is
     // rebuilt (shader hot-reload, world shader swap) and at teardown.
     pub(super) fn invalidate_wireframe_pipelines(&mut self) {
-        let device = self.device.clone();
-        self.wireframe.destroy(&device);
+        self.wireframe.destroy();
     }
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
@@ -90,7 +80,7 @@ impl VkContext {
         let hr = self.hot_reload;
         let msaa = self.msaa_samples;
         let format = self.swapchain_format;
-        let render_pass = self.main_render_pass;
+        let render_pass = self.main_render_pass.handle();
         let mut built = VkWireframe {
             built: true,
             ..Default::default()
@@ -99,8 +89,8 @@ impl VkContext {
         // unowned, so destroy what was made before propagating.
         let mut build = || -> Result<(), String> {
             if let (Some(_), Some(layout)) = (
-                self.cull.bindless_pipeline,
-                self.cull.bindless_pipeline_layout,
+                self.cull.bindless_pipeline.as_ref(),
+                self.cull.bindless_pipeline_layout.as_ref(),
             ) {
                 let (vs, fs) = compile_bindless_shaders(
                     hr,
@@ -111,7 +101,7 @@ impl VkContext {
                     &device,
                     MeshPipelineTargets {
                         render_pass,
-                        layout,
+                        layout: layout.handle(),
                         vert_spv: &vs,
                         frag_spv: &fs,
                     },
@@ -129,7 +119,7 @@ impl VkContext {
                 &device,
                 MeshPipelineTargets {
                     render_pass,
-                    layout: self.main_pipeline_layout,
+                    layout: self.main_pipeline_layout.handle(),
                     vert_spv: &main_vs,
                     frag_spv: &main_fs,
                 },
@@ -137,15 +127,16 @@ impl VkContext {
                 format,
             )?);
 
-            if let (Some(_), Some(layout)) =
-                (self.instanced.pipeline, self.instanced.pipeline_layout)
-                && let Some(vs) = resolve_instanced_shader(hr, &[], true)?
+            if let (Some(_), Some(layout)) = (
+                self.instanced.pipeline.as_ref(),
+                self.instanced.pipeline_layout.as_ref(),
+            ) && let Some(vs) = resolve_instanced_shader(hr, &[], true)?
             {
                 built.instanced = Some(create_main_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {
                         render_pass,
-                        layout,
+                        layout: layout.handle(),
                         vert_spv: &vs,
                         frag_spv: &main_fs,
                     },
@@ -154,13 +145,16 @@ impl VkContext {
                 )?);
             }
 
-            if let (Some(_), Some(layout)) = (self.skinned.pipeline, self.skinned.pipeline_layout) {
+            if let (Some(_), Some(layout)) = (
+                self.skinned.pipeline.as_ref(),
+                self.skinned.pipeline_layout.as_ref(),
+            ) {
                 let (skinned_vs, _, frag) = compile_skinned_shaders(hr, &[])?;
                 built.skinned = Some(create_skinned_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {
                         render_pass,
-                        layout,
+                        layout: layout.handle(),
                         vert_spv: &skinned_vs,
                         frag_spv: &frag,
                     },
@@ -175,7 +169,9 @@ impl VkContext {
                 Ok(())
             }
             Err(e) => {
-                built.destroy(&device);
+                // Retire whatever did build, and keep `built` set so the
+                // failure is not retried every frame.
+                built.destroy();
                 built.built = true;
                 self.wireframe = built;
                 Err(e)
@@ -186,11 +182,11 @@ impl VkContext {
     // The pipeline the main pass should bind for `solid`'s path this frame: the
     // wireframe twin while that view mode is active and the twin built, else
     // the solid pipeline itself.
-    pub(in crate::vulkan) fn wireframe_or(
+    pub(in crate::vulkan) fn wireframe_or<'a>(
         &self,
-        solid: vk::Pipeline,
-        twin: Option<vk::Pipeline>,
-    ) -> vk::Pipeline {
+        solid: &'a OwnedPipeline,
+        twin: Option<&'a OwnedPipeline>,
+    ) -> &'a OwnedPipeline {
         match twin {
             Some(w) if self.view_mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
             _ => solid,

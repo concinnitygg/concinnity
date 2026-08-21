@@ -22,7 +22,9 @@
 // graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
 // `PassId::Shadow` here.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use super::context::VkContext;
 
@@ -71,9 +73,10 @@ impl VkContext {
         cam_pos: [f32; 3],
         elapsed: f32,
     ) {
-        let (Some(shadow_pipeline), Some(shadow_pl)) =
-            (self.shadow.pipeline, self.shadow.pipeline_layout)
-        else {
+        let (Some(shadow_pipeline), Some(shadow_pl)) = (
+            self.shadow.pipeline.as_ref(),
+            self.shadow.pipeline_layout.as_ref(),
+        ) else {
             return;
         };
 
@@ -118,13 +121,13 @@ impl VkContext {
             self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
         }
 
-        for (cascade_idx, &shadow_fb) in self.shadow.framebuffers.iter().enumerate() {
+        for (cascade_idx, shadow_fb) in self.shadow.framebuffers.iter().enumerate() {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
             let rp_begin = vk::RenderPassBeginInfo::default()
-                .render_pass(self.shadow.render_pass)
-                .framebuffer(shadow_fb)
+                .render_pass(self.shadow.render_pass.handle())
+                .framebuffer(shadow_fb.handle())
                 .render_area(vk::Rect2D::default().extent(shadow_extent))
                 .clear_values(std::slice::from_ref(&clear_depth));
 
@@ -153,8 +156,8 @@ impl VkContext {
                 self.encode_shadow_slice_legacy(
                     cmd,
                     ShadowSliceBinding {
-                        pipeline: shadow_pipeline,
-                        layout: shadow_pl,
+                        pipeline: shadow_pipeline.handle(),
+                        layout: shadow_pl.handle(),
                         set: self.shadow.global_sets[frame_idx],
                         slice_idx: cascade_idx as u32,
                     },
@@ -188,15 +191,15 @@ impl VkContext {
     // cull-written indirect buffer, then the legacy chunk/clone casters.
     fn encode_shadow_cascade_indirect(
         &self,
-        device: &Device,
+        device: &VkDevice,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         cascade_idx: usize,
         cam_pos: [f32; 3],
     ) {
         let (Some(sb_pipeline), Some(sb_layout)) = (
-            self.cull.shadow_bindless_pipeline,
-            self.cull.shadow_bindless_pipeline_layout,
+            self.cull.shadow_bindless_pipeline.as_ref(),
+            self.cull.shadow_bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
@@ -215,11 +218,11 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sb_pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sb_pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                sb_layout,
+                sb_layout.handle(),
                 0,
                 &[
                     self.shadow.global_sets[frame_idx],
@@ -229,7 +232,7 @@ impl VkContext {
             );
             device.cmd_push_constants(
                 cmd,
-                sb_layout,
+                sb_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 &cascade.to_ne_bytes(),
@@ -287,7 +290,7 @@ impl VkContext {
     // into this cascade's depth (no re-clear). A no-op for worlds with no clones.
     fn encode_shadow_legacy_extra(
         &self,
-        device: &Device,
+        device: &VkDevice,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         cascade_idx: usize,
@@ -296,19 +299,24 @@ impl VkContext {
         if self.clone_slot_by_draw_idx.is_empty() {
             return;
         }
-        let (Some(shadow_pipeline), Some(shadow_pl)) =
-            (self.shadow.pipeline, self.shadow.pipeline_layout)
-        else {
+        let (Some(shadow_pipeline), Some(shadow_pl)) = (
+            self.shadow.pipeline.as_ref(),
+            self.shadow.pipeline_layout.as_ref(),
+        ) else {
             return;
         };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, shadow_pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                shadow_pipeline.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                shadow_pl,
+                shadow_pl.handle(),
                 0,
                 std::slice::from_ref(&self.shadow.global_sets[frame_idx]),
                 &[],
@@ -336,7 +344,7 @@ impl VkContext {
                 };
                 device.cmd_push_constants(
                     cmd,
-                    shadow_pl,
+                    shadow_pl.handle(),
                     vk::ShaderStageFlags::VERTEX,
                     0,
                     std::slice::from_raw_parts(
@@ -479,16 +487,20 @@ impl VkContext {
             // and instanced casters within the same cascade render
             // pass (no re-clear, so skinned depth appends).
             if let (Some(sk_pipeline), Some(sk_pl)) = (
-                self.shadow.skinned_pipeline,
-                self.shadow.skinned_pipeline_layout,
+                self.shadow.skinned_pipeline.as_ref(),
+                self.shadow.skinned_pipeline_layout.as_ref(),
             ) && !self.skinned.draw_objects.is_empty()
             {
                 let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pipeline);
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    sk_pipeline.handle(),
+                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    sk_pl,
+                    sk_pl.handle(),
                     0,
                     std::slice::from_ref(&shadow_set),
                     &[],
@@ -506,7 +518,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl,
+                        sk_pl.handle(),
                         1,
                         std::slice::from_ref(&self.skinned.joint_sets[frame_idx][i]),
                         &[],
@@ -518,7 +530,7 @@ impl VkContext {
                     };
                     device.cmd_push_constants(
                         cmd,
-                        sk_pl,
+                        sk_pl.handle(),
                         vk::ShaderStageFlags::VERTEX,
                         0,
                         std::slice::from_raw_parts(

@@ -5,7 +5,12 @@
 // per-pixel motion vector the resolve samples comes from the unified G-buffer
 // pre-pass's velocity channel; the TAA sets are wired to its per-frame views
 // by `init.rs`.
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::vulkan::allocator::DeviceAllocator;
@@ -32,14 +37,14 @@ use super::super::texture::*;
 // previous frame's read, so no manual cross-frame barrier is needed.
 pub(in crate::vulkan) struct TaaResources {
     // Resolution-independent pass / pipeline / layout.
-    pub(in crate::vulkan) taa_render_pass: vk::RenderPass,
-    pub(in crate::vulkan) taa_pipeline: vk::Pipeline,
-    pub(in crate::vulkan) taa_pipeline_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) taa_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) taa_render_pass: OwnedRenderPass,
+    pub(in crate::vulkan) taa_pipeline: OwnedPipeline,
+    pub(in crate::vulkan) taa_pipeline_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) taa_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) descriptor_pool: OwnedDescriptorPool,
     // Resolution-dependent targets (rebuilt on swapchain resize).
     pub(in crate::vulkan) taa_out_images: Vec<GpuImage>,
-    pub(in crate::vulkan) taa_framebuffers: Vec<vk::Framebuffer>,
+    pub(in crate::vulkan) taa_framebuffers: Vec<OwnedFramebuffer>,
     pub(in crate::vulkan) taa_sets: Vec<vk::DescriptorSet>,
     // Drives the Halton jitter sequence; also gates history validity
     // (`taa_frame == 0` on the first frame and after a resize).
@@ -51,7 +56,7 @@ pub(in crate::vulkan) struct TaaResources {
 // ends shader-readable for the bloom + composite passes. The `EXTERNAL`
 // dependency orders the subpass after the main / velocity writes it samples
 // *and* after the previous frame's read of the slot it is about to overwrite.
-fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_taa_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -84,9 +89,8 @@ fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("TAA render pass: {e}"))
 }
 
@@ -97,7 +101,7 @@ fn create_taa_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TaaDeviceContext<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -151,25 +155,21 @@ impl TaaResources {
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(4);
-        let taa_layouts = [taa_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let taa_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let taa_layouts = [taa_set_layout.handle()];
+        let taa_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&taa_layouts)
                     .push_constant_ranges(std::slice::from_ref(&taa_push)),
-                None,
             )
-        }
-        .map_err(|e| format!("TAA pipeline layout: {e}"))?;
+            .map_err(|e| format!("TAA pipeline layout: {e}"))?;
 
         // Pipeline.
         let (taa_vert, taa_frag) = compile_taa_shaders(hot_reload)?;
         let taa_pipeline = create_taa_pipeline(
             device,
-            taa_render_pass,
-            taa_pipeline_layout,
+            taa_render_pass.handle(),
+            taa_pipeline_layout.handle(),
             &taa_vert,
             &taa_frag,
         )?;
@@ -178,17 +178,13 @@ impl TaaResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(frames as u32 * 3)];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(frames as u32),
-                None,
             )
-        }
-        .map_err(|e| format!("TAA descriptor pool: {e}"))?;
+            .map_err(|e| format!("TAA descriptor pool: {e}"))?;
 
         let mut taa = TaaResources {
             taa_render_pass,
@@ -230,24 +226,20 @@ impl TaaResources {
             )?);
         }
         for f in 0..frames {
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let taa_fb = unsafe {
-                device.create_framebuffer(
+            let taa_fb = device
+                .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.taa_render_pass)
+                        .render_pass(self.taa_render_pass.handle())
                         .attachments(std::slice::from_ref(&self.taa_out_images[f].view))
                         .width(extent.width)
                         .height(extent.height)
                         .layers(1),
-                    None,
                 )
-            }
-            .map_err(|e| format!("TAA framebuffer: {e}"))?;
+                .map_err(|e| format!("TAA framebuffer: {e}"))?;
             self.taa_framebuffers.push(taa_fb);
         }
-        let taa_layouts: Vec<_> = (0..frames).map(|_| self.taa_set_layout).collect();
-        self.taa_sets = alloc_descriptor_sets(device, self.descriptor_pool, &taa_layouts)?;
+        let taa_layouts: Vec<_> = (0..frames).map(|_| self.taa_set_layout.handle()).collect();
+        self.taa_sets = alloc_descriptor_sets(device, self.descriptor_pool.handle(), &taa_layouts)?;
         Ok(())
     }
 
@@ -256,7 +248,7 @@ impl TaaResources {
     // at the unified pre-pass's per-frame views by `rewire_velocity` before the
     // first frame; the scene image stands in until then so the binding is a
     // valid `SHADER_READ_ONLY` image.
-    fn wire_sets(&self, device: &Device, hdr_resolve_images: &[GpuImage], sampler: vk::Sampler) {
+    fn wire_sets(&self, device: &VkDevice, hdr_resolve_images: &[GpuImage], sampler: vk::Sampler) {
         for (f, scene_img) in hdr_resolve_images.iter().enumerate() {
             // History = the previous frame's TAA output. The ring may be
             // deeper than the frame count (see `build_targets`), so index it
@@ -311,7 +303,7 @@ impl TaaResources {
     // resolve output replaces the per-frame HDR resolve as the TAA's input.
     pub(in crate::vulkan) fn rewire_scene(
         &self,
-        device: &Device,
+        device: &VkDevice,
         scene_view: vk::ImageView,
         sampler: vk::Sampler,
     ) {
@@ -338,7 +330,7 @@ impl TaaResources {
     // input moves. Mirrors the SSR resolve / SSAO / SSGI re-points.
     pub(in crate::vulkan) fn rewire_velocity(
         &self,
-        device: &Device,
+        device: &VkDevice,
         velocity_views: &[vk::ImageView],
         sampler: vk::Sampler,
     ) {
@@ -361,20 +353,16 @@ impl TaaResources {
     // Destroy the resolution-dependent targets + framebuffers and reset the
     // descriptor pool. Called before `build_targets` on resize and from
     // `destroy` at teardown.
-    fn destroy_targets(&mut self, device: &Device) {
-        for &fb in &self.taa_framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
+    fn destroy_targets(&mut self, device: &VkDevice) {
         self.taa_framebuffers.clear();
         self.taa_out_images.clear();
         // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
         // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
-            let _ = device
-                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty());
+            let _ = device.reset_descriptor_pool(
+                self.descriptor_pool.handle(),
+                vk::DescriptorPoolResetFlags::empty(),
+            );
         }
         self.taa_sets.clear();
     }
@@ -399,17 +387,8 @@ impl TaaResources {
     }
 
     // Destroy every TAA resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.taa_pipeline, None);
-            device.destroy_pipeline_layout(self.taa_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.taa_set_layout, None);
-            device.destroy_render_pass(self.taa_render_pass, None);
-        }
     }
 }
 
@@ -451,8 +430,8 @@ impl FullscreenPass for TaaResolvePass<'_> {
     fn begin(&self, cmd: &Self::Rec) {
         self.ctx.begin_fullscreen_pass(
             *cmd,
-            self.taa.taa_render_pass,
-            self.taa.taa_framebuffers[self.frame_idx],
+            self.taa.taa_render_pass.handle(),
+            self.taa.taa_framebuffers[self.frame_idx].handle(),
         );
     }
 
@@ -467,18 +446,22 @@ impl FullscreenPass for TaaResolvePass<'_> {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.taa.taa_pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.taa.taa_pipeline.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.taa.taa_pipeline_layout,
+                self.taa.taa_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&self.taa.taa_sets[self.frame_idx]),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                self.taa.taa_pipeline_layout,
+                self.taa.taa_pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -512,21 +495,21 @@ pub(in crate::vulkan) fn compile_taa_shaders(
 
 // Replacement TAA resolve pipeline built by the hot-reload pass.
 pub(in crate::vulkan) struct RebuiltTaaPipelines {
-    pub taa: vk::Pipeline,
+    pub taa: OwnedPipeline,
 }
 
 // Rebuild the live TAA resolve pipeline from disk-resident GLSL source against
 // the existing layout + render pass.
 pub(in crate::vulkan) fn rebuild_taa_pipelines(
-    device: &Device,
+    device: &VkDevice,
     taa: &TaaResources,
     hot_reload: bool,
 ) -> Result<RebuiltTaaPipelines, String> {
     let (taa_vs, taa_fs) = compile_taa_shaders(hot_reload)?;
     let taa_pipeline = create_taa_pipeline(
         device,
-        taa.taa_render_pass,
-        taa.taa_pipeline_layout,
+        taa.taa_render_pass.handle(),
+        taa.taa_pipeline_layout.handle(),
         &taa_vs,
         &taa_fs,
     )?;
@@ -537,16 +520,7 @@ impl TaaResources {
     // Swap the freshly-built pipeline into the live resources. The caller
     // has already `device_wait_idle`'d so the old pipeline is not in
     // flight. Driven by the Vulkan shader hot-reload pass.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltTaaPipelines,
-    ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.taa_pipeline, None);
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltTaaPipelines) {
         self.taa_pipeline = rebuilt.taa;
     }
 }
@@ -557,12 +531,12 @@ impl TaaResources {
 // that blends the HDR scene with the reprojected history into a single-sample
 // `R16G16B16A16_SFLOAT` target. No depth; same shape as the composite pipeline.
 fn create_taa_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -625,15 +599,8 @@ fn create_taa_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create TAA pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create TAA pipeline: {e}"))?;
 
     Ok(pipeline)
 }

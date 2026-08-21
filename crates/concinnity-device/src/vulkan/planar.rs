@@ -23,7 +23,9 @@
 // reflector. The face render then draws that indirect. Like the probe capture, the
 // skinned tail is not drawn into a mirror (static + instance + chunk only).
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
@@ -82,7 +84,7 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // single-sample colour attachment itself. The glass pass samples it. Recreated
     // on resize.
     targets: Vec<GpuImage>,
-    framebuffers: Vec<vk::Framebuffer>,
+    framebuffers: Vec<OwnedFramebuffer>,
 
     // Per-(plane, frame) reflected ViewUniforms UBO ring (HOST_VISIBLE, mapped),
     // indexed plane * frames + frame, so the CPU writes this frame's slot without
@@ -110,7 +112,7 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // reflected frustum. `Some` only when the world runs Hi-Z. Shared across planes.
     hiz_set: Option<vk::DescriptorSet>,
     hiz_ubo: Option<PooledBuffer>,
-    pool: vk::DescriptorPool,
+    _pool: OwnedDescriptorPool,
 }
 
 // The frame-side handles the planar reflected-frustum cull needs: the per-frame
@@ -139,7 +141,7 @@ unsafe impl Sync for PlanarReflectionSet {}
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarDevice<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
 }
 
 // Render dimensions for the shared colour + depth + per-plane targets: the MSAA
@@ -249,9 +251,9 @@ struct PlanarFramebufferInputs<'a> {
 // MSAA -> [shared colour, shared depth, plane target (resolve)], single-sample ->
 // [plane target (colour), shared depth].
 fn create_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     inputs: PlanarFramebufferInputs<'_>,
-) -> Result<Vec<vk::Framebuffer>, String> {
+) -> Result<Vec<OwnedFramebuffer>, String> {
     let PlanarFramebufferInputs {
         main_render_pass,
         sample_count,
@@ -281,9 +283,8 @@ fn create_framebuffers(
             .width(width.max(1))
             .height(height.max(1))
             .layers(1);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let fb = unsafe { device.create_framebuffer(&info, None) }
+        let fb = device
+            .create_framebuffer(&info)
             .map_err(|e| format!("planar framebuffer: {e}"))?;
         out.push(fb);
     }
@@ -366,7 +367,7 @@ impl PlanarReflectionSet {
         gpu: PlanarDevice<'_>,
         config: PlanarConfig,
         planes: &[[f32; 4]],
-        main_render_pass: vk::RenderPass,
+        main_render_pass: &OwnedRenderPass,
         global_set: PlanarGlobalSet,
         lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
@@ -423,7 +424,7 @@ impl PlanarReflectionSet {
         let framebuffers = create_framebuffers(
             device,
             PlanarFramebufferInputs {
-                main_render_pass,
+                main_render_pass: main_render_pass.handle(),
                 sample_count,
                 color: color.as_ref(),
                 depth: &depth,
@@ -508,13 +509,12 @@ impl PlanarReflectionSet {
         if global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
+        let pool = device
+            .create_descriptor_pool(&pool_info)
             .map_err(|e| format!("planar descriptor pool: {e}"))?;
 
         let layouts: Vec<_> = (0..ring).map(|_| global_set_layout).collect();
-        let global_sets = alloc_descriptor_sets(device, pool, &layouts)?;
+        let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
 
         let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..probe_cube_count)
             .map(|_| {
@@ -623,7 +623,7 @@ impl PlanarReflectionSet {
         // (b0 / b1), write this plane's indirect + status (b2 / b3). Ring index
         // slot * frames + frame, so `i % frames` selects the frame's buffers.
         let cull_layouts: Vec<_> = (0..ring).map(|_| cull.cull_set_layout).collect();
-        let cull_sets = alloc_descriptor_sets(device, pool, &cull_layouts)?;
+        let cull_sets = alloc_descriptor_sets(device, pool.handle(), &cull_layouts)?;
         for (i, &set) in cull_sets.iter().enumerate() {
             let frame = i % frames;
             write_storage(
@@ -665,7 +665,8 @@ impl PlanarReflectionSet {
             let ubo =
                 alloc.create_buffer(params_size, vk::BufferUsageFlags::UNIFORM_BUFFER, host)?;
             ubo.write_val(0, &params);
-            let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&hiz_layout))?[0];
+            let set =
+                alloc_descriptor_sets(device, pool.handle(), std::slice::from_ref(&hiz_layout))?[0];
             let img = img_info(hiz_view, hiz_sampler);
             let ubo_info = buf_info(ubo.buffer(), params_size);
             let writes = [sampler_write(set, 0, &img), ubo_write(set, 1, &ubo_info)];
@@ -683,7 +684,7 @@ impl PlanarReflectionSet {
             sample_count,
             width,
             height,
-            main_render_pass,
+            main_render_pass: main_render_pass.handle(),
             color,
             depth,
             targets,
@@ -696,7 +697,7 @@ impl PlanarReflectionSet {
             cull_sets,
             hiz_set,
             hiz_ubo,
-            pool,
+            _pool: pool,
         })
     }
 
@@ -720,7 +721,7 @@ impl PlanarReflectionSet {
     // Hi-Z (`hiz_set` is None).
     pub(in crate::vulkan) fn rewrite_hiz_view(
         &self,
-        device: &Device,
+        device: &VkDevice,
         view: vk::ImageView,
         sampler: vk::Sampler,
     ) {
@@ -742,7 +743,7 @@ impl PlanarReflectionSet {
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -770,13 +771,6 @@ impl PlanarReflectionSet {
             },
         )?;
 
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-        }
         // The replaced targets retire through the allocator as they drop.
         self.color = color;
         self.depth = depth;
@@ -787,16 +781,8 @@ impl PlanarReflectionSet {
         Ok(())
     }
 
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            // The pool frees every global / cull / Hi-Z set allocated from it.
-            device.destroy_descriptor_pool(self.pool, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
+        // The pool frees every global / cull / Hi-Z set allocated from it.
         self.color = None;
         self.depth = GpuImage::null();
         self.framebuffers.clear();
@@ -819,7 +805,7 @@ fn buf_info(buffer: vk::Buffer, range: u64) -> vk::DescriptorBufferInfo {
 }
 
 fn write_storage(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     binding: u32,
     buffer: vk::Buffer,
@@ -976,7 +962,7 @@ impl VkContext {
             }
             self.encode_main_into_face(
                 cmd,
-                set.framebuffers[slot],
+                set.framebuffers[slot].handle(),
                 extent,
                 set.global_sets[ring],
                 bindless_set,

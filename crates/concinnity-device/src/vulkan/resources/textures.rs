@@ -25,7 +25,7 @@ impl VkContext {
         let info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(view)
-            .sampler(self.linear_sampler);
+            .sampler(self.linear_sampler.handle());
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(binding)
@@ -59,7 +59,7 @@ impl VkContext {
         let info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(view)
-            .sampler(self.linear_sampler);
+            .sampler(self.linear_sampler.handle());
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
@@ -363,7 +363,7 @@ impl VkContext {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_view)
-                .sampler(self.composite_sampler);
+                .sampler(self.composite_sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(2)
@@ -423,11 +423,11 @@ impl VkContext {
             let irr_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_irradiance_view)
-                .sampler(self.cube_sampler);
+                .sampler(self.cube_sampler.handle());
             let pre_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_prefilter_view)
-                .sampler(self.cube_sampler);
+                .sampler(self.cube_sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -468,7 +468,7 @@ impl VkContext {
                 &nd_views,
                 &rough_views,
                 new_prefilter_view,
-                self.cube_sampler,
+                self.cube_sampler.handle(),
             );
         }
         if let Some(rm) = self.raymarch.as_ref() {
@@ -476,13 +476,13 @@ impl VkContext {
                 &self.device,
                 new_irradiance_view,
                 new_prefilter_view,
-                self.cube_sampler,
+                self.cube_sampler.handle(),
             );
         }
         // The RT-reflection sets sample the prefilter cube at binding 8 (the miss
         // fallback + the metallic/roughness IBL hit shading); re-point them too.
         if let Some(rt) = self.rt_reflections.as_ref() {
-            rt.rewire_prefilter(&self.device, new_prefilter_view, self.cube_sampler);
+            rt.rewire_prefilter(&self.device, new_prefilter_view, self.cube_sampler.handle());
         }
         drop(old);
         Ok(())
@@ -581,31 +581,30 @@ impl VkContext {
             }
             // Lazily build the clone descriptor pool on first call. Sized for
             // MAX_CLONE_DRAWS (albedo, normal) sets: two samplers each.
-            let pool = match self.clone_descriptor_pool {
-                Some(p) => p,
-                None => {
-                    let pool_sizes = [vk::DescriptorPoolSize::default()
-                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count((MAX_CLONE_DRAWS * 2) as u32)];
-                    // SAFETY: the create-info and every slice it borrows are live for the call, and
-                    // each handle it names belongs to this device.
-                    let pool = unsafe {
-                        self.device.create_descriptor_pool(
-                            &vk::DescriptorPoolCreateInfo::default()
-                                .pool_sizes(&pool_sizes)
-                                .max_sets(MAX_CLONE_DRAWS as u32),
-                            None,
-                        )
-                    }
+            if self.clone_descriptor_pool.is_none() {
+                let pool_sizes = [vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count((MAX_CLONE_DRAWS * 2) as u32)];
+                let pool = self
+                    .device
+                    .create_descriptor_pool(
+                        &vk::DescriptorPoolCreateInfo::default()
+                            .pool_sizes(&pool_sizes)
+                            .max_sets(MAX_CLONE_DRAWS as u32),
+                    )
                     .map_err(|e| format!("clone descriptor pool: {e}"))?;
-                    self.clone_descriptor_pool = Some(pool);
-                    pool
-                }
-            };
+                self.clone_descriptor_pool = Some(pool);
+            }
+            let pool = self
+                .clone_descriptor_pool
+                .as_ref()
+                .expect("clone descriptor pool built above")
+                .handle();
+            let object_set_layout = self.descriptors.object_set_layout.handle();
 
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
-                .set_layouts(std::slice::from_ref(&self.descriptors.object_set_layout));
+                .set_layouts(std::slice::from_ref(&object_set_layout));
             // SAFETY: the create-info and every slice it borrows are live for the call, and each
             // handle it names belongs to this device.
             let set = unsafe { self.device.allocate_descriptor_sets(&alloc_info) }

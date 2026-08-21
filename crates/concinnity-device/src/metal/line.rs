@@ -25,6 +25,7 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use super::encode::RenderEncode;
 
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::render_types::LineVertex;
@@ -118,23 +119,14 @@ impl MtlContext {
                 .ok_or("failed to get line render encoder")?,
             "lines",
         );
-        enc.setRenderPipelineState(pipeline);
-        // SAFETY: each pointer is derived from the live `view` with its `size_of` as the length,
-        // and `vbuf` outlives the encoder; the indices are the slots the line shaders declare.
+        enc.set_pipeline(pipeline);
+        enc.set_vertex_value(&view, 0);
+        enc.set_fragment_value(&view, 0);
+        enc.set_vertex_buffer(&vbuf, 0, VERTEX_BUFFER_INDEX);
+        // Resolved scene depth at texture(0) for the manual depth test.
+        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        // SAFETY: the draw covers exactly the vertices uploaded into `vbuf`.
         unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<concinnity_render::uniforms::LineView>(),
-                0,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<concinnity_render::uniforms::LineView>(),
-                0,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(&vbuf), 0, VERTEX_BUFFER_INDEX);
-            // Resolved scene depth at texture(0) for the manual depth test.
-            enc.setFragmentTexture_atIndex(Some(self.hdr_targets.depth_resolve.as_ref()), 0);
             enc.drawPrimitives_vertexStart_vertexCount(
                 MTLPrimitiveType::Triangle,
                 0,

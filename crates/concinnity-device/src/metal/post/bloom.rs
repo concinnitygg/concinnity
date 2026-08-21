@@ -8,12 +8,13 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
+    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
+    MTLTextureUsage,
 };
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
 };
@@ -172,17 +173,10 @@ impl MtlContext {
                 pipeline: &bloom_pipelines.prefilter,
                 label: "bloom prefilter",
             },
-            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-            // `size_of` as the length, and every bound resource outlives the encoder; the indices
-            // are the slots the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(scene_color), 0);
-                enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&self.post_process).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::PostProcessParams>(),
-                    0,
-                );
+            |enc| {
+                enc.set_fragment_texture(scene_color, 0);
+                enc.set_fragment_sampler(&self.post_sampler, 0);
+                enc.set_fragment_value(&self.post_process, 0);
             },
         )?;
 
@@ -197,11 +191,9 @@ impl MtlContext {
                     pipeline: &bloom_pipelines.downsample,
                     label: "bloom downsample",
                 },
-                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
-                // the buffer/texture indices the shaders declare.
-                |enc| unsafe {
-                    enc.setFragmentTexture_atIndex(Some(mips[i - 1].as_ref()), 0);
-                    enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                |enc| {
+                    enc.set_fragment_texture(mips[i - 1].as_ref(), 0);
+                    enc.set_fragment_sampler(&self.post_sampler, 0);
                 },
             )?;
         }
@@ -225,11 +217,9 @@ impl MtlContext {
                     pipeline: &bloom_pipelines.upsample,
                     label: "bloom upsample",
                 },
-                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
-                // the buffer/texture indices the shaders declare.
-                |enc| unsafe {
-                    enc.setFragmentTexture_atIndex(Some(mips[i + 1].as_ref()), 0);
-                    enc.setFragmentSamplerState_atIndex(Some(&self.post_sampler), 0);
+                |enc| {
+                    enc.set_fragment_texture(mips[i + 1].as_ref(), 0);
+                    enc.set_fragment_sampler(&self.post_sampler, 0);
                 },
             )?;
         }

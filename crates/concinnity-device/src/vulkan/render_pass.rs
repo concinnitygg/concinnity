@@ -2,13 +2,15 @@
 //
 // Vulkan render-pass construction for the main, shadow, composite, and
 // bloom passes.
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedRenderPass, VkDevice};
 
 pub(super) fn create_main_render_pass(
-    device: &Device,
+    device: &VkDevice,
     format: vk::Format,
     msaa: vk::SampleCountFlags,
-) -> Result<vk::RenderPass, String> {
+) -> Result<OwnedRenderPass, String> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
     // When multisampled the resolve attachment ends shader-readable; the MSAA
@@ -106,9 +108,8 @@ pub(super) fn create_main_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("main render pass: {e}"))
 }
 
@@ -129,11 +130,11 @@ pub(super) fn create_main_render_pass(
 // overwritten by `Main2`'s and nothing reads it in between (HizBuild / Cull2
 // are compute), so the combined result is what the post stack sees.
 pub(super) fn create_main_render_pass_two_pass(
-    device: &Device,
+    device: &VkDevice,
     format: vk::Format,
     msaa: vk::SampleCountFlags,
     load: bool,
-) -> Result<vk::RenderPass, String> {
+) -> Result<OwnedRenderPass, String> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
     // Phase 1 leaves the colour in COLOR_ATTACHMENT_OPTIMAL for phase 2 to
@@ -256,13 +257,12 @@ pub(super) fn create_main_render_pass_two_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("two-pass main render pass: {e}"))
 }
 
-pub(super) fn create_shadow_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+pub(super) fn create_shadow_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(vk::Format::D32_SFLOAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -285,18 +285,17 @@ pub(super) fn create_shadow_render_pass(device: &Device) -> Result<vk::RenderPas
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass));
 
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("shadow render pass: {e}"))
 }
 
 // Composite render pass. A single subpass renders the fullscreen tonemap +
 // FXAA triangle (and the text overlay) into the swapchain backbuffer.
 pub(super) fn create_composite_render_pass(
-    device: &Device,
+    device: &VkDevice,
     swapchain_format: vk::Format,
-) -> Result<vk::RenderPass, String> {
+) -> Result<OwnedRenderPass, String> {
     // The fullscreen triangle overwrites every pixel, so the backbuffer is
     // not cleared or loaded.
     let attachment = vk::AttachmentDescription::default()
@@ -336,9 +335,8 @@ pub(super) fn create_composite_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("composite render pass: {e}"))
 }
 
@@ -352,10 +350,10 @@ pub(super) fn create_composite_render_pass(
 // shader-readable layout the prior write pass left it in; otherwise the
 // attachment is discarded on load. Either way it ends `SHADER_READ_ONLY`.
 pub(super) fn create_bloom_render_pass(
-    device: &Device,
+    device: &VkDevice,
     format: vk::Format,
     load: bool,
-) -> Result<vk::RenderPass, String> {
+) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -405,8 +403,7 @@ pub(super) fn create_bloom_render_pass(
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&rp_info, None) }
+    device
+        .create_render_pass(&rp_info)
         .map_err(|e| format!("bloom render pass: {e}"))
 }

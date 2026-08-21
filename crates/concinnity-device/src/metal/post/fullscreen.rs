@@ -19,6 +19,7 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
+use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassId;
 use crate::metal::pipeline::ns_str;
 use crate::metal::slang_shaders::{FULLSCREEN_VERT, SlangLib};
@@ -148,9 +149,7 @@ pub(in crate::metal) fn set_fragment_sampler_range(
     count: usize,
 ) {
     for i in first..first + count {
-        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-        // buffer/texture indices the shaders declare.
-        unsafe { enc.setFragmentSamplerState_atIndex(Some(sampler), i) };
+        enc.set_fragment_sampler(sampler, i);
     }
 }
 
@@ -221,7 +220,7 @@ impl MtlContext {
         let enc = cmd_buf
             .renderCommandEncoderWithDescriptor(&desc)
             .ok_or_else(|| format!("failed to get {} encoder", label))?;
-        enc.setRenderPipelineState(pipeline);
+        enc.set_pipeline(pipeline);
         bind(&enc);
         // SAFETY: the fullscreen triangle's three vertices are generated from `[[vertex_id]]` in
         // the shader, so the draw reads no vertex buffer.

@@ -25,7 +25,9 @@
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use crate::assets::UpscalerBackend;
 use crate::vulkan::allocator::DeviceAllocator;
@@ -115,7 +117,7 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     ) -> Result<(), String>;
     // Tear down owned GPU + SDK resources. Called from `VkContext::drop` after
     // `device_wait_idle`.
-    fn destroy(&mut self, device: &Device);
+    fn destroy(&mut self, device: &VkDevice);
 }
 
 // Per-axis render-to-output resolution split, shared by all three backends.
@@ -176,7 +178,7 @@ fn radical_inverse(mut i: u32, base: u32) -> f32 {
 // three backends.
 pub(super) fn create_output_image(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     width: u32,
@@ -250,7 +252,7 @@ pub(super) struct BarrierSync {
 // inputs in the COMPUTE stage; the generic `transition_image_layout` helper
 // targets FRAGMENT, which would not synchronise the compute reads).
 pub(super) fn image_barrier(
-    device: &Device,
+    device: &VkDevice,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     aspect: vk::ImageAspectFlags,
@@ -357,7 +359,7 @@ fn fsr_available() -> bool {
 pub(in crate::vulkan) struct UpscalerGpu<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) instance: &'a ash::Instance,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
     pub(in crate::vulkan) physical_device: vk::PhysicalDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,

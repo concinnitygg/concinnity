@@ -12,7 +12,11 @@
 // invisible at human-scale eye-adaptation rates. Mirrors
 // `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::auto_exposure::HISTOGRAM_BINS;
 use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
@@ -40,23 +44,23 @@ pub(in crate::vulkan) fn compile_auto_exposure_shaders(
 pub(in crate::vulkan) struct AutoExposureResources {
     // Build kernel: one thread per HDR-resolve pixel; merges per-threadgroup
     // local histograms into the global histogram SSBO.
-    build_pipeline: vk::Pipeline,
-    build_pipeline_layout: vk::PipelineLayout,
-    build_set_layout: vk::DescriptorSetLayout,
+    build_pipeline: OwnedPipeline,
+    build_pipeline_layout: OwnedPipelineLayout,
+    _build_set_layout: OwnedSetLayout,
     // One build set per frame: binding 0 references that frame slot's
     // `hdr_resolve_images[frame_idx]` view.
     build_sets: Vec<vk::DescriptorSet>,
 
     // Average kernel: one threadgroup of HISTOGRAM_BINS threads reduces the
     // histogram, clears it, and writes the average log-luminance.
-    average_pipeline: vk::Pipeline,
-    average_pipeline_layout: vk::PipelineLayout,
-    average_set_layout: vk::DescriptorSetLayout,
+    average_pipeline: OwnedPipeline,
+    average_pipeline_layout: OwnedPipelineLayout,
+    _average_set_layout: OwnedSetLayout,
     // Single shared average set: both buffers are global, no per-frame
     // variation.
     average_set: vk::DescriptorSet,
 
-    descriptor_pool: vk::DescriptorPool,
+    _descriptor_pool: OwnedDescriptorPool,
 
     // Device-local 256-bin u32 histogram. The build kernel atomically
     // increments bins into it; the average kernel reads and clears them.
@@ -76,7 +80,7 @@ impl AutoExposureResources {
     // when `PostProcessConfig.auto_exposure` is enabled.
     pub(in crate::vulkan) fn new(
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         frames: usize,
         hdr_resolve_views: &[vk::ImageView],
         linear_sampler: vk::Sampler,
@@ -92,35 +96,28 @@ impl AutoExposureResources {
             .offset(0)
             .size(AUTO_EXPOSURE_PUSH_BYTES);
 
-        let build_layouts = [build_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let build_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let build_layouts = [build_set_layout.handle()];
+        let build_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&build_layouts)
                     .push_constant_ranges(std::slice::from_ref(&push_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("auto-exposure build pipeline layout: {e}"))?;
-        let average_layouts = [average_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let average_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+            .map_err(|e| format!("auto-exposure build pipeline layout: {e}"))?;
+        let average_layouts = [average_set_layout.handle()];
+        let average_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&average_layouts)
                     .push_constant_ranges(std::slice::from_ref(&push_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("auto-exposure average pipeline layout: {e}"))?;
+            .map_err(|e| format!("auto-exposure average pipeline layout: {e}"))?;
 
         let (build_spv, average_spv) = compile_auto_exposure_shaders(hot_reload)?;
-        let build_pipeline = create_compute_pipeline(device, build_pipeline_layout, &build_spv)?;
+        let build_pipeline =
+            create_compute_pipeline(device, build_pipeline_layout.handle(), &build_spv)?;
         let average_pipeline =
-            create_compute_pipeline(device, average_pipeline_layout, &average_spv)?;
+            create_compute_pipeline(device, average_pipeline_layout.handle(), &average_spv)?;
 
         // Histogram + output buffers (device-local).
         let histogram_bytes = (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as vk::DeviceSize;
@@ -157,37 +154,33 @@ impl AutoExposureResources {
                 descriptor_count: (frames + 2) as u32,
             },
         ];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .max_sets((frames + 1) as u32)
                     .pool_sizes(&pool_sizes),
-                None,
             )
-        }
-        .map_err(|e| format!("auto-exposure descriptor pool: {e}"))?;
+            .map_err(|e| format!("auto-exposure descriptor pool: {e}"))?;
 
         // Allocate build sets (one per frame) + average set.
-        let build_set_layouts: Vec<_> = (0..frames).map(|_| build_set_layout).collect();
+        let build_set_layouts: Vec<_> = (0..frames).map(|_| build_set_layout.handle()).collect();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let build_sets = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(descriptor_pool)
+                    .descriptor_pool(descriptor_pool.handle())
                     .set_layouts(&build_set_layouts),
             )
         }
         .map_err(|e| format!("auto-exposure build sets: {e}"))?;
-        let avg_layouts_single = [average_set_layout];
+        let avg_layouts_single = [average_set_layout.handle()];
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let average_set = unsafe {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(descriptor_pool)
+                    .descriptor_pool(descriptor_pool.handle())
                     .set_layouts(&avg_layouts_single),
             )
         }
@@ -210,13 +203,13 @@ impl AutoExposureResources {
         Ok(Self {
             build_pipeline,
             build_pipeline_layout,
-            build_set_layout,
+            _build_set_layout: build_set_layout,
             build_sets,
             average_pipeline,
             average_pipeline_layout,
-            average_set_layout,
+            _average_set_layout: average_set_layout,
             average_set,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             histogram_buffer,
             output_buffer,
             readback_buffers,
@@ -226,12 +219,12 @@ impl AutoExposureResources {
     // Pipeline layout for the build kernel. Exposed so the shader
     // hot-reload pass can rebuild the pipeline against the existing layout.
     pub(in crate::vulkan) fn build_pipeline_layout(&self) -> vk::PipelineLayout {
-        self.build_pipeline_layout
+        self.build_pipeline_layout.handle()
     }
     // Pipeline layout for the average kernel. Same purpose as
     // [`Self::build_pipeline_layout`].
     pub(in crate::vulkan) fn average_pipeline_layout(&self) -> vk::PipelineLayout {
-        self.average_pipeline_layout
+        self.average_pipeline_layout.handle()
     }
     // Swap the freshly-built build + average pipelines into the live
     // resources. The caller has already `device_wait_idle`'d so the old
@@ -239,16 +232,9 @@ impl AutoExposureResources {
     // pass after every replacement successfully compiled.
     pub(in crate::vulkan) fn swap_pipelines(
         &mut self,
-        device: &Device,
-        build_pipeline: vk::Pipeline,
-        average_pipeline: vk::Pipeline,
+        build_pipeline: OwnedPipeline,
+        average_pipeline: OwnedPipeline,
     ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.build_pipeline, None);
-            device.destroy_pipeline(self.average_pipeline, None);
-        }
         self.build_pipeline = build_pipeline;
         self.average_pipeline = average_pipeline;
     }
@@ -258,10 +244,10 @@ impl AutoExposureResources {
     // either kernel without re-creating the descriptor set layout +
     // pipeline layout. Mirrors `directx::auto_exposure::create_compute_pso`.
     pub(in crate::vulkan) fn create_compute_pipeline(
-        device: &Device,
+        device: &VkDevice,
         layout: vk::PipelineLayout,
         spv: &[u8],
-    ) -> Result<vk::Pipeline, String> {
+    ) -> Result<OwnedPipeline, String> {
         create_compute_pipeline(device, layout, spv)
     }
 
@@ -272,7 +258,7 @@ impl AutoExposureResources {
     // new view.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         linear_sampler: vk::Sampler,
     ) {
@@ -291,25 +277,14 @@ impl AutoExposureResources {
 
     // Free every owned handle. Called from `Drop for VkContext` after
     // `device_wait_idle`.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.build_pipeline, None);
-            device.destroy_pipeline(self.average_pipeline, None);
-            device.destroy_pipeline_layout(self.build_pipeline_layout, None);
-            device.destroy_pipeline_layout(self.average_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.build_set_layout, None);
-            device.destroy_descriptor_set_layout(self.average_set_layout, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.histogram_buffer = PooledBuffer::null();
         self.output_buffer = PooledBuffer::null();
         self.readback_buffers.clear();
     }
 }
 
-fn create_build_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_build_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -323,13 +298,12 @@ fn create_build_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, S
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("auto-exposure build set layout: {e}"))
 }
 
-fn create_average_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_average_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -343,14 +317,13 @@ fn create_average_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout,
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("auto-exposure average set layout: {e}"))
 }
 
 fn write_build_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
     sampler: vk::Sampler,
@@ -382,7 +355,7 @@ fn write_build_set(
 }
 
 fn write_average_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     histogram: vk::Buffer,
     output: vk::Buffer,
@@ -413,10 +386,10 @@ fn write_average_set(
 }
 
 fn create_compute_pipeline(
-    device: &Device,
+    device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -426,12 +399,8 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    }
-    .map_err(|(_, e)| format!("create auto-exposure pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
+        .map_err(|e| format!("create auto-exposure pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -554,19 +523,19 @@ impl VkContext {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                resources.build_pipeline,
+                resources.build_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                resources.build_pipeline_layout,
+                resources.build_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&build_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                resources.build_pipeline_layout,
+                resources.build_pipeline_layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 push_bytes,
@@ -596,19 +565,19 @@ impl VkContext {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                resources.average_pipeline,
+                resources.average_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                resources.average_pipeline_layout,
+                resources.average_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&resources.average_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                resources.average_pipeline_layout,
+                resources.average_pipeline_layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 push_bytes,

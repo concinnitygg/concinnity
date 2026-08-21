@@ -19,13 +19,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
+    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
+    MTLTextureUsage,
 };
 
 use crate::gfx::ssgi::SsgiSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
@@ -159,18 +160,11 @@ impl MtlContext {
                 pipeline: gather_ps,
                 label: "SSGI gather",
             },
-            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-            // `size_of` as the length, and every bound resource outlives the encoder; the indices
-            // are the slots the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(self.hdr_targets.hdr_resolve.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
+            |enc| {
+                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 0);
+                enc.set_fragment_texture(gbuffer, 1);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(ssgi_params).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
-                    0,
-                );
+                enc.set_fragment_value(ssgi_params, 0);
             },
         )?;
 
@@ -186,18 +180,11 @@ impl MtlContext {
                 pipeline: composite_ps,
                 label: "SSGI composite",
             },
-            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-            // `size_of` as the length, and every bound resource outlives the encoder; the indices
-            // are the slots the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(targets.gi.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
+            |enc| {
+                enc.set_fragment_texture(targets.gi.as_ref(), 0);
+                enc.set_fragment_texture(gbuffer, 1);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(ssgi_params).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
-                    0,
-                );
+                enc.set_fragment_value(ssgi_params, 0);
             },
         )?;
 

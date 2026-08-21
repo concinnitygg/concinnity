@@ -70,7 +70,7 @@ pub const MAX_JOINTS: usize = 64;
 
 // Per-draw-call material parameters pushed to the fragment shader at buffer(3).
 // Must stay in sync with the `MaterialUniforms` struct in every .metal shader.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct MaterialUniforms {
     // Perceptual roughness [0, 1]: 0 = mirror, 1 = fully diffuse.
@@ -160,7 +160,7 @@ impl MaterialUniforms {
 // Layout (32 bytes) must match DirectionalLightData in every .metal shader.
 // MSL shaders must declare float3 fields as packed_float3 in constant buffer
 // structs; plain float3 has size=16 in MSL which shifts subsequent fields.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DirectionalLightData {
     // Unit vector pointing TOWARD the light source (same as L in Blinn-Phong).
@@ -173,7 +173,7 @@ pub struct DirectionalLightData {
 // One point light entry in LightUniforms.
 // Layout (32 bytes) must match PointLightData in every .metal shader.
 // Same packed_float3 requirement as DirectionalLightData above.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct PointLightData {
     // World-space position of the light source.
@@ -245,7 +245,7 @@ const ZERO_POINT_LIGHT: PointLightData = PointLightData {
 
 // All scene lights packed into a single GPU buffer pushed at fragment buffer(4).
 // Must stay in sync with LightUniforms in every .metal shader.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LightUniforms {
     pub directional: [DirectionalLightData; MAX_DIRECTIONAL_LIGHTS],
@@ -305,7 +305,7 @@ impl LightUniforms {
 // cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
 // 16-byte lanes. Must match the `ClusterParams` struct in the light-cull and
 // forward shaders.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ClusterParams {
     // Inverse view-projection; unprojects a clip-space corner to world space.
@@ -367,7 +367,7 @@ impl ClusterParams {
 // FAR end of each cascade. The fragment shader picks the first cascade whose
 // split is greater than the fragment's view-space depth. Slot 3 (the last
 // cascade's far end) doubles as the overall shadow distance.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowUniforms {
     // One light-space VP matrix per cascade, column-major.
@@ -398,7 +398,7 @@ pub struct ShadowUniforms {
 // define their own private push-constant layouts in their respective `draw.rs`
 // modules), but kept un-gated like the rest of this module so the shared
 // shader-layout contract can validate its MSL layout on every platform.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowPassPush {
     pub cascade_idx: u32,
@@ -504,7 +504,7 @@ pub struct LineVertex {
 
 // Uniforms pushed to the text vertex shader once per text draw call.
 // Carries the framebuffer size so the shader can convert pixel coords to NDC.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TextUniforms {
     pub win_width: f32,
@@ -516,7 +516,7 @@ pub struct TextUniforms {
 // defaults) and threaded into each backend at init. Pushed verbatim to the
 // bloom prefilter and composite fragment shaders, so the layout must stay in
 // sync with the `PostUniforms` struct in those shaders. 36 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct PostProcessParams {
     // Additive bloom strength. 0 disables the bloom passes entirely.
@@ -581,7 +581,7 @@ impl PostProcessParams {
 /// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
 /// moves, which would reset an in-flight fade. It is also pushed to the bloom
 /// prefilter, which has no use for it.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CompositeParams {
     pub post: PostProcessParams,
@@ -604,7 +604,7 @@ pub struct CompositeParams {
 // rebuild a view-space position from the linear depth the SSAO pre-pass
 // writes. Pushed verbatim to the SSAO kernel fragment shader, so the layout
 // must stay in sync with the `SsaoParams` struct there. 16 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsaoParams {
     // World-space hemisphere radius the horizon search covers.
@@ -623,7 +623,7 @@ pub struct SsaoParams {
 // needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
 // the SSR resolve fragment shader, so the layout must stay in sync with the
 // `SsrParams` struct there. 96 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrParams {
     // Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
@@ -656,7 +656,7 @@ pub struct SsrParams {
 // gather pass uses to project a view-space ray point back to a screen UV.
 // Pushed verbatim to the SSGI gather + composite fragment shaders, so the
 // layout must stay in sync with the `SsgiParams` struct there. 32 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsgiParams {
     // Indirect-bounce blend strength; scales the gathered radiance the
@@ -690,7 +690,7 @@ pub struct SsgiParams {
 // direction + colour the hit-shading uses. Pushed verbatim to the RT kernel,
 // so the layout must stay in sync with the `RtParams` struct there. 144 bytes,
 // 16-byte aligned (every `vec3` is padded to a `float4`).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RtParams {
     // Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
@@ -788,7 +788,7 @@ pub struct RtGeomEntry {
 // reconstruct world positions from depth and integrate sun-aligned
 // scattering. Pushed verbatim to the fog fragment shader, so the layout must
 // stay in sync with `FogParams` in `metal/shaders/fog.metal`. 176 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct FogParams {
     // Inverse view-projection: reconstructs world position from depth.
@@ -839,7 +839,7 @@ pub struct FogParams {
 // Bound at the fog fragment shader + the froxel kernel. Layout must stay in
 // sync with `FogFroxelParams` in `shaders/fog.slang`, the single source both
 // halves compile from on every backend. 96 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct FogFroxelParams {
     // View matrix (world → view), so the compute kernel can pick a CSM
@@ -873,7 +873,7 @@ pub struct FogFroxelParams {
 // respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
 // Metal particle passes, so the layout must stay in sync with
 // `ParticleParams` in `shaders/particle_types.slang`. 144 bytes.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleParams {
     // World-space spawn origin. `packed_float3` in MSL: alignment 4, with

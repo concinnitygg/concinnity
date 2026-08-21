@@ -12,13 +12,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
+    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
+    MTLTextureUsage,
 };
 
 use crate::gfx::ssao::SsaoSettings;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
@@ -150,17 +151,10 @@ impl MtlContext {
                 pipeline: kernel_ps,
                 label: "SSAO kernel",
             },
-            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-            // `size_of` as the length, and every bound resource outlives the encoder; the indices
-            // are the slots the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(gbuffer), 0);
+            |enc| {
+                enc.set_fragment_texture(gbuffer, 0);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 1);
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(ssao_params).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
-                    0,
-                );
+                enc.set_fragment_value(ssao_params, 0);
             },
         )?;
 
@@ -174,11 +168,9 @@ impl MtlContext {
                 pipeline: blur_ps,
                 label: "SSAO blur",
             },
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            |enc| unsafe {
-                enc.setFragmentTexture_atIndex(Some(targets.ao_raw.as_ref()), 0);
-                enc.setFragmentTexture_atIndex(Some(gbuffer), 1);
+            |enc| {
+                enc.set_fragment_texture(targets.ao_raw.as_ref(), 0);
+                enc.set_fragment_texture(gbuffer, 1);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
             },
         )?;

@@ -5,7 +5,9 @@
 // target allocator (per frame slot), the framebuffer + descriptor wiring, and
 // the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
 
 use crate::gfx::render_types::PostProcessParams;
 
@@ -49,13 +51,13 @@ pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<Bloom
 // `dst + src`, used by the upsample pass to accumulate onto the downsampled
 // mip already in the target.
 pub(in crate::vulkan) fn create_bloom_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
     additive: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -131,15 +133,8 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("create bloom pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("create bloom pipeline: {e}"))?;
 
     Ok(pipeline)
 }
@@ -163,7 +158,7 @@ pub(in crate::vulkan) fn bloom_mip_count(width: u32, height: u32) -> u32 {
 // the one-shot layout transitions.
 pub(in crate::vulkan) struct BloomDeviceContext<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -269,13 +264,13 @@ pub(in crate::vulkan) fn create_bloom_chain(
 }
 
 // The bloom write and blend framebuffer sets, each indexed [frame][mip].
-type BloomFramebuffers = (Vec<Vec<vk::Framebuffer>>, Vec<Vec<vk::Framebuffer>>);
+type BloomFramebuffers = (Vec<Vec<OwnedFramebuffer>>, Vec<Vec<OwnedFramebuffer>>);
 
 // Build the bloom write + blend framebuffers for every frame slot. The write
 // set has one framebuffer per mip; the blend set omits the smallest mip,
 // which is never upsampled into.
 pub(in crate::vulkan) fn create_bloom_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     write_pass: vk::RenderPass,
     blend_pass: vk::RenderPass,
     bloom_mips: &[Vec<GpuImage>],
@@ -288,9 +283,8 @@ pub(in crate::vulkan) fn create_bloom_framebuffers(
             .width(ext.width)
             .height(ext.height)
             .layers(1);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        unsafe { device.create_framebuffer(&fb_info, None) }
+        device
+            .create_framebuffer(&fb_info)
             .map_err(|e| format!("bloom framebuffer: {e}"))
     };
     let mut write = Vec::with_capacity(bloom_mips.len());
@@ -314,7 +308,7 @@ pub(in crate::vulkan) fn create_bloom_framebuffers(
 // so the bloom prefilter thresholds the post-TAA scene image instead of the
 // raw HDR resolve.
 pub(in crate::vulkan) fn rebind_bloom_input0(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
     sampler: vk::Sampler,
@@ -337,7 +331,7 @@ pub(in crate::vulkan) fn rebind_bloom_input0(
 // one set per distinct input image: set 0 binds that slot's HDR resolve
 // image, set `1 + m` binds bloom mip `m`.
 pub(in crate::vulkan) fn alloc_bloom_input_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layout: vk::DescriptorSetLayout,
     sampler: vk::Sampler,
@@ -394,10 +388,10 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_write_pass,
-            self.bloom_write_framebuffers[f][0],
+            self.bloom_write_pass.handle(),
+            self.bloom_write_framebuffers[f][0].handle(),
             self.bloom_mip_extents[0],
-            self.bloom_pipeline_prefilter,
+            &self.bloom_pipeline_prefilter,
             self.bloom_input_sets[f][0],
         );
     }
@@ -407,10 +401,10 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_write_pass,
-            self.bloom_write_framebuffers[f][dst],
+            self.bloom_write_pass.handle(),
+            self.bloom_write_framebuffers[f][dst].handle(),
             self.bloom_mip_extents[dst],
-            self.bloom_pipeline_downsample,
+            &self.bloom_pipeline_downsample,
             self.bloom_input_sets[f][dst],
         );
     }
@@ -420,10 +414,10 @@ impl crate::gfx::fullscreen::BloomEncoder for VkContext {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
-            self.bloom_blend_pass,
-            self.bloom_blend_framebuffers[f][dst],
+            self.bloom_blend_pass.handle(),
+            self.bloom_blend_framebuffers[f][dst].handle(),
             self.bloom_mip_extents[dst],
-            self.bloom_pipeline_upsample,
+            &self.bloom_pipeline_upsample,
             self.bloom_input_sets[f][dst + 2],
         );
     }
@@ -446,7 +440,7 @@ impl VkContext {
         render_pass: vk::RenderPass,
         framebuffer: vk::Framebuffer,
         ext: vk::Extent2D,
-        pipeline: vk::Pipeline,
+        pipeline: &OwnedPipeline,
         input_set: vk::DescriptorSet,
     ) {
         let device = &self.device;
@@ -479,18 +473,18 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.bloom_pipeline_layout,
+                self.bloom_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&input_set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                self.bloom_pipeline_layout,
+                self.bloom_pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 push_bytes,

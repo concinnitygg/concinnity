@@ -2,7 +2,12 @@
 // Mirrors the public API of metal::MtlContext so GraphicsSystem can drive both
 // backends identically.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::backend::FrameParams;
 use crate::gfx::render_types::*;
@@ -38,18 +43,18 @@ pub(super) const MAX_CLONE_DRAWS: usize = 128;
 // `shadow_map` through `build_barrier_registry`, so moving these fields behind
 // one field left the parallel emit path untouched.
 pub(super) struct VkShadow {
-    pub(super) render_pass: vk::RenderPass,
+    pub(super) render_pass: OwnedRenderPass,
     pub(super) map: GpuImage,
     pub(super) map_size: u32,
     // One framebuffer per cascade slice. Empty when the shadow pass is disabled.
-    pub(super) framebuffers: Vec<vk::Framebuffer>,
-    pub(super) pipeline: Option<vk::Pipeline>,
-    pub(super) pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) global_set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) framebuffers: Vec<OwnedFramebuffer>,
+    pub(super) pipeline: Option<OwnedPipeline>,
+    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) global_set_layout: Option<OwnedSetLayout>,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
-    pub(super) sampler: vk::Sampler,
-    pub(super) skinned_pipeline: Option<vk::Pipeline>,
-    pub(super) skinned_pipeline_layout: Option<vk::PipelineLayout>,
+    pub(super) sampler: OwnedSampler,
+    pub(super) skinned_pipeline: Option<OwnedPipeline>,
+    pub(super) skinned_pipeline_layout: Option<OwnedPipelineLayout>,
     // Per-frame-in-flight `ShadowUniforms` ring, persistently mapped. One slot
     // per frame: a single buffer would let this frame's cascade VPs overwrite
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
@@ -87,31 +92,7 @@ impl VkShadow {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The per-frame `global_sets` are freed with the shared
     // descriptor pool, so they are not destroyed here.
-    pub(super) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            if let Some(p) = self.pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(p) = self.skinned_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.skinned_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(sl) = self.global_set_layout {
-                device.destroy_descriptor_set_layout(sl, None);
-            }
-            device.destroy_render_pass(self.render_pass, None);
-            device.destroy_sampler(self.sampler, None);
-        }
+    pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.ubos.clear();
     }
@@ -127,7 +108,7 @@ impl VkShadow {
 pub(super) struct VkSpotShadow {
     pub(super) map: GpuImage,
     // One framebuffer per shadowed spot; empty when the world has none.
-    pub(super) framebuffers: Vec<vk::Framebuffer>,
+    pub(super) framebuffers: Vec<OwnedFramebuffer>,
     pub(super) slice_size: u32,
     // `SpotShadowData` per slice, uploaded once at init.
     pub(super) data_buffer: PooledBuffer,
@@ -140,7 +121,7 @@ pub(super) struct VkSpotShadow {
     pub(super) ubo: PooledBuffer,
 
     pub(super) sets: Vec<vk::DescriptorSet>,
-    pub(super) descriptor_pool: vk::DescriptorPool,
+    pub(super) _descriptor_pool: OwnedDescriptorPool,
     // Round-robin clock + primed set, advanced once per frame in draw_frame.
     pub(super) scheduler: crate::gfx::spot_shadow::SpotShadowScheduler,
     // Slices re-rendered this frame (bit `i` = slice `i`).
@@ -163,15 +144,7 @@ impl VkSpotShadow {
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`; `sets` are freed with `descriptor_pool`.
-    pub(super) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-        }
+    pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.data_buffer = PooledBuffer::null();
         self.ubo = PooledBuffer::null();
@@ -188,21 +161,16 @@ pub(super) struct VkAreaLight {
     pub(super) ltc_matrix: GpuImage,
     pub(super) ltc_magnitude: GpuImage,
     // Linear clamp-to-edge sampler for both tables.
-    pub(super) sampler: vk::Sampler,
+    pub(super) sampler: OwnedSampler,
 }
 
 impl VkAreaLight {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(super) fn destroy(&mut self, device: &Device) {
+    pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.ltc_matrix = GpuImage::null();
         self.ltc_magnitude = GpuImage::null();
         self.buffer = PooledBuffer::null();
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.sampler, None);
-        }
     }
 }
 
@@ -213,10 +181,10 @@ impl VkAreaLight {
 // for the main pass, set 1 for the shadow pass; the descriptor set layout is
 // identical so one set serves both.
 pub(super) struct VkSkinned {
-    pub(super) pipeline: Option<vk::Pipeline>,
-    pub(super) pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) joint_set_layout: Option<vk::DescriptorSetLayout>,
-    pub(super) descriptor_pool: Option<vk::DescriptorPool>,
+    pub(super) pipeline: Option<OwnedPipeline>,
+    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) joint_set_layout: Option<OwnedSetLayout>,
+    pub(super) descriptor_pool: Option<OwnedDescriptorPool>,
     pub(super) vertex_buffer: PooledBuffer,
     pub(super) index_buffer: PooledBuffer,
     // Current byte sizes of the skinned VB / IB. Used by
@@ -275,23 +243,7 @@ impl VkSkinned {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The per-object `object_sets` and per-frame `joint_sets` are
     // freed with `descriptor_pool`, so they are not destroyed here.
-    pub(super) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            if let Some(p) = self.pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(l) = self.joint_set_layout {
-                device.destroy_descriptor_set_layout(l, None);
-            }
-            if let Some(pool) = self.descriptor_pool {
-                device.destroy_descriptor_pool(pool, None);
-            }
-        }
+    pub(super) fn destroy(&mut self, device: &VkDevice) {
         self.vertex_buffer = PooledBuffer::null();
         self.index_buffer = PooledBuffer::null();
         self.joint_buffers.clear();
@@ -342,7 +294,7 @@ impl VkGeometry {
 // allocated from `descriptor_pool` at init and freed with it. Post, instanced,
 // chunk, clone, and skinned descriptors live in their own pools, not here.
 pub(super) struct VkDescriptors {
-    pub(super) global_set_layout: vk::DescriptorSetLayout,
+    pub(super) global_set_layout: OwnedSetLayout,
     // Whether `global_set_layout` was created with
     // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, so it budgets
     // against the update-after-bind sampler limit instead of Metal's 16-entry
@@ -357,9 +309,9 @@ pub(super) struct VkDescriptors {
     // re-rendered global set, and probe-shader recompile reads it from here so
     // they stay sized to the layout the pipelines were built against.
     pub(super) probe_cube_count: u32,
-    pub(super) object_set_layout: vk::DescriptorSetLayout,
-    pub(super) text_set_layout: vk::DescriptorSetLayout,
-    pub(super) descriptor_pool: vk::DescriptorPool,
+    pub(super) object_set_layout: OwnedSetLayout,
+    pub(super) _text_set_layout: OwnedSetLayout,
+    pub(super) _descriptor_pool: OwnedDescriptorPool,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
     pub(super) object_sets: Vec<vk::DescriptorSet>,
     pub(super) text_atlas_sets: Vec<vk::DescriptorSet>,
@@ -369,16 +321,7 @@ impl VkDescriptors {
     // Destroy the shared descriptor pool (which frees every set allocated from
     // it: global_sets / object_sets / text_atlas_sets) and the three set
     // layouts. Called from `VkContext::drop` after `wait_idle`.
-    pub(super) fn destroy(&self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_descriptor_set_layout(self.global_set_layout, None);
-            device.destroy_descriptor_set_layout(self.object_set_layout, None);
-            device.destroy_descriptor_set_layout(self.text_set_layout, None);
-        }
-    }
+    pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
 // Instanced-prop rendering: the pipeline + per-cluster material sets + the
@@ -389,9 +332,9 @@ impl VkDescriptors {
 // per-frame LOD partition every instanced draw site shares.
 pub(super) struct VkInstanced {
     // Instanced pipeline; None when no InstancedProp clusters were declared.
-    pub(super) pipeline: Option<vk::Pipeline>,
-    pub(super) pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) pipeline: Option<OwnedPipeline>,
+    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) clusters: Vec<InstancedCluster>,
     // Per-cluster (albedo, normal) sets used by the instanced pipeline.
     // Indexed by cluster index. Empty when no clusters are declared.
@@ -417,20 +360,7 @@ impl VkInstanced {
     // `VkContext::drop` after `wait_idle`. The descriptor sets (`object_sets`,
     // `sets`) are freed with the shared descriptor pool, so they are not
     // destroyed here; `clusters` / `lod_buckets` are plain CPU state.
-    pub(super) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            if let Some(p) = self.pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(l) = self.set_layout {
-                device.destroy_descriptor_set_layout(l, None);
-            }
-        }
+    pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.buffers.clear();
     }
 }
@@ -449,7 +379,7 @@ pub(super) struct VkChunkStream {
     pub(super) idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     // Dedicated pool + one shared (albedo, normal) descriptor set for streamed
     // chunks.
-    pub(super) descriptor_pool: Option<vk::DescriptorPool>,
+    pub(super) descriptor_pool: Option<OwnedDescriptorPool>,
     pub(super) object_set: Option<vk::DescriptorSet>,
     // Albedo / normal-map pool slots the shared chunk material samples, stored
     // (already clamped) so a streamed swap of either slot re-points `object_set`.
@@ -461,14 +391,7 @@ impl VkChunkStream {
     // Destroy the chunk descriptor pool (which frees `object_set`). Called from
     // `VkContext::drop` after `wait_idle`. The allocators, free-slot list, and
     // material slots are plain CPU state with nothing to free.
-    pub(super) fn destroy(&self, device: &Device) {
-        if let Some(pool) = self.descriptor_pool {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_descriptor_pool(pool, None) };
-        }
-    }
+    pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
 // GPU-driven cull + bindless static main pass (+ optional two-pass Hi-Z
@@ -485,9 +408,9 @@ pub(super) struct VkCull {
     // Bindless static main pass. `Some` only on the built-in shader; `None`
     // keeps the legacy per-draw main pass. The bindless descriptor sets are
     // freed with the shared descriptor pool.
-    pub(super) bindless_pipeline: Option<vk::Pipeline>,
-    pub(super) bindless_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) bindless_set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) bindless_pipeline: Option<OwnedPipeline>,
+    pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) bindless_set_layout: Option<OwnedSetLayout>,
     // Descriptor count `bindless_set_layout`'s binding 1 was built with, and the
     // `{POOL_SIZE}` every pool-sized shader must compile against. 0 when the
     // bindless path is inactive. Every recompile reads this rather than
@@ -506,7 +429,7 @@ pub(super) struct VkCull {
     // GPU-culled command buffer through the shared bindless pipeline layout.
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
-    pub(super) world_pipelines: Vec<Option<vk::Pipeline>>,
+    pub(super) world_pipelines: Vec<Option<OwnedPipeline>>,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed at
     // init to the record capacity the buffers were sized for. Bucket `b`'s region
     // starts at command `b * bucket_stride`.
@@ -523,9 +446,9 @@ pub(super) struct VkCull {
     pub(super) object_buffers: Vec<PooledBuffer>,
     // Compute cull pipeline + its per-frame sets (bindings 0/1/2 = that frame's
     // object SSBO, draw-args SSBO, indirect-command SSBO). Sets are pool-freed.
-    pub(super) cull_pipeline: Option<vk::Pipeline>,
-    pub(super) cull_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) cull_set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) cull_pipeline: Option<OwnedPipeline>,
+    pub(super) cull_pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) cull_set_layout: Option<OwnedSetLayout>,
     pub(super) cull_sets: Vec<vk::DescriptorSet>,
     // Per-frame `GpuDrawArgs` storage buffers, persistently mapped.
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
@@ -541,16 +464,16 @@ pub(super) struct VkCull {
     pub(super) occlusion_two_pass: bool,
     // Phase-2 cull pipeline (same layout as `cull_pipeline`) + its per-frame
     // sets, allocated from `two_pass_pool`.
-    pub(super) cull_pipeline_phase2: Option<vk::Pipeline>,
+    pub(super) cull_pipeline_phase2: Option<OwnedPipeline>,
     pub(super) cull_sets2: Vec<vk::DescriptorSet>,
-    pub(super) two_pass_pool: Option<vk::DescriptorPool>,
+    pub(super) _two_pass_pool: Option<OwnedDescriptorPool>,
     // Per-frame second indirect draw-command buffers `Cull2` writes and `Main2`
     // consumes. Device-local.
     pub(super) indirect_buffers2: Vec<PooledBuffer>,
     // Phase-1 / phase-2 main render passes (render-pass-compatible with the
     // main-pass `framebuffers`).
-    pub(super) main_render_pass_phase1: Option<vk::RenderPass>,
-    pub(super) main_render_pass_phase2: Option<vk::RenderPass>,
+    pub(super) main_render_pass_phase1: Option<OwnedRenderPass>,
+    pub(super) main_render_pass_phase2: Option<OwnedRenderPass>,
     // Hi-Z occlusion culling. The depth-mip pyramid (built at end of frame
     // from this frame's main depth) + its build pipelines + the cull pipeline's
     // set 1 (`sampler2D` Hi-Z + per-frame `CullHizParams` UBO). `Some` exactly
@@ -581,12 +504,12 @@ pub(super) struct VkCull {
     // skinned tail. `shadow_indirect_buffers` / `shadow_cull_sets` are indexed
     // [frame][cascade]. All `Some`/non-empty only when the bindless cull path is
     // active AND shadows are enabled.
-    pub(super) shadow_cull_pipeline: Option<vk::Pipeline>,
-    pub(super) shadow_cull_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) shadow_cull_set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) shadow_cull_pipeline: Option<OwnedPipeline>,
+    pub(super) shadow_cull_pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) _shadow_cull_set_layout: Option<OwnedSetLayout>,
     pub(super) shadow_cull_sets: Vec<Vec<vk::DescriptorSet>>,
-    pub(super) shadow_bindless_pipeline: Option<vk::Pipeline>,
-    pub(super) shadow_bindless_pipeline_layout: Option<vk::PipelineLayout>,
+    pub(super) shadow_bindless_pipeline: Option<OwnedPipeline>,
+    pub(super) shadow_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) shadow_indirect_buffers: Vec<Vec<PooledBuffer>>,
     // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
     // reads `model` + `roughness` from the GpuObjectData SSBO (gl_InstanceIndex)
@@ -598,9 +521,9 @@ pub(super) struct VkCull {
     // `prev_model_*` buffers are host-mapped (instance region init-written, static
     // + skinned regions rewritten each frame). All `Some`/non-empty only when the
     // bindless cull path is active AND the G-buffer is enabled.
-    pub(super) gbuffer_bindless_pipeline: Option<vk::Pipeline>,
-    pub(super) gbuffer_bindless_pipeline_layout: Option<vk::PipelineLayout>,
-    pub(super) gbuffer_set_layout: Option<vk::DescriptorSetLayout>,
+    pub(super) gbuffer_bindless_pipeline: Option<OwnedPipeline>,
+    pub(super) gbuffer_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) _gbuffer_set_layout: Option<OwnedSetLayout>,
     pub(super) gbuffer_sets: Vec<vk::DescriptorSet>,
     pub(super) prev_model_buffers: Vec<PooledBuffer>,
 }
@@ -611,80 +534,18 @@ impl VkCull {
     // the shared descriptor pool + `two_pass_pool`, so they are not destroyed
     // here. `occlusion_two_pass` is plain CPU state. Takes `&mut self` because
     // `HiZResources::destroy` nulls out its handles as it frees them.
-    pub(super) fn destroy(&mut self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &VkDevice) {
         // Hi-Z occlusion resources (image + build pipelines + cull-read sets +
         // per-frame cull UBOs).
         if let Some(hiz) = &mut self.hiz {
             hiz.destroy(device);
         }
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            if let Some(p) = self.bindless_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            for p in self.world_pipelines.iter().flatten() {
-                device.destroy_pipeline(*p, None);
-            }
-            if let Some(pl) = self.bindless_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(sl) = self.bindless_set_layout {
-                device.destroy_descriptor_set_layout(sl, None);
-            }
-            if let Some(p) = self.cull_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(p) = self.cull_pipeline_phase2 {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.cull_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(sl) = self.cull_set_layout {
-                device.destroy_descriptor_set_layout(sl, None);
-            }
-            if let Some(pool) = self.two_pass_pool {
-                device.destroy_descriptor_pool(pool, None);
-            }
-            if let Some(rp) = self.main_render_pass_phase1 {
-                device.destroy_render_pass(rp, None);
-            }
-            if let Some(rp) = self.main_render_pass_phase2 {
-                device.destroy_render_pass(rp, None);
-            }
-            // GPU-driven shadow pass. The per-(frame, cascade) `shadow_cull_sets`
-            // are freed with the shared descriptor pool, so only the pipelines,
-            // the set layout, and the per-cascade indirect buffers are destroyed.
-            if let Some(p) = self.shadow_cull_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.shadow_cull_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(sl) = self.shadow_cull_set_layout {
-                device.destroy_descriptor_set_layout(sl, None);
-            }
-            if let Some(p) = self.shadow_bindless_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.shadow_bindless_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` are freed
-            // with the shared descriptor pool, so only the pipeline, layout, set
-            // layout, and the per-frame prev_model buffers are destroyed here.
-            if let Some(p) = self.gbuffer_bindless_pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(pl) = self.gbuffer_bindless_pipeline_layout {
-                device.destroy_pipeline_layout(pl, None);
-            }
-            if let Some(sl) = self.gbuffer_set_layout {
-                device.destroy_descriptor_set_layout(sl, None);
-            }
-        }
+        // GPU-driven shadow pass. The per-(frame, cascade) `shadow_cull_sets`
+        // are freed with the shared descriptor pool, so only the pipelines,
+        // the set layout, and the per-cascade indirect buffers are destroyed.
+        // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` are freed
+        // with the shared descriptor pool, so only the pipeline, layout, set
+        // layout, and the per-frame prev_model buffers are destroyed here.
         self.object_buffers.clear();
         self.draw_args_buffers.clear();
         self.indirect_buffers.clear();
@@ -715,7 +576,7 @@ pub(super) struct VkFrameSync {
 impl VkFrameSync {
     // Destroy every owned semaphore + fence. Called from `VkContext::drop`
     // after `wait_idle`, so none are still in flight.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&self, device: &VkDevice) {
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         unsafe {
@@ -770,7 +631,7 @@ pub(super) struct VkCommands {
 impl VkCommands {
     // Destroy every command pool, which frees the buffers allocated from it.
     // Called from `VkContext::drop` after `wait_idle`.
-    pub(super) fn destroy(&self, device: &Device) {
+    pub(super) fn destroy(&self, device: &VkDevice) {
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         unsafe {
@@ -839,7 +700,11 @@ impl VkUniforms {
 pub struct VkContext {
     // Vulkan core
     pub(super) instance: ash::Instance,
-    pub(super) device: Device,
+    // Owns the logical device: the instance and the entry above it stay alive
+    // for as long as it does, and every Vulkan object the backend owns retires
+    // through its queue. Derefs to `ash::Device`, so recording and querying
+    // through it read the same as before.
+    pub(super) device: super::owned::VkDevice,
     pub(super) physical_device: vk::PhysicalDevice,
     pub(super) surface: vk::SurfaceKHR,
     pub(super) surface_loader: ash::khr::surface::Instance,
@@ -873,10 +738,10 @@ pub struct VkContext {
     pub(super) last_present_index: Option<u32>,
 
     // Render passes
-    pub(super) main_render_pass: vk::RenderPass,
+    pub(super) main_render_pass: OwnedRenderPass,
     // Composite (post-process) pass: tonemaps the HDR resolve image onto the
     // swapchain. The text overlay also draws here, post-tonemap.
-    pub(super) composite_render_pass: vk::RenderPass,
+    pub(super) composite_render_pass: OwnedRenderPass,
 
     // Multisampling
     pub(super) msaa_samples: vk::SampleCountFlags,
@@ -890,10 +755,10 @@ pub struct VkContext {
 
     // Main-pass framebuffers (one per frame-in-flight slot): HDR colour +
     // depth (+ resolve when multisampled).
-    pub(super) framebuffers: Vec<vk::Framebuffer>,
+    pub(super) framebuffers: Vec<OwnedFramebuffer>,
     // Composite-pass framebuffers (one per swapchain image): the swapchain
     // backbuffer the composite pass writes to.
-    pub(super) composite_framebuffers: Vec<vk::Framebuffer>,
+    pub(super) composite_framebuffers: Vec<OwnedFramebuffer>,
 
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
     pub(super) shadow: VkShadow,
@@ -913,12 +778,12 @@ pub struct VkContext {
     pub(super) text_atlas_textures: Vec<GpuImage>,
 
     // Samplers
-    pub(super) linear_sampler: vk::Sampler,
-    pub(super) text_sampler: vk::Sampler,
+    pub(super) linear_sampler: OwnedSampler,
+    pub(super) _text_sampler: OwnedSampler,
 
     // Pipelines
-    pub(super) main_pipeline: vk::Pipeline,
-    pub(super) main_pipeline_layout: vk::PipelineLayout,
+    pub(super) main_pipeline: OwnedPipeline,
+    pub(super) main_pipeline_layout: OwnedPipelineLayout,
     // GPU-driven cull + bindless static main pass + two-pass Hi-Z occlusion
     // (pyramid + temporal state). See `VkCull`.
     pub(super) cull: VkCull,
@@ -927,19 +792,19 @@ pub struct VkContext {
     // `ClusterParams` UBOs. See `VkLightCull`.
     pub(super) light_cull: super::light_cull::VkLightCull,
 
-    pub(super) text_pipeline: Option<vk::Pipeline>,
-    pub(super) text_pipeline_layout: vk::PipelineLayout,
+    pub(super) text_pipeline: Option<OwnedPipeline>,
+    pub(super) text_pipeline_layout: OwnedPipelineLayout,
 
     // Composite (post-process) pipeline.
-    pub(super) composite_pipeline: vk::Pipeline,
-    pub(super) composite_pipeline_layout: vk::PipelineLayout,
-    pub(super) composite_set_layout: vk::DescriptorSetLayout,
+    pub(super) composite_pipeline: OwnedPipeline,
+    pub(super) composite_pipeline_layout: OwnedPipelineLayout,
+    pub(super) _composite_set_layout: OwnedSetLayout,
     // Per-frame-slot descriptor sets binding the matching HDR resolve image
     // (binding 0), bloom mip 0 (binding 1), and the 3D colour LUT (binding 2).
     pub(super) composite_sets: Vec<vk::DescriptorSet>,
     // Linear-clamp sampler the composite + bloom shaders read HDR images with.
     // The 3D colour LUT is sampled through the same sampler.
-    pub(super) composite_sampler: vk::Sampler,
+    pub(super) composite_sampler: OwnedSampler,
     // 3D colour-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares none.
     // Resolution-independent, so it is never rebuilt on swapchain resize.
@@ -948,24 +813,24 @@ pub struct VkContext {
     // Bloom chain. The mips, framebuffers, and input descriptor sets are all
     // per-frame-in-flight slot (outer Vec): concurrent slots must not share a
     // bloom target. Render passes / pipelines / layouts are slot-agnostic.
-    pub(super) bloom_write_pass: vk::RenderPass,
-    pub(super) bloom_blend_pass: vk::RenderPass,
-    pub(super) bloom_pipeline_prefilter: vk::Pipeline,
-    pub(super) bloom_pipeline_downsample: vk::Pipeline,
-    pub(super) bloom_pipeline_upsample: vk::Pipeline,
-    pub(super) bloom_pipeline_layout: vk::PipelineLayout,
-    pub(super) bloom_set_layout: vk::DescriptorSetLayout,
-    pub(super) bloom_descriptor_pool: vk::DescriptorPool,
+    pub(super) bloom_write_pass: OwnedRenderPass,
+    pub(super) bloom_blend_pass: OwnedRenderPass,
+    pub(super) bloom_pipeline_prefilter: OwnedPipeline,
+    pub(super) bloom_pipeline_downsample: OwnedPipeline,
+    pub(super) bloom_pipeline_upsample: OwnedPipeline,
+    pub(super) bloom_pipeline_layout: OwnedPipelineLayout,
+    pub(super) bloom_set_layout: OwnedSetLayout,
+    pub(super) bloom_descriptor_pool: OwnedDescriptorPool,
     // `[frame][mip]`, largest mip first; `mip 0` is half the HDR resolution.
     pub(super) bloom_mips: Vec<Vec<GpuImage>>,
     // Resolution of each mip level (shared across frame slots).
     pub(super) bloom_mip_extents: Vec<vk::Extent2D>,
     // `[frame][mip]` framebuffers for the DONT_CARE-load write pass.
-    pub(super) bloom_write_framebuffers: Vec<Vec<vk::Framebuffer>>,
+    pub(super) bloom_write_framebuffers: Vec<Vec<OwnedFramebuffer>>,
     // `[frame][mip]` framebuffers for the LOAD additive-blend pass; one fewer
     // entry than `bloom_write_framebuffers` (the smallest mip is never
     // upsampled into).
-    pub(super) bloom_blend_framebuffers: Vec<Vec<vk::Framebuffer>>,
+    pub(super) bloom_blend_framebuffers: Vec<Vec<OwnedFramebuffer>>,
     // `[frame][input]` sets: input 0 binds the HDR resolve image, input
     // `1 + m` binds bloom mip `m`.
     pub(super) bloom_input_sets: Vec<Vec<vk::DescriptorSet>>,
@@ -1294,7 +1159,7 @@ pub struct VkContext {
     // pool. Built at init (along with `clone_object_sets`), regardless of
     // whether any clone exists yet. Mirrors DirectX's `clone_srv_base_slot`
     // reservation.
-    pub(super) clone_descriptor_pool: Option<vk::DescriptorPool>,
+    pub(super) clone_descriptor_pool: Option<OwnedDescriptorPool>,
     // Per-clone (albedo, normal) descriptor sets, indexed by clone offset.
     // Empty until the first `clone_static_draw_object` runs; bounded by
     // `MAX_CLONE_DRAWS` from `gfx::clone::MAX_CLONE_DRAWS`. A set whose offset is
@@ -1385,7 +1250,7 @@ pub struct VkContext {
     pub(super) prefilter_mip_count: u32,
     // Cube sampler shared by the IBL irradiance + prefilter cube bindings.
     // Held here so Drop can destroy it after the device idles.
-    pub(super) cube_sampler: vk::Sampler,
+    pub(super) cube_sampler: OwnedSampler,
     // Owned IBL cube textures. Live for the lifetime of the context.
     pub(super) env_map: EnvironmentMapTextures,
 
@@ -1436,14 +1301,6 @@ pub struct VkContext {
     // `None` only transiently on the outgoing context, which is dropped
     // immediately after (see `window` / `window_mut` accessors + `Drop`).
     pub(super) window: Option<super::PlatformWindow>,
-
-    // Optional validation debug messenger
-    pub(super) debug_utils: Option<ash::ext::debug_utils::Instance>,
-    pub(super) debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
-    // Budget of benign DLSS first-frame layout errors the messenger callback
-    // drops (the messenger holds a raw pointer to this; it must outlive the
-    // messenger, which `Drop` destroys before fields). `None` without validation.
-    pub(super) debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
 
     // Keep Entry alive for the lifetime of the instance
     pub(super) _entry: ash::Entry,
@@ -1599,6 +1456,9 @@ impl VkContext {
         // what guarantees a range freed `retire_depth` ticks ago is no longer
         // referenced.
         self.alloc.begin_frame();
+        // Same tick for the owned pipeline / layout / render-pass handles a
+        // rebuild displaced, on the same reasoning.
+        self.device.begin_frame();
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.
@@ -2332,28 +2192,17 @@ impl VkContext {
         self.env_map.prefilter = GpuImage::null();
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
-        unsafe { device.destroy_sampler(self.cube_sampler, None) };
 
         // Pipelines.
-        self.wireframe.destroy(device);
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe { device.destroy_pipeline(self.main_pipeline, None) };
-        if let Some(p) = self.text_pipeline {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_pipeline(p, None) };
-        }
+        self.wireframe.destroy();
+        self.text_pipeline = None;
         // Instanced-prop pipeline + per-frame instance buffers (see
         // `VkInstanced::destroy`).
         self.instanced.destroy(device);
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
-        unsafe { device.destroy_pipeline_layout(self.main_pipeline_layout, None) };
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
-        unsafe { device.destroy_pipeline_layout(self.text_pipeline_layout, None) };
 
         // GPU-driven cull + bindless static pass resources, including the Hi-Z
         // pyramid (see `VkCull::destroy`). The bindless / cull / phase-2
@@ -2364,29 +2213,9 @@ impl VkContext {
 
         // Composite pass resources (the LUT retires through the allocator).
         self.color_lut = GpuImage::null();
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.composite_pipeline, None);
-            device.destroy_pipeline_layout(self.composite_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.composite_set_layout, None);
-            device.destroy_sampler(self.composite_sampler, None);
-        }
 
         // Bloom resources (mips + framebuffers freed by
         // destroy_swapchain_resources above).
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.bloom_pipeline_prefilter, None);
-            device.destroy_pipeline(self.bloom_pipeline_downsample, None);
-            device.destroy_pipeline(self.bloom_pipeline_upsample, None);
-            device.destroy_pipeline_layout(self.bloom_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.bloom_set_layout, None);
-            device.destroy_descriptor_pool(self.bloom_descriptor_pool, None);
-            device.destroy_render_pass(self.bloom_write_pass, None);
-            device.destroy_render_pass(self.bloom_blend_pass, None);
-        }
 
         // TAA resources (velocity + history passes, pipelines, targets, UBOs).
         if let Some(mut taa) = self.taa.take() {
@@ -2504,23 +2333,11 @@ impl VkContext {
         }
 
         // Render passes.
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_render_pass(self.main_render_pass, None);
-            device.destroy_render_pass(self.composite_render_pass, None);
-        }
 
         // Chunk-stream descriptor pool (frees `chunk_stream.object_set`); the
         // shared main pool + its set layouts are freed by
         // `self.descriptors.destroy` below.
         self.chunk_stream.destroy(device);
-        if let Some(pool) = self.clone_descriptor_pool {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_descriptor_pool(pool, None) };
-        }
 
         // Skinned-mesh resources.
         self.skinned.destroy(device);
@@ -2536,12 +2353,6 @@ impl VkContext {
         self.uniforms.destroy();
 
         // Samplers.
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.linear_sampler, None);
-            device.destroy_sampler(self.text_sampler, None);
-        }
 
         // Scene textures + baked reflection-probe cubes: dropping them retires
         // them through the allocator.
@@ -2568,13 +2379,13 @@ impl Drop for VkContext {
             self.alloc.destroy();
         }
 
-        // Surface / device / instance are the shared hardware. On a
-        // `reload_world` the successor context inherited them (Vulkan handles are
-        // not refcounted), so the outgoing context skips destroying them here;
-        // its window / debug messenger were already moved out (both `None`
-        // below). A normal shutdown has `reused_by_successor == false` and tears
-        // everything down. The swapchain is likewise skipped inside
-        // `destroy_swapchain_resources` (called above) when reused.
+        // The surface is instance-level and not refcounted, so on a
+        // `reload_world` the successor inherited it and the outgoing context
+        // leaves it alone; its window / debug messenger were already moved out
+        // (both `None` below). It goes before the instance, which the owning
+        // device handle destroys once this context's fields have dropped. The
+        // swapchain is likewise skipped inside `destroy_swapchain_resources`
+        // (called above) when reused.
         if !self.reused_by_successor {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
@@ -2582,29 +2393,12 @@ impl Drop for VkContext {
             unsafe { self.surface_loader.destroy_surface(self.surface, None) };
         }
 
-        // Debug. `None` on the outgoing context of a reload (moved to the
-        // successor), so this is naturally skipped there.
-        if let (Some(du), Some(dm)) = (&self.debug_utils, self.debug_messenger) {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { du.destroy_debug_utils_messenger(dm, None) };
-        }
-
-        if !self.reused_by_successor {
-            // Persist and destroy the device's pipeline cache before the
-            // device goes away. On a lost device the serialize inside is
-            // skipped and the previous blob stays valid.
-            super::pipeline_cache::shutdown(&self.device);
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { self.device.destroy_device(None) };
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { self.instance.destroy_instance(None) };
-        }
+        // The device, the instance, the debug messenger and the pipeline cache
+        // are the owning
+        // device handle's to destroy, once every owned Vulkan object has
+        // retired through it. That happens as this context's fields drop,
+        // after this body returns, so nothing here has to order it -- and on a
+        // live reload the successor's clone simply keeps them alive.
     }
 }
 

@@ -59,6 +59,7 @@ use objc2_metal::{
 };
 
 use super::context::write_buffer_slice;
+use super::encode::ComputeEncode;
 use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
 use super::transient::RetirePool;
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
@@ -690,7 +691,7 @@ fn encode_skin_dispatch(
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
     palettes: SkinPalettes,
 ) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
-    cenc.setComputePipelineState(skinned.skin_pipeline);
+    cenc.set_pipeline(skinned.skin_pipeline);
     let threadgroup = skinned
         .skin_pipeline
         .maxTotalThreadsPerThreadgroup()
@@ -765,37 +766,24 @@ fn encode_skin_object(
         target_count: 0,
     };
     let zero_weight = [0.0f32];
-    // SAFETY: every bound buffer outlives the encoder, and each `setBytes` pointer is derived
-    // from a live borrow with that type's `size_of` as the length; the indices are the slots
-    // the skinning kernel declares.
-    unsafe {
-        cenc.setBuffer_offset_atIndex(Some(bufs.vertex), 0, 0);
-        cenc.setBuffer_offset_atIndex(Some(bufs.deformed), 0, 1);
-        cenc.setBuffer_offset_atIndex(Some(bufs.palette), 0, 2);
-        cenc.setBytes_length_atIndex(
-            NonNull::from(&params).cast(),
-            std::mem::size_of::<SkinParams>(),
-            3,
-        );
-        cenc.setBuffer_offset_atIndex(Some(bufs.vertex), 0, 4);
-        cenc.setBytes_length_atIndex(
-            NonNull::from(&zero_weight).cast(),
-            std::mem::size_of_val(&zero_weight),
-            5,
-        );
-        cenc.dispatchThreads_threadsPerThreadgroup(
-            MTLSize {
-                width: obj.vertex_count.max(1),
-                height: 1,
-                depth: 1,
-            },
-            MTLSize {
-                width: threadgroup,
-                height: 1,
-                depth: 1,
-            },
-        );
-    }
+    cenc.set_buffer(bufs.vertex, 0, 0);
+    cenc.set_buffer(bufs.deformed, 0, 1);
+    cenc.set_buffer(bufs.palette, 0, 2);
+    cenc.set_value(&params, 3);
+    cenc.set_buffer(bufs.vertex, 0, 4);
+    cenc.set_value(&zero_weight, 5);
+    cenc.dispatchThreads_threadsPerThreadgroup(
+        MTLSize {
+            width: obj.vertex_count.max(1),
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: threadgroup,
+            height: 1,
+            depth: 1,
+        },
+    );
 }
 
 impl crate::metal::context::MtlContext {
@@ -830,7 +818,7 @@ impl crate::metal::context::MtlContext {
         let cenc = cmd_buf
             .computeCommandEncoder()
             .ok_or("failed to create main-skin compute encoder")?;
-        cenc.setComputePipelineState(skin_pipeline);
+        cenc.set_pipeline(skin_pipeline);
         let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
             let Some(joint_buf) = joint_bufs.get(i) else {
@@ -860,38 +848,33 @@ impl crate::metal::context::MtlContext {
                 Some(w) if !w.is_empty() => w.as_slice(),
                 _ => &zero_weight,
             };
-            // SAFETY: every bound buffer outlives the encoder, and each `setBytes` pointer is
-            // derived from a live borrow with that type's `size_of` as the length; the indices are
-            // the slots the skinning kernel declares.
+            cenc.set_buffer(svb.as_ref(), 0, 0);
+            cenc.set_buffer(deformed, 0, 1);
+            cenc.set_buffer(joint_buf.as_ref(), 0, 2);
+            cenc.set_value(&params, 3);
+            let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+            cenc.set_buffer(delta_buf, 0, 4);
+            // SAFETY: the whole `weights` slice uploads from its first element's
+            // address, so the pointer and length describe the same live slice.
             unsafe {
-                cenc.setBuffer_offset_atIndex(Some(svb.as_ref()), 0, 0);
-                cenc.setBuffer_offset_atIndex(Some(deformed), 0, 1);
-                cenc.setBuffer_offset_atIndex(Some(joint_buf.as_ref()), 0, 2);
-                cenc.setBytes_length_atIndex(
-                    NonNull::from(&params).cast(),
-                    std::mem::size_of::<SkinParams>(),
-                    3,
-                );
-                let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-                cenc.setBuffer_offset_atIndex(Some(delta_buf), 0, 4);
                 cenc.setBytes_length_atIndex(
                     NonNull::from(&weights[0]).cast(),
                     std::mem::size_of_val(weights),
                     5,
                 );
-                cenc.dispatchThreads_threadsPerThreadgroup(
-                    MTLSize {
-                        width: obj.vertex_count.max(1),
-                        height: 1,
-                        depth: 1,
-                    },
-                    MTLSize {
-                        width: tg,
-                        height: 1,
-                        depth: 1,
-                    },
-                );
             }
+            cenc.dispatchThreads_threadsPerThreadgroup(
+                MTLSize {
+                    width: obj.vertex_count.max(1),
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: tg,
+                    height: 1,
+                    depth: 1,
+                },
+            );
         }
         cenc.endEncoding();
         Ok(())

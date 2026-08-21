@@ -2,7 +2,9 @@
 // All uploads go through a host-visible staging buffer that is blit-copied to
 // a device-local image via a one-shot command buffer.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedSampler, VkDevice};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 
@@ -127,7 +129,7 @@ pub(super) fn create_image(
 
 // Create a VkImageView for a 2-D image.
 pub(super) fn create_image_view(
-    device: &Device,
+    device: &VkDevice,
     image: vk::Image,
     format: vk::Format,
     aspect: vk::ImageAspectFlags,
@@ -156,7 +158,7 @@ pub(super) fn create_image_view(
 // by a queue/device wait, or because a later fence on the same queue signalled
 // (fence signals cover all prior submissions on the queue).
 pub(super) fn one_shot_submit_nowait<F>(
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     f: F,
@@ -196,7 +198,7 @@ where
 
 // Execute a short-lived command buffer and wait for it to complete.
 pub(super) fn one_shot_submit<F>(
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     f: F,
@@ -233,7 +235,7 @@ pub(super) struct SubresourceRange {
 // Transition `layer_count` layers of an image from one layout to another via
 // a pipeline barrier. Used by the array shadow map and cube uploads.
 pub(super) fn transition_image_layout_range(
-    device: &Device,
+    device: &VkDevice,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     transition: LayoutTransition,
@@ -355,7 +357,7 @@ fn layout_transition_access(
 
 // Transition an image from one layout to another via a pipeline barrier.
 pub(super) fn transition_image_layout(
-    device: &Device,
+    device: &VkDevice,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     old_layout: vk::ImageLayout,
@@ -383,7 +385,7 @@ pub(super) fn transition_image_layout(
 // Variant of `transition_image_layout` that covers every layer of an array
 // image (e.g. the 4-layer shadow array).
 pub(super) fn transition_image_layout_array(
-    device: &Device,
+    device: &VkDevice,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     old_layout: vk::ImageLayout,
@@ -415,7 +417,7 @@ pub(super) fn transition_image_layout_array(
 #[derive(Clone, Copy)]
 pub(super) struct GpuUploadContext<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -444,7 +446,7 @@ pub(super) struct StreamedUploadRetire {
 }
 
 impl StreamedUploadRetire {
-    pub(super) fn destroy(&self, device: &Device, command_pool: vk::CommandPool) {
+    pub(super) fn destroy(&self, device: &VkDevice, command_pool: vk::CommandPool) {
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         unsafe {
@@ -1220,7 +1222,7 @@ pub(super) fn create_msaa_color_image(
 // an `UNDEFINED` initial layout for it.
 pub(super) fn create_hdr_resolve_image(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     width: u32,
     height: u32,
     format: vk::Format,
@@ -1252,9 +1254,9 @@ pub(super) fn create_hdr_resolve_image(
 // filtering (the caller passes the device-supported degree, or <= 1.0 when the
 // `samplerAnisotropy` feature is unavailable).
 pub(super) fn create_sampler_linear_repeat(
-    device: &Device,
+    device: &VkDevice,
     max_anisotropy: f32,
-) -> Result<vk::Sampler, String> {
+) -> Result<OwnedSampler, String> {
     let aniso = max_anisotropy > 1.0;
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
@@ -1270,13 +1272,13 @@ pub(super) fn create_sampler_linear_repeat(
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("linear repeat sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("linear repeat sampler: {e}"))
 }
 
 // Compare sampler for PCF shadow sampling (LessEqual compare op).
-pub(super) fn create_sampler_shadow(device: &Device) -> Result<vk::Sampler, String> {
+pub(super) fn create_sampler_shadow(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1289,13 +1291,13 @@ pub(super) fn create_sampler_shadow(device: &Device) -> Result<vk::Sampler, Stri
         .compare_enable(true)
         .compare_op(vk::CompareOp::LESS_OR_EQUAL)
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("shadow sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("shadow sampler: {e}"))
 }
 
 // Linear clamp sampler for text atlas lookups.
-pub(super) fn create_sampler_linear_clamp(device: &Device) -> Result<vk::Sampler, String> {
+pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1307,9 +1309,9 @@ pub(super) fn create_sampler_linear_clamp(device: &Device) -> Result<vk::Sampler
         .unnormalized_coordinates(false)
         .compare_enable(false)
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("linear clamp sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("linear clamp sampler: {e}"))
 }
 
 // IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
@@ -1578,7 +1580,7 @@ pub(super) fn upload_probe_prefilter_cube(
 
 // Linear-clamp sampler with full mipmap support, used by the IBL prefilter
 // cube (roughness → mip selection) and the irradiance cube.
-pub(super) fn create_sampler_cube_linear(device: &Device) -> Result<vk::Sampler, String> {
+pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1592,7 +1594,7 @@ pub(super) fn create_sampler_cube_linear(device: &Device) -> Result<vk::Sampler,
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
         .min_lod(0.0)
         .max_lod(vk::LOD_CLAMP_NONE);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("cube sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("cube sampler: {e}"))
 }

@@ -36,8 +36,8 @@ use objc2_metal::{
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
 };
 
-use crate::gfx::render_types::ShadowUniforms;
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
+use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
 use concinnity_render::uniforms::ViewUniforms;
@@ -484,26 +484,18 @@ impl MtlContext {
         // by both ranges: the skinned records live in the same object buffer and
         // sample the same flat pool. The object id reaches the shader via each
         // command's [[base_instance]].
-        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-        // buffer/texture indices the shaders declare.
-        unsafe {
-            enc.setVertexBuffer_offset_atIndex(Some(obj_buf), 0, 9);
-            enc.setFragmentBuffer_offset_atIndex(Some(obj_buf), 0, 9);
-            enc.setFragmentBuffer_offset_atIndex(
-                Some(tex_args),
+        enc.set_vertex_buffer(obj_buf, 0, 9);
+        enc.set_fragment_buffer(obj_buf, 0, 9);
+        enc.set_fragment_buffer(tex_args, 0, BINDLESS_TEXTURE_ARG_BUFFER_INDEX);
+        // The engine sampler block (single-source main program only;
+        // world-authored fragments use inline samplers and ignore the
+        // slot).
+        if let Some(sampler_args) = &self.bindless_sampler_args {
+            enc.set_fragment_buffer(
+                sampler_args,
                 0,
-                BINDLESS_TEXTURE_ARG_BUFFER_INDEX,
+                crate::metal::context::BINDLESS_SAMPLER_ARG_BUFFER_INDEX,
             );
-            // The engine sampler block (single-source main program only;
-            // world-authored fragments use inline samplers and ignore the
-            // slot).
-            if let Some(sampler_args) = &self.bindless_sampler_args {
-                enc.setFragmentBuffer_offset_atIndex(
-                    Some(sampler_args),
-                    0,
-                    crate::metal::context::BINDLESS_SAMPLER_ARG_BUFFER_INDEX,
-                );
-            }
         }
         self.use_bindless_textures(enc);
 
@@ -531,7 +523,7 @@ impl MtlContext {
                     let Some(pso) = self.world_pipeline(b) else {
                         continue;
                     };
-                    enc.setRenderPipelineState(pso);
+                    enc.set_pipeline(pso);
                 }
                 // SAFETY: the prefix spans the static + instance command slots
                 // (`ensure_icb_capacity` sized every ICB for `counts.total`).
@@ -545,7 +537,7 @@ impl MtlContext {
             if icbs.len() > 1
                 && let Some(ps) = &self.pipeline_state
             {
-                enc.setRenderPipelineState(ps);
+                enc.set_pipeline(ps);
             }
         }
 
@@ -558,11 +550,7 @@ impl MtlContext {
         if let (Some(deformed), Some(icb0), Some(tail)) =
             (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
-            }
+            enc.set_vertex_buffer(deformed, 0, 1);
             if let Some(skinned_ib) = self.skinned.index_buffer.as_ref() {
                 enc.useResource_usage_stages(
                     ProtocolObject::from_ref(&**skinned_ib),
@@ -606,17 +594,8 @@ impl MtlContext {
                 ..self.cluster_params
             }
         };
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&cluster_params).cast(),
-                std::mem::size_of::<crate::gfx::render_types::ClusterParams>(),
-                11,
-            );
-            enc.setFragmentBuffer_offset_atIndex(Some(&self.light_cull.cluster_buffer), 0, 12);
-        }
+        enc.set_fragment_value(&cluster_params, 11);
+        enc.set_fragment_buffer(&self.light_cull.cluster_buffer, 0, 12);
     }
 
     fn bind_main_pass_shared(
@@ -627,87 +606,62 @@ impl MtlContext {
         let Some(pipeline_state) = &self.pipeline_state else {
             return false;
         };
-        enc.setRenderPipelineState(pipeline_state);
-        enc.setDepthStencilState(Some(&self.depth_state));
+        enc.set_pipeline(pipeline_state);
+        enc.set_depth_stencil(&self.depth_state);
 
-        // SAFETY: each pointer is derived from the live `view_uniforms` borrow with its `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(view_uniforms).cast(),
-                std::mem::size_of::<ViewUniforms>(),
-                0,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(view_uniforms).cast(),
-                std::mem::size_of::<ViewUniforms>(),
-                0,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.light_uniforms).cast(),
-                std::mem::size_of::<crate::gfx::render_types::LightUniforms>(),
-                4,
-            );
-            // Local-light storage buffer at fragment buffer(8). Encoder-bound
-            // buffers are inherited by the ICB-executed bindless draws (the same
-            // way the object buffer at binding 9 is), so this single bind covers
-            // the legacy and GPU-driven paths and the planar / probe re-renders.
-            enc.setFragmentBuffer_offset_atIndex(Some(&self.local_light_buffer), 0, 8);
-            // Per-slice spot shadow projections at fragment buffer(13), inherited
-            // by the ICB draws like the local lights above. The matching depth
-            // array is a discrete texture on the legacy path only; the bindless
-            // path reaches it through the BindlessTextures argument buffer,
-            // because discrete texture bindings break ICB compatibility.
-            enc.setFragmentBuffer_offset_atIndex(Some(&self.spot_shadow_buffer), 0, 13);
-            // Rect area-light extents at fragment buffer(14), indexed by
-            // GpuLight.data_index. Inherited by the ICB draws like the buffers
-            // above, so this one bind covers every main-pass variant.
-            enc.setFragmentBuffer_offset_atIndex(Some(&self.area_light_buffer), 0, 14);
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
-                std::mem::size_of::<ShadowUniforms>(),
-                5,
-            );
-            enc.setFragmentTexture_atIndex(Some(self.shadow_map.as_ref()), 2);
-            enc.setFragmentTexture_atIndex(Some(self.spot_shadow_map.as_ref()), 14);
-            // Area-light LTC tables. The cube sampler at sampler(2) is a plain
-            // linear clamp-to-edge, which is what the lookup wants, so no extra
-            // sampler slot is needed.
-            enc.setFragmentTexture_atIndex(Some(self.ltc_matrix_texture.as_ref()), 15);
-            enc.setFragmentTexture_atIndex(Some(self.ltc_magnitude_texture.as_ref()), 16);
-            enc.setFragmentSamplerState_atIndex(Some(self.shadow_sampler.as_ref()), 1);
-            // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
-            // and a shared linear-clamp sampler at sampler(2). Always bound; the
-            // shader uses prefilter_mip_count == 0 to detect the fallback case.
-            enc.setFragmentTexture_atIndex(Some(self.env_map.irradiance.as_ref()), 3);
-            enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 4);
-            enc.setFragmentSamplerState_atIndex(Some(self.cube_sampler.as_ref()), 2);
-            // SSAO occlusion at texture(5): the blurred AO when SSAO is on,
-            // else a 1x1 white texture so shade_surface samples a constant 1.0
-            // and the ambient term is left untouched. (The bindless static
-            // pass instead reaches it through the BindlessTextures argument
-            // buffer; see build_bindless_texture_args.)
-            enc.setFragmentTexture_atIndex(Some(self.ao_output_texture()), 5);
-            // Reflection-probe cube array at texture(6 .. 6+MAX_PROBES): the legacy
-            // path now selects + blends per-surface from the same probe set as the
-            // bindless path (which reaches the cubes through the BindlessTextures arg
-            // buffer instead, ICB-incompatible discrete binds being the reason).
-            // probe_cube_or_sky returns the sky prefilter for unbaked slots, so all
-            // MAX_PROBES are always valid. Skybox + diffuse keep texture 3/4.
-            for i in 0..concinnity_render::uniforms::MAX_PROBES {
-                enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 6 + i);
-            }
-            // Reflection-probe set (count + per-probe parallax boxes) at fragment
-            // buffer(6) (a buffer slot, distinct from the texture(6) array). `EMPTY`
-            // until a bake; the shader weights every box covering the surface.
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.probe_set).cast(),
-                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
-                6,
-            );
+        enc.set_vertex_value(view_uniforms, 0);
+        enc.set_fragment_value(view_uniforms, 0);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+        enc.set_fragment_value(&self.light_uniforms, 4);
+        // Local-light storage buffer at fragment buffer(8). Encoder-bound
+        // buffers are inherited by the ICB-executed bindless draws (the same
+        // way the object buffer at binding 9 is), so this single bind covers
+        // the legacy and GPU-driven paths and the planar / probe re-renders.
+        enc.set_fragment_buffer(&self.local_light_buffer, 0, 8);
+        // Per-slice spot shadow projections at fragment buffer(13), inherited
+        // by the ICB draws like the local lights above. The matching depth
+        // array is a discrete texture on the legacy path only; the bindless
+        // path reaches it through the BindlessTextures argument buffer,
+        // because discrete texture bindings break ICB compatibility.
+        enc.set_fragment_buffer(&self.spot_shadow_buffer, 0, 13);
+        // Rect area-light extents at fragment buffer(14), indexed by
+        // GpuLight.data_index. Inherited by the ICB draws like the buffers
+        // above, so this one bind covers every main-pass variant.
+        enc.set_fragment_buffer(&self.area_light_buffer, 0, 14);
+        enc.set_fragment_value(&self.shadow_uniforms, 5);
+        enc.set_fragment_texture(self.shadow_map.as_ref(), 2);
+        enc.set_fragment_texture(self.spot_shadow_map.as_ref(), 14);
+        // Area-light LTC tables. The cube sampler at sampler(2) is a plain
+        // linear clamp-to-edge, which is what the lookup wants, so no extra
+        // sampler slot is needed.
+        enc.set_fragment_texture(self.ltc_matrix_texture.as_ref(), 15);
+        enc.set_fragment_texture(self.ltc_magnitude_texture.as_ref(), 16);
+        enc.set_fragment_sampler(self.shadow_sampler.as_ref(), 1);
+        // IBL bindings: irradiance + prefilter cubes at texture(3) / texture(4)
+        // and a shared linear-clamp sampler at sampler(2). Always bound; the
+        // shader uses prefilter_mip_count == 0 to detect the fallback case.
+        enc.set_fragment_texture(self.env_map.irradiance.as_ref(), 3);
+        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 4);
+        enc.set_fragment_sampler(self.cube_sampler.as_ref(), 2);
+        // SSAO occlusion at texture(5): the blurred AO when SSAO is on,
+        // else a 1x1 white texture so shade_surface samples a constant 1.0
+        // and the ambient term is left untouched. (The bindless static
+        // pass instead reaches it through the BindlessTextures argument
+        // buffer; see build_bindless_texture_args.)
+        enc.set_fragment_texture(self.ao_output_texture(), 5);
+        // Reflection-probe cube array at texture(6 .. 6+MAX_PROBES): the legacy
+        // path now selects + blends per-surface from the same probe set as the
+        // bindless path (which reaches the cubes through the BindlessTextures arg
+        // buffer instead, ICB-incompatible discrete binds being the reason).
+        // probe_cube_or_sky returns the sky prefilter for unbaked slots, so all
+        // MAX_PROBES are always valid. Skybox + diffuse keep texture 3/4.
+        for i in 0..concinnity_render::uniforms::MAX_PROBES {
+            enc.set_fragment_texture(self.probe_cube_or_sky(i), 6 + i);
         }
+        // Reflection-probe set (count + per-probe parallax boxes) at fragment
+        // buffer(6) (a buffer slot, distinct from the texture(6) array). `EMPTY`
+        // until a bake; the shader weights every box covering the surface.
+        enc.set_fragment_value(&self.probe_set, 6);
         true
     }
 
@@ -775,30 +729,14 @@ impl MtlContext {
             draw_calls += self.draw_static_objects(enc, visible, cam_pos, |enc, obj, _| {
                 let model_uniforms = ModelUniforms { model: obj.model };
                 let slot = obj.texture_slot.min(last_tex);
-                // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as
-                // the length, and the textures are owned by `self`; `slot` was clamped to
-                // `last_tex`.
-                unsafe {
-                    // model matrix at vertex buffer(2)
-                    enc.setVertexBytes_length_atIndex(
-                        std::ptr::NonNull::from(&model_uniforms).cast(),
-                        std::mem::size_of::<ModelUniforms>(),
-                        2,
-                    );
-                    // material at fragment buffer(3)
-                    enc.setFragmentBytes_length_atIndex(
-                        std::ptr::NonNull::from(&obj.material).cast(),
-                        std::mem::size_of::<crate::gfx::render_types::MaterialUniforms>(),
-                        3,
-                    );
-                    // albedo at texture(0), normal map at texture(1)
-                    enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
-                    enc.setFragmentTexture_atIndex(
-                        Some(self.normal_pool_texture(obj.normal_map_slot)),
-                        1,
-                    );
-                    enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
-                }
+                // model matrix at vertex buffer(2)
+                enc.set_vertex_value(&model_uniforms, 2);
+                // material at fragment buffer(3)
+                enc.set_fragment_value(&obj.material, 3);
+                // albedo at texture(0), normal map at texture(1)
+                enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+                enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
+                enc.set_fragment_sampler(&self.sampler, 0);
             });
         }
         enc.popDebugGroup();
@@ -838,7 +776,7 @@ impl MtlContext {
             enc.popDebugGroup();
             return 0;
         }
-        enc.setRenderPipelineState(&inst_ps);
+        enc.set_pipeline(&inst_ps);
 
         let last_tex = self.textures.len().saturating_sub(1);
 
@@ -846,33 +784,17 @@ impl MtlContext {
         // textures, shared across the cluster's LOD buckets. The shared helper
         // owns the cull / LOD-bucket / instance-buffer / draw loop.
         let draw_calls = self.draw_prepared_instances(enc, prepared, false, |enc, cluster| {
-            // SAFETY: each pointer is derived from a live borrow and paired with that type's
-            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
-            // buffer indices are the slots the shaders declare.
-            unsafe {
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&cluster.material).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::MaterialUniforms>(),
-                    3,
-                );
-            }
+            enc.set_fragment_value(&cluster.material, 3);
             let slot = cluster.texture_slot.min(last_tex);
-            // SAFETY: `slot` was clamped to `last_tex`, so it indexes `self.textures`; the normal
-            // pool always returns a live texture, and the sampler is owned by `self`.
-            unsafe {
-                enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
-                enc.setFragmentTexture_atIndex(
-                    Some(self.normal_pool_texture(cluster.normal_map_slot)),
-                    1,
-                );
-                enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
-            }
+            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            enc.set_fragment_texture(self.normal_pool_texture(cluster.normal_map_slot), 1);
+            enc.set_fragment_sampler(&self.sampler, 0);
         });
 
         // Restore the regular pipeline state so a future addition to the
         // main pass starts from the same shape the static path left it in.
         if let Some(pipeline_state) = &self.pipeline_state {
-            enc.setRenderPipelineState(pipeline_state);
+            enc.set_pipeline(pipeline_state);
         }
         enc.popDebugGroup();
         draw_calls
@@ -911,12 +833,8 @@ impl MtlContext {
             enc.popDebugGroup();
             return 0;
         }
-        enc.setRenderPipelineState(&skinned_ps);
-        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-        // buffer/texture indices the shaders declare.
-        unsafe {
-            enc.setVertexBuffer_offset_atIndex(Some(&svb), 0, 1);
-        }
+        enc.set_pipeline(&skinned_ps);
+        enc.set_vertex_buffer(&svb, 0, 1);
 
         let last_tex = self.textures.len().saturating_sub(1);
 
@@ -943,34 +861,15 @@ impl MtlContext {
                     *dst = *src;
                 }
             }
-            // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
-            // length, and the joint / morph-delta buffers outlive the encoder.
-            unsafe {
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&model_uniforms).cast(),
-                    std::mem::size_of::<ModelUniforms>(),
-                    2,
-                );
-                enc.setVertexBuffer_offset_atIndex(Some(&skinned_joint_bufs[i]), 0, 8);
-                let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-                enc.setVertexBuffer_offset_atIndex(Some(delta_buf), 0, 9);
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&morph_params).cast(),
-                    std::mem::size_of::<crate::metal::uniforms::VsMorphParams>(),
-                    10,
-                );
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&obj.material).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::MaterialUniforms>(),
-                    3,
-                );
-                enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
-                enc.setFragmentTexture_atIndex(
-                    Some(self.normal_pool_texture(obj.normal_map_slot)),
-                    1,
-                );
-                enc.setFragmentSamplerState_atIndex(Some(&self.sampler), 0);
-            }
+            enc.set_vertex_value(&model_uniforms, 2);
+            enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
+            let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+            enc.set_vertex_buffer(delta_buf, 0, 9);
+            enc.set_vertex_value(&morph_params, 10);
+            enc.set_fragment_value(&obj.material, 3);
+            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            enc.set_fragment_texture(self.normal_pool_texture(obj.normal_map_slot), 1);
+            enc.set_fragment_sampler(&self.sampler, 0);
         });
         enc.popDebugGroup();
         draw_calls

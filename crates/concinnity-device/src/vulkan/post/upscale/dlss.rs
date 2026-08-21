@@ -25,7 +25,9 @@ use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use super::{UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
 use crate::vulkan::context::HDR_FORMAT;
@@ -733,7 +735,7 @@ impl VkUpscaleBackend for DlssUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, _device: &Device) {
+    fn destroy(&mut self, _device: &VkDevice) {
         // SAFETY: each handle is released exactly once (guarded by its null check) and nulled
         // afterwards, innermost first, so a second `destroy` is a no-op.
         unsafe {

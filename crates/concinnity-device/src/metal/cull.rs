@@ -14,6 +14,7 @@ use objc2_metal::{
 };
 
 use super::context::*;
+use super::encode::ComputeEncode;
 use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
 use super::uniforms::*;
@@ -652,37 +653,28 @@ impl MtlContext {
                 .ok_or("failed to get compute encoder")?,
             label,
         );
-        enc.setComputePipelineState(pipeline);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound buffer outlives the encoder; the indices are the slots the
-        // kernel declares.
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&cull_uniforms).cast(),
-                std::mem::size_of::<CullUniforms>(),
-                2,
-            );
-            enc.setBuffer_offset_atIndex(Some(&self.index_buffer), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(arg_buf), 0, CULL_ICB_BUFFER_INDEX);
-            // Per-object cull status at buffer(5). The kernel writes it
-            // unconditionally; the main cull's status is read by phase 2 under
-            // two-pass occlusion, the mirror cull's shared scratch is never read.
-            enc.setBuffer_offset_atIndex(Some(status), 0, 5);
-            // Skinned u16 index buffer at buffer(6): the kernel bakes it into the
-            // indirect command for records at/after `skinned_base`. Bound
-            // unconditionally (Metal requires a buffer the kernel references to be
-            // bound even under a never-taken branch); the static index buffer is a
-            // harmless placeholder when no skinned mesh is folded (skinned_base ==
-            // object_count then, so the skinned branch never fires).
-            enc.setBuffer_offset_atIndex(Some(self.skinned_index_or_placeholder()), 0, 6);
-            // Hi-Z depth pyramid at texture(0). Bound directly (not via an
-            // argument buffer), so Metal tracks its residency automatically.
-            // Always bound when present; `hiz_enabled` decides whether it's read.
-            if let Some(tex) = hiz_tex {
-                enc.setTexture_atIndex(Some(tex), 0);
-            }
+        enc.set_pipeline(pipeline);
+        enc.set_buffer(object_buffer, 0, 0);
+        enc.set_buffer(draw_args_buffer, 0, 1);
+        enc.set_value(&cull_uniforms, 2);
+        enc.set_buffer(&self.index_buffer, 0, 3);
+        enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
+        // Per-object cull status at buffer(5). The kernel writes it
+        // unconditionally; the main cull's status is read by phase 2 under
+        // two-pass occlusion, the mirror cull's shared scratch is never read.
+        enc.set_buffer(status, 0, 5);
+        // Skinned u16 index buffer at buffer(6): the kernel bakes it into the
+        // indirect command for records at/after `skinned_base`. Bound
+        // unconditionally (Metal requires a buffer the kernel references to be
+        // bound even under a never-taken branch); the static index buffer is a
+        // harmless placeholder when no skinned mesh is folded (skinned_base ==
+        // object_count then, so the skinned branch never fires).
+        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        // Hi-Z depth pyramid at texture(0). Bound directly (not via an
+        // argument buffer), so Metal tracks its residency automatically.
+        // Always bound when present; `hiz_enabled` decides whether it's read.
+        if let Some(tex) = hiz_tex {
+            enc.set_texture(tex, 0);
         }
         // The kernel writes draw commands into the ICBs through the argument
         // buffer, so each must be declared resident for the compute pass.
@@ -780,27 +772,18 @@ impl MtlContext {
                 .ok_or("failed to get compute encoder")?,
             "cull phase2",
         );
-        enc.setComputePipelineState(pipeline);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound buffer outlives the encoder; the indices are the slots the
-        // kernel declares.
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&cull_uniforms).cast(),
-                std::mem::size_of::<CullUniforms>(),
-                2,
-            );
-            enc.setBuffer_offset_atIndex(Some(&self.index_buffer), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(arg_buf), 0, CULL_ICB_BUFFER_INDEX);
-            enc.setBuffer_offset_atIndex(Some(status), 0, 5);
-            // Skinned u16 index buffer at buffer(6); see encode_cull. Phase 2
-            // of two-pass occlusion re-tests the same records, so the skinned
-            // tail is handled here too.
-            enc.setBuffer_offset_atIndex(Some(self.skinned_index_or_placeholder()), 0, 6);
-            enc.setTexture_atIndex(Some(hiz.texture.as_ref()), 0);
-        }
+        enc.set_pipeline(pipeline);
+        enc.set_buffer(object_buffer, 0, 0);
+        enc.set_buffer(draw_args_buffer, 0, 1);
+        enc.set_value(&cull_uniforms, 2);
+        enc.set_buffer(&self.index_buffer, 0, 3);
+        enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
+        enc.set_buffer(status, 0, 5);
+        // Skinned u16 index buffer at buffer(6); see encode_cull. Phase 2
+        // of two-pass occlusion re-tests the same records, so the skinned
+        // tail is handled here too.
+        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        enc.set_texture(hiz.texture.as_ref(), 0);
         // The kernel writes draw commands into the phase-2 ICBs through the
         // argument buffer, so each must be declared resident here too.
         for icb in &self.cull.icbs_2 {
@@ -876,18 +859,14 @@ impl MtlContext {
                 .ok_or("failed to get shadow cull compute encoder")?,
             "shadow cull",
         );
-        enc.setComputePipelineState(pipeline);
-        // SAFETY: every bound buffer outlives the encoder, at the buffer indices the shadow cull
-        // kernel declares; `skinned_index_or_placeholder` always returns a live buffer.
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(object_buffer), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(draw_args_buffer), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&self.index_buffer), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(arg_buf), 0, CULL_ICB_BUFFER_INDEX);
-            // Skinned u16 index buffer at buffer(6); the kernel bakes it into the
-            // skinned-tail commands exactly like the main cull.
-            enc.setBuffer_offset_atIndex(Some(self.skinned_index_or_placeholder()), 0, 6);
-        }
+        enc.set_pipeline(pipeline);
+        enc.set_buffer(object_buffer, 0, 0);
+        enc.set_buffer(draw_args_buffer, 0, 1);
+        enc.set_buffer(&self.index_buffer, 0, 3);
+        enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
+        // Skinned u16 index buffer at buffer(6); the kernel bakes it into the
+        // skinned-tail commands exactly like the main cull.
+        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
         // The kernel writes draw commands into the shadow ICB through the
         // argument buffer, so it must be resident for the compute pass.
         enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
@@ -924,16 +903,7 @@ impl MtlContext {
                 bucket_count: 1,
                 _pad_skin: 0,
             };
-            // SAFETY: each pointer is derived from a live borrow and paired with that type's
-            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
-            // buffer indices are the slots the shaders declare.
-            unsafe {
-                enc.setBytes_length_atIndex(
-                    std::ptr::NonNull::from(&cull_uniforms).cast(),
-                    std::mem::size_of::<CullUniforms>(),
-                    2,
-                );
-            }
+            enc.set_value(&cull_uniforms, 2);
             enc.dispatchThreads_threadsPerThreadgroup(
                 MTLSize {
                     width: object_count,

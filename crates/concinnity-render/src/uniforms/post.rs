@@ -5,7 +5,7 @@
 
 // Input to the TAA resolve fragment shader. Matches `TaaParams` in
 // `shaders/taa.slang`. 4 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
     // 0 on the first frame / after a resize, 1.0 otherwise.
@@ -15,7 +15,7 @@ pub struct TaaParams {
 // Input to the auto-exposure histogram kernels: the three luminance-mapping
 // scalars then a pad rounding to 16 bytes. Matches `AutoExposureParams` in
 // `shaders/auto_exposure.slang`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct AutoExposureParams {
     // Lowest log2(luminance) the histogram covers.

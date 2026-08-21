@@ -2,7 +2,9 @@
 //
 // Vulkan swapchain, attachment, and framebuffer creation, plus the
 // swapchain rebuild path.
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
@@ -29,30 +31,6 @@ use super::texture::*;
 impl VkContext {
     pub(super) fn destroy_swapchain_resources(&mut self) {
         let device = &self.device;
-        for fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(*fb, None) };
-        }
-        for fb in &self.composite_framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(*fb, None) };
-        }
-        for frame_fbs in self
-            .bloom_write_framebuffers
-            .iter()
-            .chain(&self.bloom_blend_framebuffers)
-        {
-            for &fb in frame_fbs {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_framebuffer(fb, None) };
-            }
-        }
         for iv in &self.swapchain_image_views {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
@@ -197,7 +175,7 @@ impl VkContext {
             // The rebuilt feature re-emits the benign DLSS first-frame layout
             // errors; re-arm the messenger budget so they stay suppressed.
             if resolved == super::post::ResolvedBackend::Dlss
-                && let Some(f) = &self.debug_filter
+                && let Some(f) = self.device.debug_filter()
             {
                 f.store(
                     super::init::DLSS_FIRST_FRAME_LAYOUT_SUPPRESS,
@@ -264,7 +242,7 @@ impl VkContext {
         self.hdr_resolve_images = hdr_resolve_images;
         self.framebuffers = create_main_framebuffers(
             &self.device,
-            self.main_render_pass,
+            self.main_render_pass.handle(),
             &self.color_images,
             &self.depth_images,
             &self.hdr_resolve_images,
@@ -273,7 +251,7 @@ impl VkContext {
         )?;
         self.composite_framebuffers = create_composite_framebuffers(
             &self.device,
-            self.composite_render_pass,
+            self.composite_render_pass.handle(),
             &self.swapchain_image_views,
             ext,
         )?;
@@ -294,8 +272,8 @@ impl VkContext {
         self.bloom_mip_extents = bloom_mip_extents;
         let (bloom_write_framebuffers, bloom_blend_framebuffers) = create_bloom_framebuffers(
             &self.device,
-            self.bloom_write_pass,
-            self.bloom_blend_pass,
+            self.bloom_write_pass.handle(),
+            self.bloom_blend_pass.handle(),
             &self.bloom_mips,
             &self.bloom_mip_extents,
         )?;
@@ -310,16 +288,16 @@ impl VkContext {
         unsafe {
             self.device
                 .reset_descriptor_pool(
-                    self.bloom_descriptor_pool,
+                    self.bloom_descriptor_pool.handle(),
                     vk::DescriptorPoolResetFlags::empty(),
                 )
                 .map_err(|e| format!("reset bloom pool: {e}"))?;
         }
         self.bloom_input_sets = alloc_bloom_input_sets(
             &self.device,
-            self.bloom_descriptor_pool,
-            self.bloom_set_layout,
-            self.composite_sampler,
+            self.bloom_descriptor_pool.handle(),
+            self.bloom_set_layout.handle(),
+            self.composite_sampler.handle(),
             &self.hdr_resolve_images,
             &self.bloom_mips,
         )?;
@@ -384,7 +362,7 @@ impl VkContext {
                     gbuffer_views: &nd_views,
                     roughness_views: &rough_views,
                     prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler,
+                    cube_sampler: self.cube_sampler.handle(),
                 },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
@@ -448,7 +426,7 @@ impl VkContext {
                     gbuffer_views: &nd_views,
                     roughness_views: &rough_views,
                     prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler,
+                    cube_sampler: self.cube_sampler.handle(),
                 },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
@@ -489,7 +467,7 @@ impl VkContext {
                     &self.device,
                     frame_sets[0],
                     rc.output.view,
-                    self.composite_sampler,
+                    self.composite_sampler.handle(),
                 );
             }
             self.reflection_composite = Some(rc);
@@ -512,28 +490,32 @@ impl VkContext {
                 self.frames_in_flight,
                 &TaaSceneInputs {
                     hdr_resolve_images: &self.hdr_resolve_images,
-                    sampler: self.composite_sampler,
+                    sampler: self.composite_sampler.handle(),
                 },
             )?;
             // When a reflection path owns the scene image, TAA samples the reflection
             // composite output (HDR + reflections) instead of the raw HDR resolve. A
             // SSGI-only build leaves TAA on the raw HDR resolve.
             if let Some(rc) = self.reflection_composite.as_ref() {
-                taa.rewire_scene(&self.device, rc.output.view, self.composite_sampler);
+                taa.rewire_scene(
+                    &self.device,
+                    rc.output.view,
+                    self.composite_sampler.handle(),
+                );
             }
             // The TAA resolve's velocity input is the unified G-buffer's per-frame
             // velocity channel (rebuilt above), replacing TAA's own velocity
             // pre-pass output. Mirrors the init-time `rewire_velocity`.
             if let Some(gb) = self.gbuffer.as_ref() {
                 let vel_views = gb.velocity_views();
-                taa.rewire_velocity(&self.device, &vel_views, self.composite_sampler);
+                taa.rewire_velocity(&self.device, &vel_views, self.composite_sampler.handle());
             }
             for (i, frame_sets) in self.bloom_input_sets.iter().enumerate() {
                 rebind_bloom_input0(
                     &self.device,
                     frame_sets[0],
                     taa.output_view(i),
-                    self.composite_sampler,
+                    self.composite_sampler.handle(),
                 );
             }
             self.taa = Some(taa);
@@ -549,7 +531,7 @@ impl VkContext {
                     &self.device,
                     frame_sets[0],
                     up_output_view,
-                    self.composite_sampler,
+                    self.composite_sampler.handle(),
                 );
             }
         }
@@ -728,7 +710,7 @@ impl VkContext {
         if let Some(mut ae) = self.auto_exposure.take() {
             let hdr_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            ae.rebuild(&self.device, &hdr_views, self.linear_sampler);
+            ae.rebuild(&self.device, &hdr_views, self.linear_sampler.handle());
             self.auto_exposure = Some(ae);
         }
 
@@ -766,7 +748,7 @@ impl VkContext {
                 let info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(ao_view)
-                    .sampler(self.linear_sampler);
+                    .sampler(self.linear_sampler.handle());
                 let write = vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(6)
@@ -802,7 +784,7 @@ impl VkContext {
                 scene_view,
                 self.bloom_mips[i][0].view,
                 self.color_lut.view,
-                self.composite_sampler,
+                self.composite_sampler.handle(),
             );
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
@@ -818,7 +800,7 @@ impl VkContext {
                 self.transient_pool
                     .view_for("ao_output", i)
                     .unwrap_or(self.ssao_white.view),
-                self.composite_sampler,
+                self.composite_sampler.handle(),
             );
         }
 
@@ -847,7 +829,7 @@ impl VkContext {
 // Vulkan handles needed to query the surface and create a swapchain against it.
 pub(super) struct SwapchainSurface<'a> {
     pub instance: &'a ash::Instance,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub pd: vk::PhysicalDevice,
     pub surface_loader: &'a ash::khr::surface::Instance,
     pub surface: vk::SurfaceKHR,
@@ -1067,7 +1049,7 @@ pub(super) fn create_swapchain_inner(
 }
 
 pub(super) fn create_swapchain_image_views(
-    device: &Device,
+    device: &VkDevice,
     images: &[vk::Image],
     format: vk::Format,
 ) -> Result<Vec<vk::ImageView>, String> {
@@ -1085,7 +1067,7 @@ pub(super) fn create_swapchain_image_views(
 // Vulkan handles needed to allocate + transition off-screen attachment images.
 pub(super) struct AttachmentDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -1132,14 +1114,14 @@ pub(super) fn create_attachments(
 // Main-pass framebuffers, one per frame-in-flight slot. Each attaches the HDR
 // colour (MSAA colour + resolve, or just the resolve image) and depth.
 pub(super) fn create_main_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     color_images: &[GpuImage],
     depth_images: &[GpuImage],
     resolve_images: &[GpuImage],
     extent: vk::Extent2D,
     msaa: vk::SampleCountFlags,
-) -> Result<Vec<vk::Framebuffer>, String> {
+) -> Result<Vec<OwnedFramebuffer>, String> {
     (0..resolve_images.len())
         .map(|i| {
             let attachments: Vec<vk::ImageView> = if msaa != vk::SampleCountFlags::TYPE_1 {
@@ -1157,9 +1139,8 @@ pub(super) fn create_main_framebuffers(
                 .width(extent.width)
                 .height(extent.height)
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe { device.create_framebuffer(&fb_info, None) }
+            device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("framebuffer[{i}]: {e}"))
         })
         .collect()
@@ -1167,11 +1148,11 @@ pub(super) fn create_main_framebuffers(
 
 // Composite-pass framebuffers, one per swapchain image.
 pub(super) fn create_composite_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     swapchain_views: &[vk::ImageView],
     extent: vk::Extent2D,
-) -> Result<Vec<vk::Framebuffer>, String> {
+) -> Result<Vec<OwnedFramebuffer>, String> {
     swapchain_views
         .iter()
         .enumerate()
@@ -1182,9 +1163,8 @@ pub(super) fn create_composite_framebuffers(
                 .width(extent.width)
                 .height(extent.height)
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe { device.create_framebuffer(&fb_info, None) }
+            device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("composite framebuffer[{i}]: {e}"))
         })
         .collect()
@@ -1194,7 +1174,7 @@ pub(super) fn create_composite_framebuffers(
 // binding 1 = bloom mip 0, binding 2 = the 3D colour-grading LUT. All sampled
 // through `sampler`.
 pub(super) fn write_composite_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     hdr_view: vk::ImageView,
     bloom_view: vk::ImageView,
@@ -1242,7 +1222,7 @@ pub(super) fn write_composite_set(
 // from `write_composite_set` because these three survive the scene-input
 // re-points TAA / FSR / reflections make.
 pub(super) fn write_composite_channel_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     normal_depth_view: vk::ImageView,
     roughness_view: vk::ImageView,
@@ -1275,11 +1255,11 @@ pub(super) fn write_composite_channel_set(
 // framebuffer attaches a single-layer depth view from
 // `shadow_map.aux_views`. Returns one framebuffer per available slice.
 pub(super) fn create_shadow_framebuffers(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     shadow_map: &GpuImage,
     size: u32,
-) -> Result<Vec<vk::Framebuffer>, String> {
+) -> Result<Vec<OwnedFramebuffer>, String> {
     let mut fbs = Vec::with_capacity(shadow_map.aux_views.len());
     for &view in &shadow_map.aux_views {
         let fb_info = vk::FramebufferCreateInfo::default()
@@ -1288,9 +1268,8 @@ pub(super) fn create_shadow_framebuffers(
             .width(size)
             .height(size)
             .layers(1);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+        let fb = device
+            .create_framebuffer(&fb_info)
             .map_err(|e| format!("shadow framebuffer: {e}"))?;
         fbs.push(fb);
     }

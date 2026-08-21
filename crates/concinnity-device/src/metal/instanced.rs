@@ -33,6 +33,7 @@ use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 
 use super::context::{MtlContext, bytes_of_slice};
+use super::encode::RenderEncode;
 
 // One LOD bucket of a cluster, prepared for this frame: a ready-to-bind
 // instance-matrix buffer (from the per-frame ring) plus its index range and
@@ -154,13 +155,13 @@ impl MtlContext {
             per_cluster(enc, cluster);
             for b in &pc.buckets {
                 let index_byte_offset = b.index_offset * std::mem::size_of::<u32>();
-                // SAFETY: the bucket's instance buffer outlives the encoder, and
-                // `index_offset`/`index_count` bound the bucket's own slice of `self.index_buffer`.
+                enc.set_vertex_buffer(&b.instances, 0, 6);
+                if bind_prev {
+                    enc.set_vertex_buffer(&b.instances, 0, 7);
+                }
+                // SAFETY: `index_offset`/`index_count` bound the bucket's own slice of
+                // `self.index_buffer`.
                 unsafe {
-                    enc.setVertexBuffer_offset_atIndex(Some(&b.instances), 0, 6);
-                    if bind_prev {
-                        enc.setVertexBuffer_offset_atIndex(Some(&b.instances), 0, 7);
-                    }
                     enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
                         MTLPrimitiveType::Triangle,
                         b.index_count,

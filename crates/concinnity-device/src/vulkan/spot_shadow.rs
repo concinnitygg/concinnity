@@ -12,7 +12,9 @@
 // picks which slices redraw; a skipped slice keeps the depth it last rendered,
 // which stays correct until a caster moves.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use crate::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
@@ -25,7 +27,7 @@ use crate::vulkan::texture::GpuImage;
 pub(super) struct SpotShadowBuild<'a> {
     pub alloc: &'a DeviceAllocator,
     pub instance: &'a ash::Instance,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub physical_device: vk::PhysicalDevice,
     // The depth array, already created with one layer per shadowed spot (or the
     // 1x1 fallback when there are none).
@@ -113,20 +115,16 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
     let pool_sizes = [vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::UNIFORM_BUFFER)
         .descriptor_count(set_count)];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let descriptor_pool = unsafe {
-        device.create_descriptor_pool(
+    let descriptor_pool = device
+        .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(&pool_sizes)
                 .max_sets(set_count),
-            None,
         )
-    }
-    .map_err(|e| format!("spot shadow descriptor pool: {e}"))?;
+        .map_err(|e| format!("spot shadow descriptor pool: {e}"))?;
 
     let layouts: Vec<_> = (0..set_count).map(|_| set_layout).collect();
-    let sets = alloc_descriptor_sets(device, descriptor_pool, &layouts)?;
+    let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
     for (i, &set) in sets.iter().enumerate() {
         let info = vk::DescriptorBufferInfo::default()
             .buffer(ubo.buffer())
@@ -149,7 +147,7 @@ pub(super) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, 
         data_buffer,
         ubo,
         sets,
-        descriptor_pool,
+        _descriptor_pool: descriptor_pool,
         scheduler: Default::default(),
         render_mask: 0,
     })
@@ -179,8 +177,10 @@ impl VkContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pipeline), Some(layout)) = (self.shadow.pipeline, self.shadow.pipeline_layout)
-        else {
+        let (Some(pipeline), Some(layout)) = (
+            self.shadow.pipeline.as_ref(),
+            self.shadow.pipeline_layout.as_ref(),
+        ) else {
             return;
         };
         let count = self.spot_shadow.count();
@@ -217,8 +217,8 @@ impl VkContext {
                 continue;
             }
             let begin = vk::RenderPassBeginInfo::default()
-                .render_pass(self.shadow.render_pass)
-                .framebuffer(self.spot_shadow.framebuffers[slice as usize])
+                .render_pass(self.shadow.render_pass.handle())
+                .framebuffer(self.spot_shadow.framebuffers[slice as usize].handle())
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
                     extent,
@@ -257,8 +257,8 @@ impl VkContext {
             self.encode_shadow_slice_legacy(
                 cmd,
                 super::shadow::ShadowSliceBinding {
-                    pipeline,
-                    layout,
+                    pipeline: pipeline.handle(),
+                    layout: layout.handle(),
                     set: self.spot_shadow.sets[slice as usize],
                     slice_idx: 0,
                 },

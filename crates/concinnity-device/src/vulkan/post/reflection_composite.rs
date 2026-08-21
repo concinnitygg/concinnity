@@ -20,7 +20,12 @@
 // `encode_reflection_composite` with that target's view; the composite's reflection
 // binding is re-pointed to it per encode (the two paths are mutually exclusive).
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
@@ -34,34 +39,34 @@ pub(in crate::vulkan) struct ReflectionCompositeResources {
     // Composited scene (full render resolution): the scene image the post stack
     // consumes in place of the raw SSR / RT resolve output.
     pub(in crate::vulkan) output: GpuImage,
-    output_framebuffer: vk::Framebuffer,
+    output_framebuffer: OwnedFramebuffer,
 
     // Reduced-resolution roughness blur of the reflection target (pass 1 writes it,
     // the composite upsamples it). Sized at render / `blur_scale`.
     blur: GpuImage,
-    blur_framebuffer: vk::Framebuffer,
+    blur_framebuffer: OwnedFramebuffer,
     blur_extent: vk::Extent2D,
 
     // One render pass (RGBA16F colour, DONT_CARE load, ends shader-readable) shared
     // by both passes; the framebuffer selects the target.
-    render_pass: vk::RenderPass,
+    render_pass: OwnedRenderPass,
 
     // Pass 1 (blur) reads reflection + roughness; pass 2 (composite) reads those
     // plus scene + G-buffer normal+depth + blur.
-    blur_set_layout: vk::DescriptorSetLayout,
-    composite_set_layout: vk::DescriptorSetLayout,
-    blur_pipeline_layout: vk::PipelineLayout,
-    composite_pipeline_layout: vk::PipelineLayout,
-    blur_pso: vk::Pipeline,
-    composite_pso: vk::Pipeline,
+    _blur_set_layout: OwnedSetLayout,
+    _composite_set_layout: OwnedSetLayout,
+    blur_pipeline_layout: OwnedPipelineLayout,
+    composite_pipeline_layout: OwnedPipelineLayout,
+    blur_pso: OwnedPipeline,
+    composite_pso: OwnedPipeline,
 
-    descriptor_pool: vk::DescriptorPool,
+    _descriptor_pool: OwnedDescriptorPool,
     // Per-frame sets. Binding 0 (the reflection target) is re-pointed each encode to
     // the resolve that just ran; the rest are wired at init / resize.
     blur_sets: Vec<vk::DescriptorSet>,
     composite_sets: Vec<vk::DescriptorSet>,
 
-    sampler: vk::Sampler,
+    sampler: OwnedSampler,
 
     // Per-axis divisor the blur target is sized by (from the world's
     // `reflection_blur_resolution`). Held so `rebuild` reuses the same scale.
@@ -96,27 +101,27 @@ pub(in crate::vulkan) fn compile_reflection_composite_shaders(
 
 // Replacement composite pipelines from a shader hot-reload.
 pub(in crate::vulkan) struct RebuiltReflectionComposite {
-    pub blur: vk::Pipeline,
-    pub composite: vk::Pipeline,
+    pub blur: OwnedPipeline,
+    pub composite: OwnedPipeline,
 }
 
 pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
-    device: &Device,
+    device: &VkDevice,
     rc: &ReflectionCompositeResources,
     hot_reload: bool,
 ) -> Result<RebuiltReflectionComposite, String> {
     let shaders = compile_reflection_composite_shaders(hot_reload)?;
     let blur = create_composite_pipeline(
         device,
-        rc.render_pass,
-        rc.blur_pipeline_layout,
+        rc.render_pass.handle(),
+        rc.blur_pipeline_layout.handle(),
         &shaders.vs,
         &shaders.blur_fs,
     )?;
     let composite = create_composite_pipeline(
         device,
-        rc.render_pass,
-        rc.composite_pipeline_layout,
+        rc.render_pass.handle(),
+        rc.composite_pipeline_layout.handle(),
         &shaders.vs,
         &shaders.composite_fs,
     )?;
@@ -127,7 +132,7 @@ pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
 // triangle overwrites every pixel so DONT_CARE is safe on load. Ends shader-readable
 // for the next pass (composite -> bloom/TAA; blur -> composite). Mirrors the SSR
 // resolve render pass.
-fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -162,9 +167,8 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("reflection composite render pass: {e}"))
 }
 
@@ -223,12 +227,12 @@ fn create_target(ctx: &GpuUploadContext, width: u32, height: u32) -> Result<GpuI
 // Fullscreen pipeline: no vertex input, no depth, no blend; writes one HDR target.
 // Mirrors the SSR resolve pipeline.
 fn create_composite_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -281,15 +285,8 @@ fn create_composite_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create reflection composite pso: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create reflection composite pso: {e}"))?;
     Ok(pipeline)
 }
 
@@ -336,32 +333,28 @@ impl ReflectionCompositeResources {
 
         let make_layout = |set_layout: vk::DescriptorSetLayout, name: &str| -> Result<_, String> {
             let layouts = [set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe {
-                device.create_pipeline_layout(
+            device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
-                    None,
                 )
-            }
-            .map_err(|e| format!("{name}: {e}"))
+                .map_err(|e| format!("{name}: {e}"))
         };
-        let blur_pipeline_layout = make_layout(blur_set_layout, "reflection blur layout")?;
+        let blur_pipeline_layout = make_layout(blur_set_layout.handle(), "reflection blur layout")?;
         let composite_pipeline_layout =
-            make_layout(composite_set_layout, "reflection composite layout")?;
+            make_layout(composite_set_layout.handle(), "reflection composite layout")?;
 
         let shaders = compile_reflection_composite_shaders(hot_reload)?;
         let blur_pso = create_composite_pipeline(
             device,
-            render_pass,
-            blur_pipeline_layout,
+            render_pass.handle(),
+            blur_pipeline_layout.handle(),
             &shaders.vs,
             &shaders.blur_fs,
         )?;
         let composite_pso = create_composite_pipeline(
             device,
-            render_pass,
-            composite_pipeline_layout,
+            render_pass.handle(),
+            composite_pipeline_layout.handle(),
             &shaders.vs,
             &shaders.composite_fs,
         )?;
@@ -371,38 +364,36 @@ impl ReflectionCompositeResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(f * 7)];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(f * 2),
-                None,
             )
-        }
-        .map_err(|e| format!("reflection composite descriptor pool: {e}"))?;
-        let blur_layouts: Vec<_> = (0..frames).map(|_| blur_set_layout).collect();
-        let blur_sets = alloc_descriptor_sets(device, descriptor_pool, &blur_layouts)?;
-        let composite_layouts: Vec<_> = (0..frames).map(|_| composite_set_layout).collect();
-        let composite_sets = alloc_descriptor_sets(device, descriptor_pool, &composite_layouts)?;
+            .map_err(|e| format!("reflection composite descriptor pool: {e}"))?;
+        let blur_layouts: Vec<_> = (0..frames).map(|_| blur_set_layout.handle()).collect();
+        let blur_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &blur_layouts)?;
+        let composite_layouts: Vec<_> =
+            (0..frames).map(|_| composite_set_layout.handle()).collect();
+        let composite_sets =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &composite_layouts)?;
 
         let sampler = create_sampler_linear_clamp(device)?;
 
         let mut me = Self {
             output: GpuImage::null(),
-            output_framebuffer: vk::Framebuffer::null(),
+            output_framebuffer: OwnedFramebuffer::null(),
             blur: GpuImage::null(),
-            blur_framebuffer: vk::Framebuffer::null(),
+            blur_framebuffer: OwnedFramebuffer::null(),
             blur_extent: vk::Extent2D::default(),
             render_pass,
-            blur_set_layout,
-            composite_set_layout,
+            _blur_set_layout: blur_set_layout,
+            _composite_set_layout: composite_set_layout,
             blur_pipeline_layout,
             composite_pipeline_layout,
             blur_pso,
             composite_pso,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             blur_sets,
             composite_sets,
             sampler,
@@ -433,21 +424,17 @@ impl ReflectionCompositeResources {
             height: bh,
         };
 
-        let make_fb = |view: vk::ImageView, fw: u32, fh: u32| -> Result<vk::Framebuffer, String> {
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe {
-                device.create_framebuffer(
+        let make_fb = |view: vk::ImageView, fw: u32, fh: u32| -> Result<OwnedFramebuffer, String> {
+            device
+                .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.render_pass)
+                        .render_pass(self.render_pass.handle())
                         .attachments(std::slice::from_ref(&view))
                         .width(fw)
                         .height(fh)
                         .layers(1),
-                    None,
                 )
-            }
-            .map_err(|e| format!("reflection composite framebuffer: {e}"))
+                .map_err(|e| format!("reflection composite framebuffer: {e}"))
         };
         self.output_framebuffer = make_fb(self.output.view, w, h)?;
         self.blur_framebuffer = make_fb(self.blur.view, bw, bh)?;
@@ -459,7 +446,7 @@ impl ReflectionCompositeResources {
     // reflection target) is left at a valid placeholder and re-pointed per encode.
     // Single-entry G-buffer slices are shared across frames (the legacy pre-pass
     // produced one view); per-frame slices index by frame.
-    fn wire_sets(&self, device: &Device, views: &CompositeInputViews) {
+    fn wire_sets(&self, device: &VkDevice, views: &CompositeInputViews) {
         let &CompositeInputViews {
             hdr_resolve_views,
             normal_depth_views,
@@ -469,7 +456,7 @@ impl ReflectionCompositeResources {
             vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(view)
-                .sampler(self.sampler)
+                .sampler(self.sampler.handle())
         };
         let write = |set: vk::DescriptorSet, binding: u32, info: &vk::DescriptorImageInfo| {
             let w = vk::WriteDescriptorSet::default()
@@ -501,19 +488,9 @@ impl ReflectionCompositeResources {
         }
     }
 
-    fn destroy_targets(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            if self.output_framebuffer != vk::Framebuffer::null() {
-                device.destroy_framebuffer(self.output_framebuffer, None);
-                self.output_framebuffer = vk::Framebuffer::null();
-            }
-            if self.blur_framebuffer != vk::Framebuffer::null() {
-                device.destroy_framebuffer(self.blur_framebuffer, None);
-                self.blur_framebuffer = vk::Framebuffer::null();
-            }
-        }
+    fn destroy_targets(&mut self, _device: &VkDevice) {
+        self.output_framebuffer = OwnedFramebuffer::null();
+        self.blur_framebuffer = OwnedFramebuffer::null();
         self.output = GpuImage::null();
         self.blur = GpuImage::null();
     }
@@ -535,37 +512,14 @@ impl ReflectionCompositeResources {
     }
 
     // Swap freshly-built pipelines into the live resources after a hot-reload.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltReflectionComposite,
-    ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.blur_pso, None);
-            device.destroy_pipeline(self.composite_pso, None);
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltReflectionComposite) {
         self.blur_pso = rebuilt.blur;
         self.composite_pso = rebuilt.composite;
     }
 
     // Destroy every composite resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.sampler, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.blur_pso, None);
-            device.destroy_pipeline(self.composite_pso, None);
-            device.destroy_pipeline_layout(self.blur_pipeline_layout, None);
-            device.destroy_pipeline_layout(self.composite_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.blur_set_layout, None);
-            device.destroy_descriptor_set_layout(self.composite_set_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-        }
     }
 }
 
@@ -595,7 +549,7 @@ impl VkContext {
         let refl = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(reflection_view)
-            .sampler(rc.sampler);
+            .sampler(rc.sampler.handle());
         let repoint = [
             vk::WriteDescriptorSet::default()
                 .dst_set(rc.blur_sets[frame_idx])
@@ -613,15 +567,20 @@ impl VkContext {
         unsafe { device.update_descriptor_sets(&repoint, &[]) };
 
         // Pass 1: roughness blur into the reduced-resolution blur target.
-        self.begin_fullscreen_pass_sized(cmd, rc.render_pass, rc.blur_framebuffer, rc.blur_extent);
+        self.begin_fullscreen_pass_sized(
+            cmd,
+            rc.render_pass.handle(),
+            rc.blur_framebuffer.handle(),
+            rc.blur_extent,
+        );
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, rc.blur_pso);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, rc.blur_pso.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                rc.blur_pipeline_layout,
+                rc.blur_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&rc.blur_sets[frame_idx]),
                 &[],
@@ -631,15 +590,19 @@ impl VkContext {
         self.end_fullscreen_pass(cmd);
 
         // Pass 2: lerp sharp vs upsampled blur by roughness, composite over scene.
-        self.begin_fullscreen_pass(cmd, rc.render_pass, rc.output_framebuffer);
+        self.begin_fullscreen_pass(cmd, rc.render_pass.handle(), rc.output_framebuffer.handle());
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, rc.composite_pso);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                rc.composite_pso.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                rc.composite_pipeline_layout,
+                rc.composite_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&rc.composite_sets[frame_idx]),
                 &[],

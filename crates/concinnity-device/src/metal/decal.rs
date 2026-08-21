@@ -23,6 +23,7 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use super::encode::RenderEncode;
 
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::decal::DecalRecord;
@@ -136,36 +137,23 @@ impl MtlContext {
                 .ok_or("failed to get decal render encoder")?,
             "decals",
         );
-        enc.setRenderPipelineState(pipeline);
+        enc.set_pipeline(pipeline);
 
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            // Per-frame view inputs at buffer(0); rebound once.
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<DecalView>(),
-                0,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<DecalView>(),
-                0,
-            );
-            // Unit-cube vertices at vertex buffer(2); the vertex shader declares
-            // a single `[[attribute(0)]] float3` mapped to buffer(2) by the
-            // pipeline's vertex descriptor.
-            enc.setVertexBuffer_offset_atIndex(Some(vbuf), 0, 2);
-            // Decal sampler at fragment sampler(0); texture(0) is the MSAA
-            // scene depth.
-            // Sample the single-sample `depth_resolve` (post-
-            // Main depth, plus any raymarched surface depth) instead
-            // of the MSAA original. Lets decals project correctly onto
-            // raymarched surfaces.
-            enc.setFragmentTexture_atIndex(Some(self.hdr_targets.depth_resolve.as_ref()), 0);
-            enc.setFragmentSamplerState_atIndex(Some(sampler), 0);
-        }
+        // Per-frame view inputs at buffer(0); rebound once.
+        enc.set_vertex_value(&view, 0);
+        enc.set_fragment_value(&view, 0);
+        // Unit-cube vertices at vertex buffer(2); the vertex shader declares
+        // a single `[[attribute(0)]] float3` mapped to buffer(2) by the
+        // pipeline's vertex descriptor.
+        enc.set_vertex_buffer(vbuf, 0, 2);
+        // Decal sampler at fragment sampler(0); texture(0) is the MSAA
+        // scene depth.
+        // Sample the single-sample `depth_resolve` (post-
+        // Main depth, plus any raymarched surface depth) instead
+        // of the MSAA original. Lets decals project correctly onto
+        // raymarched surfaces.
+        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        enc.set_fragment_sampler(sampler, 0);
 
         let last_tex = self.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
@@ -187,21 +175,12 @@ impl MtlContext {
                 _pad2: 0.0,
             };
             let slot = d.texture_slot.min(last_tex);
-            // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
-            // length, every bound resource outlives the encoder, and the draw's index range is this
-            // decal cube's own slice of the bound index buffer.
+            enc.set_vertex_value(&params, 1);
+            enc.set_fragment_value(&params, 1);
+            enc.set_fragment_texture(self.textures[slot].as_ref(), 1);
+            // SAFETY: the draw's index range is this decal cube's own slice of the bound index
+            // buffer.
             unsafe {
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&params).cast(),
-                    std::mem::size_of::<DecalParams>(),
-                    1,
-                );
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&params).cast(),
-                    std::mem::size_of::<DecalParams>(),
-                    1,
-                );
-                enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 1);
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                     MTLPrimitiveType::Triangle,
                     36,

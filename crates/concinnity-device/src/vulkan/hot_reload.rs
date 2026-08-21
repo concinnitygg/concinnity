@@ -233,8 +233,8 @@ impl VkContext {
         let (composite_vs, composite_ps) = compile_composite_shaders(hr)?;
         let composite_pipeline = create_composite_pipeline(
             device,
-            self.composite_render_pass,
-            self.composite_pipeline_layout,
+            self.composite_render_pass.handle(),
+            self.composite_pipeline_layout.handle(),
             &composite_vs,
             &composite_ps,
         )?;
@@ -244,8 +244,8 @@ impl VkContext {
             let (tv, tf) = compile_text_shaders(hr)?;
             create_text_pipeline(
                 device,
-                self.composite_render_pass,
-                self.text_pipeline_layout,
+                self.composite_render_pass.handle(),
+                self.text_pipeline_layout.handle(),
                 &tv,
                 &tf,
                 vk::SampleCountFlags::TYPE_1,
@@ -256,24 +256,24 @@ impl VkContext {
         let bloom_shaders = compile_bloom_shaders(hr)?;
         let bloom_prefilter = create_bloom_pipeline(
             device,
-            self.bloom_write_pass,
-            self.bloom_pipeline_layout,
+            self.bloom_write_pass.handle(),
+            self.bloom_pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.prefilter,
             false,
         )?;
         let bloom_downsample = create_bloom_pipeline(
             device,
-            self.bloom_write_pass,
-            self.bloom_pipeline_layout,
+            self.bloom_write_pass.handle(),
+            self.bloom_pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.downsample,
             false,
         )?;
         let bloom_upsample = create_bloom_pipeline(
             device,
-            self.bloom_blend_pass,
-            self.bloom_pipeline_layout,
+            self.bloom_blend_pass.handle(),
+            self.bloom_pipeline_layout.handle(),
             &bloom_shaders.vert,
             &bloom_shaders.upsample,
             true,
@@ -291,11 +291,13 @@ impl VkContext {
                 create_main_pipeline(
                     device,
                     MeshPipelineTargets {
-                        render_pass: self.main_render_pass,
+                        render_pass: self.main_render_pass.handle(),
                         layout: self
                             .cull
                             .bindless_pipeline_layout
-                            .expect("bindless pipeline layout is live alongside its pipeline"),
+                            .as_ref()
+                            .expect("bindless pipeline layout is live alongside its pipeline")
+                            .handle(),
                         vert_spv: &bvs,
                         frag_spv: &bps,
                     },
@@ -312,7 +314,9 @@ impl VkContext {
                     device,
                     self.cull
                         .cull_pipeline_layout
-                        .expect("cull pipeline layout is live alongside its pipeline"),
+                        .as_ref()
+                        .expect("cull pipeline layout is live alongside its pipeline")
+                        .handle(),
                     &cs,
                 )
             }
@@ -327,7 +331,9 @@ impl VkContext {
                     device,
                     self.cull
                         .cull_pipeline_layout
-                        .expect("cull pipeline layout is live alongside its phase-2 pipeline"),
+                        .as_ref()
+                        .expect("cull pipeline layout is live alongside its phase-2 pipeline")
+                        .handle(),
                     &cs,
                 )
             }
@@ -496,128 +502,78 @@ impl VkContext {
                 .rebuild_pipelines(device, hr)
         );
 
-        // All builds succeeded: destroy the displaced pipelines and swap
-        // the freshly compiled ones in. The caller's `wait_idle` above this
-        // method guarantees no command buffer still references them.
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.composite_pipeline, None);
-        }
+        // All builds succeeded: swap the freshly compiled pipelines in. Each
+        // assignment drops the pipeline it displaces, which retires it through
+        // the device's queue rather than destroying it under a submission that
+        // may still name it.
         self.composite_pipeline = composite_pipeline;
 
         if let Some(new_pipeline) = text_pipeline {
-            if let Some(old) = self.text_pipeline.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.text_pipeline = Some(new_pipeline);
         }
 
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.bloom_pipeline_prefilter, None);
-            device.destroy_pipeline(self.bloom_pipeline_downsample, None);
-            device.destroy_pipeline(self.bloom_pipeline_upsample, None);
-        }
         self.bloom_pipeline_prefilter = bloom_prefilter;
         self.bloom_pipeline_downsample = bloom_downsample;
         self.bloom_pipeline_upsample = bloom_upsample;
 
         if let Some(new_pipeline) = bindless_main_pipeline {
-            if let Some(old) = self.cull.bindless_pipeline.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.cull.bindless_pipeline = Some(new_pipeline);
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
         if let Some(new_pipeline) = cull_pipeline {
-            if let Some(old) = self.cull.cull_pipeline.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.cull.cull_pipeline = Some(new_pipeline);
         }
         if let Some(new_pipeline) = cull_pipeline_phase2 {
-            if let Some(old) = self.cull.cull_pipeline_phase2.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.cull.cull_pipeline_phase2 = Some(new_pipeline);
         }
         if let (Some((init, downsample)), Some(hiz)) = (hiz_pipelines, self.cull.hiz.as_mut()) {
-            hiz.swap_pipelines(device, init, downsample);
+            hiz.swap_pipelines(init, downsample);
         }
 
         if let (Some((build, average)), Some(ae)) =
             (auto_exposure_pipelines, self.auto_exposure.as_mut())
         {
-            ae.swap_pipelines(device, build, average);
+            ae.swap_pipelines(build, average);
         }
 
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decals_state.as_mut()) {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_pipeline(decals.pipeline, None) };
             decals.pipeline = new_pipeline;
         }
         if let (Some(new_pipeline), Some(lines)) = (line_pipeline, self.lines.resources.as_mut()) {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_pipeline(lines.pipeline, None) };
             lines.pipeline = new_pipeline;
         }
         if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog_resources.as_mut()) {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe {
-                device.destroy_pipeline(fog.pipeline, None);
-                device.destroy_pipeline(fog.froxel_pipeline, None);
-            }
             fog.pipeline = render;
             fog.froxel_pipeline = froxel;
         }
         if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.as_mut()) {
-            ssao.swap_pipelines(device, rebuilt);
+            ssao.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            ssr.swap_pipelines(device, rebuilt);
+            ssr.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
-            ssgi.swap_pipelines(device, rebuilt);
+            ssgi.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
-            rt.swap_pipelines(device, rebuilt);
+            rt.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(rc)) = (
             reflection_composite_rebuilt,
             self.reflection_composite.as_mut(),
         ) {
-            rc.swap_pipelines(device, rebuilt);
+            rc.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
-            taa.swap_pipelines(device, rebuilt);
+            taa.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(gb)) = (gbuffer_rebuilt, self.gbuffer.as_mut()) {
-            gb.swap_pipelines(device, rebuilt);
+            gb.swap_pipelines(rebuilt);
         }
         if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle_resources.as_mut()) {
-            p.swap_pipelines(device, cp, rp);
+            p.swap_pipelines(cp, rp);
         }
         Ok(())
     }
@@ -678,8 +634,8 @@ impl VkContext {
         let new_main = create_main_pipeline(
             device,
             MeshPipelineTargets {
-                render_pass: self.main_render_pass,
-                layout: self.main_pipeline_layout,
+                render_pass: self.main_render_pass.handle(),
+                layout: self.main_pipeline_layout.handle(),
                 vert_spv: &vert_spv,
                 frag_spv: &frag_spv,
             },
@@ -690,9 +646,10 @@ impl VkContext {
         // Instanced pipeline: rebuilt only when one is live. Needs the world's
         // instanced vertex stage paired with the fresh fragment, reusing the
         // live instanced pipeline layout.
-        let new_instanced = if let (Some(_), Some(layout)) =
-            (self.instanced.pipeline, self.instanced.pipeline_layout)
-        {
+        let new_instanced = if let (Some(_), Some(layout)) = (
+            self.instanced.pipeline.as_ref(),
+            self.instanced.pipeline_layout.as_ref(),
+        ) {
             let inst = vert_instanced_bytes.ok_or_else(|| {
                 "update_world_shader_pipelines: instanced vertex shader bytes are required \
                  when an instanced pipeline is live"
@@ -704,8 +661,8 @@ impl VkContext {
             Some(create_instanced_pipeline(
                 device,
                 MeshPipelineTargets {
-                    render_pass: self.main_render_pass,
-                    layout,
+                    render_pass: self.main_render_pass.handle(),
+                    layout: layout.handle(),
                     vert_spv: &inst_spv,
                     frag_spv: &frag_spv,
                 },
@@ -718,15 +675,16 @@ impl VkContext {
 
         // Skinned main pipeline: rebuilt only when one is live. Keeps its
         // engine-internal skinned vertex shader; only the fragment changes.
-        let new_skinned = if let (Some(_), Some(layout)) =
-            (self.skinned.pipeline, self.skinned.pipeline_layout)
-        {
+        let new_skinned = if let (Some(_), Some(layout)) = (
+            self.skinned.pipeline.as_ref(),
+            self.skinned.pipeline_layout.as_ref(),
+        ) {
             let (skinned_vs, _skinned_shadow_vs, frag_ps) = compile_skinned_shaders(hr, frag)?;
             Some(create_skinned_pipeline(
                 device,
                 MeshPipelineTargets {
-                    render_pass: self.main_render_pass,
-                    layout,
+                    render_pass: self.main_render_pass.handle(),
+                    layout: layout.handle(),
                     vert_spv: &skinned_vs,
                     frag_spv: &frag_ps,
                 },
@@ -742,26 +700,11 @@ impl VkContext {
         // built-in `reload_shaders` path the draw loop guards. Mirrors the
         // internal `wait_idle` in `upload_skinned` / `update_skinned_mesh_geometry`.
         self.wait_idle();
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe { device.destroy_pipeline(self.main_pipeline, None) };
         self.main_pipeline = new_main;
         if let Some(p) = new_instanced {
-            if let Some(old) = self.instanced.pipeline.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.instanced.pipeline = Some(p);
         }
         if let Some(p) = new_skinned {
-            if let Some(old) = self.skinned.pipeline.take() {
-                // SAFETY: the handle was created from this device and is destroyed exactly once;
-                // the caller has already waited for the device to go idle, so no submission still
-                // references it.
-                unsafe { device.destroy_pipeline(old, None) };
-            }
             self.skinned.pipeline = Some(p);
         }
         self.invalidate_wireframe_pipelines();

@@ -121,7 +121,7 @@ impl VkContext {
                     frames: self.frames_in_flight,
                 },
                 super::post::gbuffer::GbufferSsboLayouts {
-                    instance: self.instanced.set_layout,
+                    instance: self.instanced.set_layout.as_ref().map(|l| l.handle()),
                     // Skinned variant is built lazily by `upload_skinned`, as at init.
                     skinned: None,
                 },
@@ -145,7 +145,7 @@ impl VkContext {
                 self.render_extent,
                 &super::post::taa::TaaSceneInputs {
                     hdr_resolve_images: &self.hdr_resolve_images,
-                    sampler: self.composite_sampler,
+                    sampler: self.composite_sampler.handle(),
                 },
                 self.hot_reload,
             )?;
@@ -179,8 +179,8 @@ impl VkContext {
                     settings,
                     hdr_resolve_views: &hdr_views,
                     prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler,
-                    global_set_layout: self.descriptors.global_set_layout,
+                    cube_sampler: self.cube_sampler.handle(),
+                    global_set_layout: self.descriptors.global_set_layout.handle(),
                     probe_cube_count: self.descriptors.probe_cube_count,
                 },
                 self.hot_reload,
@@ -233,7 +233,7 @@ impl VkContext {
                 &self.device,
                 self.frames_in_flight,
                 &hdr_views,
-                self.linear_sampler,
+                self.linear_sampler.handle(),
                 self.hot_reload,
             )?;
             self.auto_exposure = Some(resources);
@@ -445,7 +445,7 @@ impl VkContext {
                 gbuffer_views: &nd_views,
                 roughness_views: &rough_views,
                 prefilter_view: self.env_map.prefilter.view,
-                cube_sampler: self.cube_sampler,
+                cube_sampler: self.cube_sampler.handle(),
             },
             super::post::rt_reflections::RtAccelHandles {
                 tlas: accel.tlas(),
@@ -455,8 +455,8 @@ impl VkContext {
                 skinned_indices: accel.skinned_indices(),
             },
             super::post::rt_reflections::RtLayoutConfig {
-                bindless_set_layout: self.cull.bindless_set_layout,
-                global_set_layout: self.descriptors.global_set_layout,
+                bindless_set_layout: self.cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                global_set_layout: self.descriptors.global_set_layout.handle(),
                 probe_cube_count: self.descriptors.probe_cube_count,
                 pool_size: bindless_pool_size,
                 hot_reload: self.hot_reload,
@@ -489,7 +489,7 @@ impl VkContext {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(ao_view)
-                .sampler(self.linear_sampler);
+                .sampler(self.linear_sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(6)

@@ -15,7 +15,12 @@
 
 use std::ffi::CString;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -70,11 +75,11 @@ struct VertexSlot {
 //       - binding 0: UNIFORM_BUFFER, `LineView`
 //       - binding 1: COMBINED_IMAGE_SAMPLER, main depth view
 pub(in crate::vulkan) struct LineResources {
-    render_pass: vk::RenderPass,
-    pub(in crate::vulkan) pipeline: vk::Pipeline,
-    pipeline_layout: vk::PipelineLayout,
-    view_set_layout: vk::DescriptorSetLayout,
-    descriptor_pool: vk::DescriptorPool,
+    render_pass: OwnedRenderPass,
+    pub(in crate::vulkan) pipeline: OwnedPipeline,
+    pipeline_layout: OwnedPipelineLayout,
+    _view_set_layout: OwnedSetLayout,
+    _descriptor_pool: OwnedDescriptorPool,
 
     // Per-frame view UBO (LineView, 80 bytes). Persistently mapped.
     view_ubos: Vec<PooledBuffer>,
@@ -87,7 +92,7 @@ pub(in crate::vulkan) struct LineResources {
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
     // `hdr_resolve_images[i].view` as the sole colour attachment.
-    framebuffers: Vec<vk::Framebuffer>,
+    framebuffers: Vec<OwnedFramebuffer>,
 
     sampler: vk::Sampler,
 }
@@ -97,7 +102,7 @@ pub(in crate::vulkan) struct LineResources {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct LineDeviceContext<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
 }
 
 // Render-target inputs the line pass writes into / samples from: the resolved
@@ -130,11 +135,16 @@ impl LineResources {
         } = targets;
         let render_pass = create_line_render_pass(device, hdr_format)?;
         let view_set_layout = create_line_set_layout(device)?;
-        let pipeline_layout = create_line_pipeline_layout(device, view_set_layout)?;
+        let pipeline_layout = create_line_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
-        let pipeline =
-            create_line_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
+        let pipeline = create_line_pipeline(
+            device,
+            render_pass.handle(),
+            pipeline_layout.handle(),
+            &vert_spv,
+            &frag_spv,
+        )?;
 
         let view_size = std::mem::size_of::<LineView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
@@ -149,9 +159,9 @@ impl LineResources {
         }
 
         let descriptor_pool = create_line_descriptor_pool(device, frames)?;
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
+        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
         let info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
+            .descriptor_pool(descriptor_pool.handle())
             .set_layouts(&view_layouts);
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
@@ -169,15 +179,20 @@ impl LineResources {
 
         let mut framebuffers = Vec::with_capacity(frames);
         for &view in hdr_resolve_views.iter().take(frames) {
-            framebuffers.push(create_line_framebuffer(device, render_pass, view, extent)?);
+            framebuffers.push(create_line_framebuffer(
+                device,
+                render_pass.handle(),
+                view,
+                extent,
+            )?);
         }
 
         Ok(Self {
             render_pass,
             pipeline,
             pipeline_layout,
-            view_set_layout,
-            descriptor_pool,
+            _view_set_layout: view_set_layout,
+            _descriptor_pool: descriptor_pool,
             view_ubos,
             vertex_slots,
             view_sets,
@@ -191,22 +206,16 @@ impl LineResources {
     // pipeline, layouts, buffers, and sampler all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> Result<(), String> {
-        for &fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             self.framebuffers.push(create_line_framebuffer(
                 device,
-                self.render_pass,
+                self.render_pass.handle(),
                 view,
                 extent,
             )?);
@@ -231,19 +240,7 @@ impl LineResources {
     // Destroy every GPU resource. Called from `VkContext::destroy` after
     // `wait_idle`; the pooled buffers retire through the allocator as their
     // fields clear.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_descriptor_set_layout(self.view_set_layout, None);
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
         self.view_ubos.clear();
         self.vertex_slots.clear();
@@ -272,11 +269,11 @@ fn grow_capacity(capacity: u64, needed: u64) -> u64 {
 }
 
 fn create_line_framebuffer(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     view: vk::ImageView,
     extent: vk::Extent2D,
-) -> Result<vk::Framebuffer, String> {
+) -> Result<OwnedFramebuffer, String> {
     let attachments = [view];
     let info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
@@ -284,14 +281,17 @@ fn create_line_framebuffer(
         .width(extent.width.max(1))
         .height(extent.height.max(1))
         .layers(1);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_framebuffer(&info, None) }.map_err(|e| format!("line framebuffer: {e}"))
+    device
+        .create_framebuffer(&info)
+        .map_err(|e| format!("line framebuffer: {e}"))
 }
 
 // Render pass / pipeline construction
 
-fn create_line_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass, String> {
+fn create_line_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+) -> Result<OwnedRenderPass, String> {
     // One colour attachment: the resolved HDR scene. The preceding pass left it
     // in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT during the
     // subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom
@@ -335,12 +335,12 @@ fn create_line_render_pass(device: &Device, format: vk::Format) -> Result<vk::Re
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }.map_err(|e| format!("line render pass: {e}"))
+    device
+        .create_render_pass(&info)
+        .map_err(|e| format!("line render pass: {e}"))
 }
 
-fn create_line_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_line_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -354,28 +354,26 @@ fn create_line_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, St
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("line view set layout: {e}"))
 }
 
 fn create_line_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let set_layouts = [view_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("line pipeline layout: {e}"))
 }
 
 fn create_line_descriptor_pool(
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
-) -> Result<vk::DescriptorPool, String> {
+) -> Result<OwnedDescriptorPool, String> {
     let frames = frames as u32;
     let sizes = [
         vk::DescriptorPoolSize {
@@ -390,14 +388,13 @@ fn create_line_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_pool(&info, None) }
+    device
+        .create_descriptor_pool(&info)
         .map_err(|e| format!("line descriptor pool: {e}"))
 }
 
 fn write_view_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view_ubo: vk::Buffer,
     depth_view: vk::ImageView,
@@ -442,28 +439,28 @@ fn compile_line_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8
 // Used by the Vulkan shader hot-reload path. The caller destroys the previous
 // pipeline only after this call succeeds.
 pub(in crate::vulkan) fn rebuild_line_pipeline(
-    device: &Device,
+    device: &VkDevice,
     lines: &LineResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
     create_line_pipeline(
         device,
-        lines.render_pass,
-        lines.pipeline_layout,
+        lines.render_pass.handle(),
+        lines.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
     )
 }
 
 fn create_line_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert = spv_module(device, vert_spv)?;
     let frag = spv_module(device, frag_spv)?;
     let entry = CString::new("main").unwrap();
@@ -549,15 +546,8 @@ fn create_line_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create line pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create line pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -593,7 +583,7 @@ impl VkContext {
                     hdr_format: super::context::HDR_FORMAT,
                     hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    sampler: self.linear_sampler,
+                    sampler: self.linear_sampler.handle(),
                     extent: self.render_extent,
                 },
                 self.frames_in_flight,
@@ -675,8 +665,8 @@ impl VkContext {
         // sample: the graph declares this pass's depth read and the executor emits
         // the transition ahead of this command buffer.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(lines.render_pass)
-            .framebuffer(lines.framebuffers[frame_idx])
+            .render_pass(lines.render_pass.handle())
+            .framebuffer(lines.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
 
         // Negative-height viewport matches the main pass so the rasterised
@@ -697,11 +687,15 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, lines.pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                lines.pipeline.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                lines.pipeline_layout,
+                lines.pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&lines.view_sets[frame_idx]),
                 &[],

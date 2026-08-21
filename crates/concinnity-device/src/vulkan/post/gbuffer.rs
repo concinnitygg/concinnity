@@ -22,7 +22,12 @@
 // because TAA reads `velocity_images[frame_idx]` and the engine pipelines
 // frames-in-flight deep; this follows the per-frame `Vec` shape of taa.rs.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSetLayout, VkDevice,
+};
 
 use crate::vulkan::uniforms::GBUFFER_PREPASS_PUSH_BYTES;
 use crate::vulkan::uniforms::GbModelPush;
@@ -87,7 +92,7 @@ pub(in crate::vulkan) fn compile_gbuffer_shaders(
 // without an extra barrier. The depth is STORE'd because the temporal upscaler
 // (FSR) consumes this render-resolution single-sample depth alongside the
 // motion vectors.
-fn create_prepass_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_prepass_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachments = [
         vk::AttachmentDescription::default()
             .format(GBUFFER_NORMAL_DEPTH_FORMAT)
@@ -165,9 +170,8 @@ fn create_prepass_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("gbuffer prepass render pass: {e}"))
 }
 
@@ -190,10 +194,10 @@ struct PrepassPipelineShaders<'a> {
 // velocity) over a private depth buffer; same no-cull / LESS depth as the main
 // pass.
 fn create_prepass_pipeline(
-    device: &Device,
+    device: &VkDevice,
     targets: PrepassPipelineTargets,
     shaders: PrepassPipelineShaders,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let PrepassPipelineTargets {
         render_pass,
         layout,
@@ -268,15 +272,8 @@ fn create_prepass_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create gbuffer prepass pso: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create gbuffer prepass pso: {e}"))?;
     Ok(pipeline)
 }
 
@@ -404,9 +401,9 @@ fn vertex_56_dual_input() -> (
 // the per-frame set 0 binds the G-buffer view UBO + that frame's prev_model SSBO,
 // and set 1 reuses the bindless GpuObjectData set.
 pub(in crate::vulkan) struct GbufferBindless {
-    pub(in crate::vulkan) pipeline: vk::Pipeline,
-    pub(in crate::vulkan) pipeline_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) pipeline: OwnedPipeline,
+    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) set_layout: OwnedSetLayout,
     pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
     pub(in crate::vulkan) prev_model_buffers: Vec<PooledBuffer>,
 }
@@ -416,7 +413,7 @@ pub(in crate::vulkan) struct GbufferBindless {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GbufferDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
 }
 
 // Descriptor wiring the GPU-driven pre-pass allocates against: the shared pool
@@ -487,23 +484,17 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
             ),
         ],
     )?;
-    let layouts = [set_layout, bindless_set_layout];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let pipeline_layout = unsafe {
-        device.create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
-            None,
-        )
-    }
-    .map_err(|e| format!("gbuffer bindless pipeline layout: {e}"))?;
+    let layouts = [set_layout.handle(), bindless_set_layout];
+    let pipeline_layout = device
+        .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
+        .map_err(|e| format!("gbuffer bindless pipeline layout: {e}"))?;
 
     let (bindings, attrs) = vertex_56_dual_input();
     let pipeline = create_prepass_pipeline(
         device,
         PrepassPipelineTargets {
-            render_pass: gb.prepass_render_pass,
-            layout: pipeline_layout,
+            render_pass: gb.prepass_render_pass.handle(),
+            layout: pipeline_layout.handle(),
         },
         PrepassPipelineShaders {
             vert_spv: &vs,
@@ -536,7 +527,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     // One set 0 per frame: binding 0 = that frame's GbView UBO, binding 1 = that
     // frame's prev_model SSBO. Both buffers are stable for the world's lifetime,
     // so the sets are written once here.
-    let set_layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
+    let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
         let view_info = vk::DescriptorBufferInfo::default()
@@ -603,22 +594,22 @@ pub(in crate::vulkan) struct GbufferPooled {
 // shape.
 pub(in crate::vulkan) struct GbufferResources {
     // Render pass.
-    pub(in crate::vulkan) prepass_render_pass: vk::RenderPass,
+    pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,
 
     // Pre-pass pipelines (static always, instanced / skinned conditional).
-    pub(in crate::vulkan) prepass_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) prepass_layout_static: vk::PipelineLayout,
-    pub(in crate::vulkan) prepass_layout_instanced: Option<vk::PipelineLayout>,
-    pub(in crate::vulkan) prepass_layout_skinned: Option<vk::PipelineLayout>,
-    pub(in crate::vulkan) prepass_pso_static: vk::Pipeline,
-    pub(in crate::vulkan) prepass_pso_instanced: Option<vk::Pipeline>,
-    pub(in crate::vulkan) prepass_pso_skinned: Option<vk::Pipeline>,
+    pub(in crate::vulkan) prepass_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) prepass_layout_static: OwnedPipelineLayout,
+    pub(in crate::vulkan) prepass_layout_instanced: Option<OwnedPipelineLayout>,
+    pub(in crate::vulkan) prepass_layout_skinned: Option<OwnedPipelineLayout>,
+    pub(in crate::vulkan) prepass_pso_static: OwnedPipeline,
+    pub(in crate::vulkan) prepass_pso_instanced: Option<OwnedPipeline>,
+    pub(in crate::vulkan) prepass_pso_skinned: Option<OwnedPipeline>,
 
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat),
     // host-mapped + descriptor set.
     pub(in crate::vulkan) view_ubo_buffers: Vec<PooledBuffer>,
     pub(in crate::vulkan) prepass_sets: Vec<vk::DescriptorSet>,
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) _descriptor_pool: OwnedDescriptorPool,
 
     // Per-frame MRT targets + private depth + framebuffers (rebuilt on resize).
     // One slot per frame in flight: TAA reads `velocity_images[frame_idx]`.
@@ -631,7 +622,7 @@ pub(in crate::vulkan) struct GbufferResources {
     pub(in crate::vulkan) roughness_images: Vec<PooledTarget>,
     pub(in crate::vulkan) velocity_images: Vec<PooledTarget>,
     pub(in crate::vulkan) depth_images: Vec<GpuImage>,
-    pub(in crate::vulkan) framebuffers: Vec<vk::Framebuffer>,
+    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Previous-frame motion state, owned here so the velocity channel works for
     // any consumer (TAA or FSR) independent of whether engine-TAA is on.
@@ -651,16 +642,16 @@ pub(in crate::vulkan) struct GbufferResources {
 // Conditional variants are `Some` exactly when the corresponding
 // `prepass_pso_*` is `Some` on the live resource.
 pub(in crate::vulkan) struct RebuiltGbufferPipelines {
-    pub prepass_static: vk::Pipeline,
-    pub prepass_instanced: Option<vk::Pipeline>,
-    pub prepass_skinned: Option<vk::Pipeline>,
+    pub prepass_static: OwnedPipeline,
+    pub prepass_instanced: Option<OwnedPipeline>,
+    pub prepass_skinned: Option<OwnedPipeline>,
 }
 
 // Rebuild every live G-buffer pre-pass pipeline from disk-resident GLSL source
 // against the existing layouts + render pass. Same shape as
 // [`rebuild_ssr_pipelines`].
 pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
-    device: &Device,
+    device: &VkDevice,
     gbuffer: &GbufferResources,
     hot_reload: bool,
 ) -> Result<RebuiltGbufferPipelines, String> {
@@ -669,8 +660,8 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
     let prepass_static = create_prepass_pipeline(
         device,
         PrepassPipelineTargets {
-            render_pass: gbuffer.prepass_render_pass,
-            layout: gbuffer.prepass_layout_static,
+            render_pass: gbuffer.prepass_render_pass.handle(),
+            layout: gbuffer.prepass_layout_static.handle(),
         },
         PrepassPipelineShaders {
             vert_spv: &shaders.prepass_vs,
@@ -680,16 +671,16 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
         },
     )?;
     let prepass_instanced = if let (Some(layout), Some(_)) = (
-        gbuffer.prepass_layout_instanced,
-        gbuffer.prepass_pso_instanced,
+        gbuffer.prepass_layout_instanced.as_ref(),
+        gbuffer.prepass_pso_instanced.as_ref(),
     ) {
         // Instanced pre-pass reads only position + normal (model comes from the
         // instance SSBO), so bind just those two attributes.
         Some(create_prepass_pipeline(
             device,
             PrepassPipelineTargets {
-                render_pass: gbuffer.prepass_render_pass,
-                layout,
+                render_pass: gbuffer.prepass_render_pass.handle(),
+                layout: layout.handle(),
             },
             PrepassPipelineShaders {
                 vert_spv: &shaders.prepass_instanced_vs,
@@ -701,15 +692,16 @@ pub(in crate::vulkan) fn rebuild_gbuffer_pipelines(
     } else {
         None
     };
-    let prepass_skinned = if let (Some(layout), Some(_)) =
-        (gbuffer.prepass_layout_skinned, gbuffer.prepass_pso_skinned)
-    {
+    let prepass_skinned = if let (Some(layout), Some(_)) = (
+        gbuffer.prepass_layout_skinned.as_ref(),
+        gbuffer.prepass_pso_skinned.as_ref(),
+    ) {
         let (sbindings, sattrs) = skinned_vertex_input();
         Some(create_prepass_pipeline(
             device,
             PrepassPipelineTargets {
-                render_pass: gbuffer.prepass_render_pass,
-                layout,
+                render_pass: gbuffer.prepass_render_pass.handle(),
+                layout: layout.handle(),
             },
             PrepassPipelineShaders {
                 vert_spv: &shaders.prepass_skinned_vs,
@@ -796,33 +788,25 @@ impl GbufferResources {
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(GBUFFER_PREPASS_PUSH_BYTES);
-        let static_layouts = [prepass_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let prepass_layout_static = unsafe {
-            device.create_pipeline_layout(
+        let static_layouts = [prepass_set_layout.handle()];
+        let prepass_layout_static = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&static_layouts)
                     .push_constant_ranges(std::slice::from_ref(&prepass_push)),
-                None,
             )
-        }
-        .map_err(|e| format!("gbuffer prepass static layout: {e}"))?;
+            .map_err(|e| format!("gbuffer prepass static layout: {e}"))?;
 
         let prepass_layout_instanced = if let Some(isl) = instance_ssbo_set_layout {
-            let layouts = [prepass_set_layout, isl];
+            let layouts = [prepass_set_layout.handle(), isl];
             Some(
-                // SAFETY: the create-info and every slice it borrows are live for the call, and
-                // each handle it names belongs to this device.
-                unsafe {
-                    device.create_pipeline_layout(
+                device
+                    .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
                             .set_layouts(&layouts)
                             .push_constant_ranges(std::slice::from_ref(&prepass_push)),
-                        None,
                     )
-                }
-                .map_err(|e| format!("gbuffer prepass instanced layout: {e}"))?,
+                    .map_err(|e| format!("gbuffer prepass instanced layout: {e}"))?,
             )
         } else {
             None
@@ -831,19 +815,15 @@ impl GbufferResources {
         let prepass_layout_skinned = if let Some(jsl) = skinned_ssbo_set_layout {
             // Set 1 = current joint palette, set 2 = previous joint palette.
             // Both reuse the single main-pass joint set layout.
-            let layouts = [prepass_set_layout, jsl, jsl];
+            let layouts = [prepass_set_layout.handle(), jsl, jsl];
             Some(
-                // SAFETY: the create-info and every slice it borrows are live for the call, and
-                // each handle it names belongs to this device.
-                unsafe {
-                    device.create_pipeline_layout(
+                device
+                    .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
                             .set_layouts(&layouts)
                             .push_constant_ranges(std::slice::from_ref(&prepass_push)),
-                        None,
                     )
-                }
-                .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?,
+                    .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?,
             )
         } else {
             None
@@ -855,8 +835,8 @@ impl GbufferResources {
         let prepass_pso_static = create_prepass_pipeline(
             device,
             PrepassPipelineTargets {
-                render_pass: prepass_render_pass,
-                layout: prepass_layout_static,
+                render_pass: prepass_render_pass.handle(),
+                layout: prepass_layout_static.handle(),
             },
             PrepassPipelineShaders {
                 vert_spv: &shaders.prepass_vs,
@@ -865,14 +845,14 @@ impl GbufferResources {
                 attrs: &vattrs,
             },
         )?;
-        let prepass_pso_instanced = if let Some(layout) = prepass_layout_instanced {
+        let prepass_pso_instanced = if let Some(layout) = prepass_layout_instanced.as_ref() {
             // Instanced pre-pass reads only position + normal (model comes from
             // the instance SSBO), so bind just those two attributes.
             Some(create_prepass_pipeline(
                 device,
                 PrepassPipelineTargets {
-                    render_pass: prepass_render_pass,
-                    layout,
+                    render_pass: prepass_render_pass.handle(),
+                    layout: layout.handle(),
                 },
                 PrepassPipelineShaders {
                     vert_spv: &shaders.prepass_instanced_vs,
@@ -884,13 +864,13 @@ impl GbufferResources {
         } else {
             None
         };
-        let prepass_pso_skinned = if let Some(layout) = prepass_layout_skinned {
+        let prepass_pso_skinned = if let Some(layout) = prepass_layout_skinned.as_ref() {
             let (sbindings, sattrs) = skinned_vertex_input();
             Some(create_prepass_pipeline(
                 device,
                 PrepassPipelineTargets {
-                    render_pass: prepass_render_pass,
-                    layout,
+                    render_pass: prepass_render_pass.handle(),
+                    layout: layout.handle(),
                 },
                 PrepassPipelineShaders {
                     vert_spv: &shaders.prepass_skinned_vs,
@@ -918,20 +898,17 @@ impl GbufferResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(frames as u32)];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(frames as u32),
-                None,
             )
-        }
-        .map_err(|e| format!("gbuffer descriptor pool: {e}"))?;
+            .map_err(|e| format!("gbuffer descriptor pool: {e}"))?;
 
-        let prepass_layouts: Vec<_> = (0..frames).map(|_| prepass_set_layout).collect();
-        let prepass_sets = alloc_descriptor_sets(device, descriptor_pool, &prepass_layouts)?;
+        let prepass_layouts: Vec<_> = (0..frames).map(|_| prepass_set_layout.handle()).collect();
+        let prepass_sets =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &prepass_layouts)?;
         for (i, &set) in prepass_sets.iter().enumerate() {
             let buf_info = vk::DescriptorBufferInfo::default()
                 .buffer(view_ubo_buffers[i].buffer())
@@ -958,7 +935,7 @@ impl GbufferResources {
             prepass_pso_skinned,
             view_ubo_buffers,
             prepass_sets,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             normal_depth_images: Vec::new(),
             roughness_images: Vec::new(),
             velocity_images: Vec::new(),
@@ -1020,20 +997,16 @@ impl GbufferResources {
                 vk::SampleCountFlags::TYPE_1,
             )?;
             let attachments = [normal_depth.view, roughness.view, velocity.view, depth.view];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let framebuffer = unsafe {
-                device.create_framebuffer(
+            let framebuffer = device
+                .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.prepass_render_pass)
+                        .render_pass(self.prepass_render_pass.handle())
                         .attachments(&attachments)
                         .width(w)
                         .height(h)
                         .layers(1),
-                    None,
                 )
-            }
-            .map_err(|e| format!("gbuffer prepass framebuffer: {e}"))?;
+                .map_err(|e| format!("gbuffer prepass framebuffer: {e}"))?;
             self.normal_depth_images.push(normal_depth);
             self.roughness_images.push(roughness);
             self.velocity_images.push(velocity);
@@ -1098,13 +1071,7 @@ impl GbufferResources {
             .collect()
     }
 
-    fn destroy_targets(&mut self, device: &Device) {
-        for &fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
+    fn destroy_targets(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
         // The three colour channels are pool-owned: dropping these records frees
         // nothing, which is the point. The private depth images retire through
@@ -1137,20 +1104,18 @@ impl GbufferResources {
     // exists. Idempotent: re-calling replaces the existing pipeline.
     pub(in crate::vulkan) fn ensure_skinned_gbuffer_pso(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         joint_set_layout: vk::DescriptorSetLayout,
     ) -> Result<(), String> {
-        if let Some(p) = self.prepass_pso_skinned.take() {
+        if let Some(_p) = self.prepass_pso_skinned.take() {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
             // references it.
-            unsafe { device.destroy_pipeline(p, None) };
         }
-        if let Some(l) = self.prepass_layout_skinned.take() {
+        if let Some(_l) = self.prepass_layout_skinned.take() {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
             // references it.
-            unsafe { device.destroy_pipeline_layout(l, None) };
         }
         let prepass_push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -1159,18 +1124,18 @@ impl GbufferResources {
         // Set 1 = current joint palette, set 2 = previous joint palette; the
         // skinned VS deforms both poses to emit a real deformation motion
         // vector. Both reuse the single main-pass joint set layout.
-        let layouts = [self.prepass_set_layout, joint_set_layout, joint_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let layout = unsafe {
-            device.create_pipeline_layout(
+        let layouts = [
+            self.prepass_set_layout.handle(),
+            joint_set_layout,
+            joint_set_layout,
+        ];
+        let layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&layouts)
                     .push_constant_ranges(std::slice::from_ref(&prepass_push)),
-                None,
             )
-        }
-        .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?;
+            .map_err(|e| format!("gbuffer prepass skinned layout: {e}"))?;
         use super::super::builtins;
         let compile_ctx = builtins::Ctx::plain(self.hot_reload);
         let sk_vs =
@@ -1181,8 +1146,8 @@ impl GbufferResources {
         let pso = create_prepass_pipeline(
             device,
             PrepassPipelineTargets {
-                render_pass: self.prepass_render_pass,
-                layout,
+                render_pass: self.prepass_render_pass.handle(),
+                layout: layout.handle(),
             },
             PrepassPipelineShaders {
                 vert_spv: &sk_vs,
@@ -1198,23 +1163,7 @@ impl GbufferResources {
 
     // Swap the freshly-built pipelines into the live resources. The caller has
     // already `device_wait_idle`'d so the old pipelines are not in flight.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltGbufferPipelines,
-    ) {
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_pipeline(self.prepass_pso_static, None);
-            if let Some(p) = self.prepass_pso_instanced.take() {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(p) = self.prepass_pso_skinned.take() {
-                device.destroy_pipeline(p, None);
-            }
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltGbufferPipelines) {
         self.prepass_pso_static = rebuilt.prepass_static;
         self.prepass_pso_instanced = rebuilt.prepass_instanced;
         self.prepass_pso_skinned = rebuilt.prepass_skinned;
@@ -1222,30 +1171,8 @@ impl GbufferResources {
 
     // Destroy every G-buffer pre-pass resource. The caller has already idled the
     // device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.prepass_pso_static, None);
-            if let Some(p) = self.prepass_pso_instanced.take() {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(p) = self.prepass_pso_skinned.take() {
-                device.destroy_pipeline(p, None);
-            }
-            device.destroy_pipeline_layout(self.prepass_layout_static, None);
-            if let Some(l) = self.prepass_layout_instanced.take() {
-                device.destroy_pipeline_layout(l, None);
-            }
-            if let Some(l) = self.prepass_layout_skinned.take() {
-                device.destroy_pipeline_layout(l, None);
-            }
-            device.destroy_descriptor_set_layout(self.prepass_set_layout, None);
-            device.destroy_render_pass(self.prepass_render_pass, None);
-        }
     }
 }
 
@@ -1329,8 +1256,8 @@ impl VkContext {
             },
         ];
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(gb.prepass_render_pass)
-            .framebuffer(gb.framebuffers[frame_idx])
+            .render_pass(gb.prepass_render_pass.handle())
+            .framebuffer(gb.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(&clears);
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -1388,11 +1315,15 @@ impl VkContext {
                 0,
                 vk::IndexType::UINT32,
             );
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, gb.prepass_pso_static);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                gb.prepass_pso_static.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                gb.prepass_layout_static,
+                gb.prepass_layout_static.handle(),
                 0,
                 std::slice::from_ref(&gb.prepass_sets[frame_idx]),
                 &[],
@@ -1429,7 +1360,7 @@ impl VkContext {
             unsafe {
                 device.cmd_push_constants(
                     cmd,
-                    gb.prepass_layout_static,
+                    gb.prepass_layout_static.handle(),
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
                     std::slice::from_raw_parts(
@@ -1452,19 +1383,20 @@ impl VkContext {
         // motion is camera-only (the instanced VS feeds the same matrix to cur
         // and prev clip). Reuses the per-cluster instance SSBO the main
         // instanced pass already filled this frame.
-        if let (Some(inst_pso), Some(inst_layout)) =
-            (gb.prepass_pso_instanced, gb.prepass_layout_instanced)
-            && !self.instanced.clusters.is_empty()
+        if let (Some(inst_pso), Some(inst_layout)) = (
+            gb.prepass_pso_instanced.as_ref(),
+            gb.prepass_layout_instanced.as_ref(),
+        ) && !self.instanced.clusters.is_empty()
             && !self.instanced.sets.is_empty()
         {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, inst_pso);
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, inst_pso.handle());
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    inst_layout,
+                    inst_layout.handle(),
                     0,
                     std::slice::from_ref(&gb.prepass_sets[frame_idx]),
                     &[],
@@ -1505,14 +1437,14 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        inst_layout,
+                        inst_layout.handle(),
                         1,
                         std::slice::from_ref(&inst_set),
                         &[],
                     );
                     device.cmd_push_constants(
                         cmd,
-                        inst_layout,
+                        inst_layout.handle(),
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
                         std::slice::from_raw_parts(
@@ -1548,8 +1480,10 @@ impl VkContext {
         // palette lives at the prior slot of the joint-set ring; with fewer than
         // two frames in flight there is no distinct prior slot, so prev = cur
         // (it cannot ghost without a second in-flight frame anyway).
-        if let (Some(sk_pso), Some(sk_layout)) = (gb.prepass_pso_skinned, gb.prepass_layout_skinned)
-            && !self.skinned.draw_objects.is_empty()
+        if let (Some(sk_pso), Some(sk_layout)) = (
+            gb.prepass_pso_skinned.as_ref(),
+            gb.prepass_layout_skinned.as_ref(),
+        ) && !self.skinned.draw_objects.is_empty()
         {
             let frames = self.frames_in_flight.max(1);
             let prev_frame_idx = if velocity_active && frames >= 2 {
@@ -1561,13 +1495,13 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pso);
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pso.handle());
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
                 device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT16);
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    sk_layout,
+                    sk_layout.handle(),
                     0,
                     std::slice::from_ref(&gb.prepass_sets[frame_idx]),
                     &[],
@@ -1597,7 +1531,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        sk_layout,
+                        sk_layout.handle(),
                         1,
                         std::slice::from_ref(&self.skinned.joint_sets[frame_idx][i]),
                         &[],
@@ -1605,14 +1539,14 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        sk_layout,
+                        sk_layout.handle(),
                         2,
                         std::slice::from_ref(&self.skinned.joint_sets[prev_frame_idx][i]),
                         &[],
                     );
                     device.cmd_push_constants(
                         cmd,
-                        sk_layout,
+                        sk_layout.handle(),
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
                         std::slice::from_raw_parts(
@@ -1669,8 +1603,8 @@ impl VkContext {
     ) {
         let device = &self.device;
         let (Some(pipeline), Some(layout)) = (
-            self.cull.gbuffer_bindless_pipeline,
-            self.cull.gbuffer_bindless_pipeline_layout,
+            self.cull.gbuffer_bindless_pipeline.as_ref(),
+            self.cull.gbuffer_bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
@@ -1695,12 +1629,12 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             // set 0 = GbView UBO + prev_model SSBO; set 1 = bindless GpuObjectData.
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout,
+                layout.handle(),
                 0,
                 &[gset, self.cull.bindless_sets[frame_idx]],
                 &[],
@@ -1811,11 +1745,15 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, gb.prepass_pso_static);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                gb.prepass_pso_static.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                gb.prepass_layout_static,
+                gb.prepass_layout_static.handle(),
                 0,
                 std::slice::from_ref(&gb.prepass_sets[frame_idx]),
                 &[],
@@ -1860,7 +1798,7 @@ impl VkContext {
             unsafe {
                 device.cmd_push_constants(
                     cmd,
-                    gb.prepass_layout_static,
+                    gb.prepass_layout_static.handle(),
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     0,
                     std::slice::from_raw_parts(

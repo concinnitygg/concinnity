@@ -20,7 +20,9 @@
 // `alloc_descriptor_sets`, `upload_geometry_buffer{,_raw}`) live in this file
 // because every submodule + `init.rs` needs them.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{OwnedSetLayout, VkDevice};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::texture;
@@ -32,9 +34,9 @@ mod streaming;
 mod textures;
 
 pub(in crate::vulkan) fn create_descriptor_set_layout(
-    device: &Device,
+    device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType, vk::ShaderStageFlags)],
-) -> Result<vk::DescriptorSetLayout, String> {
+) -> Result<OwnedSetLayout, String> {
     let vk_bindings: Vec<_> = bindings
         .iter()
         .map(|&(b, ty, stage)| {
@@ -46,14 +48,13 @@ pub(in crate::vulkan) fn create_descriptor_set_layout(
         })
         .collect();
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&vk_bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("descriptor set layout: {e}"))
 }
 
 pub(in crate::vulkan) fn alloc_descriptor_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
 ) -> Result<Vec<vk::DescriptorSet>, String> {
@@ -91,7 +92,7 @@ pub(in crate::vulkan) fn shared_geometry_usage(rt_capable: bool) -> vk::BufferUs
 
 pub(in crate::vulkan) fn upload_geometry_buffer<T: bytemuck::NoUninit>(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     data: &[T],
@@ -109,7 +110,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer<T: bytemuck::NoUninit>(
 
 pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     data: &[u8],

@@ -16,7 +16,7 @@
 // its own spelling (`view_mat`, and `cam_x`/`cam_y`/`cam_z` in place of
 // `cam_pos`), which is why the two are checked as byte ranges rather than by
 // name.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ViewUniforms {
     // Combined view-projection matrix (column-major).
@@ -53,7 +53,7 @@ pub struct ViewUniforms {
 // un-jittered cur/prev VPs derive a jitter-free motion vector. Matches `GbView`
 // in `shaders/gbuffer_prepass.slang`. 256 bytes (four float4x4, all naturally
 // 16-aligned, no padding).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GBufferView {
     pub jittered_vp: [[f32; 4]; 4],
@@ -68,7 +68,7 @@ pub struct GBufferView {
 // block (`vulkan::uniforms::GbModelPush`), because a pipeline layout may declare
 // only one. For a static or skinned object with no motion the caller sets
 // `prev == cur`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GBufferModel {
     pub cur_model: [[f32; 4]; 4],

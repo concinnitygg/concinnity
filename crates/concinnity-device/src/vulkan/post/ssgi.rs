@@ -17,7 +17,12 @@
 // resolve uses for `SsrParams`), so there is no per-frame param UBO: the
 // descriptor sets carry only image samplers.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsgiParams;
@@ -59,17 +64,17 @@ pub(in crate::vulkan) struct SsgiResources {
 
     // Render passes: gather writes the `gi` target, composite LOAD/blends into
     // the HDR resolve.
-    gather_render_pass: vk::RenderPass,
-    composite_render_pass: vk::RenderPass,
+    gather_render_pass: OwnedRenderPass,
+    composite_render_pass: OwnedRenderPass,
 
     // One set layout shared by both passes (binding 0 = scene/gi, binding 1 =
     // gbuffer) + one pipeline layout (that set + the SsgiParams push range).
-    set_layout: vk::DescriptorSetLayout,
-    pipeline_layout: vk::PipelineLayout,
-    gather_pso: vk::Pipeline,
-    composite_pso: vk::Pipeline,
+    _set_layout: OwnedSetLayout,
+    pipeline_layout: OwnedPipelineLayout,
+    gather_pso: OwnedPipeline,
+    composite_pso: OwnedPipeline,
 
-    descriptor_pool: vk::DescriptorPool,
+    _descriptor_pool: OwnedDescriptorPool,
     // Per-frame gather sets: each binds that frame's HDR resolve as the scene
     // input (binding 0) + that frame's G-buffer (binding 1).
     gather_sets: Vec<vk::DescriptorSet>,
@@ -79,7 +84,7 @@ pub(in crate::vulkan) struct SsgiResources {
     composite_sets: Vec<vk::DescriptorSet>,
 
     // Linear-clamp sampler the passes read scene / gi / G-buffer through.
-    sampler: vk::Sampler,
+    sampler: OwnedSampler,
 
     // Resolution-dependent targets (rebuilt on swapchain resize).
     gi: GpuImage,
@@ -87,10 +92,10 @@ pub(in crate::vulkan) struct SsgiResources {
     // size). The gather pass rasterizes at this extent; the composite stays at
     // full render resolution and bilateral-upsamples the gi target.
     gi_extent: vk::Extent2D,
-    gather_framebuffer: vk::Framebuffer,
+    gather_framebuffer: OwnedFramebuffer,
     // One per HDR-resolve slot: the composite LOAD/blends into each frame's
     // resolved scene in place.
-    composite_framebuffers: Vec<vk::Framebuffer>,
+    composite_framebuffers: Vec<OwnedFramebuffer>,
 }
 
 // Broad SUBPASS_EXTERNAL dependencies shared by both SSGI render passes. The
@@ -130,7 +135,7 @@ fn ssgi_external_deps() -> [vk::SubpassDependency; 2] {
 // Gather render pass: one HDR-format colour attachment (`gi`). The gather
 // overwrites every pixel so `DONT_CARE` is safe on load; ends shader-readable
 // for the composite to sample.
-fn create_gather_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_gather_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -151,9 +156,8 @@ fn create_gather_render_pass(device: &Device) -> Result<vk::RenderPass, String> 
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("SSGI gather render pass: {e}"))
 }
 
@@ -161,7 +165,7 @@ fn create_gather_render_pass(device: &Device) -> Result<vk::RenderPass, String> 
 // indirect term, STORE. Stays in SHADER_READ_ONLY_OPTIMAL in + out so the next
 // RMW pass (Decals / Fog / SSR resolve) samples it unchanged. Mirrors
 // `create_decal_render_pass`.
-fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -182,9 +186,8 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("SSGI composite render pass: {e}"))
 }
 
@@ -192,7 +195,7 @@ fn create_composite_render_pass(device: &Device) -> Result<vk::RenderPass, Strin
 // sampled texture. Mirrors the SSR `create_color_target`.
 fn create_gi_target(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     width: u32,
     height: u32,
 ) -> Result<GpuImage, String> {
@@ -218,13 +221,13 @@ fn create_gi_target(
 // blend (the composite blends into the scene) vs. a plain write (the gather
 // fills its own `gi` target).
 fn create_ssgi_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
     additive: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -289,44 +292,37 @@ fn create_ssgi_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create ssgi pso: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create ssgi pso: {e}"))?;
     Ok(pipeline)
 }
 
 // Replacement SSGI pipelines built by the hot-reload pass.
 pub(in crate::vulkan) struct RebuiltSsgiPipelines {
-    pub gather: vk::Pipeline,
-    pub composite: vk::Pipeline,
+    pub gather: OwnedPipeline,
+    pub composite: OwnedPipeline,
 }
 
 // Rebuild both SSGI pipelines from disk-resident GLSL source against the
 // existing layout + render passes. Same shape as `rebuild_ssr_pipelines`.
 pub(in crate::vulkan) fn rebuild_ssgi_pipelines(
-    device: &Device,
+    device: &VkDevice,
     ssgi: &SsgiResources,
     hot_reload: bool,
 ) -> Result<RebuiltSsgiPipelines, String> {
     let shaders = compile_ssgi_shaders(hot_reload)?;
     let gather = create_ssgi_pipeline(
         device,
-        ssgi.gather_render_pass,
-        ssgi.pipeline_layout,
+        ssgi.gather_render_pass.handle(),
+        ssgi.pipeline_layout.handle(),
         &shaders.vs,
         &shaders.gather_fs,
         false,
     )?;
     let composite = create_ssgi_pipeline(
         device,
-        ssgi.composite_render_pass,
-        ssgi.pipeline_layout,
+        ssgi.composite_render_pass.handle(),
+        ssgi.pipeline_layout.handle(),
         &shaders.vs,
         &shaders.composite_fs,
         true,
@@ -340,7 +336,7 @@ pub(in crate::vulkan) fn rebuild_ssgi_pipelines(
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct SsgiDevice<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
 }
 
 // The image views `SsgiResources::new` wires its descriptor sets + framebuffers
@@ -395,32 +391,28 @@ impl SsgiResources {
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(std::mem::size_of::<SsgiParams>() as u32);
-        let set_layouts = [set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let set_layouts = [set_layout.handle()];
+        let pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&push)),
-                None,
             )
-        }
-        .map_err(|e| format!("ssgi pipeline layout: {e}"))?;
+            .map_err(|e| format!("ssgi pipeline layout: {e}"))?;
 
         let shaders = compile_ssgi_shaders(hot_reload)?;
         let gather_pso = create_ssgi_pipeline(
             device,
-            gather_render_pass,
-            pipeline_layout,
+            gather_render_pass.handle(),
+            pipeline_layout.handle(),
             &shaders.vs,
             &shaders.gather_fs,
             false,
         )?;
         let composite_pso = create_ssgi_pipeline(
             device,
-            composite_render_pass,
-            pipeline_layout,
+            composite_render_pass.handle(),
+            pipeline_layout.handle(),
             &shaders.vs,
             &shaders.composite_fs,
             true,
@@ -432,22 +424,19 @@ impl SsgiResources {
         let pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(sampler_count);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(std::slice::from_ref(&pool_size))
                     .max_sets(frames as u32 * 2),
-                None,
             )
-        }
-        .map_err(|e| format!("ssgi descriptor pool: {e}"))?;
+            .map_err(|e| format!("ssgi descriptor pool: {e}"))?;
 
-        let gather_layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-        let gather_sets = alloc_descriptor_sets(device, descriptor_pool, &gather_layouts)?;
-        let composite_layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-        let composite_sets = alloc_descriptor_sets(device, descriptor_pool, &composite_layouts)?;
+        let gather_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+        let gather_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &gather_layouts)?;
+        let composite_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+        let composite_sets =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &composite_layouts)?;
 
         let sampler = create_sampler_linear_clamp(device)?;
 
@@ -455,11 +444,11 @@ impl SsgiResources {
             settings,
             gather_render_pass,
             composite_render_pass,
-            set_layout,
+            _set_layout: set_layout,
             pipeline_layout,
             gather_pso,
             composite_pso,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             gather_sets,
             composite_sets,
             sampler,
@@ -469,7 +458,7 @@ impl SsgiResources {
                 width: 1,
                 height: 1,
             },
-            gather_framebuffer: vk::Framebuffer::null(),
+            gather_framebuffer: OwnedFramebuffer::null(),
             composite_framebuffers: Vec::new(),
         };
         me.build_targets(alloc, device, width, height, hdr_resolve_views)?;
@@ -486,7 +475,7 @@ impl SsgiResources {
     fn build_targets(
         &mut self,
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         width: u32,
         height: u32,
         hdr_resolve_views: &[vk::ImageView],
@@ -504,36 +493,28 @@ impl SsgiResources {
             height: gh,
         };
         self.gi = create_gi_target(alloc, device, gw, gh)?;
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        self.gather_framebuffer = unsafe {
-            device.create_framebuffer(
+        self.gather_framebuffer = device
+            .create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.gather_render_pass)
+                    .render_pass(self.gather_render_pass.handle())
                     .attachments(std::slice::from_ref(&self.gi.view))
                     .width(gw)
                     .height(gh)
                     .layers(1),
-                None,
             )
-        }
-        .map_err(|e| format!("ssgi gather framebuffer: {e}"))?;
+            .map_err(|e| format!("ssgi gather framebuffer: {e}"))?;
         let mut fbs = Vec::with_capacity(hdr_resolve_views.len());
         for &view in hdr_resolve_views {
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe {
-                device.create_framebuffer(
+            let fb = device
+                .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.composite_render_pass)
+                        .render_pass(self.composite_render_pass.handle())
                         .attachments(std::slice::from_ref(&view))
                         .width(w)
                         .height(h)
                         .layers(1),
-                    None,
                 )
-            }
-            .map_err(|e| format!("ssgi composite framebuffer: {e}"))?;
+                .map_err(|e| format!("ssgi composite framebuffer: {e}"))?;
             fbs.push(fb);
         }
         self.composite_framebuffers = fbs;
@@ -551,7 +532,7 @@ impl SsgiResources {
     // per-frame / shared respectively as before.
     pub(in crate::vulkan) fn wire_sets(
         &self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         gbuffer_views: &[vk::ImageView],
     ) {
@@ -560,12 +541,12 @@ impl SsgiResources {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(gb_view(i))
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let scene_view = hdr_resolve_views[i % hdr_resolve_views.len().max(1)];
             let scene_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(scene_view)
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -585,12 +566,12 @@ impl SsgiResources {
         let gi_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.gi.view)
-            .sampler(self.sampler);
+            .sampler(self.sampler.handle());
         for (i, &set) in self.composite_sets.iter().enumerate() {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(gb_view(i))
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -615,25 +596,15 @@ impl SsgiResources {
     // bindings are left untouched (already wired by `wire_sets`).
     pub(in crate::vulkan) fn wire_sets_gbuffer(
         &self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         gbuffer_views: &[vk::ImageView],
     ) {
         self.wire_sets(device, hdr_resolve_views, gbuffer_views);
     }
 
-    fn destroy_targets(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            if self.gather_framebuffer != vk::Framebuffer::null() {
-                device.destroy_framebuffer(self.gather_framebuffer, None);
-                self.gather_framebuffer = vk::Framebuffer::null();
-            }
-            for &fb in &self.composite_framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-        }
+    fn destroy_targets(&mut self, _device: &VkDevice) {
+        self.gather_framebuffer = OwnedFramebuffer::null();
         self.composite_framebuffers.clear();
         if self.gi.image != vk::Image::null() {
             self.gi = GpuImage::null();
@@ -660,36 +631,14 @@ impl SsgiResources {
 
     // Swap freshly-built pipelines into the live resources after a hot-reload.
     // The caller has already `device_wait_idle`'d.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltSsgiPipelines,
-    ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.gather_pso, None);
-            device.destroy_pipeline(self.composite_pso, None);
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltSsgiPipelines) {
         self.gather_pso = rebuilt.gather;
         self.composite_pso = rebuilt.composite;
     }
 
     // Destroy every SSGI resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.sampler, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.gather_pso, None);
-            device.destroy_pipeline(self.composite_pso, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.set_layout, None);
-            device.destroy_render_pass(self.gather_render_pass, None);
-            device.destroy_render_pass(self.composite_render_pass, None);
-        }
     }
 }
 
@@ -730,10 +679,10 @@ impl VkContext {
             &SsgiFullscreenPass {
                 ctx: self,
                 ssgi,
-                render_pass: ssgi.gather_render_pass,
-                framebuffer: ssgi.gather_framebuffer,
+                render_pass: ssgi.gather_render_pass.handle(),
+                framebuffer: ssgi.gather_framebuffer.handle(),
                 extent: ssgi.gi_extent,
-                pso: ssgi.gather_pso,
+                pso: &ssgi.gather_pso.handle(),
                 set: ssgi.gather_sets[frame_idx],
                 params: &params,
             },
@@ -746,10 +695,10 @@ impl VkContext {
             &SsgiFullscreenPass {
                 ctx: self,
                 ssgi,
-                render_pass: ssgi.composite_render_pass,
-                framebuffer: ssgi.composite_framebuffers[frame_idx],
+                render_pass: ssgi.composite_render_pass.handle(),
+                framebuffer: ssgi.composite_framebuffers[frame_idx].handle(),
                 extent: self.render_extent,
-                pso: ssgi.composite_pso,
+                pso: &ssgi.composite_pso.handle(),
                 set: ssgi.composite_sets[frame_idx],
                 params: &params,
             },
@@ -772,7 +721,7 @@ struct SsgiFullscreenPass<'a> {
     // Target extent: the reduced gi extent for the gather, the full render
     // extent for the composite.
     extent: vk::Extent2D,
-    pso: vk::Pipeline,
+    pso: &'a vk::Pipeline,
     set: vk::DescriptorSet,
     params: &'a SsgiParams,
 }
@@ -799,18 +748,18 @@ impl FullscreenPass for SsgiFullscreenPass<'_> {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pso);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, *self.pso);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.ssgi.pipeline_layout,
+                self.ssgi.pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&self.set),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                self.ssgi.pipeline_layout,
+                self.ssgi.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 push,

@@ -6,6 +6,11 @@ use std::ffi::{CStr, CString, c_char};
 
 use ash::vk;
 
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
+    VkDevice,
+};
+
 use crate::gfx::render_types::*;
 
 use super::context::*;
@@ -190,9 +195,6 @@ impl VkContext {
             rt_capable,
             update_after_bind,
             device_local_heaps,
-            debug_utils,
-            debug_messenger,
-            debug_filter,
             timestamp_query_pool,
             timestamp_period,
             alloc,
@@ -325,9 +327,10 @@ impl VkContext {
                 //  Debug messenger
                 // Budget the messenger callback consumes to drop benign DLSS first-frame
                 // layout errors; set after `build_upscaler` resolves to DLSS. Heap-boxed
-                // so its address stays stable when this `VkContext` is returned by value,
-                // and kept as a context field that outlives the messenger (destroyed in
-                // `Drop` before fields). `None` when validation (the messenger) is off.
+                // so its address stays stable, and handed to the owning device
+                // handle alongside the messenger: the callback reads it for as long
+                // as the messenger can fire, which is past the device teardown.
+                // `None` when validation (the messenger) is off.
                 let debug_filter: Option<Box<std::sync::atomic::AtomicU32>> =
                     validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
                 let (debug_utils, debug_messenger) = if validation {
@@ -387,6 +390,21 @@ impl VkContext {
                     validation,
                     &upscale_sdk,
                 )?;
+                // Hand the raw device to the owning wrapper straight away: from
+                // here on the device, the instance and the entry are destroyed
+                // by the last handle to them, and every Vulkan object the
+                // backend owns retires through this device's queue.
+                let device = super::owned::VkDevice::new(
+                    entry.clone(),
+                    instance.clone(),
+                    device,
+                    frames,
+                    super::owned::DebugMessenger {
+                        utils: debug_utils,
+                        messenger: debug_messenger,
+                        filter: debug_filter,
+                    },
+                );
 
                 // SAFETY: a property query on a live handle; it only reads.
                 let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
@@ -596,9 +614,6 @@ impl VkContext {
                     rt_capable,
                     update_after_bind,
                     device_local_heaps,
-                    debug_utils,
-                    debug_messenger,
-                    debug_filter,
                     timestamp_query_pool,
                     timestamp_period,
                     alloc,
@@ -652,7 +667,7 @@ impl VkContext {
             // Arm the messenger's benign-error budget for DLSS (see
             // `DLSS_FIRST_FRAME_LAYOUT_SUPPRESS`); a no-op for other backends.
             if resolved == super::post::ResolvedBackend::Dlss
-                && let Some(f) = &debug_filter
+                && let Some(f) = device.debug_filter()
             {
                 f.store(
                     DLSS_FIRST_FRAME_LAYOUT_SUPPRESS,
@@ -876,7 +891,7 @@ impl VkContext {
         //  Framebuffers
         let framebuffers = create_main_framebuffers(
             &device,
-            main_render_pass,
+            main_render_pass.handle(),
             &color_images,
             &depth_images,
             &hdr_resolve_images,
@@ -885,7 +900,7 @@ impl VkContext {
         )?;
         let composite_framebuffers = create_composite_framebuffers(
             &device,
-            composite_render_pass,
+            composite_render_pass.handle(),
             &swapchain_image_views,
             swapchain_extent,
         )?;
@@ -941,8 +956,8 @@ impl VkContext {
         )?;
         let (bloom_write_framebuffers, bloom_blend_framebuffers) = create_bloom_framebuffers(
             &device,
-            bloom_write_pass,
-            bloom_blend_pass,
+            bloom_write_pass.handle(),
+            bloom_blend_pass.handle(),
             &bloom_mips,
             &bloom_mip_extents,
         )?;
@@ -1288,9 +1303,8 @@ impl VkContext {
             if global_update_after_bind {
                 info = info.flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL);
             }
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            unsafe { device.create_descriptor_set_layout(&info, None) }
+            device
+                .create_descriptor_set_layout(&info)
                 .map_err(|e| format!("global set layout: {e}"))?
         };
         // Per-object set (set 1): albedo + normal map.
@@ -1340,53 +1354,41 @@ impl VkContext {
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(112);
-        let main_set_layouts = [global_set_layout, object_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let main_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let main_set_layouts = [global_set_layout.handle(), object_set_layout.handle()];
+        let main_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&main_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&main_pc_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("main pipeline layout: {e}"))?;
+            .map_err(|e| format!("main pipeline layout: {e}"))?;
 
         let shadow_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
             // 64 bytes for model + 16 bytes for cascade_idx + padding.
             .size(80);
-        let shadow_set_layouts = [shadow_global_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let shadow_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let shadow_set_layouts = [shadow_global_set_layout.handle()];
+        let shadow_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&shadow_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&shadow_pc_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("shadow pipeline layout: {e}"))?;
+            .map_err(|e| format!("shadow pipeline layout: {e}"))?;
 
         let text_pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
             .size(16);
-        let text_set_layouts = [text_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let text_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let text_set_layouts = [text_set_layout.handle()];
+        let text_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&text_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&text_pc_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("text pipeline layout: {e}"))?;
+            .map_err(|e| format!("text pipeline layout: {e}"))?;
 
         // Post-process push constant: the full `PostProcessParams` struct,
         // fragment-stage. Read by the bloom-prefilter shader.
@@ -1403,41 +1405,33 @@ impl VkContext {
             .size(std::mem::size_of::<crate::gfx::render_types::CompositeParams>() as u32);
 
         // Composite layout: one descriptor set (HDR resolve + bloom mip 0).
-        let composite_set_layouts = [composite_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let composite_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let composite_set_layouts = [composite_set_layout.handle()];
+        let composite_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&composite_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&composite_pc_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("composite pipeline layout: {e}"))?;
+            .map_err(|e| format!("composite pipeline layout: {e}"))?;
 
         // Bloom layout: one descriptor set (the input image) + the shared
         // post-process push constant (read only by the prefilter).
-        let bloom_set_layouts = [bloom_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let bloom_pipeline_layout = unsafe {
-            device.create_pipeline_layout(
+        let bloom_set_layouts = [bloom_set_layout.handle()];
+        let bloom_pipeline_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&bloom_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&post_pc_range)),
-                None,
             )
-        }
-        .map_err(|e| format!("bloom pipeline layout: {e}"))?;
+            .map_err(|e| format!("bloom pipeline layout: {e}"))?;
 
         //  Pipelines
         let (vert_spv, frag_spv) = resolve_main_shaders(hot_reload, vert_bytes, frag_bytes)?;
         let main_pipeline = create_main_pipeline(
             &device,
             MeshPipelineTargets {
-                render_pass: main_render_pass,
-                layout: main_pipeline_layout,
+                render_pass: main_render_pass.handle(),
+                layout: main_pipeline_layout.handle(),
                 vert_spv: &vert_spv,
                 frag_spv: &frag_spv,
             },
@@ -1463,19 +1457,20 @@ impl VkContext {
 
         let (instanced_pipeline_opt, instanced_pipeline_layout_opt) = if need_instanced {
             let instance_set_layout = instance_set_layout_opt
+                .as_ref()
                 .expect("instance set layout was created because instanced draws are needed");
-            let instanced_set_layouts = [global_set_layout, object_set_layout, instance_set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let instanced_pl = unsafe {
-                device.create_pipeline_layout(
+            let instanced_set_layouts = [
+                global_set_layout.handle(),
+                object_set_layout.handle(),
+                instance_set_layout.handle(),
+            ];
+            let instanced_pl = device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
                         .set_layouts(&instanced_set_layouts)
                         .push_constant_ranges(std::slice::from_ref(&main_pc_range)),
-                    None,
                 )
-            }
-            .map_err(|e| format!("instanced pipeline layout: {e}"))?;
+                .map_err(|e| format!("instanced pipeline layout: {e}"))?;
 
             let inst_spv_opt =
                 resolve_instanced_shader(hot_reload, vert_instanced_bytes, need_instanced)?
@@ -1483,8 +1478,8 @@ impl VkContext {
             let pipeline = create_instanced_pipeline(
                 &device,
                 MeshPipelineTargets {
-                    render_pass: main_render_pass,
-                    layout: instanced_pl,
+                    render_pass: main_render_pass.handle(),
+                    layout: instanced_pl.handle(),
                     vert_spv: &inst_spv_opt,
                     frag_spv: &frag_spv,
                 },
@@ -1501,13 +1496,13 @@ impl VkContext {
         {
             let pl = create_shadow_pipeline(
                 &device,
-                shadow_render_pass,
-                shadow_pipeline_layout,
+                shadow_render_pass.handle(),
+                shadow_pipeline_layout.handle(),
                 &shadow_spv,
             )?;
             let fbs = create_shadow_framebuffers(
                 &device,
-                shadow_render_pass,
+                shadow_render_pass.handle(),
                 &shadow_map,
                 effective_shadow_size,
             )?;
@@ -1532,8 +1527,8 @@ impl VkContext {
                 device: &device,
                 physical_device,
                 map: spot_shadow_map,
-                render_pass: shadow_render_pass,
-                set_layout: shadow_global_set_layout,
+                render_pass: shadow_render_pass.handle(),
+                set_layout: shadow_global_set_layout.handle(),
                 slice_size: spot_shadow_slice_size,
                 spot_shadows: &spot_shadows,
             })?;
@@ -1544,8 +1539,8 @@ impl VkContext {
             let (tv, tf) = compile_text_shaders(hot_reload)?;
             let tp = create_text_pipeline(
                 &device,
-                composite_render_pass,
-                text_pipeline_layout,
+                composite_render_pass.handle(),
+                text_pipeline_layout.handle(),
                 &tv,
                 &tf,
                 vk::SampleCountFlags::TYPE_1,
@@ -1560,8 +1555,8 @@ impl VkContext {
             let (cv, cf) = compile_composite_shaders(hot_reload)?;
             create_composite_pipeline(
                 &device,
-                composite_render_pass,
-                composite_pipeline_layout,
+                composite_render_pass.handle(),
+                composite_pipeline_layout.handle(),
                 &cv,
                 &cf,
             )?
@@ -1572,16 +1567,16 @@ impl VkContext {
             let bs = compile_bloom_shaders(hot_reload)?;
             let prefilter = create_bloom_pipeline(
                 &device,
-                bloom_write_pass,
-                bloom_pipeline_layout,
+                bloom_write_pass.handle(),
+                bloom_pipeline_layout.handle(),
                 &bs.vert,
                 &bs.prefilter,
                 false,
             )?;
             let downsample = create_bloom_pipeline(
                 &device,
-                bloom_write_pass,
-                bloom_pipeline_layout,
+                bloom_write_pass.handle(),
+                bloom_pipeline_layout.handle(),
                 &bs.vert,
                 &bs.downsample,
                 false,
@@ -1590,8 +1585,8 @@ impl VkContext {
             // additively onto the mip already there.
             let upsample = create_bloom_pipeline(
                 &device,
-                bloom_blend_pass,
-                bloom_pipeline_layout,
+                bloom_blend_pass.handle(),
+                bloom_pipeline_layout.handle(),
                 &bs.vert,
                 &bs.upsample,
                 true,
@@ -1672,8 +1667,8 @@ impl VkContext {
                     settings,
                     hdr_resolve_views: &hdr_views,
                     prefilter_view: env_map.prefilter.view,
-                    cube_sampler,
-                    global_set_layout,
+                    cube_sampler: cube_sampler.handle(),
+                    global_set_layout: global_set_layout.handle(),
                     probe_cube_count,
                 },
                 hot_reload,
@@ -1710,7 +1705,7 @@ impl VkContext {
                     frames,
                 },
                 super::post::gbuffer::GbufferSsboLayouts {
-                    instance: instance_set_layout_opt,
+                    instance: instance_set_layout_opt.as_ref().map(|l| l.handle()),
                     // Skinned variant built lazily by `upload_skinned` via
                     // `ensure_skinned_gbuffer_pso` (the joint-set layout does not
                     // exist yet at init time), matching the gbuffer / TAA.
@@ -1910,15 +1905,15 @@ impl VkContext {
         if bindless_uab || global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
+        let descriptor_pool = device
+            .create_descriptor_pool(&pool_info)
             .map_err(|e| format!("descriptor pool: {e}"))?;
 
         //  Descriptor sets
         // Global sets (one per frame).
-        let global_layouts: Vec<_> = (0..frames).map(|_| global_set_layout).collect();
-        let global_sets = alloc_descriptor_sets(&device, descriptor_pool, &global_layouts)?;
+        let global_layouts: Vec<_> = (0..frames).map(|_| global_set_layout.handle()).collect();
+        let global_sets =
+            alloc_descriptor_sets(&device, descriptor_pool.handle(), &global_layouts)?;
         // Update global sets.
         for (i, &set) in global_sets.iter().enumerate() {
             let view_info = vk::DescriptorBufferInfo::default()
@@ -1938,13 +1933,13 @@ impl VkContext {
             let shadow_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(shadow_map.view)
-                .sampler(shadow_sampler);
+                .sampler(shadow_sampler.handle());
             // Same resting layout as the cascade array: the SpotShadow producer
             // barrier opens it for the depth loop and Main returns it here.
             let spot_shadow_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(spot_shadow.map.view)
-                .sampler(shadow_sampler);
+                .sampler(shadow_sampler.handle());
             let spot_shadow_data_info = vk::DescriptorBufferInfo::default()
                 .buffer(spot_shadow.data_buffer.buffer())
                 .offset(0)
@@ -1956,19 +1951,19 @@ impl VkContext {
             let ltc_matrix_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(ltc_matrix_image.view)
-                .sampler(ltc_sampler);
+                .sampler(ltc_sampler.handle());
             let ltc_magnitude_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(ltc_magnitude_image.view)
-                .sampler(ltc_sampler);
+                .sampler(ltc_sampler.handle());
             let irr_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(env_map.irradiance.view)
-                .sampler(cube_sampler);
+                .sampler(cube_sampler.handle());
             let pre_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(env_map.prefilter.view)
-                .sampler(cube_sampler);
+                .sampler(cube_sampler.handle());
             // SSAO occlusion: this frame's blurred occlusion when SSAO is on
             // (per frame in flight, pooled), or the 1×1 white fallback when it
             // is off. Either way the descriptor is bound so the main pass's
@@ -1979,7 +1974,7 @@ impl VkContext {
             let ssao_img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(ssao_view)
-                .sampler(linear_sampler);
+                .sampler(linear_sampler.handle());
             // ProbeSet UBO (binding 7): this frame's reflection-probe set.
             let probe_set_info = vk::DescriptorBufferInfo::default()
                 .buffer(probe_set_ubo_buffers[i].buffer())
@@ -2012,7 +2007,7 @@ impl VkContext {
                     vk::DescriptorImageInfo::default()
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                         .image_view(env_map.prefilter.view)
-                        .sampler(cube_sampler)
+                        .sampler(cube_sampler.handle())
                 })
                 .collect();
             let writes = [
@@ -2116,9 +2111,11 @@ impl VkContext {
         }
 
         // Shadow global sets (one per frame).
-        let shadow_global_layouts: Vec<_> = (0..frames).map(|_| shadow_global_set_layout).collect();
+        let shadow_global_layouts: Vec<_> = (0..frames)
+            .map(|_| shadow_global_set_layout.handle())
+            .collect();
         let shadow_global_sets =
-            alloc_descriptor_sets(&device, descriptor_pool, &shadow_global_layouts)?;
+            alloc_descriptor_sets(&device, descriptor_pool.handle(), &shadow_global_layouts)?;
         for (i, &set) in shadow_global_sets.iter().enumerate() {
             let su_info = vk::DescriptorBufferInfo::default()
                 .buffer(shadow_ubos[i].buffer())
@@ -2135,11 +2132,15 @@ impl VkContext {
         }
 
         // Per-object sets.
-        let object_set_layouts: Vec<_> = draw_objects.iter().map(|_| object_set_layout).collect();
+        let object_set_layouts: Vec<_> = draw_objects
+            .iter()
+            .map(|_| object_set_layout.handle())
+            .collect();
         let object_sets = if object_set_layouts.is_empty() {
             vec![]
         } else {
-            let sets = alloc_descriptor_sets(&device, descriptor_pool, &object_set_layouts)?;
+            let sets =
+                alloc_descriptor_sets(&device, descriptor_pool.handle(), &object_set_layouts)?;
             let last_tex = gpu_textures.len().saturating_sub(1);
             // Resolve the image view a `normal_map_slot` samples: a real normal
             // map is a texture in the shared pool at its own slot;
@@ -2157,11 +2158,11 @@ impl VkContext {
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(gpu_textures[tex_slot].view)
-                    .sampler(linear_sampler);
+                    .sampler(linear_sampler.handle());
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(normal_view(obj.normal_map_slot))
-                    .sampler(linear_sampler);
+                    .sampler(linear_sampler.handle());
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
@@ -2222,29 +2223,24 @@ impl VkContext {
                     .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
                     .push_next(&mut flags_info);
             }
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let set_layout = unsafe { device.create_descriptor_set_layout(&set_info, None) }
+            let set_layout = device
+                .create_descriptor_set_layout(&set_info)
                 .map_err(|e| format!("bindless set layout: {e}"))?;
 
-            let layouts = [global_set_layout, set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let pipeline_layout = unsafe {
-                device.create_pipeline_layout(
+            let layouts = [global_set_layout.handle(), set_layout.handle()];
+            let pipeline_layout = device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
-                    None,
                 )
-            }
-            .map_err(|e| format!("bindless pipeline layout: {e}"))?;
+                .map_err(|e| format!("bindless pipeline layout: {e}"))?;
 
             let (bvs, bfs) =
                 compile_bindless_shaders(hot_reload, bindless_pool_size, probe_cube_count)?;
             let pipeline = create_main_pipeline(
                 &device,
                 MeshPipelineTargets {
-                    render_pass: main_render_pass,
-                    layout: pipeline_layout,
+                    render_pass: main_render_pass.handle(),
+                    layout: pipeline_layout.handle(),
                     vert_spv: &bvs,
                     frag_spv: &bfs,
                 },
@@ -2268,8 +2264,8 @@ impl VkContext {
 
             // One bindless set per frame: binding 0 = that frame's SSBO,
             // binding 1 = the shared pool ([albedo views..] ++ [normal..]).
-            let set_layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-            let sets = alloc_descriptor_sets(&device, descriptor_pool, &set_layouts)?;
+            let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+            let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &set_layouts)?;
             let pool_infos: Vec<vk::DescriptorImageInfo> = gpu_textures
                 .iter()
                 .chain(gpu_normal_maps.iter())
@@ -2277,7 +2273,7 @@ impl VkContext {
                     vk::DescriptorImageInfo::default()
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                         .image_view(img.view)
-                        .sampler(linear_sampler)
+                        .sampler(linear_sampler.handle())
                 })
                 .collect();
             for (i, &set) in sets.iter().enumerate() {
@@ -2327,7 +2323,7 @@ impl VkContext {
         // of the GPU-culled command buffer. They exist only on the bindless path:
         // a world with a legacy per-draw main shader carries no bucket routing.
         let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-        let world_pipelines = match (bindless_pipeline_layout, bucket_shaders.is_empty()) {
+        let world_pipelines = match (bindless_pipeline_layout.as_ref(), bucket_shaders.is_empty()) {
             (Some(layout), false) => {
                 let max = crate::gfx::render_types::MAX_SHADER_BUCKETS;
                 if bucket_shaders.len() + 1 > max {
@@ -2339,8 +2335,8 @@ impl VkContext {
                 build_world_pipeline_table(
                     &device,
                     BucketPipelineTargets {
-                        render_pass: main_render_pass,
-                        layout,
+                        render_pass: main_render_pass.handle(),
+                        layout: layout.handle(),
                         msaa_samples,
                         swapchain_format,
                     },
@@ -2419,7 +2415,7 @@ impl VkContext {
                             gbuffer_views: &nd_views,
                             roughness_views: &rough_views,
                             prefilter_view: env_map.prefilter.view,
-                            cube_sampler,
+                            cube_sampler: cube_sampler.handle(),
                         },
                         super::post::rt_reflections::RtAccelHandles {
                             tlas: accel.tlas(),
@@ -2429,8 +2425,8 @@ impl VkContext {
                             skinned_indices: accel.skinned_indices(),
                         },
                         super::post::rt_reflections::RtLayoutConfig {
-                            bindless_set_layout,
-                            global_set_layout,
+                            bindless_set_layout: bindless_set_layout.as_ref().map(|l| l.handle()),
+                            global_set_layout: global_set_layout.handle(),
                             probe_cube_count,
                             pool_size: bindless_pool_size,
                             hot_reload,
@@ -2534,9 +2530,9 @@ impl VkContext {
         // indirect draw command per build-time object, which the bindless main
         // pass issues with a single multiDrawIndexedIndirect.
         type CullPipelineResources = (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
+            Option<OwnedPipeline>,
+            Option<OwnedPipelineLayout>,
+            Option<OwnedSetLayout>,
             Vec<vk::DescriptorSet>,
             Vec<super::allocator::PooledBuffer>,
             Vec<super::allocator::PooledBuffer>,
@@ -2563,15 +2559,11 @@ impl VkContext {
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
                 .collect();
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let set_layout = unsafe {
-                device.create_descriptor_set_layout(
+            let set_layout = device
+                .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
-                    None,
                 )
-            }
-            .map_err(|e| format!("cull set layout: {e}"))?;
+                .map_err(|e| format!("cull set layout: {e}"))?;
 
             // Hi-Z occlusion resources. Built under the same gating as the cull
             // pipeline; its `read_set_layout` becomes set 1 of the cull
@@ -2599,21 +2591,17 @@ impl VkContext {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .offset(0)
                 .size(CULL_PUSH_CONSTANT_BYTES);
-            let layouts = [set_layout, hiz.read_set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let pipeline_layout = unsafe {
-                device.create_pipeline_layout(
+            let layouts = [set_layout.handle(), hiz.read_set_layout.handle()];
+            let pipeline_layout = device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
                         .set_layouts(&layouts)
                         .push_constant_ranges(std::slice::from_ref(&push_range)),
-                    None,
                 )
-            }
-            .map_err(|e| format!("cull pipeline layout: {e}"))?;
+                .map_err(|e| format!("cull pipeline layout: {e}"))?;
 
             let cs = compile_cull_shader(hot_reload)?;
-            let pipeline = create_cull_pipeline(&device, pipeline_layout, &cs)?;
+            let pipeline = create_cull_pipeline(&device, pipeline_layout.handle(), &cs)?;
 
             // Per-frame GpuDrawArgs (host-visible, rebuilt each frame) and
             // indirect-command buffers (device-local, GPU-written). `n_cull`
@@ -2646,8 +2634,8 @@ impl VkContext {
 
             // One cull set per frame: that frame's object / draw-args /
             // indirect-command buffers at bindings 0 / 1 / 2.
-            let set_layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-            let sets = alloc_descriptor_sets(&device, descriptor_pool, &set_layouts)?;
+            let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+            let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &set_layouts)?;
             for (i, &set) in sets.iter().enumerate() {
                 let obj_info = vk::DescriptorBufferInfo::default()
                     .buffer(object_buffers[i].buffer())
@@ -2753,12 +2741,12 @@ impl VkContext {
         // `cmd_draw_indexed_indirect` (static + instance prefix) + one for the
         // skinned tail, replacing the CPU per-object shadow loop.
         type ShadowCullResources = (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
+            Option<OwnedPipeline>,
+            Option<OwnedPipelineLayout>,
+            Option<OwnedSetLayout>,
             Vec<Vec<vk::DescriptorSet>>,
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
+            Option<OwnedPipeline>,
+            Option<OwnedPipelineLayout>,
             Vec<Vec<super::allocator::PooledBuffer>>,
         );
         let (
@@ -2771,7 +2759,7 @@ impl VkContext {
             shadow_indirect_buffers,
         ): ShadowCullResources = if bindless_active
             && shadow_pipeline_opt.is_some()
-            && let Some(bl_set_layout) = bindless_set_layout
+            && let Some(bl_set_layout) = bindless_set_layout.as_ref()
         {
             let cascades = crate::gfx::render_types::NUM_SHADOW_CASCADES;
             // Lean shadow cull set layout: objects(0) + draw-args(1) + commands(2).
@@ -2784,34 +2772,26 @@ impl VkContext {
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
                 .collect();
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let sc_set_layout = unsafe {
-                device.create_descriptor_set_layout(
+            let sc_set_layout = device
+                .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&sc_bindings),
-                    None,
                 )
-            }
-            .map_err(|e| format!("shadow cull set layout: {e}"))?;
+                .map_err(|e| format!("shadow cull set layout: {e}"))?;
 
             let sc_push = vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .offset(0)
                 .size(CULL_PUSH_CONSTANT_BYTES);
-            let sc_layouts = [sc_set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let sc_pl = unsafe {
-                device.create_pipeline_layout(
+            let sc_layouts = [sc_set_layout.handle()];
+            let sc_pl = device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
                         .set_layouts(&sc_layouts)
                         .push_constant_ranges(std::slice::from_ref(&sc_push)),
-                    None,
                 )
-            }
-            .map_err(|e| format!("shadow cull pipeline layout: {e}"))?;
+                .map_err(|e| format!("shadow cull pipeline layout: {e}"))?;
             let sc_spv = compile_shadow_cull_shader(hot_reload)?;
-            let sc_pipeline = create_cull_pipeline(&device, sc_pl, &sc_spv)?;
+            let sc_pipeline = create_cull_pipeline(&device, sc_pl.handle(), &sc_spv)?;
 
             // Depth-only bindless shadow graphics pipeline: shadow-global set 0 +
             // the bindless GpuObjectData set 1 + a cascade-index push constant.
@@ -2819,20 +2799,21 @@ impl VkContext {
                 .stage_flags(vk::ShaderStageFlags::VERTEX)
                 .offset(0)
                 .size(4);
-            let sb_layouts = [shadow_global_set_layout, bl_set_layout];
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let sb_pl = unsafe {
-                device.create_pipeline_layout(
+            let sb_layouts = [shadow_global_set_layout.handle(), bl_set_layout.handle()];
+            let sb_pl = device
+                .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default()
                         .set_layouts(&sb_layouts)
                         .push_constant_ranges(std::slice::from_ref(&sb_push)),
-                    None,
                 )
-            }
-            .map_err(|e| format!("shadow bindless pipeline layout: {e}"))?;
+                .map_err(|e| format!("shadow bindless pipeline layout: {e}"))?;
             let sb_spv = compile_shadow_bindless_vs(hot_reload)?;
-            let sb_pipeline = create_shadow_pipeline(&device, shadow_render_pass, sb_pl, &sb_spv)?;
+            let sb_pipeline = create_shadow_pipeline(
+                &device,
+                shadow_render_pass.handle(),
+                sb_pl.handle(),
+                &sb_spv,
+            )?;
 
             // Per-(frame, cascade) indirect buffers + cull sets. Each cull set
             // binds this frame's object + draw-args SSBOs and this cascade's
@@ -2857,8 +2838,8 @@ impl VkContext {
                         vk::MemoryPropertyFlags::DEVICE_LOCAL,
                     )?);
                 }
-                let set_layouts: Vec<_> = (0..cascades).map(|_| sc_set_layout).collect();
-                let sets = alloc_descriptor_sets(&device, descriptor_pool, &set_layouts)?;
+                let set_layouts: Vec<_> = (0..cascades).map(|_| sc_set_layout.handle()).collect();
+                let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &set_layouts)?;
                 for (c, &set) in sets.iter().enumerate() {
                     let obj_info = vk::DescriptorBufferInfo::default()
                         .buffer(object_buffers[f].buffer())
@@ -2917,9 +2898,9 @@ impl VkContext {
         // prev_model buffers' instance region is init-written inside the helper;
         // the static + skinned regions are rewritten each frame.
         type GbufferBindlessResources = (
-            Option<vk::Pipeline>,
-            Option<vk::PipelineLayout>,
-            Option<vk::DescriptorSetLayout>,
+            Option<OwnedPipeline>,
+            Option<OwnedPipelineLayout>,
+            Option<OwnedSetLayout>,
             Vec<vk::DescriptorSet>,
             Vec<super::allocator::PooledBuffer>,
         );
@@ -2929,9 +2910,11 @@ impl VkContext {
             gbuffer_set_layout,
             gbuffer_sets,
             prev_model_buffers,
-        ): GbufferBindlessResources = if let (true, Some(gb), Some(bl_set_layout)) =
-            (gbuffer_active, gbuffer_opt.as_ref(), bindless_set_layout)
-        {
+        ): GbufferBindlessResources = if let (true, Some(gb), Some(bl_set_layout)) = (
+            gbuffer_active,
+            gbuffer_opt.as_ref(),
+            bindless_set_layout.as_ref(),
+        ) {
             // Per-instance models in cluster-then-instance order (matches the
             // GpuObjectData instance records); the helper init-writes them into the
             // prev_model buffers' instance region for camera-only velocity.
@@ -2945,8 +2928,8 @@ impl VkContext {
                     device: &device,
                 },
                 super::post::gbuffer::GbufferBindlessDescriptors {
-                    descriptor_pool,
-                    bindless_set_layout: bl_set_layout,
+                    descriptor_pool: descriptor_pool.handle(),
+                    bindless_set_layout: bl_set_layout.handle(),
                 },
                 gb,
                 super::post::gbuffer::GbufferBindlessScene {
@@ -2978,12 +2961,12 @@ impl VkContext {
         // phase-2 cull-read sets live inside `HiZResources` (built above when
         // `occlusion_two_pass`). Mirrors `directx/init/pipelines.rs`.
         type TwoPassCullResources = (
-            Option<vk::Pipeline>,
+            Option<OwnedPipeline>,
             Vec<vk::DescriptorSet>,
-            Option<vk::DescriptorPool>,
+            Option<OwnedDescriptorPool>,
             Vec<super::allocator::PooledBuffer>,
-            Option<vk::RenderPass>,
-            Option<vk::RenderPass>,
+            Option<OwnedRenderPass>,
+            Option<OwnedRenderPass>,
         );
         let (
             cull_pipeline_phase2,
@@ -2993,7 +2976,7 @@ impl VkContext {
             main_render_pass_phase1,
             main_render_pass_phase2,
         ): TwoPassCullResources = if let (Some(set_layout), Some(pipeline_layout)) =
-            (cull_set_layout, cull_pipeline_layout)
+            (cull_set_layout.as_ref(), cull_pipeline_layout.as_ref())
             && occlusion_two_pass
         {
             let n = n_cull as u64;
@@ -3010,7 +2993,7 @@ impl VkContext {
 
             // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
             let cs2 = compile_cull_shader_phase2(hot_reload)?;
-            let pipeline2 = create_cull_pipeline(&device, pipeline_layout, &cs2)?;
+            let pipeline2 = create_cull_pipeline(&device, pipeline_layout.handle(), &cs2)?;
 
             // Second indirect-command buffers (device-local, GPU-written).
             let mut ind2_buffers = Vec::with_capacity(frames);
@@ -3027,19 +3010,15 @@ impl VkContext {
             let pool_size = vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(4 * n_frames);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let pool = unsafe {
-                device.create_descriptor_pool(
+            let pool = device
+                .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
                         .pool_sizes(std::slice::from_ref(&pool_size))
                         .max_sets(n_frames),
-                    None,
                 )
-            }
-            .map_err(|e| format!("two-pass cull descriptor pool: {e}"))?;
-            let set_layouts2: Vec<_> = (0..frames).map(|_| set_layout).collect();
-            let sets2 = alloc_descriptor_sets(&device, pool, &set_layouts2)?;
+                .map_err(|e| format!("two-pass cull descriptor pool: {e}"))?;
+            let set_layouts2: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+            let sets2 = alloc_descriptor_sets(&device, pool.handle(), &set_layouts2)?;
             for (i, &set) in sets2.iter().enumerate() {
                 let obj_info = vk::DescriptorBufferInfo::default()
                     .buffer(object_buffers[i].buffer())
@@ -3099,9 +3078,9 @@ impl VkContext {
         } else {
             let cluster_layouts: Vec<_> = instanced_clusters
                 .iter()
-                .map(|_| object_set_layout)
+                .map(|_| object_set_layout.handle())
                 .collect();
-            let sets = alloc_descriptor_sets(&device, descriptor_pool, &cluster_layouts)?;
+            let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &cluster_layouts)?;
             let last_tex = gpu_textures.len().saturating_sub(1);
             let normal_view = |nms: usize| {
                 if nms == NO_NORMAL_MAP_SLOT {
@@ -3115,11 +3094,11 @@ impl VkContext {
                 let albedo_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(gpu_textures[tex_slot].view)
-                    .sampler(linear_sampler);
+                    .sampler(linear_sampler.handle());
                 let nm_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(normal_view(cluster.normal_map_slot))
-                    .sampler(linear_sampler);
+                    .sampler(linear_sampler.handle());
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(set)
@@ -3145,6 +3124,7 @@ impl VkContext {
         let mut instance_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
         if !instanced_clusters.is_empty() {
             let instance_set_layout = instance_set_layout_opt
+                .as_ref()
                 .expect("instance set layout was created because instanced draws are needed");
             for _ in 0..frames {
                 let mut bufs: Vec<super::allocator::PooledBuffer> =
@@ -3164,9 +3144,9 @@ impl VkContext {
                 // Allocate one descriptor set per cluster for this frame.
                 let layouts: Vec<_> = instanced_clusters
                     .iter()
-                    .map(|_| instance_set_layout)
+                    .map(|_| instance_set_layout.handle())
                     .collect();
-                let sets = alloc_descriptor_sets(&device, descriptor_pool, &layouts)?;
+                let sets = alloc_descriptor_sets(&device, descriptor_pool.handle(), &layouts)?;
                 // Wire each set to its buffer.
                 for (i, &set) in sets.iter().enumerate() {
                     let info = vk::DescriptorBufferInfo::default()
@@ -3188,16 +3168,20 @@ impl VkContext {
         }
 
         // Text atlas sets.
-        let text_atlas_layouts: Vec<_> = gpu_text_atlases.iter().map(|_| text_set_layout).collect();
+        let text_atlas_layouts: Vec<_> = gpu_text_atlases
+            .iter()
+            .map(|_| text_set_layout.handle())
+            .collect();
         let text_atlas_sets = if text_atlas_layouts.is_empty() {
             vec![]
         } else {
-            let sets = alloc_descriptor_sets(&device, descriptor_pool, &text_atlas_layouts)?;
+            let sets =
+                alloc_descriptor_sets(&device, descriptor_pool.handle(), &text_atlas_layouts)?;
             for (&set, atlas) in sets.iter().zip(gpu_text_atlases.iter()) {
                 let img_info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(atlas.view)
-                    .sampler(text_sampler);
+                    .sampler(text_sampler.handle());
                 let write = vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(0)
@@ -3215,8 +3199,10 @@ impl VkContext {
         // resolve), binding 1 = that slot's bloom mip 0, binding 2 = the
         // shared 3D colour LUT. TAA's branch below overrides binding 0 to
         // the TAA output when TAA is on.
-        let composite_layouts: Vec<_> = (0..frames).map(|_| composite_set_layout).collect();
-        let composite_sets = alloc_descriptor_sets(&device, descriptor_pool, &composite_layouts)?;
+        let composite_layouts: Vec<_> =
+            (0..frames).map(|_| composite_set_layout.handle()).collect();
+        let composite_sets =
+            alloc_descriptor_sets(&device, descriptor_pool.handle(), &composite_layouts)?;
         for (i, &set) in composite_sets.iter().enumerate() {
             // Scene image: the reflection composite output (the SSR / RT reflection
             // blended over the scene) when a reflection path is active, else the raw
@@ -3232,7 +3218,7 @@ impl VkContext {
                 scene_view,
                 bloom_mips[i][0].view,
                 color_lut.view,
-                composite_sampler,
+                composite_sampler.handle(),
             );
         }
 
@@ -3244,22 +3230,18 @@ impl VkContext {
         let bloom_pool_size = vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(bloom_pool_capacity);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let bloom_descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let bloom_descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(std::slice::from_ref(&bloom_pool_size))
                     .max_sets(bloom_pool_capacity),
-                None,
             )
-        }
-        .map_err(|e| format!("bloom descriptor pool: {e}"))?;
+            .map_err(|e| format!("bloom descriptor pool: {e}"))?;
         let bloom_input_sets = alloc_bloom_input_sets(
             &device,
-            bloom_descriptor_pool,
-            bloom_set_layout,
-            composite_sampler,
+            bloom_descriptor_pool.handle(),
+            bloom_set_layout.handle(),
+            composite_sampler.handle(),
             &hdr_resolve_images,
             &bloom_mips,
         )?;
@@ -3270,7 +3252,7 @@ impl VkContext {
         // every frame's prefilter input 0 points at it.
         if let Some(view) = composite_opt.as_ref().map(|c| c.output.view) {
             for frame_sets in &bloom_input_sets {
-                rebind_bloom_input0(&device, frame_sets[0], view, composite_sampler);
+                rebind_bloom_input0(&device, frame_sets[0], view, composite_sampler.handle());
             }
         }
 
@@ -3291,7 +3273,7 @@ impl VkContext {
                 render_extent,
                 &TaaSceneInputs {
                     hdr_resolve_images: &hdr_resolve_images,
-                    sampler: composite_sampler,
+                    sampler: composite_sampler.handle(),
                 },
                 hot_reload,
             )?;
@@ -3300,7 +3282,7 @@ impl VkContext {
             // in) instead of the raw HDR resolve. A SSGI-only build leaves TAA on the
             // raw HDR resolve.
             if let Some(view) = composite_opt.as_ref().map(|c| c.output.view) {
-                taa.rewire_scene(&device, view, composite_sampler);
+                taa.rewire_scene(&device, view, composite_sampler.handle());
             }
             for (i, &set) in composite_sets.iter().enumerate() {
                 write_composite_set(
@@ -3309,7 +3291,7 @@ impl VkContext {
                     taa.output_view(i),
                     bloom_mips[i][0].view,
                     color_lut.view,
-                    composite_sampler,
+                    composite_sampler.handle(),
                 );
             }
             for (i, frame_sets) in bloom_input_sets.iter().enumerate() {
@@ -3317,7 +3299,7 @@ impl VkContext {
                     &device,
                     frame_sets[0],
                     taa.output_view(i),
-                    composite_sampler,
+                    composite_sampler.handle(),
                 );
             }
             Some(taa)
@@ -3341,11 +3323,16 @@ impl VkContext {
                     up_output_view,
                     bloom_mips[i][0].view,
                     color_lut.view,
-                    composite_sampler,
+                    composite_sampler.handle(),
                 );
             }
             for frame_sets in &bloom_input_sets {
-                rebind_bloom_input0(&device, frame_sets[0], up_output_view, composite_sampler);
+                rebind_bloom_input0(
+                    &device,
+                    frame_sets[0],
+                    up_output_view,
+                    composite_sampler.handle(),
+                );
             }
         }
 
@@ -3371,7 +3358,7 @@ impl VkContext {
                     &nd_views,
                     &rough_views,
                     env_map.prefilter.view,
-                    cube_sampler,
+                    cube_sampler.handle(),
                 );
             }
             if let Some(ssgi) = ssgi_opt.as_ref() {
@@ -3381,7 +3368,7 @@ impl VkContext {
                 ssao.wire_kernel_and_blur_sets_gbuffer(&device, &nd_views);
             }
             if let Some(taa) = taa.as_ref() {
-                taa.rewire_velocity(&device, &vel_views, composite_sampler);
+                taa.rewire_velocity(&device, &vel_views, composite_sampler.handle());
             }
         }
 
@@ -3402,7 +3389,7 @@ impl VkContext {
                 transient_pool
                     .view_for("ao_output", i)
                     .unwrap_or(ssao_white.view),
-                composite_sampler,
+                composite_sampler.handle(),
             );
         }
 
@@ -3425,7 +3412,7 @@ impl VkContext {
                 hdr_format: HDR_FORMAT,
                 hdr_resolve_views: &hdr_resolve_views,
                 depth_views: &depth_views,
-                sampler: linear_sampler,
+                sampler: linear_sampler.handle(),
                 extent: render_extent,
             },
             frames,
@@ -3450,13 +3437,13 @@ impl VkContext {
                     hdr_format: HDR_FORMAT,
                     hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    sampler: linear_sampler,
+                    sampler: linear_sampler.handle(),
                     extent: render_extent,
                 },
                 crate::vulkan::fog::FogShadowResources {
                     ubos: &shadow_ubos,
                     map_view: shadow_map.view,
-                    sampler: shadow_sampler,
+                    sampler: shadow_sampler.handle(),
                 },
                 hot_reload,
             )?)
@@ -3483,14 +3470,14 @@ impl VkContext {
             },
             crate::vulkan::raymarch::RaymarchSharedBindings {
                 shadow_map_view: shadow_map.view,
-                shadow_sampler,
+                shadow_sampler: shadow_sampler.handle(),
                 irradiance_view: env_map.irradiance.view,
                 prefilter_view: env_map.prefilter.view,
-                cube_sampler,
-                linear_sampler,
+                cube_sampler: cube_sampler.handle(),
+                linear_sampler: linear_sampler.handle(),
                 light_ubo: light_ubo.buffer(),
                 shadow_ubos: &shadow_ubos,
-                shadow_render_pass,
+                shadow_render_pass: shadow_render_pass.handle(),
             },
             &sdf_volumes,
             hot_reload,
@@ -3517,15 +3504,15 @@ impl VkContext {
         // probe / sky reflection. Mirrors `metal::planar`'s bindless gate.
         let planar_reflection = if planar_assignment.representatives.is_empty() {
             None
-        } else if let Some(csl) = cull_set_layout {
+        } else if let Some(csl) = cull_set_layout.as_ref() {
             let cull_sources = crate::vulkan::planar::PlanarCullSources {
                 frame_object_buffers: &object_buffers,
                 frame_draw_args_buffers: &draw_args_buffers,
-                cull_set_layout: csl,
+                cull_set_layout: csl.handle(),
                 cull_count: n_cull,
                 hiz: hiz.as_ref().map(|h| {
                     let (view, sampler) = h.read_set_sources();
-                    (h.read_set_layout, view, sampler)
+                    (h.read_set_layout.handle(), view, sampler)
                 }),
             };
             Some(crate::vulkan::planar::PlanarReflectionSet::new(
@@ -3540,10 +3527,10 @@ impl VkContext {
                     height: render_extent.height,
                 },
                 &planar_assignment.representatives,
-                main_render_pass,
+                &main_render_pass,
                 crate::vulkan::planar::PlanarGlobalSet {
                     update_after_bind: global_update_after_bind,
-                    layout: global_set_layout,
+                    layout: global_set_layout.handle(),
                     probe_cube_count,
                 },
                 crate::vulkan::planar::PlanarLightingBindings {
@@ -3558,16 +3545,16 @@ impl VkContext {
                     area_light_buffer: area_light_buffer.buffer(),
                     ltc_matrix_view: ltc_matrix_image.view,
                     ltc_magnitude_view: ltc_magnitude_image.view,
-                    ltc_sampler,
+                    ltc_sampler: ltc_sampler.handle(),
                     shadow_ubos: &shadow_ubos,
                     shadow_size: shadow_ubo_size,
                     shadow_map_view: shadow_map.view,
-                    shadow_sampler,
+                    shadow_sampler: shadow_sampler.handle(),
                     irradiance_view: env_map.irradiance.view,
                     prefilter_view: env_map.prefilter.view,
-                    cube_sampler,
+                    cube_sampler: cube_sampler.handle(),
                     ssao_white_view: ssao_white.view,
-                    linear_sampler,
+                    linear_sampler: linear_sampler.handle(),
                 },
                 cull_sources,
             )?)
@@ -3631,7 +3618,7 @@ impl VkContext {
                     msaa_samples,
                     width: render_extent.width,
                     height: render_extent.height,
-                    global_set_layout,
+                    global_set_layout: global_set_layout.handle(),
                     probe_cube_count,
                     hot_reload,
                 },
@@ -3639,7 +3626,7 @@ impl VkContext {
                     scene_views: &glass_scene_views,
                     scene_images: &glass_scene_images,
                     depth_views: &glass_depth_views,
-                    sampler: linear_sampler,
+                    sampler: linear_sampler.handle(),
                 },
                 crate::vulkan::glass::GlassPlanarTargets {
                     slots: &planar_assignment.slots,
@@ -3650,7 +3637,7 @@ impl VkContext {
                     vertex_buffer: vertex_buffer.buffer(),
                     index_buffer: index_buffer.buffer(),
                     rt_inputs: glass_rt_inputs,
-                    bindless_set_layout,
+                    bindless_set_layout: bindless_set_layout.as_ref().map(|l| l.handle()),
                     bindless_pool_size,
                 },
                 &glass_panels,
@@ -3670,7 +3657,7 @@ impl VkContext {
                     &device,
                     frames,
                     &hdr_resolve_views,
-                    linear_sampler,
+                    linear_sampler.handle(),
                     hot_reload,
                 )?;
                 let state = crate::gfx::auto_exposure::AutoExposureState::new(settings);
@@ -3699,7 +3686,7 @@ impl VkContext {
         let pass_pool_flags = vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
             | vk::CommandPoolCreateFlags::TRANSIENT;
         let make_pool_with_buffer =
-            |device: &ash::Device| -> Result<(vk::CommandPool, vk::CommandBuffer), String> {
+            |device: &VkDevice| -> Result<(vk::CommandPool, vk::CommandBuffer), String> {
                 // SAFETY: the create-info and every slice it borrows are live for the call, and
                 // each handle it names belongs to this device.
                 let pool = unsafe {
@@ -3794,7 +3781,6 @@ impl VkContext {
             // SAFETY: every handle here was created from this device and is destroyed exactly once;
             // the caller has already waited for the device to go idle, so no submission still
             // references them.
-            unsafe { device.destroy_pipeline_layout(shadow_pipeline_layout, None) };
             None
         };
 
@@ -3868,7 +3854,7 @@ impl VkContext {
             normal_map_textures: gpu_normal_maps,
             text_atlas_textures: gpu_text_atlases,
             linear_sampler,
-            text_sampler,
+            _text_sampler: text_sampler,
             main_pipeline,
             main_pipeline_layout,
             light_cull,
@@ -3893,7 +3879,7 @@ impl VkContext {
                 occlusion_two_pass,
                 cull_pipeline_phase2,
                 cull_sets2,
-                two_pass_pool,
+                _two_pass_pool: two_pass_pool,
                 indirect_buffers2,
                 main_render_pass_phase1,
                 main_render_pass_phase2,
@@ -3902,14 +3888,14 @@ impl VkContext {
                 hiz_prev_view_proj: IDENTITY4,
                 shadow_cull_pipeline,
                 shadow_cull_pipeline_layout,
-                shadow_cull_set_layout,
+                _shadow_cull_set_layout: shadow_cull_set_layout,
                 shadow_cull_sets,
                 shadow_bindless_pipeline,
                 shadow_bindless_pipeline_layout,
                 shadow_indirect_buffers,
                 gbuffer_bindless_pipeline,
                 gbuffer_bindless_pipeline_layout,
-                gbuffer_set_layout,
+                _gbuffer_set_layout: gbuffer_set_layout,
                 gbuffer_sets,
                 prev_model_buffers,
             },
@@ -3927,7 +3913,7 @@ impl VkContext {
             },
             composite_pipeline,
             composite_pipeline_layout,
-            composite_set_layout,
+            _composite_set_layout: composite_set_layout,
             composite_sets,
             composite_sampler,
             color_lut,
@@ -4002,8 +3988,8 @@ impl VkContext {
                 global_update_after_bind,
                 probe_cube_count,
                 object_set_layout,
-                text_set_layout,
-                descriptor_pool,
+                _text_set_layout: text_set_layout,
+                _descriptor_pool: descriptor_pool,
                 global_sets,
                 object_sets,
                 text_atlas_sets,
@@ -4113,9 +4099,6 @@ impl VkContext {
             stream_frame: 0,
             stream_retires: Vec::new(),
             window: Some(window),
-            debug_utils,
-            debug_messenger,
-            debug_filter,
             _entry: entry,
             // The swap-decision key for a future live reload of this context
             // (see `hot_swap_config` / `reload_world`). Normalised `frames` (>=1)
@@ -4211,9 +4194,6 @@ impl VkContext {
             rt_capable: self.rt_capable,
             update_after_bind: self.update_after_bind,
             device_local_heaps: self.device_local_heaps.clone(),
-            debug_utils: self.debug_utils.take(),
-            debug_messenger: self.debug_messenger.take(),
-            debug_filter: self.debug_filter.take(),
             timestamp_query_pool: self.timestamp_query_pool.take(),
             timestamp_period: self.timestamp_period_ns,
             alloc: self.alloc.clone(),
@@ -4229,6 +4209,10 @@ impl VkContext {
         self.reused_by_successor = true;
         self.destroy_world_content();
         self.alloc.reclaim_idle();
+        // The old world's pipelines, layouts and render passes queued on the
+        // device's retire list as their owners dropped; the `wait_idle` above
+        // means they can go now rather than after the successor's first frames.
+        self.device.reclaim_idle();
         tracing::debug!("reload: old world freed: {}", self.alloc.stats());
         match VkContext::build(init, Some(reuse)) {
             Ok(rebuilt) => {
@@ -4251,7 +4235,7 @@ struct SharedHardware {
     window: super::PlatformWindow,
     entry: ash::Entry,
     instance: ash::Instance,
-    device: ash::Device,
+    device: super::owned::VkDevice,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
     surface_loader: ash::khr::surface::Instance,
@@ -4270,9 +4254,6 @@ struct SharedHardware {
     rt_capable: bool,
     update_after_bind: bool,
     device_local_heaps: Vec<u32>,
-    debug_utils: Option<ash::ext::debug_utils::Instance>,
-    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
-    debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
     timestamp_query_pool: Option<vk::QueryPool>,
     timestamp_period: f32,
     // Fresh on a launch; the outgoing context's on a reload, so the rebuilt
@@ -4293,7 +4274,7 @@ pub(in crate::vulkan) struct VkReuse {
     window: super::PlatformWindow,
     entry: ash::Entry,
     instance: ash::Instance,
-    device: ash::Device,
+    device: super::owned::VkDevice,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
     surface_loader: ash::khr::surface::Instance,
@@ -4311,9 +4292,6 @@ pub(in crate::vulkan) struct VkReuse {
     rt_capable: bool,
     update_after_bind: bool,
     device_local_heaps: Vec<u32>,
-    debug_utils: Option<ash::ext::debug_utils::Instance>,
-    debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
-    debug_filter: Option<Box<std::sync::atomic::AtomicU32>>,
     timestamp_query_pool: Option<vk::QueryPool>,
     timestamp_period: f32,
     alloc: super::allocator::DeviceAllocator,
@@ -4352,9 +4330,6 @@ impl VkReuse {
             rt_capable: self.rt_capable,
             update_after_bind: self.update_after_bind,
             device_local_heaps: self.device_local_heaps,
-            debug_utils: self.debug_utils,
-            debug_messenger: self.debug_messenger,
-            debug_filter: self.debug_filter,
             timestamp_query_pool: self.timestamp_query_pool,
             timestamp_period: self.timestamp_period,
             alloc: self.alloc,

@@ -11,7 +11,12 @@
 // is re-pointed at `SsrResources::output` so the post-process stack consumes
 // the HDR scene with reflections composited in.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::fullscreen::{FullscreenPass, encode_fullscreen};
 use crate::gfx::render_types::SsrParams;
@@ -33,13 +38,13 @@ pub(in crate::vulkan) struct SsrResources {
     pub(in crate::vulkan) settings: crate::gfx::ssr::SsrSettings,
 
     // Render pass.
-    pub(in crate::vulkan) resolve_render_pass: vk::RenderPass,
+    pub(in crate::vulkan) resolve_render_pass: OwnedRenderPass,
 
     // Resolve pipeline: fullscreen triangle reading the scene + G-buffer +
     // roughness + prefilter cubemap, writing `output`.
-    pub(in crate::vulkan) resolve_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) resolve_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) resolve_pso: vk::Pipeline,
+    pub(in crate::vulkan) _resolve_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) resolve_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) resolve_pso: OwnedPipeline,
 
     // Probe cube-array length the resolve fragment was built against, kept so a
     // hot-reload recompile sizes its `probe_cubes[]` to the same global set
@@ -50,15 +55,15 @@ pub(in crate::vulkan) struct SsrResources {
     // scene SRV. The G-buffer / roughness come from the unified pre-pass's
     // per-frame views; the prefilter cube is shared across all frames.
     pub(in crate::vulkan) resolve_sets: Vec<vk::DescriptorSet>,
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) _descriptor_pool: OwnedDescriptorPool,
 
     // Linear-clamp sampler the resolve reads scene / G-buffer / roughness
     // through. The cubemap fallback uses VkContext's `cube_sampler`.
-    pub(in crate::vulkan) sampler: vk::Sampler,
+    pub(in crate::vulkan) sampler: OwnedSampler,
 
     // Resolution-dependent target (rebuilt on swapchain resize).
     pub(in crate::vulkan) output: GpuImage,
-    pub(in crate::vulkan) resolve_framebuffer: vk::Framebuffer,
+    pub(in crate::vulkan) resolve_framebuffer: OwnedFramebuffer,
 }
 
 // SPIR-V blobs for every SSR pipeline. Produced by [`compile_ssr_shaders`];
@@ -92,21 +97,21 @@ pub(in crate::vulkan) fn compile_ssr_shaders(
 
 // Replacement SSR pipeline built by the hot-reload pass.
 pub(in crate::vulkan) struct RebuiltSsrPipelines {
-    pub resolve: vk::Pipeline,
+    pub resolve: OwnedPipeline,
 }
 
 // Rebuild the live SSR resolve pipeline from disk-resident GLSL source against
 // the existing layout + render pass. Same shape as [`rebuild_ssao_pipelines`].
 pub(in crate::vulkan) fn rebuild_ssr_pipelines(
-    device: &Device,
+    device: &VkDevice,
     ssr: &SsrResources,
     hot_reload: bool,
 ) -> Result<RebuiltSsrPipelines, String> {
     let shaders = compile_ssr_shaders(hot_reload, ssr.probe_cube_count)?;
     let resolve = create_resolve_pipeline(
         device,
-        ssr.resolve_render_pass,
-        ssr.resolve_layout,
+        ssr.resolve_render_pass.handle(),
+        ssr.resolve_layout.handle(),
         &shaders.fullscreen_vs,
         &shaders.resolve_fs,
     )?;
@@ -118,16 +123,7 @@ impl SsrResources {
     // has already `device_wait_idle`'d so the old pipeline is not in
     // flight. Driven by the Vulkan shader hot-reload pass after the
     // replacement successfully compiled.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltSsrPipelines,
-    ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.resolve_pso, None);
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltSsrPipelines) {
         self.resolve_pso = rebuilt.resolve;
     }
 }
@@ -135,7 +131,7 @@ impl SsrResources {
 // Resolve render pass: one HDR-format colour attachment, no depth. The
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes.
-fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_resolve_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(SSR_OUTPUT_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -168,9 +164,8 @@ fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String>
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("SSR resolve render pass: {e}"))
 }
 
@@ -178,7 +173,7 @@ fn create_resolve_render_pass(device: &Device) -> Result<vk::RenderPass, String>
 // `create_output_target`, `build_targets`, `new`, and `rebuild`.
 pub(in crate::vulkan) struct SsrGpuContext<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
 }
@@ -244,12 +239,12 @@ fn create_output_target(gpu: &SsrGpuContext, extent: SsrExtent) -> Result<GpuIma
 // triangle is procedural in the VS); no depth; no blend; writes the HDR
 // resolve output target.
 fn create_resolve_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -302,15 +297,8 @@ fn create_resolve_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create ssr resolve pso: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create ssr resolve pso: {e}"))?;
     Ok(pipeline)
 }
 
@@ -401,25 +389,21 @@ impl SsrResources {
             .size(std::mem::size_of::<SsrParams>() as u32);
         // set 0 = the resolve set (scene/gbuffer/roughness/prefilter); set 1 = the
         // global set (probe set/cubes) for the missed-ray probe fallback.
-        let resolve_set_layouts = [resolve_set_layout, global_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let resolve_layout = unsafe {
-            device.create_pipeline_layout(
+        let resolve_set_layouts = [resolve_set_layout.handle(), global_set_layout];
+        let resolve_layout = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&resolve_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&params_push)),
-                None,
             )
-        }
-        .map_err(|e| format!("ssr resolve layout: {e}"))?;
+            .map_err(|e| format!("ssr resolve layout: {e}"))?;
 
         // Pipeline.
         let shaders = compile_ssr_shaders(hot_reload, probe_cube_count)?;
         let resolve_pso = create_resolve_pipeline(
             device,
-            resolve_render_pass,
-            resolve_layout,
+            resolve_render_pass.handle(),
+            resolve_layout.handle(),
             &shaders.fullscreen_vs,
             &shaders.resolve_fs,
         )?;
@@ -428,20 +412,18 @@ impl SsrResources {
         let pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(frames as u32 * 4)];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(frames as u32),
-                None,
             )
-        }
-        .map_err(|e| format!("ssr descriptor pool: {e}"))?;
+            .map_err(|e| format!("ssr descriptor pool: {e}"))?;
 
-        let resolve_layouts_vec: Vec<_> = (0..frames).map(|_| resolve_set_layout).collect();
-        let resolve_sets = alloc_descriptor_sets(device, descriptor_pool, &resolve_layouts_vec)?;
+        let resolve_layouts_vec: Vec<_> =
+            (0..frames).map(|_| resolve_set_layout.handle()).collect();
+        let resolve_sets =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &resolve_layouts_vec)?;
 
         // Dedicated linear-clamp sampler the resolve reads scene / G-buffer /
         // roughness through.
@@ -450,16 +432,16 @@ impl SsrResources {
         let mut me = Self {
             settings,
             resolve_render_pass,
-            resolve_set_layout,
+            _resolve_set_layout: resolve_set_layout,
             resolve_layout,
             resolve_pso,
             probe_cube_count,
             resolve_sets,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             sampler,
             // Placeholder GpuImage; replaced by build_targets below.
             output: GpuImage::null(),
-            resolve_framebuffer: vk::Framebuffer::null(),
+            resolve_framebuffer: OwnedFramebuffer::null(),
         };
         me.build_targets(gpu, extent)?;
         // Bind scene + prefilter cube; the G-buffer / roughness slots are
@@ -491,20 +473,16 @@ impl SsrResources {
             },
         )?;
 
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        self.resolve_framebuffer = unsafe {
-            device.create_framebuffer(
+        self.resolve_framebuffer = device
+            .create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.resolve_render_pass)
+                    .render_pass(self.resolve_render_pass.handle())
                     .attachments(std::slice::from_ref(&self.output.view))
                     .width(w)
                     .height(h)
                     .layers(1),
-                None,
             )
-        }
-        .map_err(|e| format!("ssr resolve framebuffer: {e}"))?;
+            .map_err(|e| format!("ssr resolve framebuffer: {e}"))?;
         Ok(())
     }
 
@@ -518,7 +496,7 @@ impl SsrResources {
     // in so every binding is a valid `SHADER_READ_ONLY` image.
     pub(in crate::vulkan) fn wire_resolve_sets(
         &self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         gbuffer_views: &[vk::ImageView],
         roughness_views: &[vk::ImageView],
@@ -546,11 +524,11 @@ impl SsrResources {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(gb_view)
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let rough_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(rough_view)
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             // Each resolve set binds its frame's HDR resolve as the scene
             // input. With fewer HDR resolves than frames (shouldn't happen)
             // we wrap.
@@ -558,7 +536,7 @@ impl SsrResources {
             let scene_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(scene_view)
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -587,15 +565,9 @@ impl SsrResources {
         }
     }
 
-    fn destroy_targets(&mut self, device: &Device) {
-        if self.resolve_framebuffer != vk::Framebuffer::null() {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe {
-                device.destroy_framebuffer(self.resolve_framebuffer, None);
-            }
-            self.resolve_framebuffer = vk::Framebuffer::null();
+    fn destroy_targets(&mut self, _device: &VkDevice) {
+        if !self.resolve_framebuffer.is_null() {
+            self.resolve_framebuffer = OwnedFramebuffer::null();
             self.output = GpuImage::null();
         }
     }
@@ -631,18 +603,8 @@ impl SsrResources {
     }
 
     // Destroy every SSR resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.sampler, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.resolve_pso, None);
-            device.destroy_pipeline_layout(self.resolve_layout, None);
-            device.destroy_descriptor_set_layout(self.resolve_set_layout, None);
-            device.destroy_render_pass(self.resolve_render_pass, None);
-        }
     }
 }
 
@@ -706,8 +668,8 @@ impl FullscreenPass for SsrResolvePass<'_> {
     fn begin(&self, cmd: &Self::Rec) {
         self.ctx.begin_fullscreen_pass(
             *cmd,
-            self.ssr.resolve_render_pass,
-            self.ssr.resolve_framebuffer,
+            self.ssr.resolve_render_pass.handle(),
+            self.ssr.resolve_framebuffer.handle(),
         );
     }
 
@@ -733,11 +695,15 @@ impl FullscreenPass for SsrResolvePass<'_> {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.ssr.resolve_pso);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.ssr.resolve_pso.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.ssr.resolve_layout,
+                self.ssr.resolve_layout.handle(),
                 0,
                 std::slice::from_ref(&self.ssr.resolve_sets[self.frame_idx]),
                 &[],
@@ -746,14 +712,14 @@ impl FullscreenPass for SsrResolvePass<'_> {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.ssr.resolve_layout,
+                self.ssr.resolve_layout.handle(),
                 1,
                 std::slice::from_ref(&self.ctx.descriptors.global_sets[self.frame_idx]),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                self.ssr.resolve_layout,
+                self.ssr.resolve_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(

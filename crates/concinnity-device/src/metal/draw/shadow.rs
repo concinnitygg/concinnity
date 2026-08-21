@@ -23,6 +23,7 @@ use objc2_metal::{
 
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
 use crate::metal::context::MtlContext;
+use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::uniforms::ModelUniforms;
 
@@ -197,25 +198,12 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         bind: &ShadowPassBinding,
     ) {
-        enc.setRenderPipelineState(bind.pipeline);
-        enc.setDepthStencilState(Some(&self.depth_state));
+        enc.set_pipeline(bind.pipeline);
+        enc.set_depth_stencil(&self.depth_state);
         enc.setDepthBias_slopeScale_clamp(0.005, bind.slope_bias, 0.01);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(bind.uniforms).cast(),
-                std::mem::size_of::<ShadowUniforms>(),
-                0,
-            );
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&bind.push).cast(),
-                std::mem::size_of::<ShadowPassPush>(),
-                7,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-        }
+        enc.set_vertex_value(bind.uniforms, 0);
+        enc.set_vertex_value(&bind.push, 7);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
     }
 
     // GPU-driven shadow draws for one cascade: execute this cascade's
@@ -245,30 +233,17 @@ impl MtlContext {
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str(
             "shadow cascade indirect",
         ));
-        enc.setRenderPipelineState(pipeline);
-        enc.setDepthStencilState(Some(&self.depth_state));
+        enc.set_pipeline(pipeline);
+        enc.set_depth_stencil(&self.depth_state);
         enc.setDepthBias_slopeScale_clamp(0.005, slope_bias, 0.01);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            // ShadowUniforms (vbuf 0), cascade push (vbuf 7), object buffer
-            // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
-            // these bindings; the cull baked base_instance = record id, so the VS
-            // reads `objects[id].model`.
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
-                std::mem::size_of::<ShadowUniforms>(),
-                0,
-            );
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(push).cast(),
-                std::mem::size_of::<ShadowPassPush>(),
-                7,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(object_buffer), 0, 9);
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-        }
+        // ShadowUniforms (vbuf 0), cascade push (vbuf 7), object buffer
+        // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
+        // these bindings; the cull baked base_instance = record id, so the VS
+        // reads `objects[id].model`.
+        enc.set_vertex_value(&self.shadow_uniforms, 0);
+        enc.set_vertex_value(push, 7);
+        enc.set_vertex_buffer(object_buffer, 0, 9);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
 
         // This cascade's command slots live at `[c*stride, c*stride + stride)`
         // in the shared shadow ICB (stride = the live record count, the same
@@ -298,11 +273,7 @@ impl MtlContext {
 
         // Folded skinned tail: deformed VB at binding 1, skinned u16 IB resident.
         if let (Some(deformed), Some(tail)) = (deformed_skinned, counts.skinned_tail(cascade_off)) {
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
-            }
+            enc.set_vertex_buffer(deformed, 0, 1);
             if let Some(skinned_ib) = self.skinned.index_buffer.as_ref() {
                 enc.useResource_usage_stages(
                     ProtocolObject::from_ref(&**skinned_ib),
@@ -339,16 +310,7 @@ impl MtlContext {
                 continue;
             }
             let model_uniforms = ModelUniforms { model: obj.model };
-            // SAFETY: each pointer is derived from a live borrow and paired with that type's
-            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
-            // buffer indices are the slots the shaders declare.
-            unsafe {
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&model_uniforms).cast(),
-                    std::mem::size_of::<ModelUniforms>(),
-                    2,
-                );
-            }
+            enc.set_vertex_value(&model_uniforms, 2);
             // Pick the LOD by camera distance -- the shadow pass uses the
             // same slice the main pass will, so silhouettes track when the
             // runtime swaps to a coarser LOD.
@@ -402,15 +364,10 @@ impl MtlContext {
                 let index_byte_offset = index_offset * std::mem::size_of::<u32>();
                 for &model in instances {
                     let model_uniforms = ModelUniforms { model };
-                    // SAFETY: the pointer is derived from the live `model_uniforms` with its
-                    // `size_of` as the length, and the index range comes from `active_lod` on this
-                    // object's own slice of `self.index_buffer`.
+                    enc.set_vertex_value(&model_uniforms, 2);
+                    // SAFETY: the index range comes from `active_lod` on this object's own slice of
+                    // `self.index_buffer`.
                     unsafe {
-                        enc.setVertexBytes_length_atIndex(
-                            std::ptr::NonNull::from(&model_uniforms).cast(),
-                            std::mem::size_of::<ModelUniforms>(),
-                            2,
-                        );
                         enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                             MTLPrimitiveType::Triangle,
                             index_count,
@@ -458,11 +415,7 @@ impl MtlContext {
                 ..*bind
             },
         );
-        // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-        // buffer/texture indices the shaders declare.
-        unsafe {
-            enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
-        }
+        enc.set_vertex_buffer(svb, 0, 1);
         for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
             if !obj.visible {
                 continue;
@@ -471,16 +424,10 @@ impl MtlContext {
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let index_byte_offset = index_offset * std::mem::size_of::<u16>();
-            // SAFETY: as above, over the skinned buffers -- pointer and length describe the live
-            // `model_uniforms`, `skinned_joint_bufs[i]` outlives the encoder, and the index range
-            // is this object's own slice.
+            enc.set_vertex_value(&model_uniforms, 2);
+            enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
+            // SAFETY: the index range is this object's own slice of the skinned index buffer.
             unsafe {
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&model_uniforms).cast(),
-                    std::mem::size_of::<ModelUniforms>(),
-                    2,
-                );
-                enc.setVertexBuffer_offset_atIndex(Some(&skinned_joint_bufs[i]), 0, 8);
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                     MTLPrimitiveType::Triangle,
                     index_count,

@@ -6,8 +6,12 @@
 // grid. The forward pass then shades each fragment from only its cluster's
 // lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
-use ash::Device;
 use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
+};
+use crate::vulkan::record::Recorder;
 
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
@@ -28,10 +32,10 @@ pub(in crate::vulkan) fn cluster_list_size() -> vk::DeviceSize {
 // reference bindings 10 + 11 unconditionally, guarded by `use_clusters`); the
 // pipeline and its descriptor set exist only when the world has local lights.
 pub(in crate::vulkan) struct VkLightCull {
-    pub pipeline: Option<vk::Pipeline>,
-    pub pipeline_layout: Option<vk::PipelineLayout>,
-    pub set_layout: Option<vk::DescriptorSetLayout>,
-    pub descriptor_pool: Option<vk::DescriptorPool>,
+    pub pipeline: Option<OwnedPipeline>,
+    pub pipeline_layout: Option<OwnedPipelineLayout>,
+    pub _set_layout: Option<OwnedSetLayout>,
+    pub _descriptor_pool: Option<OwnedDescriptorPool>,
     // One compute set per frame in flight (each pointing at that frame's
     // `ClusterParams` UBO).
     pub sets: Vec<vk::DescriptorSet>,
@@ -50,23 +54,7 @@ pub(in crate::vulkan) struct VkLightCull {
 impl VkLightCull {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            if let Some(p) = self.pipeline {
-                device.destroy_pipeline(p, None);
-            }
-            if let Some(l) = self.pipeline_layout {
-                device.destroy_pipeline_layout(l, None);
-            }
-            if let Some(l) = self.set_layout {
-                device.destroy_descriptor_set_layout(l, None);
-            }
-            if let Some(p) = self.descriptor_pool {
-                device.destroy_descriptor_pool(p, None);
-            }
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.cluster_buffer = PooledBuffer::null();
         self.params_buffers.clear();
         self.unclustered_buffer = PooledBuffer::null();
@@ -75,7 +63,7 @@ impl VkLightCull {
 
 // Descriptor set layout for the light-cull kernel: the `ClusterParams` UBO, the
 // per-scene `GpuLight` SSBO, and the per-cluster list SSBO.
-fn create_light_cull_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_light_cull_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -94,9 +82,8 @@ fn create_light_cull_set_layout(device: &Device) -> Result<vk::DescriptorSetLayo
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("light cull set layout: {e}"))
 }
 
@@ -106,7 +93,7 @@ fn create_light_cull_set_layout(device: &Device) -> Result<vk::DescriptorSetLayo
 // but the buffers are still allocated for the forward pass's unconditional binds.
 pub(in crate::vulkan) fn build_light_cull(
     alloc: &DeviceAllocator,
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
     local_light_buffer: vk::Buffer,
     local_light_size: vk::DeviceSize,
@@ -144,8 +131,8 @@ pub(in crate::vulkan) fn build_light_cull(
         return Ok(VkLightCull {
             pipeline: None,
             pipeline_layout: None,
-            set_layout: None,
-            descriptor_pool: None,
+            _set_layout: None,
+            _descriptor_pool: None,
             sets: Vec::new(),
             cluster_buffer,
             params_buffers,
@@ -154,11 +141,10 @@ pub(in crate::vulkan) fn build_light_cull(
     }
 
     let set_layout = create_light_cull_set_layout(device)?;
-    let set_layouts = [set_layout];
+    let set_layouts = [set_layout.handle()];
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+    let pipeline_layout = device
+        .create_pipeline_layout(&layout_info)
         .map_err(|e| format!("light cull pipeline layout: {e}"))?;
 
     let spirv =
@@ -171,16 +157,9 @@ pub(in crate::vulkan) fn build_light_cull(
         .name(&entry);
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
-        .layout(pipeline_layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(
-            device,
-            std::slice::from_ref(&pipeline_info),
-        )
-    }
-    .map_err(|(_, e)| format!("light cull pipeline: {e}"))?[0];
+        .layout(pipeline_layout.handle());
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &pipeline_info)
+        .map_err(|e| format!("light cull pipeline: {e}"))?;
 
     // One compute set per frame, each pointing at that frame's params UBO.
     let f = frames as u32;
@@ -197,13 +176,12 @@ pub(in crate::vulkan) fn build_light_cull(
     let pool_info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
+    let descriptor_pool = device
+        .create_descriptor_pool(&pool_info)
         .map_err(|e| format!("light cull descriptor pool: {e}"))?;
-    let layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
+    let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(descriptor_pool)
+        .descriptor_pool(descriptor_pool.handle())
         .set_layouts(&layouts);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
@@ -248,8 +226,8 @@ pub(in crate::vulkan) fn build_light_cull(
     Ok(VkLightCull {
         pipeline: Some(pipeline),
         pipeline_layout: Some(pipeline_layout),
-        set_layout: Some(set_layout),
-        descriptor_pool: Some(descriptor_pool),
+        _set_layout: Some(set_layout),
+        _descriptor_pool: Some(descriptor_pool),
         sets,
         cluster_buffer,
         params_buffers,
@@ -268,31 +246,20 @@ impl VkContext {
     // kernel builds the cluster's world-space AABB and tests each local light's
     // sphere against it, writing the surviving indices into `cluster_buffer`.
     // The trailing barrier orders the write before the forward pass's read.
-    pub(in crate::vulkan) fn encode_light_cull(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        let (Some(pipeline), Some(layout)) =
-            (self.light_cull.pipeline, self.light_cull.pipeline_layout)
-        else {
+    pub(in crate::vulkan) fn encode_light_cull(&self, rec: &Recorder<'_>, frame_idx: usize) {
+        let (Some(pipeline), Some(layout)) = (
+            self.light_cull.pipeline.as_ref(),
+            self.light_cull.pipeline_layout.as_ref(),
+        ) else {
             return;
         };
         let Some(&set) = self.light_cull.sets.get(frame_idx) else {
             return;
         };
-        let device = &self.device;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout,
-                0,
-                &[set],
-                &[],
-            );
-            // One invocation per cluster, 64-wide workgroups.
-            device.cmd_dispatch(cmd, CLUSTER_COUNT.div_ceil(64), 1, 1);
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(vk::PipelineBindPoint::COMPUTE, layout, 0, &[set], &[]);
+        // One invocation per cluster, 64-wide workgroups.
+        rec.dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
     }
 }
 

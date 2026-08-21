@@ -21,7 +21,12 @@
 // live TLAS + geometry-table handles every frame (they change on a dynamic
 // rebuild; see `crate::vulkan::raytrace`).
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::render_types::RtParams;
 use crate::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
@@ -89,29 +94,29 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // shared image, like the SSR resolve output). Owns its own slot because RT
     // can be authored with the SSR resolve off.
     pub(in crate::vulkan) output: GpuImage,
-    render_pass: vk::RenderPass,
-    framebuffer: vk::Framebuffer,
+    render_pass: OwnedRenderPass,
+    framebuffer: OwnedFramebuffer,
 
-    set_layout: vk::DescriptorSetLayout,
+    _set_layout: OwnedSetLayout,
     // Flat (material-tint) layout = [set 0]; textured layout = [set 0, bindless
     // pool]. The textured layout/PSO are `Some` only when the bindless pool is
     // live (same gate as the bindless static pass).
-    layout_flat: vk::PipelineLayout,
-    layout_textured: Option<vk::PipelineLayout>,
-    flat_pso: vk::Pipeline,
-    textured_pso: Option<vk::Pipeline>,
+    layout_flat: OwnedPipelineLayout,
+    layout_textured: Option<OwnedPipelineLayout>,
+    flat_pso: OwnedPipeline,
+    textured_pso: Option<OwnedPipeline>,
 
     // Per-frame `RtParams` UBO (144 B), host-mapped.
     params_buffers: Vec<PooledBuffer>,
 
-    descriptor_pool: vk::DescriptorPool,
+    _descriptor_pool: OwnedDescriptorPool,
     // Per-frame resolve sets: scene = that frame's HDR resolve, plus the shared
     // gbuffer / roughness / prefilter / verts / indices. The TLAS + geometry
     // table (bindings 1/2) are re-pointed every frame by `wire_dynamic`.
     resolve_sets: Vec<vk::DescriptorSet>,
 
     // Linear-clamp sampler the pass reads scene / G-buffer / roughness through.
-    sampler: vk::Sampler,
+    sampler: OwnedSampler,
 
     // A 1-element dummy storage buffer bound to the skinned-index SSBO (binding
     // 10) when the scene carries no skinned geometry (the accel data's skinned
@@ -138,7 +143,7 @@ unsafe impl Send for RtReflectionsResources {}
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes. Mirrors the SSR resolve
 // render pass.
-fn create_rt_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
+fn create_rt_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -175,9 +180,8 @@ fn create_rt_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dep));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("RT reflections render pass: {e}"))
 }
 
@@ -185,12 +189,12 @@ fn create_rt_render_pass(device: &Device) -> Result<vk::RenderPass, String> {
 // triangle); no depth; no blend; writes the HDR output. Mirrors the SSR resolve
 // pipeline.
 fn create_rt_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert_mod = spv_module(device, vert_spv)?;
     let frag_mod = spv_module(device, frag_spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
@@ -243,44 +247,37 @@ fn create_rt_pipeline(
         .layout(layout)
         .render_pass(render_pass)
         .subpass(0);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create rt reflections pso: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create rt reflections pso: {e}"))?;
     Ok(pipeline)
 }
 
 // Replacement RT pipelines built by the hot-reload pass.
 pub(in crate::vulkan) struct RebuiltRtPipelines {
-    flat: vk::Pipeline,
-    textured: Option<vk::Pipeline>,
+    flat: OwnedPipeline,
+    textured: Option<OwnedPipeline>,
 }
 
 // Rebuild the RT pipelines from disk-resident GLSL against the existing layouts +
 // render pass. Same shape as `rebuild_ssr_pipelines`.
 pub(in crate::vulkan) fn rebuild_rt_pipelines(
-    device: &Device,
+    device: &VkDevice,
     rt: &RtReflectionsResources,
     hot_reload: bool,
 ) -> Result<RebuiltRtPipelines, String> {
     let shaders = compile_rt_shaders(hot_reload, rt.pool_size, rt.probe_cube_count)?;
     let flat = create_rt_pipeline(
         device,
-        rt.render_pass,
-        rt.layout_flat,
+        rt.render_pass.handle(),
+        rt.layout_flat.handle(),
         &shaders.vs,
         &shaders.flat_fs,
     )?;
-    let textured = match (rt.layout_textured, &shaders.textured_fs) {
+    let textured = match (rt.layout_textured.as_ref(), &shaders.textured_fs) {
         (Some(layout), Some(fs)) => Some(create_rt_pipeline(
             device,
-            rt.render_pass,
-            layout,
+            rt.render_pass.handle(),
+            layout.handle(),
             &shaders.vs,
             fs,
         )?),
@@ -295,7 +292,7 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
 // need to size and place the pass's GPU memory.
 pub(in crate::vulkan) struct RtBuild<'a> {
     pub alloc: &'a DeviceAllocator,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub width: u32,
     pub height: u32,
     pub frames: usize,
@@ -458,28 +455,20 @@ impl RtReflectionsResources {
         // set 0 = the RT resolve set; set 1 = the global set (probe set/cubes). The
         // textured variant adds the bindless pool as set 2 (kept past the global set
         // so probe_common's set index stays a fixed 1 across both variants).
-        let flat_layouts = [set_layout, global_set_layout];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let layout_flat = unsafe {
-            device.create_pipeline_layout(
+        let flat_layouts = [set_layout.handle(), global_set_layout];
+        let layout_flat = device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts),
-                None,
             )
-        }
-        .map_err(|e| format!("rt flat pipeline layout: {e}"))?;
+            .map_err(|e| format!("rt flat pipeline layout: {e}"))?;
         let layout_textured = if let Some(bsl) = bindless_set_layout {
-            let layouts = [set_layout, global_set_layout, bsl];
+            let layouts = [set_layout.handle(), global_set_layout, bsl];
             Some(
-                // SAFETY: the create-info and every slice it borrows are live for the call, and
-                // each handle it names belongs to this device.
-                unsafe {
-                    device.create_pipeline_layout(
+                device
+                    .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
-                        None,
                     )
-                }
-                .map_err(|e| format!("rt textured pipeline layout: {e}"))?,
+                    .map_err(|e| format!("rt textured pipeline layout: {e}"))?,
             )
         } else {
             None
@@ -488,16 +477,16 @@ impl RtReflectionsResources {
         let shaders = compile_rt_shaders(hot_reload, pool_size, probe_cube_count)?;
         let flat_pso = create_rt_pipeline(
             device,
-            render_pass,
-            layout_flat,
+            render_pass.handle(),
+            layout_flat.handle(),
             &shaders.vs,
             &shaders.flat_fs,
         )?;
-        let textured_pso = match (layout_textured, &shaders.textured_fs) {
+        let textured_pso = match (layout_textured.as_ref(), &shaders.textured_fs) {
             (Some(layout), Some(fs)) => Some(create_rt_pipeline(
                 device,
-                render_pass,
-                layout,
+                render_pass.handle(),
+                layout.handle(),
                 &shaders.vs,
                 fs,
             )?),
@@ -533,19 +522,15 @@ impl RtReflectionsResources {
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(f * 4),
         ];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
+        let descriptor_pool = device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(f),
-                None,
             )
-        }
-        .map_err(|e| format!("rt descriptor pool: {e}"))?;
-        let layouts: Vec<_> = (0..frames).map(|_| set_layout).collect();
-        let resolve_sets = alloc_descriptor_sets(device, descriptor_pool, &layouts)?;
+            .map_err(|e| format!("rt descriptor pool: {e}"))?;
+        let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+        let resolve_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
 
         let sampler = create_sampler_linear_clamp(device)?;
 
@@ -561,14 +546,14 @@ impl RtReflectionsResources {
             settings,
             output: GpuImage::null(),
             render_pass,
-            framebuffer: vk::Framebuffer::null(),
-            set_layout,
+            framebuffer: OwnedFramebuffer::null(),
+            _set_layout: set_layout,
             layout_flat,
             layout_textured,
             flat_pso,
             textured_pso,
             params_buffers,
-            descriptor_pool,
+            _descriptor_pool: descriptor_pool,
             resolve_sets,
             sampler,
             dummy_ssbo,
@@ -608,7 +593,7 @@ impl RtReflectionsResources {
     fn build_targets(
         &mut self,
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -634,20 +619,16 @@ impl RtReflectionsResources {
         let image = pooled.image();
         let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         self.output = GpuImage::from_pooled(pooled, view);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        self.framebuffer = unsafe {
-            device.create_framebuffer(
+        self.framebuffer = device
+            .create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.render_pass)
+                    .render_pass(self.render_pass.handle())
                     .attachments(std::slice::from_ref(&self.output.view))
                     .width(w)
                     .height(h)
                     .layers(1),
-                None,
             )
-        }
-        .map_err(|e| format!("rt framebuffer: {e}"))?;
+            .map_err(|e| format!("rt framebuffer: {e}"))?;
         Ok(())
     }
 
@@ -657,7 +638,7 @@ impl RtReflectionsResources {
     // would otherwise keep descriptors on destroyed buffers).
     pub(in crate::vulkan) fn rewire_geometry(
         &self,
-        device: &Device,
+        device: &VkDevice,
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
     ) {
@@ -697,7 +678,7 @@ impl RtReflectionsResources {
     // A single-entry slice is shared across frames (the legacy SSR pre-pass
     // G-buffer). RT reuses the same byte-identical G-buffer the separate SSR
     // pre-pass produced, so the trace maths is unchanged.
-    pub(in crate::vulkan) fn wire_static(&self, device: &Device, inputs: RtStaticInputs) {
+    pub(in crate::vulkan) fn wire_static(&self, device: &VkDevice, inputs: RtStaticInputs) {
         let RtStaticInputs {
             vertex_buffer,
             index_buffer,
@@ -716,11 +697,11 @@ impl RtReflectionsResources {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(gbuffer_views[i % gbuffer_views.len().max(1)])
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let rough_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(roughness_views[i % roughness_views.len().max(1)])
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let ubo_info = vk::DescriptorBufferInfo::default()
                 .buffer(self.params_buffers[i].buffer())
                 .offset(0)
@@ -729,7 +710,7 @@ impl RtReflectionsResources {
             let scene_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(scene_view)
-                .sampler(self.sampler);
+                .sampler(self.sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -775,7 +756,7 @@ impl RtReflectionsResources {
     // valid.
     pub(in crate::vulkan) fn wire_dynamic(
         &self,
-        device: &Device,
+        device: &VkDevice,
         frame_idx: usize,
         accel: RtAccelHandles,
     ) {
@@ -844,7 +825,7 @@ impl RtReflectionsResources {
     // loses the device. Mirrors the SSR resolve / raymarch cube re-wires.
     pub(in crate::vulkan) fn rewire_prefilter(
         &self,
-        device: &Device,
+        device: &VkDevice,
         prefilter_view: vk::ImageView,
         cube_sampler: vk::Sampler,
     ) {
@@ -864,13 +845,12 @@ impl RtReflectionsResources {
         }
     }
 
-    fn destroy_targets(&mut self, device: &Device) {
-        if self.framebuffer != vk::Framebuffer::null() {
+    fn destroy_targets(&mut self, _device: &VkDevice) {
+        if !self.framebuffer.is_null() {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
             // references it.
-            unsafe { device.destroy_framebuffer(self.framebuffer, None) };
-            self.framebuffer = vk::Framebuffer::null();
+            self.framebuffer = OwnedFramebuffer::null();
         }
         if self.output.image != vk::Image::null() {
             self.output = GpuImage::null();
@@ -884,7 +864,7 @@ impl RtReflectionsResources {
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         alloc: &DeviceAllocator,
-        device: &Device,
+        device: &VkDevice,
         width: u32,
         height: u32,
         inputs: RtStaticInputs,
@@ -896,44 +876,14 @@ impl RtReflectionsResources {
     }
 
     // Swap freshly-built pipelines into the live resources after a hot-reload.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        rebuilt: RebuiltRtPipelines,
-    ) {
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_pipeline(self.flat_pso, None);
-            if let Some(p) = self.textured_pso.take() {
-                device.destroy_pipeline(p, None);
-            }
-        }
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltRtPipelines) {
         self.flat_pso = rebuilt.flat;
         self.textured_pso = rebuilt.textured;
     }
 
     // Destroy every RT resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
+    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         self.destroy_targets(device);
-        // SAFETY: every handle here was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still references
-        // them.
-        unsafe {
-            device.destroy_pipeline(self.flat_pso, None);
-            if let Some(p) = self.textured_pso.take() {
-                device.destroy_pipeline(p, None);
-            }
-            device.destroy_pipeline_layout(self.layout_flat, None);
-            if let Some(l) = self.layout_textured.take() {
-                device.destroy_pipeline_layout(l, None);
-            }
-            device.destroy_descriptor_set_layout(self.set_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_sampler(self.sampler, None);
-        }
         self.dummy_ssbo = PooledBuffer::null();
         self.params_buffers.clear();
     }
@@ -1125,14 +1075,18 @@ impl VkContext {
         // the bindless static path populates; otherwise fall back to the
         // flat-tint variant. Mirrors DirectX's bindless gate.
         let textured = self.cull.bindless_pipeline.is_some() && rt.textured_pso.is_some();
-        let (pso, layout) = match (textured, rt.textured_pso, rt.layout_textured) {
+        let (pso, layout) = match (
+            textured,
+            rt.textured_pso.as_ref(),
+            rt.layout_textured.as_ref(),
+        ) {
             (true, Some(pso), Some(layout)) => (pso, layout),
-            _ => (rt.flat_pso, rt.layout_flat),
+            _ => (&rt.flat_pso, &rt.layout_flat),
         };
 
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(rt.render_pass)
-            .framebuffer(rt.framebuffer)
+            .render_pass(rt.render_pass.handle())
+            .framebuffer(rt.framebuffer.handle())
             .render_area(vk::Rect2D::default().extent(extent));
         let vp = vk::Viewport {
             x: 0.0,
@@ -1149,11 +1103,11 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pso);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pso.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout,
+                layout.handle(),
                 0,
                 std::slice::from_ref(&rt.resolve_sets[frame_idx]),
                 &[],
@@ -1162,7 +1116,7 @@ impl VkContext {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout,
+                layout.handle(),
                 1,
                 std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
                 &[],
@@ -1171,7 +1125,7 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    layout,
+                    layout.handle(),
                     2,
                     std::slice::from_ref(&self.cull.bindless_sets[frame_idx]),
                     &[],

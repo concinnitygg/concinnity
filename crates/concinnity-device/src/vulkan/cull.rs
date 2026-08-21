@@ -151,9 +151,10 @@ impl VkContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pipeline), Some(layout)) =
-            (self.cull.cull_pipeline, self.cull.cull_pipeline_layout)
-        else {
+        let (Some(pipeline), Some(layout)) = (
+            self.cull.cull_pipeline.as_ref(),
+            self.cull.cull_pipeline_layout.as_ref(),
+        ) else {
             return;
         };
         let device = &self.device;
@@ -179,11 +180,11 @@ impl VkContext {
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
         // live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                layout,
+                layout.handle(),
                 0,
                 std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
                 &[],
@@ -204,13 +205,19 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    layout,
+                    layout.handle(),
                     1,
                     std::slice::from_ref(&hiz.read_sets[frame_idx]),
                     &[],
                 );
             }
-            device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
+            device.cmd_push_constants(
+                cmd,
+                layout.handle(),
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_bytes,
+            );
             // One invocation per build-time object, 64-wide local groups.
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
         }
@@ -235,8 +242,8 @@ impl VkContext {
         cam_pos: [f32; 3],
     ) {
         let (Some(pipeline), Some(layout)) = (
-            self.cull.shadow_cull_pipeline,
-            self.cull.shadow_cull_pipeline_layout,
+            self.cull.shadow_cull_pipeline.as_ref(),
+            self.cull.shadow_cull_pipeline_layout.as_ref(),
         ) else {
             return;
         };
@@ -252,7 +259,7 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
             // `sets` has one entry per cascade (NUM_SHADOW_CASCADES), allocated in
             // `init`; iterate it so cascade `c` uses its own output set + frustum.
             for (c, &set) in sets.iter().enumerate() {
@@ -280,14 +287,14 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    layout,
+                    layout.handle(),
                     0,
                     std::slice::from_ref(&set),
                     &[],
                 );
                 device.cmd_push_constants(
                     cmd,
-                    layout,
+                    layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
                     0,
                     push_bytes,
@@ -328,8 +335,8 @@ impl VkContext {
         cur_vp: [[f32; 4]; 4],
     ) {
         let (Some(pipeline), Some(layout), Some(hiz)) = (
-            self.cull.cull_pipeline_phase2,
-            self.cull.cull_pipeline_layout,
+            self.cull.cull_pipeline_phase2.as_ref(),
+            self.cull.cull_pipeline_layout.as_ref(),
             self.cull.hiz.as_ref(),
         ) else {
             return;
@@ -375,11 +382,11 @@ impl VkContext {
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
         // live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                layout,
+                layout.handle(),
                 0,
                 std::slice::from_ref(&self.cull.cull_sets2[frame_idx]),
                 &[],
@@ -387,12 +394,18 @@ impl VkContext {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                layout,
+                layout.handle(),
                 1,
                 std::slice::from_ref(&hiz.read_sets2[frame_idx]),
                 &[],
             );
-            device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
+            device.cmd_push_constants(
+                cmd,
+                layout.handle(),
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_bytes,
+            );
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
         }
     }

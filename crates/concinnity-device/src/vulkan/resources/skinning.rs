@@ -51,26 +51,23 @@ impl VkContext {
             .offset(0)
             .size(112);
         let main_set_layouts = [
-            self.descriptors.global_set_layout,
-            self.descriptors.object_set_layout,
-            joint_set_layout,
+            self.descriptors.global_set_layout.handle(),
+            self.descriptors.object_set_layout.handle(),
+            joint_set_layout.handle(),
         ];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let skinned_pipeline_layout = unsafe {
-            self.device.create_pipeline_layout(
+        let skinned_pipeline_layout = self
+            .device
+            .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&main_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&main_pc)),
-                None,
             )
-        }
-        .map_err(|e| format!("skinned pipeline layout: {e}"))?;
+            .map_err(|e| format!("skinned pipeline layout: {e}"))?;
         let skinned_pipeline = create_skinned_pipeline(
             &self.device,
             MeshPipelineTargets {
-                render_pass: self.main_render_pass,
-                layout: skinned_pipeline_layout,
+                render_pass: self.main_render_pass.handle(),
+                layout: skinned_pipeline_layout.handle(),
                 vert_spv: &skinned_vs,
                 frag_spv: &frag_spv,
             },
@@ -78,29 +75,27 @@ impl VkContext {
         )?;
 
         let (skinned_shadow_pipeline, skinned_shadow_pipeline_layout) =
-            if let (Some(_), Some(shadow_global)) =
-                (self.shadow.pipeline, self.shadow.global_set_layout)
-            {
+            if let (Some(_), Some(shadow_global)) = (
+                self.shadow.pipeline.as_ref(),
+                self.shadow.global_set_layout.as_ref(),
+            ) {
                 let shadow_pc = vk::PushConstantRange::default()
                     .stage_flags(vk::ShaderStageFlags::VERTEX)
                     .offset(0)
                     .size(80);
-                let shadow_set_layouts = [shadow_global, joint_set_layout];
-                // SAFETY: the create-info and every slice it borrows are live for the call, and
-                // each handle it names belongs to this device.
-                let layout = unsafe {
-                    self.device.create_pipeline_layout(
+                let shadow_set_layouts = [shadow_global.handle(), joint_set_layout.handle()];
+                let layout = self
+                    .device
+                    .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
                             .set_layouts(&shadow_set_layouts)
                             .push_constant_ranges(std::slice::from_ref(&shadow_pc)),
-                        None,
                     )
-                }
-                .map_err(|e| format!("skinned shadow pipeline layout: {e}"))?;
+                    .map_err(|e| format!("skinned shadow pipeline layout: {e}"))?;
                 let pipeline = create_skinned_shadow_pipeline(
                     &self.device,
-                    self.shadow.render_pass,
-                    layout,
+                    self.shadow.render_pass.handle(),
+                    layout.handle(),
                     &skinned_shadow_vs,
                 )?;
                 (Some(pipeline), Some(layout))
@@ -153,30 +148,29 @@ impl VkContext {
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count((n * frames) as u32),
         ];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let pool = unsafe {
-            self.device.create_descriptor_pool(
+        let pool = self
+            .device
+            .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .max_sets((n + n * frames) as u32)
                     .pool_sizes(&pool_sizes),
-                None,
             )
-        }
-        .map_err(|e| format!("skinned descriptor pool: {e}"))?;
+            .map_err(|e| format!("skinned descriptor pool: {e}"))?;
 
-        let object_layouts: Vec<_> = (0..n).map(|_| self.descriptors.object_set_layout).collect();
-        let object_sets = alloc_descriptor_sets(&self.device, pool, &object_layouts)?;
+        let object_layouts: Vec<_> = (0..n)
+            .map(|_| self.descriptors.object_set_layout.handle())
+            .collect();
+        let object_sets = alloc_descriptor_sets(&self.device, pool.handle(), &object_layouts)?;
         let last_tex = self.textures.len().saturating_sub(1);
         for (&set, obj) in object_sets.iter().zip(draw_objects.iter()) {
             let albedo_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(self.textures[obj.texture_slot.min(last_tex)].view)
-                .sampler(self.linear_sampler);
+                .sampler(self.linear_sampler.handle());
             let nm_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(self.normal_pool_view(obj.normal_map_slot))
-                .sampler(self.linear_sampler);
+                .sampler(self.linear_sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -212,8 +206,8 @@ impl VkContext {
                 buf.write_slice(0, &identity_seed);
                 bufs.push(buf);
             }
-            let layouts: Vec<_> = (0..n).map(|_| joint_set_layout).collect();
-            let sets = alloc_descriptor_sets(&self.device, pool, &layouts)?;
+            let layouts: Vec<_> = (0..n).map(|_| joint_set_layout.handle()).collect();
+            let sets = alloc_descriptor_sets(&self.device, pool.handle(), &layouts)?;
             for (i, &set) in sets.iter().enumerate() {
                 let info = vk::DescriptorBufferInfo::default()
                     .buffer(bufs[i].buffer())
@@ -247,6 +241,7 @@ impl VkContext {
         self.skinned.pipeline_layout = Some(skinned_pipeline_layout);
         self.shadow.skinned_pipeline = skinned_shadow_pipeline;
         self.shadow.skinned_pipeline_layout = skinned_shadow_pipeline_layout;
+        let joint_set_layout_handle = joint_set_layout.handle();
         self.skinned.joint_set_layout = Some(joint_set_layout);
         self.skinned.descriptor_pool = Some(pool);
         self.skinned.vertex_buffer = skinned_vbuf;
@@ -282,7 +277,7 @@ impl VkContext {
         }
 
         if let Some(gb) = self.gbuffer.as_mut() {
-            gb.ensure_skinned_gbuffer_pso(&self.device, joint_set_layout)?;
+            gb.ensure_skinned_gbuffer_pso(&self.device, joint_set_layout_handle)?;
         }
         Ok(())
     }

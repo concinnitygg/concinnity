@@ -91,14 +91,18 @@ impl VkContext {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
             .pool_sizes(&pool_sizes);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let pool = unsafe { self.device.create_descriptor_pool(&pool_info, None) }
+        let pool = self
+            .device
+            .create_descriptor_pool(&pool_info)
             .map_err(|e| format!("chunk descriptor pool: {e}"))?;
-        let set = alloc_descriptor_sets(&self.device, pool, &[self.descriptors.object_set_layout])?
-            .into_iter()
-            .next()
-            .ok_or("chunk descriptor set: allocation returned none")?;
+        let set = alloc_descriptor_sets(
+            &self.device,
+            pool.handle(),
+            &[self.descriptors.object_set_layout.handle()],
+        )?
+        .into_iter()
+        .next()
+        .ok_or("chunk descriptor set: allocation returned none")?;
         let tex_slot = texture_slot.min(self.textures.len().saturating_sub(1));
         self.chunk_stream.texture_slot = Some(tex_slot);
         // The normal map is a texture in the shared pool at its own handle (or
@@ -108,11 +112,11 @@ impl VkContext {
         let albedo_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.textures[tex_slot].view)
-            .sampler(self.linear_sampler);
+            .sampler(self.linear_sampler.handle());
         let nm_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(self.normal_pool_view(normal_map_slot))
-            .sampler(self.linear_sampler);
+            .sampler(self.linear_sampler.handle());
         let writes = [
             vk::WriteDescriptorSet::default()
                 .dst_set(set)

@@ -42,8 +42,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         let device = &self.device;
         let extent = self.swapchain_extent;
         let composite_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.composite_render_pass)
-            .framebuffer(self.composite_framebuffers[args.image_index])
+            .render_pass(self.composite_render_pass.handle())
+            .framebuffer(self.composite_framebuffers[args.image_index].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // The composite pass uses a standard positive-height viewport: the HDR
         // image is already upright, so it is a plain copy + post.
@@ -73,12 +73,12 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             device.cmd_bind_pipeline(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.composite_pipeline,
+                self.composite_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.composite_pipeline_layout,
+                self.composite_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&self.composite_sets[args.frame_idx]),
                 &[],
@@ -100,7 +100,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             };
             device.cmd_push_constants(
                 *cmd,
-                self.composite_pipeline_layout,
+                self.composite_pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -115,7 +115,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     }
 
     fn begin_text(&self, cmd: &Self::Rec, _args: &Self::Args) -> bool {
-        let Some(text_pipeline) = self.text_pipeline else {
+        let Some(text_pipeline) = self.text_pipeline.as_ref() else {
             return false;
         };
         if self.text_atlas_textures.is_empty() {
@@ -124,8 +124,11 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device
-                .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::GRAPHICS, text_pipeline);
+            self.device.cmd_bind_pipeline(
+                *cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                text_pipeline.handle(),
+            );
         }
         true
     }
@@ -195,14 +198,14 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.text_pipeline_layout,
+                self.text_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&self.descriptors.text_atlas_sets[atlas_idx]),
                 &[],
             );
             device.cmd_push_constants(
                 *cmd,
-                self.text_pipeline_layout,
+                self.text_pipeline_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 std::slice::from_raw_parts(

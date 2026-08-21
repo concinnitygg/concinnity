@@ -22,7 +22,9 @@
 // `ao_output` only when SSAO is on); the `*_for` lookups return `None`
 // otherwise and the consumer falls back exactly as it did before.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use super::texture::{
     create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
@@ -37,7 +39,7 @@ use crate::gfx::render_graph::{
 #[derive(Clone, Copy)]
 pub(super) struct TransientPoolGpu<'a> {
     pub instance: &'a ash::Instance,
-    pub device: &'a Device,
+    pub device: &'a VkDevice,
     pub physical_device: vk::PhysicalDevice,
     pub command_pool: vk::CommandPool,
     pub queue: vk::Queue,
@@ -306,7 +308,7 @@ impl TransientImagePool {
     // Free every managed image, view, and slot allocation. The caller has
     // already idled the device and destroyed any framebuffer that referenced
     // these views.
-    pub(super) fn destroy(&mut self, device: &Device) {
+    pub(super) fn destroy(&mut self, device: &VkDevice) {
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         unsafe {
@@ -329,7 +331,7 @@ impl TransientImagePool {
 // allocation afterward (so several aliased images can share one allocation).
 // Mirrors `texture::create_image` minus the allocate + bind, and translates the
 // graph's declared shape rather than restating it.
-fn create_image_unbound(device: &Device, spec: &TransientTexture) -> Result<vk::Image, String> {
+fn create_image_unbound(device: &VkDevice, spec: &TransientTexture) -> Result<vk::Image, String> {
     let info = vk::ImageCreateInfo::default()
         .image_type(if spec.depth.max(1) > 1 {
             vk::ImageType::TYPE_3D

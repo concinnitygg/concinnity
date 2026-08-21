@@ -10,12 +10,13 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
+    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
+    MTLTextureUsage,
 };
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
@@ -132,19 +133,10 @@ impl MtlContext {
                 label: "TAA resolve",
             },
             |enc| {
-                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-                // `size_of` as the length, and every bound resource outlives the encoder; the
-                // indices are the slots the shaders declare.
-                unsafe {
-                    enc.setFragmentTexture_atIndex(Some(scene_input), 0);
-                    enc.setFragmentTexture_atIndex(Some(velocity), 1);
-                    enc.setFragmentTexture_atIndex(Some(history.as_ref()), 2);
-                    enc.setFragmentBytes_length_atIndex(
-                        std::ptr::NonNull::from(taa_uniforms).cast(),
-                        std::mem::size_of::<TaaParams>(),
-                        0,
-                    );
-                }
+                enc.set_fragment_texture(scene_input, 0);
+                enc.set_fragment_texture(velocity, 1);
+                enc.set_fragment_texture(history.as_ref(), 2);
+                enc.set_fragment_value(taa_uniforms, 0);
                 set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
             },
         )?;

@@ -18,6 +18,7 @@ use objc2_metal::{
 };
 
 use super::context::*;
+use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
@@ -154,19 +155,10 @@ impl MtlContext {
         );
 
         // Build kernel: 16x16 threadgroups, one thread per HDR pixel.
-        enc.setComputePipelineState(&pipelines.build);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setTexture_atIndex(Some(hdr_tex), 0);
-            enc.setBuffer_offset_atIndex(Some(histogram), 0, 0);
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&params).cast(),
-                std::mem::size_of::<AutoExposureParams>(),
-                1,
-            );
-        }
+        enc.set_pipeline(&pipelines.build);
+        enc.set_texture(hdr_tex, 0);
+        enc.set_buffer(histogram, 0, 0);
+        enc.set_value(&params, 1);
         let tg = MTLSize {
             width: 16,
             height: 16,
@@ -182,19 +174,10 @@ impl MtlContext {
         // Average kernel: one threadgroup of 256 threads reduces the
         // histogram and clears it for the next frame. The output buffer at
         // buffer(1) receives the count-weighted average log-luminance.
-        enc.setComputePipelineState(&pipelines.average);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(histogram), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(output), 0, 1);
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&params).cast(),
-                std::mem::size_of::<AutoExposureParams>(),
-                2,
-            );
-        }
+        enc.set_pipeline(&pipelines.average);
+        enc.set_buffer(histogram, 0, 0);
+        enc.set_buffer(output, 0, 1);
+        enc.set_value(&params, 2);
         let avg_grid = MTLSize {
             width: crate::gfx::auto_exposure::HISTOGRAM_BINS,
             height: 1,

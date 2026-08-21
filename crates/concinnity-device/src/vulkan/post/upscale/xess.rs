@@ -23,7 +23,9 @@ use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::VkDevice;
 
 use super::{UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names};
 use crate::vulkan::context::HDR_FORMAT;
@@ -617,7 +619,7 @@ impl VkUpscaleBackend for XessUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, _device: &Device) {
+    fn destroy(&mut self, _device: &VkDevice) {
         if !self.ctx.is_null() {
             // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
             // the SDK's declared signature; the context and every parameter / out-param it is

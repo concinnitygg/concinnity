@@ -29,6 +29,7 @@ use crate::gfx::volumetric_fog::FogSettings;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::encode::{ComputeEncode, RenderEncode};
 use super::pipeline::ns_str;
 use super::post::fullscreen::{
     FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
@@ -111,32 +112,24 @@ impl MtlContext {
                 .ok_or("failed to get fog render encoder")?,
             "volumetric fog",
         );
-        enc.setRenderPipelineState(pipeline);
+        enc.set_pipeline(pipeline);
 
-        // SAFETY: each pointer is derived from a live borrow with that type's `size_of` as the
-        // length, at the buffer indices the fog shaders declare.
+        enc.set_fragment_value(params, 0);
+        enc.set_fragment_value(froxel_params, 1);
+        // Read the single-sample `depth_resolve` (post-
+        // Main depth + any raymarched surface depth) so fog
+        // attenuates raymarched surfaces by their true distance. It is
+        // fetched by pixel coordinate and never sampled, so it takes no
+        // sampler slot; the volume is trilinearly filtered and takes
+        // sampler(0). `post_sampler` is the linear clamp-to-edge state the
+        // shader used to declare inline as a constexpr sampler.
+        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(volume.as_ref(), 1);
+        set_fragment_sampler_range(&enc, &self.post_sampler, 0, 1);
+        // Fullscreen triangle: 3 vertices, no vertex buffer.
+        // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
+        // vertex buffer.
         unsafe {
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(params).cast(),
-                std::mem::size_of::<FogParams>(),
-                0,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(froxel_params).cast(),
-                std::mem::size_of::<FogFroxelParams>(),
-                1,
-            );
-            // Read the single-sample `depth_resolve` (post-
-            // Main depth + any raymarched surface depth) so fog
-            // attenuates raymarched surfaces by their true distance. It is
-            // fetched by pixel coordinate and never sampled, so it takes no
-            // sampler slot; the volume is trilinearly filtered and takes
-            // sampler(0). `post_sampler` is the linear clamp-to-edge state the
-            // shader used to declare inline as a constexpr sampler.
-            enc.setFragmentTexture_atIndex(Some(self.hdr_targets.depth_resolve.as_ref()), 0);
-            enc.setFragmentTexture_atIndex(Some(volume.as_ref()), 1);
-            set_fragment_sampler_range(&enc, &self.post_sampler, 0, 1);
-            // Fullscreen triangle: 3 vertices, no vertex buffer.
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
         }
 
@@ -175,52 +168,35 @@ impl MtlContext {
                 .ok_or("failed to get fog froxel compute encoder")?,
             "fog froxel volume",
         );
-        enc.setComputePipelineState(pipeline);
+        enc.set_pipeline(pipeline);
 
-        // SAFETY: as in the render path -- pointers and lengths describe live borrows. The dispatch
-        // is sized from the froxel grid the same params describe, and the threadgroup size is
-        // within the pipeline's limit.
-        unsafe {
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(params).cast(),
-                std::mem::size_of::<FogParams>(),
-                0,
-            );
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(froxel_params).cast(),
-                std::mem::size_of::<FogFroxelParams>(),
-                1,
-            );
-            // ShadowUniforms at buffer(2) so the kernel can pick a CSM
-            // cascade per froxel.
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.shadow_uniforms).cast(),
-                std::mem::size_of_val(&self.shadow_uniforms),
-                2,
-            );
-            enc.setTexture_atIndex(Some(self.shadow_map.as_ref()), 0);
-            enc.setTexture_atIndex(Some(volume.as_ref()), 1);
-            // The per-slab CSM tap's comparison sampler, which the shader used
-            // to declare inline as a constexpr sampler. `shadow_sampler` is the
-            // same linear / clamp-to-edge / less-equal state the main pass taps
-            // the cascades with.
-            enc.setSamplerState_atIndex(Some(self.shadow_sampler.as_ref()), 0);
+        enc.set_value(params, 0);
+        enc.set_value(froxel_params, 1);
+        // ShadowUniforms at buffer(2) so the kernel can pick a CSM cascade per
+        // froxel.
+        enc.set_value(&self.shadow_uniforms, 2);
+        enc.set_texture(self.shadow_map.as_ref(), 0);
+        enc.set_texture(volume.as_ref(), 1);
+        // The per-slab CSM tap's comparison sampler, which the shader used
+        // to declare inline as a constexpr sampler. `shadow_sampler` is the
+        // same linear / clamp-to-edge / less-equal state the main pass taps
+        // the cascades with.
+        enc.set_sampler(self.shadow_sampler.as_ref(), 0);
 
-            // One thread per (x, y) tile; the kernel walks Z internally.
-            // Threadgroup of 8x8x1 keeps occupancy high without thrashing
-            // registers (the inner Z loop has decent working set).
-            let tg = MTLSize {
-                width: 8,
-                height: 8,
-                depth: 1,
-            };
-            let grid = MTLSize {
-                width: FOG_FROXEL_X as usize,
-                height: FOG_FROXEL_Y as usize,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
-        }
+        // One thread per (x, y) tile; the kernel walks Z internally.
+        // Threadgroup of 8x8x1 keeps occupancy high without thrashing
+        // registers (the inner Z loop has decent working set).
+        let tg = MTLSize {
+            width: 8,
+            height: 8,
+            depth: 1,
+        };
+        let grid = MTLSize {
+            width: FOG_FROXEL_X as usize,
+            height: FOG_FROXEL_Y as usize,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
         Ok(0)
     }
 }

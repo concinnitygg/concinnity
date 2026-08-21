@@ -156,15 +156,20 @@ impl VkContext {
         let render_pass = if self.two_pass_occlusion_active() {
             self.cull
                 .main_render_pass_phase1
-                .unwrap_or(self.main_render_pass)
-        } else if let Some(rp) = self.raymarch.as_ref().and_then(|r| r.main_store_color_pass) {
+                .as_ref()
+                .unwrap_or(&self.main_render_pass)
+        } else if let Some(rp) = self
+            .raymarch
+            .as_ref()
+            .and_then(|r| r.main_store_color_pass.as_ref())
+        {
             rp
         } else {
-            self.main_render_pass
+            &self.main_render_pass
         };
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass)
-            .framebuffer(self.framebuffers[frame_idx])
+            .render_pass(render_pass.handle())
+            .framebuffer(self.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(clears);
 
@@ -230,21 +235,23 @@ impl VkContext {
             let pipeline = self.wireframe_or(
                 self.cull
                     .bindless_pipeline
+                    .as_ref()
                     .expect("bindless pipeline is live"),
-                self.wireframe.bindless,
+                self.wireframe.bindless.as_ref(),
             );
             let layout = self
                 .cull
                 .bindless_pipeline_layout
+                .as_ref()
                 .expect("bindless pipeline layout is live alongside its pipeline");
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    layout,
+                    layout.handle(),
                     0,
                     &[
                         self.descriptors.global_sets[frame_idx],
@@ -283,7 +290,13 @@ impl VkContext {
             if self.shader_bucket_count() > 1 {
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
-                unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
+                unsafe {
+                    device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline.handle(),
+                    )
+                };
             }
         }
 
@@ -300,12 +313,13 @@ impl VkContext {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(self.main_pipeline, self.wireframe.main),
+                    self.wireframe_or(&self.main_pipeline, self.wireframe.main.as_ref())
+                        .handle(),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.main_pipeline_layout,
+                    self.main_pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
                     &[],
@@ -358,7 +372,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        self.main_pipeline_layout,
+                        self.main_pipeline_layout.handle(),
                         1,
                         std::slice::from_ref(&obj_set),
                         &[],
@@ -386,7 +400,7 @@ impl VkContext {
                 unsafe {
                     device.cmd_push_constants(
                         cmd,
-                        self.main_pipeline_layout,
+                        self.main_pipeline_layout.handle(),
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
                         std::slice::from_raw_parts(
@@ -410,9 +424,10 @@ impl VkContext {
         // Instanced clusters main pass. Skipped when the bindless merge is active:
         // each instance is then a `GpuObjectData` record at `n_objects + k` in the
         // cull buffers, drawn by the bindless `cmd_draw_indexed_indirect` above.
-        if let (Some(inst_pipeline), Some(inst_pipeline_layout)) =
-            (self.instanced.pipeline, self.instanced.pipeline_layout)
-            && !self.instanced.clusters.is_empty()
+        if let (Some(inst_pipeline), Some(inst_pipeline_layout)) = (
+            self.instanced.pipeline.as_ref(),
+            self.instanced.pipeline_layout.as_ref(),
+        ) && !self.instanced.clusters.is_empty()
             && !use_bindless
         {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -421,12 +436,13 @@ impl VkContext {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(inst_pipeline, self.wireframe.instanced),
+                    self.wireframe_or(inst_pipeline, self.wireframe.instanced.as_ref())
+                        .handle(),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    inst_pipeline_layout,
+                    inst_pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
                     &[],
@@ -468,7 +484,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        inst_pipeline_layout,
+                        inst_pipeline_layout.handle(),
                         1,
                         std::slice::from_ref(&self.instanced.object_sets[cluster_idx]),
                         &[],
@@ -477,7 +493,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        inst_pipeline_layout,
+                        inst_pipeline_layout.handle(),
                         2,
                         std::slice::from_ref(&self.instanced.sets[frame_idx][cluster_idx]),
                         &[],
@@ -496,7 +512,7 @@ impl VkContext {
                     };
                     device.cmd_push_constants(
                         cmd,
-                        inst_pipeline_layout,
+                        inst_pipeline_layout.handle(),
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
                         std::slice::from_raw_parts(
@@ -532,8 +548,8 @@ impl VkContext {
         // worlds, or a pure-skinned world with no static geometry to engage bindless).
         if use_bindless && self.n_skinned > 0 {
             if let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
-                self.cull.bindless_pipeline,
-                self.cull.bindless_pipeline_layout,
+                self.cull.bindless_pipeline.as_ref(),
+                self.cull.bindless_pipeline_layout.as_ref(),
                 self.skinned.deformed.get(frame_idx),
             ) {
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
@@ -542,12 +558,13 @@ impl VkContext {
                     device.cmd_bind_pipeline(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        self.wireframe_or(bindless_pipeline, self.wireframe.bindless),
+                        self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref())
+                            .handle(),
                     );
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        bindless_layout,
+                        bindless_layout.handle(),
                         0,
                         &[
                             self.descriptors.global_sets[frame_idx],
@@ -583,9 +600,10 @@ impl VkContext {
                 }
                 self.inc_draw_calls(1);
             }
-        } else if let (Some(sk_pipeline), Some(sk_pl)) =
-            (self.skinned.pipeline, self.skinned.pipeline_layout)
-            && !self.skinned.draw_objects.is_empty()
+        } else if let (Some(sk_pipeline), Some(sk_pl)) = (
+            self.skinned.pipeline.as_ref(),
+            self.skinned.pipeline_layout.as_ref(),
+        ) && !self.skinned.draw_objects.is_empty()
         {
             let (sk_vbuf, sk_ibuf) = self.skinned_geometry();
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -594,12 +612,13 @@ impl VkContext {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(sk_pipeline, self.wireframe.skinned),
+                    self.wireframe_or(sk_pipeline, self.wireframe.skinned.as_ref())
+                        .handle(),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    sk_pl,
+                    sk_pl.handle(),
                     0,
                     std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
                     &[],
@@ -633,7 +652,7 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl,
+                        sk_pl.handle(),
                         1,
                         std::slice::from_ref(&self.skinned.object_sets[i]),
                         &[],
@@ -641,14 +660,14 @@ impl VkContext {
                     device.cmd_bind_descriptor_sets(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        sk_pl,
+                        sk_pl.handle(),
                         2,
                         std::slice::from_ref(&self.skinned.joint_sets[frame_idx][i]),
                         &[],
                     );
                     device.cmd_push_constants(
                         cmd,
-                        sk_pl,
+                        sk_pl.handle(),
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                         0,
                         std::slice::from_raw_parts(
@@ -689,13 +708,13 @@ impl VkContext {
         frame_idx: usize,
     ) {
         let (Some(render_pass), Some(pipeline), Some(layout)) = (
-            self.cull.main_render_pass_phase2,
-            self.cull.bindless_pipeline,
-            self.cull.bindless_pipeline_layout,
+            self.cull.main_render_pass_phase2.as_ref(),
+            self.cull.bindless_pipeline.as_ref(),
+            self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
-        let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless);
+        let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
         if self.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
             return;
         }
@@ -741,8 +760,8 @@ impl VkContext {
         // LOAD render pass: no clears (loadOp = LOAD / DONT_CARE), so no clear
         // values are required.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass)
-            .framebuffer(self.framebuffers[frame_idx])
+            .render_pass(render_pass.handle())
+            .framebuffer(self.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -772,11 +791,11 @@ impl VkContext {
                 vk::IndexType::UINT32,
             );
 
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout,
+                layout.handle(),
                 0,
                 &[
                     self.descriptors.global_sets[frame_idx],
@@ -812,7 +831,7 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,

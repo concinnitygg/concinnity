@@ -32,6 +32,7 @@ use objc2_metal::{
 };
 
 use super::context::MtlContext;
+use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_render::uniforms::TransparentView;
 
@@ -147,21 +148,8 @@ impl MtlContext {
         // depth attachment (translucents are not hardware depth-tested;
         // depth-aware effects sample `depth_resolve` instead), so no
         // depth-stencil state is bound.
-        // SAFETY: each pointer is derived from a live borrow and paired with that type's `size_of`
-        // as the length, so the encoder copies exactly the bytes it was handed; the buffer indices
-        // are the slots the shaders declare.
-        unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(view).cast(),
-                std::mem::size_of::<TransparentView>(),
-                5,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(view).cast(),
-                std::mem::size_of::<TransparentView>(),
-                5,
-            );
-        }
+        enc.set_vertex_value(view, 5);
+        enc.set_fragment_value(view, 5);
 
         // Reflection sources shared by every transparent shader that samples
         // them (glass + water): the sky prefilter cube at texture(2), the local
@@ -171,57 +159,48 @@ impl MtlContext {
         // count of 0 keeps the sky-only fallback. `probe_cube_or_sky` returns the
         // sky for unbaked slots, so binding all MAX_PROBES is always valid. The
         // per-draw bindings below never touch these slots, so the state persists.
-        // SAFETY: every texture bound here is owned by `self` and outlives the encoder, at the
-        // texture indices the shader declares; `probe_cube_or_sky` returns the sky for unbaked
-        // slots, so all MAX_PROBES slots are live.
-        unsafe {
-            enc.setFragmentTexture_atIndex(Some(self.env_map.prefilter.as_ref()), 2);
-            for i in 0..concinnity_render::uniforms::MAX_PROBES {
-                enc.setFragmentTexture_atIndex(Some(self.probe_cube_or_sky(i)), 3 + i);
-            }
-            // The cube sampler covers the prefilter cube and every probe cube.
-            // The single-source glass fragment declares those as combined
-            // texture-samplers, which slangc lowers to one sampler per texture
-            // (prefilter at 1, the probe array at 2..1+MAX_PROBES); the
-            // hand-written water and glass-mesh shaders read the same cube
-            // sampler at 1, so one contiguous run serves both.
-            super::post::fullscreen::set_fragment_sampler_range(
-                &enc,
-                self.cube_sampler.as_ref(),
-                1,
-                1 + concinnity_render::uniforms::MAX_PROBES,
-            );
-            // The planar resolve at texture(11) takes the post sampler at the
-            // slot after the probe run, and the bindless pool the RT variants
-            // read takes the repeat-address sampler after that.
-            super::post::fullscreen::set_fragment_sampler_range(
-                &enc,
-                &self.post_sampler,
-                GLASS_PLANAR_SAMPLER_INDEX,
-                1,
-            );
-            super::post::fullscreen::set_fragment_sampler_range(
-                &enc,
-                self.sampler.as_ref(),
-                GLASS_POOL_SAMPLER_INDEX,
-                1,
-            );
-            enc.setFragmentBytes_length_atIndex(
-                std::ptr::NonNull::from(&self.probe_set).cast(),
-                std::mem::size_of::<concinnity_render::uniforms::ProbeSet>(),
-                7,
-            );
-            // A planar reflection resolve at texture(11), the default for every
-            // transparent draw so the slot is always bound (validation-safe) even
-            // for slotless / probe-path draws. water.metal + glass.slang sample it
-            // when their `planar.x` flag is set; a planar draw overrides this with
-            // ITS plane's resolve per-draw (see the collect paths). The first
-            // slot's resolve is a valid stand-in for draws that do not sample it.
-            if let Some(planar) = self.planar_reflection.as_ref()
-                && let Some(first) = planar.targets.first()
-            {
-                enc.setFragmentTexture_atIndex(Some(first.resolve.as_ref()), 11);
-            }
+        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 2);
+        for i in 0..concinnity_render::uniforms::MAX_PROBES {
+            enc.set_fragment_texture(self.probe_cube_or_sky(i), 3 + i);
+        }
+        // The cube sampler covers the prefilter cube and every probe cube.
+        // The single-source glass fragment declares those as combined
+        // texture-samplers, which slangc lowers to one sampler per texture
+        // (prefilter at 1, the probe array at 2..1+MAX_PROBES); the
+        // hand-written water and glass-mesh shaders read the same cube
+        // sampler at 1, so one contiguous run serves both.
+        super::post::fullscreen::set_fragment_sampler_range(
+            &enc,
+            self.cube_sampler.as_ref(),
+            1,
+            1 + concinnity_render::uniforms::MAX_PROBES,
+        );
+        // The planar resolve at texture(11) takes the post sampler at the
+        // slot after the probe run, and the bindless pool the RT variants
+        // read takes the repeat-address sampler after that.
+        super::post::fullscreen::set_fragment_sampler_range(
+            &enc,
+            &self.post_sampler,
+            GLASS_PLANAR_SAMPLER_INDEX,
+            1,
+        );
+        super::post::fullscreen::set_fragment_sampler_range(
+            &enc,
+            self.sampler.as_ref(),
+            GLASS_POOL_SAMPLER_INDEX,
+            1,
+        );
+        enc.set_fragment_value(&self.probe_set, 7);
+        // A planar reflection resolve at texture(11), the default for every
+        // transparent draw so the slot is always bound (validation-safe) even
+        // for slotless / probe-path draws. water.metal + glass.slang sample it
+        // when their `planar.x` flag is set; a planar draw overrides this with
+        // ITS plane's resolve per-draw (see the collect paths). The first
+        // slot's resolve is a valid stand-in for draws that do not sample it.
+        if let Some(planar) = self.planar_reflection.as_ref()
+            && let Some(first) = planar.targets.first()
+        {
+            enc.set_fragment_texture(first.resolve.as_ref(), 11);
         }
 
         // Ray-traced glass + water inputs. When the acceleration structure is
@@ -244,32 +223,23 @@ impl MtlContext {
             }),
             rt_params,
         ) {
-            // SAFETY: the params pointer is derived from a live borrow with its `size_of` as the
-            // length, and every geometry / acceleration-structure buffer bound here is owned by
-            // `self` or `accel` and outlives the encoder.
-            unsafe {
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(rt_params).cast(),
-                    std::mem::size_of::<crate::gfx::render_types::RtParams>(),
-                    0,
-                );
-                enc.setFragmentBuffer_offset_atIndex(Some(self.vertex_buffer.as_ref()), 0, 1);
-                enc.setFragmentBuffer_offset_atIndex(Some(self.index_buffer.as_ref()), 0, 2);
-                enc.setFragmentBuffer_offset_atIndex(Some(accel.geom_table.as_ref()), 0, 3);
-                enc.setFragmentAccelerationStructure_atBufferIndex(Some(accel.tlas.as_ref()), 4);
-                enc.setFragmentBuffer_offset_atIndex(Some(accel.deformed_verts.as_ref()), 0, 8);
-                enc.setFragmentBuffer_offset_atIndex(Some(accel.skinned_indices.as_ref()), 0, 9);
-                super::raytrace::use_blas_resident_fragment(&enc, &accel.blas);
-                // Textured variants (bindless world): the albedo / normal /
-                // emissive pool at buffer(10) + its textures declared resident.
-                if let Some(tex_args) = bindless_tex_args.filter(|_| {
-                    self.glass_pipeline_rt_textured.is_some()
-                        || self.water_pipeline_rt_textured.is_some()
-                        || self.glass_mesh_pipeline_rt_textured.is_some()
-                }) {
-                    enc.setFragmentBuffer_offset_atIndex(Some(tex_args.as_ref()), 0, 10);
-                    self.use_bindless_textures(&enc);
-                }
+            enc.set_fragment_value(rt_params, 0);
+            enc.set_fragment_buffer(self.vertex_buffer.as_ref(), 0, 1);
+            enc.set_fragment_buffer(self.index_buffer.as_ref(), 0, 2);
+            enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, 3);
+            enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
+            enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 8);
+            enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, 9);
+            super::raytrace::use_blas_resident_fragment(&enc, &accel.blas);
+            // Textured variants (bindless world): the albedo / normal /
+            // emissive pool at buffer(10) + its textures declared resident.
+            if let Some(tex_args) = bindless_tex_args.filter(|_| {
+                self.glass_pipeline_rt_textured.is_some()
+                    || self.water_pipeline_rt_textured.is_some()
+                    || self.glass_mesh_pipeline_rt_textured.is_some()
+            }) {
+                enc.set_fragment_buffer(tex_args.as_ref(), 0, 10);
+                self.use_bindless_textures(&enc);
             }
         }
 
@@ -278,21 +248,20 @@ impl MtlContext {
 
         for &i in &order {
             let d = &draws[i];
-            enc.setRenderPipelineState(&d.pipeline);
-            // SAFETY: every buffer, texture, and sampler in this draw record outlives the encoder;
-            // `params_ptr`/`d.params.len()` describe the record own parameter blob, and the index
-            // range is that record own slice of `d.index_buffer`.
+            enc.set_pipeline(&d.pipeline);
+            // SAFETY: `params_ptr`/`d.params.len()` describe the record own parameter blob, and the
+            // index range is that record own slice of `d.index_buffer`.
             unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(&d.vertex_buffer), 0, 1);
+                enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
                 let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
                     .ok_or("transparent draw params blob is null")?;
                 enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6);
                 enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6);
                 for (slot, tex) in &d.fragment_textures {
-                    enc.setFragmentTexture_atIndex(Some(tex.as_ref()), *slot);
+                    enc.set_fragment_texture(tex.as_ref(), *slot);
                 }
                 for (slot, samp) in &d.fragment_samplers {
-                    enc.setFragmentSamplerState_atIndex(Some(samp.as_ref()), *slot);
+                    enc.set_fragment_sampler(samp.as_ref(), *slot);
                 }
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
                     MTLPrimitiveType::Triangle,

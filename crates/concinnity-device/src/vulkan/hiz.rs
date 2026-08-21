@@ -34,7 +34,11 @@
 // producer barrier derived from `Cull`'s declared pyramid read orders that read
 // before this frame's write.
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::pipeline::spv_module;
@@ -76,20 +80,20 @@ pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
 pub(super) struct HiZResources {
     // Build pipelines + their layouts (the init and downsample kernels bind
     // different set layouts, so each needs its own pipeline layout).
-    init_pipeline: vk::Pipeline,
-    downsample_pipeline: vk::Pipeline,
-    init_pipeline_layout: vk::PipelineLayout,
-    downsample_pipeline_layout: vk::PipelineLayout,
-    init_set_layout: vk::DescriptorSetLayout,
-    downsample_set_layout: vk::DescriptorSetLayout,
+    init_pipeline: OwnedPipeline,
+    downsample_pipeline: OwnedPipeline,
+    init_pipeline_layout: OwnedPipelineLayout,
+    downsample_pipeline_layout: OwnedPipelineLayout,
+    init_set_layout: OwnedSetLayout,
+    downsample_set_layout: OwnedSetLayout,
 
     // Cull-read set layout (set 1 of the cull pipeline): sampler2D Hi-Z +
     // CullHizParams UBO. Held here because `init.rs` threads it into the cull
     // pipeline layout, and the layout survives a resize.
-    pub(super) read_set_layout: vk::DescriptorSetLayout,
+    pub(super) read_set_layout: OwnedSetLayout,
 
     // Dedicated descriptor pool for every Hi-Z set (build + cull-read).
-    descriptor_pool: vk::DescriptorPool,
+    descriptor_pool: OwnedDescriptorPool,
 
     // R32F mip-chain image. Written mip-by-mip during the build (GENERAL),
     // sampled by the cull kernel between frames (SHADER_READ_ONLY). Its views
@@ -105,7 +109,7 @@ pub(super) struct HiZResources {
     // Nearest sampler the cull kernel reads the Hi-Z with (texelFetch ignores
     // filtering, but a sampler is still required for the combined-image-sampler
     // binding).
-    sampler: vk::Sampler,
+    sampler: OwnedSampler,
 
     // Build sets: one init set per frame (depth differs per frame slot), one
     // downsample set per mip step (frame-independent, Hi-Z mips only).
@@ -166,7 +170,7 @@ fn create_hiz_image(
 // A single-level (`mip`) or all-mips (`base_mip = 0`, `count = mip_count`) 2D
 // R32F view of the Hi-Z image.
 fn create_hiz_view(
-    device: &Device,
+    device: &VkDevice,
     image: vk::Image,
     base_mip: u32,
     level_count: u32,
@@ -190,12 +194,12 @@ fn create_hiz_view(
 // Build the init/downsample pipelines for the given MSAA mode. Returns the two
 // pipelines; the layouts are created by the caller and outlive a hot-reload.
 fn build_hiz_pipelines(
-    device: &Device,
+    device: &VkDevice,
     init_layout: vk::PipelineLayout,
     downsample_layout: vk::PipelineLayout,
     sample_count: u32,
     hot_reload: bool,
-) -> Result<(vk::Pipeline, vk::Pipeline), String> {
+) -> Result<(OwnedPipeline, OwnedPipeline), String> {
     // The init kernel is a per-variant compile of the single-source
     // `hiz_build.slang`: the depth resource is a `Texture2DMS` when
     // multisampled, a `Texture2D` otherwise (a sampled image either way; the
@@ -213,10 +217,10 @@ fn build_hiz_pipelines(
 }
 
 fn create_compute_pipeline(
-    device: &Device,
+    device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -226,12 +230,8 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    }
-    .map_err(|(_, e)| format!("create hiz pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
+        .map_err(|e| format!("create hiz pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -241,7 +241,7 @@ fn create_compute_pipeline(
 #[derive(Clone, Copy)]
 pub(super) struct HiZDeviceCtx<'a> {
     pub(super) alloc: &'a DeviceAllocator,
-    pub(super) device: &'a Device,
+    pub(super) device: &'a VkDevice,
     pub(super) command_pool: vk::CommandPool,
     pub(super) queue: vk::Queue,
 }
@@ -263,7 +263,7 @@ impl HiZResources {
     // pyramid, and without taking a slot in this struct's pool. `read_set_layout`
     // is already `pub(super)`.
     pub(super) fn read_set_sources(&self) -> (vk::ImageView, vk::Sampler) {
-        (self.sampled_view, self.sampler)
+        (self.sampled_view, self.sampler.handle())
     }
 
     // Build every Hi-Z resource sized to the render (depth) resolution. Called
@@ -315,14 +315,15 @@ impl HiZResources {
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
             .size(std::mem::size_of::<HizParams>() as u32);
-        let init_pipeline_layout = create_pipeline_layout(device, init_set_layout, push_range)?;
+        let init_pipeline_layout =
+            create_pipeline_layout(device, init_set_layout.handle(), push_range)?;
         let downsample_pipeline_layout =
-            create_pipeline_layout(device, downsample_set_layout, push_range)?;
+            create_pipeline_layout(device, downsample_set_layout.handle(), push_range)?;
 
         let (init_pipeline, downsample_pipeline) = build_hiz_pipelines(
             device,
-            init_pipeline_layout,
-            downsample_pipeline_layout,
+            init_pipeline_layout.handle(),
+            downsample_pipeline_layout.handle(),
             sample_count,
             hot_reload,
         )?;
@@ -436,25 +437,32 @@ impl HiZResources {
         // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
             device
-                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .reset_descriptor_pool(
+                    self.descriptor_pool.handle(),
+                    vk::DescriptorPoolResetFlags::empty(),
+                )
                 .map_err(|e| format!("reset hiz pool: {e}"))?;
         }
         let frames = self.cull_ubos.len();
-        let init_layouts: Vec<_> = (0..frames).map(|_| self.init_set_layout).collect();
-        let init_sets = alloc_descriptor_sets(device, self.descriptor_pool, &init_layouts)?;
-        let downsample_layouts: Vec<_> =
-            (1..mip_count).map(|_| self.downsample_set_layout).collect();
+        let init_layouts: Vec<_> = (0..frames).map(|_| self.init_set_layout.handle()).collect();
+        let init_sets =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &init_layouts)?;
+        let downsample_layouts: Vec<_> = (1..mip_count)
+            .map(|_| self.downsample_set_layout.handle())
+            .collect();
         let downsample_sets =
-            alloc_descriptor_sets(device, self.descriptor_pool, &downsample_layouts)?;
-        let read_layouts: Vec<_> = (0..frames).map(|_| self.read_set_layout).collect();
-        let read_sets = alloc_descriptor_sets(device, self.descriptor_pool, &read_layouts)?;
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &downsample_layouts)?;
+        let read_layouts: Vec<_> = (0..frames).map(|_| self.read_set_layout.handle()).collect();
+        let read_sets =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts)?;
         // Phase-2 cull-read sets (two-pass occlusion), one per frame, only when
         // the phase-2 UBO ring was allocated.
         let two_pass = !self.cull_ubos2.is_empty();
         let read_layouts2: Vec<_> = (0..if two_pass { frames } else { 0 })
-            .map(|_| self.read_set_layout)
+            .map(|_| self.read_set_layout.handle())
             .collect();
-        let read_sets2 = alloc_descriptor_sets(device, self.descriptor_pool, &read_layouts2)?;
+        let read_sets2 =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts2)?;
 
         // Init sets: binding 0 = that frame's main depth, binding 1 = mip 0.
         for (i, &set) in init_sets.iter().enumerate() {
@@ -470,7 +478,7 @@ impl HiZResources {
         }
         // Read sets: binding 0 = all-mips Hi-Z sampler, binding 1 = cull UBO.
         for (i, &set) in read_sets.iter().enumerate() {
-            write_sampler(device, set, 0, sampled_view, self.sampler);
+            write_sampler(device, set, 0, sampled_view, self.sampler.handle());
             write_uniform_buffer(
                 device,
                 set,
@@ -481,7 +489,7 @@ impl HiZResources {
         }
         // Phase-2 read sets: same pyramid sampler, the phase-2 per-frame UBO.
         for (i, &set) in read_sets2.iter().enumerate() {
-            write_sampler(device, set, 0, sampled_view, self.sampler);
+            write_sampler(device, set, 0, sampled_view, self.sampler.handle());
             write_uniform_buffer(
                 device,
                 set,
@@ -517,18 +525,7 @@ impl HiZResources {
 
     // Swap freshly-rebuilt pipelines into the live resource. Used by the shader
     // hot-reload pass; the image, views, sets, and layouts are kept.
-    pub(super) fn swap_pipelines(
-        &mut self,
-        device: &Device,
-        init: vk::Pipeline,
-        downsample: vk::Pipeline,
-    ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.init_pipeline, None);
-            device.destroy_pipeline(self.downsample_pipeline, None);
-        }
+    pub(super) fn swap_pipelines(&mut self, init: OwnedPipeline, downsample: OwnedPipeline) {
         self.init_pipeline = init;
         self.downsample_pipeline = downsample;
     }
@@ -537,13 +534,13 @@ impl HiZResources {
     // The MSAA mode is fixed at init, so it is reused here.
     pub(super) fn recompile_pipelines(
         &self,
-        device: &Device,
+        device: &VkDevice,
         hot_reload: bool,
-    ) -> Result<(vk::Pipeline, vk::Pipeline), String> {
+    ) -> Result<(OwnedPipeline, OwnedPipeline), String> {
         build_hiz_pipelines(
             device,
-            self.init_pipeline_layout,
-            self.downsample_pipeline_layout,
+            self.init_pipeline_layout.handle(),
+            self.downsample_pipeline_layout.handle(),
             self.sample_count,
             hot_reload,
         )
@@ -551,20 +548,7 @@ impl HiZResources {
 
     // Destroy every non-pooled GPU resource and drop the pooled ones (the
     // pyramid + its views and the cull UBO rings retire through the allocator).
-    pub(super) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_sampler(self.sampler, None);
-            device.destroy_pipeline(self.init_pipeline, None);
-            device.destroy_pipeline(self.downsample_pipeline, None);
-            device.destroy_pipeline_layout(self.init_pipeline_layout, None);
-            device.destroy_pipeline_layout(self.downsample_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.init_set_layout, None);
-            device.destroy_descriptor_set_layout(self.downsample_set_layout, None);
-            device.destroy_descriptor_set_layout(self.read_set_layout, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-        }
+    pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.pyramid = PooledImage::null();
         self.sampled_view = vk::ImageView::null();
         self.mip_views.clear();
@@ -600,18 +584,22 @@ impl crate::vulkan::context::VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, hiz.init_pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                hiz.init_pipeline.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                hiz.init_pipeline_layout,
+                hiz.init_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&hiz.init_sets[frame_idx]),
                 &[],
             );
             device.cmd_push_constants(
                 cmd,
-                hiz.init_pipeline_layout,
+                hiz.init_pipeline_layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 as_bytes(&init_params),
@@ -665,19 +653,19 @@ impl crate::vulkan::context::VkContext {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    hiz.downsample_pipeline,
+                    hiz.downsample_pipeline.handle(),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    hiz.downsample_pipeline_layout,
+                    hiz.downsample_pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&hiz.downsample_sets[(mip - 1) as usize]),
                     &[],
                 );
                 device.cmd_push_constants(
                     cmd,
-                    hiz.downsample_pipeline_layout,
+                    hiz.downsample_pipeline_layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
                     0,
                     as_bytes(&params),
@@ -720,9 +708,9 @@ fn hiz_image_barrier(
 }
 
 fn create_set_layout(
-    device: &Device,
+    device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType)],
-) -> Result<vk::DescriptorSetLayout, String> {
+) -> Result<OwnedSetLayout, String> {
     let binds: Vec<_> = bindings
         .iter()
         .map(|&(b, ty)| {
@@ -733,41 +721,33 @@ fn create_set_layout(
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
         })
         .collect();
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe {
-        device.create_descriptor_set_layout(
+    device
+        .create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&binds),
-            None,
         )
-    }
-    .map_err(|e| format!("hiz set layout: {e}"))
+        .map_err(|e| format!("hiz set layout: {e}"))
 }
 
 fn create_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     set_layout: vk::DescriptorSetLayout,
     push_range: vk::PushConstantRange,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let layouts = [set_layout];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe {
-        device.create_pipeline_layout(
+    device
+        .create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&layouts)
                 .push_constant_ranges(std::slice::from_ref(&push_range)),
-            None,
         )
-    }
-    .map_err(|e| format!("hiz pipeline layout: {e}"))
+        .map_err(|e| format!("hiz pipeline layout: {e}"))
 }
 
 fn create_pool(
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
     two_pass: bool,
-) -> Result<vk::DescriptorPool, String> {
+) -> Result<OwnedDescriptorPool, String> {
     let f = frames as u32;
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
     // each with a sampler + a UBO descriptor.
@@ -792,20 +772,16 @@ fn create_pool(
     ];
     // init (frames) + cull-read (frames per read ring) + downsample (per mip).
     let max_sets = (1 + read_rings) * f + MAX_HIZ_MIPS as u32;
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe {
-        device.create_descriptor_pool(
+    device
+        .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(&sizes)
                 .max_sets(max_sets),
-            None,
         )
-    }
-    .map_err(|e| format!("hiz descriptor pool: {e}"))
+        .map_err(|e| format!("hiz descriptor pool: {e}"))
 }
 
-fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
+fn create_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::NEAREST)
         .min_filter(vk::Filter::NEAREST)
@@ -815,13 +791,13 @@ fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .min_lod(0.0)
         .max_lod(MAX_HIZ_MIPS as f32);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("hiz sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("hiz sampler: {e}"))
 }
 
 fn write_sampler(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     binding: u32,
     view: vk::ImageView,
@@ -843,7 +819,12 @@ fn write_sampler(
 
 // Sampled-image write with no sampler: the init kernel reads the depth by
 // texel coordinate, so only the image view is bound.
-fn write_sampled_image(device: &Device, set: vk::DescriptorSet, binding: u32, view: vk::ImageView) {
+fn write_sampled_image(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    binding: u32,
+    view: vk::ImageView,
+) {
     let info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .image_view(view);
@@ -857,7 +838,12 @@ fn write_sampled_image(device: &Device, set: vk::DescriptorSet, binding: u32, vi
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
-fn write_storage_image(device: &Device, set: vk::DescriptorSet, binding: u32, view: vk::ImageView) {
+fn write_storage_image(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    binding: u32,
+    view: vk::ImageView,
+) {
     let info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::GENERAL)
         .image_view(view);
@@ -872,7 +858,7 @@ fn write_storage_image(device: &Device, set: vk::DescriptorSet, binding: u32, vi
 }
 
 fn write_uniform_buffer(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     binding: u32,
     buffer: vk::Buffer,

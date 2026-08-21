@@ -21,7 +21,12 @@
 
 use std::ffi::CString;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use crate::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
@@ -46,11 +51,11 @@ const VOLUME_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 // uniform rings + the shared 3D froxel volume the kernel writes and the
 // fragment shader samples.
 pub(in crate::vulkan) struct FogResources {
-    pub(in crate::vulkan) render_pass: vk::RenderPass,
-    pub(in crate::vulkan) pipeline: vk::Pipeline,
-    pub(in crate::vulkan) pipeline_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) view_set_layout: vk::DescriptorSetLayout,
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) render_pass: OwnedRenderPass,
+    pub(in crate::vulkan) pipeline: OwnedPipeline,
+    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) _descriptor_pool: OwnedDescriptorPool,
 
     // Per-frame FogParams view UBO (176 bytes). Persistently mapped.
     pub(in crate::vulkan) params_ubos: Vec<PooledBuffer>,
@@ -65,9 +70,9 @@ pub(in crate::vulkan) struct FogResources {
 
     // Froxel compute pipeline + its per-frame sets (binding 0 FogParams, 1
     // FogFroxelParams, 2 ShadowUniforms, 3 shadow_map, 4 volume image3D).
-    pub(in crate::vulkan) froxel_pipeline: vk::Pipeline,
-    pub(in crate::vulkan) froxel_pipeline_layout: vk::PipelineLayout,
-    pub(in crate::vulkan) froxel_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) froxel_pipeline: OwnedPipeline,
+    pub(in crate::vulkan) froxel_pipeline_layout: OwnedPipelineLayout,
+    pub(in crate::vulkan) _froxel_set_layout: OwnedSetLayout,
     pub(in crate::vulkan) froxel_sets: Vec<vk::DescriptorSet>,
 
     // Shared 3D RGBA16F volume: written by the compute kernel (GENERAL),
@@ -81,13 +86,13 @@ pub(in crate::vulkan) struct FogResources {
 
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
     // `hdr_resolve_images[i].view` as the sole colour attachment.
-    pub(in crate::vulkan) framebuffers: Vec<vk::Framebuffer>,
+    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Depth sampler (the shared linear sampler; depth is read via texelFetch so
     // the filter mode is irrelevant).
     pub(in crate::vulkan) sampler: vk::Sampler,
     // Linear-clamp sampler for the trilinear volume read.
-    pub(in crate::vulkan) volume_sampler: vk::Sampler,
+    pub(in crate::vulkan) _volume_sampler: OwnedSampler,
 }
 
 // The Vulkan device handles `FogResources::new` needs to create its GPU
@@ -96,7 +101,7 @@ pub(in crate::vulkan) struct FogResources {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogDeviceContext<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
-    pub(in crate::vulkan) device: &'a Device,
+    pub(in crate::vulkan) device: &'a VkDevice,
     pub(in crate::vulkan) command_pool: vk::CommandPool,
     pub(in crate::vulkan) queue: vk::Queue,
 }
@@ -156,17 +161,24 @@ impl FogResources {
         } = shadow;
         let render_pass = create_fog_render_pass(device, hdr_format)?;
         let view_set_layout = create_fog_set_layout(device)?;
-        let pipeline_layout = create_fog_pipeline_layout(device, view_set_layout)?;
+        let pipeline_layout = create_fog_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
-        let pipeline =
-            create_fog_pipeline(device, render_pass, pipeline_layout, &vert_spv, &frag_spv)?;
+        let pipeline = create_fog_pipeline(
+            device,
+            render_pass.handle(),
+            pipeline_layout.handle(),
+            &vert_spv,
+            &frag_spv,
+        )?;
 
         // Froxel compute pipeline.
         let froxel_set_layout = create_froxel_set_layout(device)?;
-        let froxel_pipeline_layout = create_froxel_pipeline_layout(device, froxel_set_layout)?;
+        let froxel_pipeline_layout =
+            create_froxel_pipeline_layout(device, froxel_set_layout.handle())?;
         let froxel_spv = compile_fog_froxel_shader(hot_reload)?;
-        let froxel_pipeline = create_compute_pipeline(device, froxel_pipeline_layout, &froxel_spv)?;
+        let froxel_pipeline =
+            create_compute_pipeline(device, froxel_pipeline_layout.handle(), &froxel_spv)?;
 
         // The shared 3D volume + its storage (compute write) + sampled
         // (fragment read) views. Rest it in SHADER_READ_ONLY so the first
@@ -203,10 +215,10 @@ impl FogResources {
             alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogFroxelParams>() as u64)?;
 
         let descriptor_pool = create_fog_descriptor_pool(device, frames)?;
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
-        let view_sets = alloc_descriptor_sets(device, descriptor_pool, &view_layouts)?;
-        let froxel_layouts: Vec<_> = (0..frames).map(|_| froxel_set_layout).collect();
-        let froxel_sets = alloc_descriptor_sets(device, descriptor_pool, &froxel_layouts)?;
+        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
+        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
+        let froxel_layouts: Vec<_> = (0..frames).map(|_| froxel_set_layout.handle()).collect();
+        let froxel_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &froxel_layouts)?;
 
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in view_sets.iter().enumerate() {
@@ -219,7 +231,7 @@ impl FogResources {
                     depth_sampler: sampler,
                     froxel_ubo: froxel_ubos[i].buffer(),
                     volume_view: volume_sampled_view,
-                    volume_sampler,
+                    _volume_sampler: volume_sampler.handle(),
                 },
             );
         }
@@ -244,14 +256,13 @@ impl FogResources {
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
+                .render_pass(render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("fog framebuffer: {e}"))?;
             framebuffers.push(fb);
         }
@@ -260,19 +271,19 @@ impl FogResources {
             render_pass,
             pipeline,
             pipeline_layout,
-            view_set_layout,
-            descriptor_pool,
+            _view_set_layout: view_set_layout,
+            _descriptor_pool: descriptor_pool,
             params_ubos,
             froxel_ubos,
             view_sets,
             froxel_pipeline,
             froxel_pipeline_layout,
-            froxel_set_layout,
+            _froxel_set_layout: froxel_set_layout,
             froxel_sets,
             volume,
             framebuffers,
             sampler,
-            volume_sampler,
+            _volume_sampler: volume_sampler,
         })
     }
 
@@ -284,29 +295,22 @@ impl FogResources {
     // reconstruction, not tied to render resolution).
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> Result<(), String> {
-        for &fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.params_ubos.len()) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass)
+                .render_pass(self.render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("fog framebuffer (rebuild): {e}"))?;
             self.framebuffers.push(fb);
         }
@@ -331,23 +335,7 @@ impl FogResources {
     // Destroy every non-pooled GPU resource and drop the pooled ones (the
     // UBO rings and the volume + its views retire through the allocator).
     // Called from `VkContext::drop` after `wait_idle`.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_sampler(self.volume_sampler, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_descriptor_set_layout(self.view_set_layout, None);
-            device.destroy_descriptor_set_layout(self.froxel_set_layout, None);
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline(self.froxel_pipeline, None);
-            device.destroy_pipeline_layout(self.pipeline_layout, None);
-            device.destroy_pipeline_layout(self.froxel_pipeline_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
         self.params_ubos.clear();
         self.froxel_ubos.clear();
@@ -377,7 +365,10 @@ fn alloc_ubo_ring(
 
 // Render pass / pipeline construction
 
-fn create_fog_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass, String> {
+fn create_fog_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+) -> Result<OwnedRenderPass, String> {
     // One colour attachment: the resolved HDR scene. The main pass (and
     // any preceding decal pass) left it in SHADER_READ_ONLY_OPTIMAL; we
     // want it in COLOR_ATTACHMENT during the subpass and
@@ -422,12 +413,12 @@ fn create_fog_render_pass(device: &Device, format: vk::Format) -> Result<vk::Ren
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }.map_err(|e| format!("fog render pass: {e}"))
+    device
+        .create_render_pass(&info)
+        .map_err(|e| format!("fog render pass: {e}"))
 }
 
-fn create_fog_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_fog_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         // 0: FogParams UBO.
         vk::DescriptorSetLayoutBinding::default()
@@ -455,13 +446,12 @@ fn create_fog_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, Str
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("fog set layout: {e}"))
 }
 
-fn create_froxel_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_froxel_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         // 0: FogParams UBO.
         vk::DescriptorSetLayoutBinding::default()
@@ -495,40 +485,37 @@ fn create_froxel_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, 
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("fog froxel set layout: {e}"))
 }
 
 fn create_fog_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let set_layouts = [view_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("fog pipeline layout: {e}"))
 }
 
 fn create_froxel_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     froxel_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let set_layouts = [froxel_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("fog froxel pipeline layout: {e}"))
 }
 
 fn create_fog_descriptor_pool(
-    device: &Device,
+    device: &VkDevice,
     frames: usize,
-) -> Result<vk::DescriptorPool, String> {
+) -> Result<OwnedDescriptorPool, String> {
     let f = frames as u32;
     let sizes = [
         // view: FogParams + FogFroxelParams (2). froxel: FogParams +
@@ -551,14 +538,13 @@ fn create_fog_descriptor_pool(
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(2 * f)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_pool(&info, None) }
+    device
+        .create_descriptor_pool(&info)
         .map_err(|e| format!("fog descriptor pool: {e}"))
 }
 
 fn alloc_descriptor_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
 ) -> Result<Vec<vk::DescriptorSet>, String> {
@@ -580,17 +566,17 @@ struct FogViewBindings {
     depth_sampler: vk::Sampler,
     froxel_ubo: vk::Buffer,
     volume_view: vk::ImageView,
-    volume_sampler: vk::Sampler,
+    _volume_sampler: vk::Sampler,
 }
 
-fn write_view_set(device: &Device, set: vk::DescriptorSet, bindings: FogViewBindings) {
+fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBindings) {
     let FogViewBindings {
         params_ubo,
         depth_view,
         depth_sampler,
         froxel_ubo,
         volume_view,
-        volume_sampler,
+        _volume_sampler: volume_sampler,
     } = bindings;
     let params_info = vk::DescriptorBufferInfo::default()
         .buffer(params_ubo)
@@ -648,7 +634,7 @@ struct FogFroxelBindings {
     volume_storage_view: vk::ImageView,
 }
 
-fn write_froxel_set(device: &Device, set: vk::DescriptorSet, bindings: FogFroxelBindings) {
+fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFroxelBindings) {
     let FogFroxelBindings {
         params_ubo,
         froxel_ubo,
@@ -732,7 +718,7 @@ fn create_volume_image(alloc: &DeviceAllocator) -> Result<PooledImage, String> {
 
 // A whole-image 3D view of the froxel volume (used for both the compute
 // storage bind and the fragment sampled bind).
-fn create_volume_view(device: &Device, image: vk::Image) -> Result<vk::ImageView, String> {
+fn create_volume_view(device: &VkDevice, image: vk::Image) -> Result<vk::ImageView, String> {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_3D)
@@ -750,7 +736,7 @@ fn create_volume_view(device: &Device, image: vk::Image) -> Result<vk::ImageView
 }
 
 // Linear clamp-to-edge sampler for the trilinear volume read.
-fn create_volume_sampler(device: &Device) -> Result<vk::Sampler, String> {
+fn create_volume_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -758,9 +744,9 @@ fn create_volume_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("fog volume sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("fog volume sampler: {e}"))
 }
 
 fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
@@ -784,16 +770,16 @@ fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
 // responsible for destroying the previous pipeline only after this call
 // succeeds.
 pub(in crate::vulkan) fn rebuild_fog_pipeline(
-    device: &Device,
+    device: &VkDevice,
     fog: &FogResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
     create_fog_pipeline(
         device,
-        fog.render_pass,
-        fog.pipeline_layout,
+        fog.render_pass.handle(),
+        fog.pipeline_layout.handle(),
         &vert_spv,
         &frag_spv,
     )
@@ -801,19 +787,19 @@ pub(in crate::vulkan) fn rebuild_fog_pipeline(
 
 // Rebuild the froxel compute pipeline against the existing layout. Hot-reload.
 pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
-    device: &Device,
+    device: &VkDevice,
     fog: &FogResources,
     hot_reload: bool,
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let spv = compile_fog_froxel_shader(hot_reload)?;
-    create_compute_pipeline(device, fog.froxel_pipeline_layout, &spv)
+    create_compute_pipeline(device, fog.froxel_pipeline_layout.handle(), &spv)
 }
 
 fn create_compute_pipeline(
-    device: &Device,
+    device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
     let entry = CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -823,22 +809,18 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    }
-    .map_err(|(_, e)| format!("create fog froxel pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
+        .map_err(|e| format!("create fog froxel pipeline: {e}"))?;
     Ok(pipeline)
 }
 
 fn create_fog_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert = spv_module(device, vert_spv)?;
     let frag = spv_module(device, frag_spv)?;
     let entry = CString::new("main").unwrap();
@@ -902,15 +884,8 @@ fn create_fog_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create fog pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create fog pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -1011,11 +986,15 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, fog.froxel_pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                fog.froxel_pipeline.handle(),
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                fog.froxel_pipeline_layout,
+                fog.froxel_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&fog.froxel_sets[frame_idx]),
                 &[],
@@ -1064,8 +1043,8 @@ impl VkContext {
         // sample: the graph declares this pass's depth read and the executor emits
         // the transition ahead of this command buffer.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(fog.render_pass)
-            .framebuffer(fog.framebuffers[frame_idx])
+            .render_pass(fog.render_pass.handle())
+            .framebuffer(fog.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
 
         // Standard positive-height viewport: the fullscreen triangle is
@@ -1088,11 +1067,11 @@ impl VkContext {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
             device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, fog.pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, fog.pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                fog.pipeline_layout,
+                fog.pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&fog.view_sets[frame_idx]),
                 &[],

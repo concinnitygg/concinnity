@@ -6,7 +6,7 @@
 // Per-frame view inputs shared by every draw in the transparent pass (water,
 // glass, ...), bound once for the whole pass. Matches `TransparentView` in
 // `shaders/glass.slang`. 160 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TransparentView {
     pub vp: [[f32; 4]; 4],

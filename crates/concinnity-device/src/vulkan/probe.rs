@@ -24,6 +24,8 @@
 
 use ash::vk;
 
+use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::cull::CullParams;
@@ -173,7 +175,7 @@ impl VkContext {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(self.env_map.prefilter.view)
-                    .sampler(self.cube_sampler)
+                    .sampler(self.cube_sampler.handle())
             })
             .collect();
         for &set in &self.descriptors.global_sets {
@@ -399,7 +401,7 @@ impl VkContext {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(img.view)
-                    .sampler(self.linear_sampler)
+                    .sampler(self.linear_sampler.handle())
             })
             .collect();
         let write = vk::WriteDescriptorSet::default()
@@ -452,7 +454,7 @@ impl VkContext {
                 r.eye,
                 b.cull_set,
                 b.hiz_set,
-                b.framebuffer,
+                b.framebuffer.handle(),
                 b.global_sets[r.cursor],
                 b.bindless_sets[r.cursor],
                 b.indirect_buf.buffer(),
@@ -733,7 +735,7 @@ impl VkContext {
         let img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(cube.view)
-            .sampler(self.cube_sampler);
+            .sampler(self.cube_sampler.handle());
         for &set in &self.descriptors.global_sets {
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
@@ -787,9 +789,10 @@ impl VkContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pipeline), Some(layout)) =
-            (self.cull.cull_pipeline, self.cull.cull_pipeline_layout)
-        else {
+        let (Some(pipeline), Some(layout)) = (
+            self.cull.cull_pipeline.as_ref(),
+            self.cull.cull_pipeline_layout.as_ref(),
+        ) else {
             return;
         };
         let device = &self.device;
@@ -805,11 +808,11 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                layout,
+                layout.handle(),
                 0,
                 std::slice::from_ref(&cull_set),
                 &[],
@@ -818,13 +821,13 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    layout,
+                    layout.handle(),
                     1,
                     std::slice::from_ref(&hs),
                     &[],
                 );
             }
-            device.cmd_push_constants(cmd, layout, vk::ShaderStageFlags::COMPUTE, 0, push);
+            device.cmd_push_constants(cmd, layout.handle(), vk::ShaderStageFlags::COMPUTE, 0, push);
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -858,8 +861,8 @@ impl VkContext {
         indirect: vk::Buffer,
     ) {
         let (Some(pipeline), Some(layout)) = (
-            self.cull.bindless_pipeline,
-            self.cull.bindless_pipeline_layout,
+            self.cull.bindless_pipeline.as_ref(),
+            self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
@@ -882,7 +885,7 @@ impl VkContext {
             &[clear_color, clear_depth]
         };
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.main_render_pass)
+            .render_pass(self.main_render_pass.handle())
             .framebuffer(framebuffer)
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(clears);
@@ -910,11 +913,11 @@ impl VkContext {
                 0,
                 vk::IndexType::UINT32,
             );
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout,
+                layout.handle(),
                 0,
                 &[global_set, bindless_set],
                 &[],
@@ -962,7 +965,7 @@ impl RenderingBake {
     // Mirrors the planar cull set's treatment.
     pub(super) fn rewrite_hiz_view(
         &self,
-        device: &ash::Device,
+        device: &VkDevice,
         view: vk::ImageView,
         sampler: vk::Sampler,
     ) {
@@ -978,7 +981,7 @@ impl RenderingBake {
     // one-shot pool), the per-face fences, and the bake target / cull / sets. The
     // caller has ensured the GPU retired them (the last face's fence is signalled, or
     // the device is idle).
-    pub(super) fn destroy(self, device: &ash::Device, command_pool: vk::CommandPool) {
+    pub(super) fn destroy(self, device: &VkDevice, command_pool: vk::CommandPool) {
         // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
         // has already waited for the device to go idle, so no submission still references it.
         unsafe {
@@ -1012,12 +1015,12 @@ struct BakeResources {
     // Held for the bake's lifetime; the framebuffer and sets alias them.
     _depth: GpuImage,
     resolve: Option<GpuImage>,
-    framebuffer: vk::Framebuffer,
+    framebuffer: OwnedFramebuffer,
     object_buf: PooledBuffer,
     draw_args_buf: PooledBuffer,
     indirect_buf: PooledBuffer,
     _status_buf: PooledBuffer,
-    pool: vk::DescriptorPool,
+    _pool: OwnedDescriptorPool,
     cull_set: vk::DescriptorSet,
     // One texture-pool set per face, written from the live pool right before
     // that face records. A face's set is never touched after its submit, so a
@@ -1132,14 +1135,13 @@ impl BakeResources {
             vec![color.view, depth.view]
         };
         let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(ctx.main_render_pass)
+            .render_pass(ctx.main_render_pass.handle())
             .attachments(&fb_attachments)
             .width(size)
             .height(size)
             .layers(1);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }
+        let framebuffer = device
+            .create_framebuffer(&fb_info)
             .map_err(|e| format!("probe framebuffer: {e}"))?;
 
         // Bake-owned cull ring, sized like the per-frame rings.
@@ -1218,19 +1220,20 @@ impl BakeResources {
         if ctx.cull.bindless_update_after_bind || ctx.descriptors.global_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
+        let pool = device
+            .create_descriptor_pool(&pool_info)
             .map_err(|e| format!("probe descriptor pool: {e}"))?;
 
         // Cull set (set 0): object / draw-args / indirect / status SSBOs.
         let cull_set = alloc_descriptor_sets(
             device,
-            pool,
+            pool.handle(),
             std::slice::from_ref(
                 &ctx.cull
                     .cull_set_layout
-                    .expect("cull descriptor set layout exists once culling is initialised"),
+                    .as_ref()
+                    .expect("cull descriptor set layout exists once culling is initialised")
+                    .handle(),
             ),
         )?[0];
         write_storage(device, cull_set, 0, object_buf.buffer(), object_size);
@@ -1244,12 +1247,14 @@ impl BakeResources {
         // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
         // a pending set.
         let bindless_layouts = vec![
-            ctx.cull.bindless_set_layout.expect(
-                "bindless descriptor set layout exists once culling is initialised"
-            );
+            ctx.cull
+                .bindless_set_layout
+                .as_ref()
+                .expect("bindless descriptor set layout exists once culling is initialised")
+                .handle();
             PROBE_FACE_COUNT
         ];
-        let bindless_sets = alloc_descriptor_sets(device, pool, &bindless_layouts)?;
+        let bindless_sets = alloc_descriptor_sets(device, pool.handle(), &bindless_layouts)?;
         {
             let obj_info = vk::DescriptorBufferInfo::default()
                 .buffer(object_buf.buffer())
@@ -1280,8 +1285,9 @@ impl BakeResources {
             };
             let ubo = make_ubo_bytes(alloc, hiz_params_bytes(&params))?;
             let (view, sampler) = hiz.read_set_sources();
-            let layout = hiz.read_set_layout;
-            let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&layout))?[0];
+            let layout = hiz.read_set_layout.handle();
+            let set =
+                alloc_descriptor_sets(device, pool.handle(), std::slice::from_ref(&layout))?[0];
             let img = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(view)
@@ -1315,15 +1321,15 @@ impl BakeResources {
         // + shared snapshot lighting + env cubes + the SSAO white fallback + an
         // EMPTY ProbeSet + the sky-filled probe cube array. Mirrors init.rs.
         let layouts: Vec<_> = (0..PROBE_FACE_COUNT)
-            .map(|_| ctx.descriptors.global_set_layout)
+            .map(|_| ctx.descriptors.global_set_layout.handle())
             .collect();
-        let global_sets = alloc_descriptor_sets(device, pool, &layouts)?;
+        let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
         let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..ctx.descriptors.probe_cube_count)
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(ctx.env_map.prefilter.view)
-                    .sampler(ctx.cube_sampler)
+                    .sampler(ctx.cube_sampler.handle())
             })
             .collect();
         for (face, &set) in global_sets.iter().enumerate() {
@@ -1334,10 +1340,10 @@ impl BakeResources {
                 std::mem::size_of::<ShadowUniforms>() as u64,
             );
             let probeset_info = buf_info(probeset.buffer(), std::mem::size_of::<ProbeSet>() as u64);
-            let shadow_img = img_info(ctx.shadow.map.view, ctx.shadow.sampler);
-            let irr_img = img_info(ctx.env_map.irradiance.view, ctx.cube_sampler);
-            let pre_img = img_info(ctx.env_map.prefilter.view, ctx.cube_sampler);
-            let ssao_img = img_info(ctx.ssao_white.view, ctx.linear_sampler);
+            let shadow_img = img_info(ctx.shadow.map.view, ctx.shadow.sampler.handle());
+            let irr_img = img_info(ctx.env_map.irradiance.view, ctx.cube_sampler.handle());
+            let pre_img = img_info(ctx.env_map.prefilter.view, ctx.cube_sampler.handle());
+            let ssao_img = img_info(ctx.ssao_white.view, ctx.linear_sampler.handle());
             let writes = [
                 ubo_write(set, 0, &view_info),
                 ubo_write(set, 1, &light_info),
@@ -1389,7 +1395,7 @@ impl BakeResources {
             );
             // Bindings 12 + 13: the spot shadow depth array + its per-slice
             // projections, bound exactly as the main camera binds them.
-            let spot_img = img_info(ctx.spot_shadow.map.view, ctx.shadow.sampler);
+            let spot_img = img_info(ctx.spot_shadow.map.view, ctx.shadow.sampler.handle());
             let spot_write = sampler_write(
                 set,
                 super::descriptor_layout::SPOT_SHADOW_MAP_BINDING,
@@ -1413,8 +1419,14 @@ impl BakeResources {
                 ctx.area_light.buffer.buffer(),
                 vk::WHOLE_SIZE,
             );
-            let ltc_m = img_info(ctx.area_light.ltc_matrix.view, ctx.area_light.sampler);
-            let ltc_g = img_info(ctx.area_light.ltc_magnitude.view, ctx.area_light.sampler);
+            let ltc_m = img_info(
+                ctx.area_light.ltc_matrix.view,
+                ctx.area_light.sampler.handle(),
+            );
+            let ltc_g = img_info(
+                ctx.area_light.ltc_magnitude.view,
+                ctx.area_light.sampler.handle(),
+            );
             let ltc_writes = [
                 sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
                 sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
@@ -1444,7 +1456,7 @@ impl BakeResources {
             draw_args_buf,
             indirect_buf,
             _status_buf: status_buf,
-            pool,
+            _pool: pool,
             cull_set,
             bindless_sets,
             hiz_set,
@@ -1458,16 +1470,10 @@ impl BakeResources {
         })
     }
 
-    fn destroy(self, device: &ash::Device) {
+    fn destroy(self, _device: &VkDevice) {
         // The images and pooled buffers retire through the allocator when this
         // drops; only the framebuffer and the descriptor pool are destroyed by
         // hand (the pool frees every set allocated from it).
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_framebuffer(self.framebuffer, None);
-            device.destroy_descriptor_pool(self.pool, None);
-        }
     }
 }
 
@@ -1565,7 +1571,7 @@ fn sampler_write<'a>(
 }
 
 fn write_storage(
-    device: &ash::Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     binding: u32,
     buffer: vk::Buffer,

@@ -23,7 +23,12 @@
 use std::cell::Cell;
 use std::ffi::CString;
 
-use ash::{Device, vk};
+use ash::vk;
+
+use crate::vulkan::owned::{
+    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
+    OwnedSampler, OwnedSetLayout, VkDevice,
+};
 
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use crate::gfx::render_types::ParticleParams;
@@ -109,26 +114,26 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
 // runtime `add_emitter`.
 pub(in crate::vulkan) struct ParticleResources {
     // Compute pass: particle_simulate.slang.
-    pub(in crate::vulkan) compute_pipeline: vk::Pipeline,
-    pub(in crate::vulkan) compute_pipeline_layout: vk::PipelineLayout,
+    pub(in crate::vulkan) compute_pipeline: OwnedPipeline,
+    pub(in crate::vulkan) compute_pipeline_layout: OwnedPipelineLayout,
     // set 0: (pool SSBO, counter SSBO) per emitter.
-    pub(in crate::vulkan) compute_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
 
     // Render pass: the particle.slang billboard pair.
-    pub(in crate::vulkan) render_pass: vk::RenderPass,
-    pub(in crate::vulkan) render_pipeline: vk::Pipeline,
-    pub(in crate::vulkan) render_pipeline_layout: vk::PipelineLayout,
+    pub(in crate::vulkan) render_pass: OwnedRenderPass,
+    pub(in crate::vulkan) render_pipeline: OwnedPipeline,
+    pub(in crate::vulkan) render_pipeline_layout: OwnedPipelineLayout,
     // set 0: per-frame ParticleView UBO. Single binding (binding 0).
-    pub(in crate::vulkan) view_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
     // set 1: per-emitter (pool SSBO, albedo). Allocated for each
     // `ParticleEmitterGpuState` from `descriptor_pool` and written by
     // `add_emitter`.
-    pub(in crate::vulkan) emitter_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) emitter_set_layout: OwnedSetLayout,
 
     // Per-emitter descriptor pool. Holds `MAX_EMITTERS` compute sets +
     // `MAX_EMITTERS` render emitter sets + `frames` view sets. Sized at
     // init; runtime `add_emitter` past the cap returns an error.
-    pub(in crate::vulkan) descriptor_pool: vk::DescriptorPool,
+    pub(in crate::vulkan) descriptor_pool: OwnedDescriptorPool,
 
     // Per-frame view UBO (single 96-byte block), persistently mapped.
     pub(in crate::vulkan) view_ubos: Vec<PooledBuffer>,
@@ -137,10 +142,10 @@ pub(in crate::vulkan) struct ParticleResources {
 
     // One framebuffer per frame-in-flight slot, each binding its frame
     // slot's `hdr_resolve_images[i].view` as the sole colour attachment.
-    pub(in crate::vulkan) framebuffers: Vec<vk::Framebuffer>,
+    pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Linear-clamp sampler shared by every emitter's albedo binding.
-    pub(in crate::vulkan) sampler: vk::Sampler,
+    pub(in crate::vulkan) sampler: OwnedSampler,
 }
 
 impl ParticleResources {
@@ -160,16 +165,21 @@ impl ParticleResources {
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
         let compute_set_layout = create_compute_set_layout(device)?;
         let (view_set_layout, emitter_set_layout) = create_render_set_layouts(device)?;
-        let compute_pipeline_layout = create_compute_pipeline_layout(device, compute_set_layout)?;
-        let render_pipeline_layout =
-            create_render_pipeline_layout(device, view_set_layout, emitter_set_layout)?;
+        let compute_pipeline_layout =
+            create_compute_pipeline_layout(device, compute_set_layout.handle())?;
+        let render_pipeline_layout = create_render_pipeline_layout(
+            device,
+            view_set_layout.handle(),
+            emitter_set_layout.handle(),
+        )?;
 
         let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload)?;
-        let compute_pipeline = create_compute_pipeline(device, compute_pipeline_layout, &cs_spv)?;
+        let compute_pipeline =
+            create_compute_pipeline(device, compute_pipeline_layout.handle(), &cs_spv)?;
         let render_pipeline = create_render_pipeline(
             device,
-            render_pass,
-            render_pipeline_layout,
+            render_pass.handle(),
+            render_pipeline_layout.handle(),
             &vs_spv,
             &fs_spv,
         )?;
@@ -191,8 +201,8 @@ impl ParticleResources {
         let descriptor_pool = create_descriptor_pool(device, frames)?;
 
         // Per-frame view sets (one per frame slot).
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout).collect();
-        let view_sets = alloc_descriptor_sets(device, descriptor_pool, &view_layouts)?;
+        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
+        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(device, set, view_ubos[i].buffer());
         }
@@ -203,14 +213,13 @@ impl ParticleResources {
         for &view in hdr_resolve_views.iter().take(frames) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
+                .render_pass(render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("particle framebuffer: {e}"))?;
             framebuffers.push(fb);
         }
@@ -222,7 +231,7 @@ impl ParticleResources {
             render_pass,
             render_pipeline,
             render_pipeline_layout,
-            view_set_layout,
+            _view_set_layout: view_set_layout,
             emitter_set_layout,
             descriptor_pool,
             view_ubos,
@@ -238,28 +247,21 @@ impl ParticleResources {
     // per-emitter descriptor sets all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &Device,
+        device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> Result<(), String> {
-        for &fb in &self.framebuffers {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
-            unsafe { device.destroy_framebuffer(fb, None) };
-        }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             let attachments = [view];
             let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass)
+                .render_pass(self.render_pass.handle())
                 .attachments(&attachments)
                 .width(extent.width.max(1))
                 .height(extent.height.max(1))
                 .layers(1);
-            // SAFETY: the create-info and every slice it borrows are live for the call, and each
-            // handle it names belongs to this device.
-            let fb = unsafe { device.create_framebuffer(&fb_info, None) }
+            let fb = device
+                .create_framebuffer(&fb_info)
                 .map_err(|e| format!("particle framebuffer (rebuild): {e}"))?;
             self.framebuffers.push(fb);
         }
@@ -270,15 +272,15 @@ impl ParticleResources {
     // layouts. Used by the shader hot-reload pass.
     pub(in crate::vulkan) fn rebuild_pipelines(
         &self,
-        device: &Device,
+        device: &VkDevice,
         hot_reload: bool,
-    ) -> Result<(vk::Pipeline, vk::Pipeline), String> {
+    ) -> Result<(OwnedPipeline, OwnedPipeline), String> {
         let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload)?;
-        let cp = create_compute_pipeline(device, self.compute_pipeline_layout, &cs_spv)?;
+        let cp = create_compute_pipeline(device, self.compute_pipeline_layout.handle(), &cs_spv)?;
         let rp = create_render_pipeline(
             device,
-            self.render_pass,
-            self.render_pipeline_layout,
+            self.render_pass.handle(),
+            self.render_pipeline_layout.handle(),
             &vs_spv,
             &fs_spv,
         )?;
@@ -289,16 +291,9 @@ impl ParticleResources {
     // `device_wait_idle`'d so the old pipelines are not in flight.
     pub(in crate::vulkan) fn swap_pipelines(
         &mut self,
-        device: &Device,
-        compute: vk::Pipeline,
-        render: vk::Pipeline,
+        compute: OwnedPipeline,
+        render: OwnedPipeline,
     ) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            device.destroy_pipeline(self.compute_pipeline, None);
-            device.destroy_pipeline(self.render_pipeline, None);
-        }
         self.compute_pipeline = compute;
         self.render_pipeline = render;
     }
@@ -307,24 +302,7 @@ impl ParticleResources {
     // `device_wait_idle`. Per-emitter pools + counters live in
     // `VkContext::particle_emitter_state`; their destruction is the
     // caller's responsibility.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &fb in &self.framebuffers {
-                device.destroy_framebuffer(fb, None);
-            }
-            device.destroy_sampler(self.sampler, None);
-            device.destroy_descriptor_pool(self.descriptor_pool, None);
-            device.destroy_pipeline(self.compute_pipeline, None);
-            device.destroy_pipeline(self.render_pipeline, None);
-            device.destroy_pipeline_layout(self.compute_pipeline_layout, None);
-            device.destroy_pipeline_layout(self.render_pipeline_layout, None);
-            device.destroy_descriptor_set_layout(self.compute_set_layout, None);
-            device.destroy_descriptor_set_layout(self.view_set_layout, None);
-            device.destroy_descriptor_set_layout(self.emitter_set_layout, None);
-            device.destroy_render_pass(self.render_pass, None);
-        }
+    pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
         self.view_ubos.clear();
     }
@@ -368,8 +346,11 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     zero_device_buffer(gpu, counter_buffer.buffer(), counter_bytes)?;
 
     // Allocate the (compute, render) descriptor set pair.
-    let set_layouts = [resources.compute_set_layout, resources.emitter_set_layout];
-    let sets = alloc_descriptor_sets(device, resources.descriptor_pool, &set_layouts)?;
+    let set_layouts = [
+        resources.compute_set_layout.handle(),
+        resources.emitter_set_layout.handle(),
+    ];
+    let sets = alloc_descriptor_sets(device, resources.descriptor_pool.handle(), &set_layouts)?;
     let compute_set = sets[0];
     let render_set = sets[1];
 
@@ -399,7 +380,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
 // Render pass / descriptor / pipeline construction
 
-fn create_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass, String> {
+fn create_render_pass(device: &VkDevice, format: vk::Format) -> Result<OwnedRenderPass, String> {
     // One colour attachment: the resolved HDR scene. The fog pass left
     // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
     // during the subpass and SHADER_READ_ONLY_OPTIMAL again on exit so
@@ -444,13 +425,12 @@ fn create_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderP
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_render_pass(&info, None) }
+    device
+        .create_render_pass(&info)
         .map_err(|e| format!("particle render pass: {e}"))
 }
 
-fn create_compute_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, String> {
+fn create_compute_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -464,15 +444,14 @@ fn create_compute_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout,
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_set_layout(&info, None) }
+    device
+        .create_descriptor_set_layout(&info)
         .map_err(|e| format!("particle compute set layout: {e}"))
 }
 
 fn create_render_set_layouts(
-    device: &Device,
-) -> Result<(vk::DescriptorSetLayout, vk::DescriptorSetLayout), String> {
+    device: &VkDevice,
+) -> Result<(OwnedSetLayout, OwnedSetLayout), String> {
     // set 0: per-frame ParticleView UBO. Vertex stage only.
     let view_bindings = [vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -480,9 +459,8 @@ fn create_render_set_layouts(
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::VERTEX)];
     let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let view_set_layout = unsafe { device.create_descriptor_set_layout(&view_info, None) }
+    let view_set_layout = device
+        .create_descriptor_set_layout(&view_info)
         .map_err(|e| format!("particle view set layout: {e}"))?;
 
     // set 1: per-emitter (pool SSBO, albedo).
@@ -499,9 +477,8 @@ fn create_render_set_layouts(
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let emitter_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&emitter_bindings);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    let emitter_set_layout = unsafe { device.create_descriptor_set_layout(&emitter_info, None) }
+    let emitter_set_layout = device
+        .create_descriptor_set_layout(&emitter_info)
         .map_err(|e| format!("particle emitter set layout: {e}"))?;
     Ok((view_set_layout, emitter_set_layout))
 }
@@ -514,9 +491,9 @@ fn create_render_set_layouts(
 const PARTICLE_PUSH_BYTES: u32 = 112;
 
 fn create_compute_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     compute_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
@@ -525,17 +502,16 @@ fn create_compute_pipeline_layout(
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("particle compute pipeline layout: {e}"))
 }
 
 fn create_render_pipeline_layout(
-    device: &Device,
+    device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
     emitter_set_layout: vk::DescriptorSetLayout,
-) -> Result<vk::PipelineLayout, String> {
+) -> Result<OwnedPipelineLayout, String> {
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::VERTEX)
         .offset(0)
@@ -544,13 +520,12 @@ fn create_render_pipeline_layout(
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_pipeline_layout(&info, None) }
+    device
+        .create_pipeline_layout(&info)
         .map_err(|e| format!("particle render pipeline layout: {e}"))
 }
 
-fn create_descriptor_pool(device: &Device, frames: usize) -> Result<vk::DescriptorPool, String> {
+fn create_descriptor_pool(device: &VkDevice, frames: usize) -> Result<OwnedDescriptorPool, String> {
     let frames = frames as u32;
     let max_emitters = MAX_EMITTERS as u32;
     // Pool sizing:
@@ -575,14 +550,13 @@ fn create_descriptor_pool(device: &Device, frames: usize) -> Result<vk::Descript
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames + 2 * max_emitters)
         .pool_sizes(&sizes);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_descriptor_pool(&info, None) }
+    device
+        .create_descriptor_pool(&info)
         .map_err(|e| format!("particle descriptor pool: {e}"))
 }
 
 fn alloc_descriptor_sets(
-    device: &Device,
+    device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
 ) -> Result<Vec<vk::DescriptorSet>, String> {
@@ -595,7 +569,7 @@ fn alloc_descriptor_sets(
         .map_err(|e| format!("particle descriptor sets: {e}"))
 }
 
-fn write_view_set(device: &Device, set: vk::DescriptorSet, view_ubo: vk::Buffer) {
+fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, view_ubo: vk::Buffer) {
     let info = vk::DescriptorBufferInfo::default()
         .buffer(view_ubo)
         .offset(0)
@@ -611,7 +585,7 @@ fn write_view_set(device: &Device, set: vk::DescriptorSet, view_ubo: vk::Buffer)
 }
 
 fn write_compute_set(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     pool_buffer: vk::Buffer,
     pool_bytes: u64,
@@ -643,7 +617,7 @@ fn write_compute_set(
 }
 
 fn write_render_pool_binding(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     pool_buffer: vk::Buffer,
     pool_bytes: u64,
@@ -662,7 +636,7 @@ fn write_render_pool_binding(
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
-fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
+fn create_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -672,16 +646,16 @@ fn create_sampler(device: &Device) -> Result<vk::Sampler, String> {
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .border_color(vk::BorderColor::FLOAT_OPAQUE_BLACK)
         .max_lod(vk::LOD_CLAMP_NONE);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.create_sampler(&info, None) }.map_err(|e| format!("particle sampler: {e}"))
+    device
+        .create_sampler(&info)
+        .map_err(|e| format!("particle sampler: {e}"))
 }
 
 fn create_compute_pipeline(
-    device: &Device,
+    device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let module = spv_module(device, spv)?;
     let entry = CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -691,22 +665,18 @@ fn create_compute_pipeline(
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(layout);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
-    }
-    .map_err(|(_, e)| format!("create particle compute pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
+        .map_err(|e| format!("create particle compute pipeline: {e}"))?;
     Ok(pipeline)
 }
 
 fn create_render_pipeline(
-    device: &Device,
+    device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<vk::Pipeline, String> {
+) -> Result<OwnedPipeline, String> {
     let vert = spv_module(device, vert_spv)?;
     let frag = spv_module(device, frag_spv)?;
     let entry = CString::new("main").unwrap();
@@ -767,15 +737,8 @@ fn create_render_pipeline(
         .dynamic_state(&dynamic)
         .layout(layout)
         .render_pass(render_pass);
-    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
-    // they name belongs to this device.
-    let pipeline = unsafe {
-        crate::vulkan::pipeline_cache::create_graphics_pipelines(
-            device,
-            std::slice::from_ref(&info),
-        )
-    }
-    .map_err(|(_, e)| format!("create particle render pipeline: {e}"))?[0];
+    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
+        .map_err(|e| format!("create particle render pipeline: {e}"))?;
     Ok(pipeline)
 }
 
@@ -1008,7 +971,7 @@ impl VkContext {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
-                resources.compute_pipeline,
+                resources.compute_pipeline.handle(),
             );
         }
         for (i, data) in params_per_emitter.iter().enumerate() {
@@ -1027,14 +990,14 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
-                    resources.compute_pipeline_layout,
+                    resources.compute_pipeline_layout.handle(),
                     0,
                     std::slice::from_ref(&gpu.compute_set),
                     &[],
                 );
                 device.cmd_push_constants(
                     cmd,
-                    resources.compute_pipeline_layout,
+                    resources.compute_pipeline_layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
                     0,
                     std::slice::from_raw_parts(
@@ -1079,8 +1042,8 @@ impl VkContext {
         // via its subpass dependencies, so no explicit image barrier is
         // needed here.
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(resources.render_pass)
-            .framebuffer(resources.framebuffers[frame_idx])
+            .render_pass(resources.render_pass.handle())
+            .framebuffer(resources.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // Negative-height viewport flips clip-space Y to match the main +
         // shadow + decal passes (the engine's `perspective()` produces +Y-up
@@ -1108,12 +1071,12 @@ impl VkContext {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline,
+                resources.render_pipeline.handle(),
             );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline_layout,
+                resources.render_pipeline_layout.handle(),
                 0,
                 std::slice::from_ref(&resources.view_sets[frame_idx]),
                 &[],
@@ -1142,14 +1105,14 @@ impl VkContext {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    resources.render_pipeline_layout,
+                    resources.render_pipeline_layout.handle(),
                     1,
                     std::slice::from_ref(&gpu.render_set),
                     &[],
                 );
                 device.cmd_push_constants(
                     cmd,
-                    resources.render_pipeline_layout,
+                    resources.render_pipeline_layout.handle(),
                     vk::ShaderStageFlags::VERTEX,
                     0,
                     std::slice::from_raw_parts(
@@ -1228,7 +1191,8 @@ impl VkContext {
             .particle_resources
             .as_ref()
             .expect("particle resources are live")
-            .sampler;
+            .sampler
+            .handle();
         write_render_albedo_binding(
             &self.device,
             gpu_state.render_set,
@@ -1355,7 +1319,7 @@ impl VkContext {
                     &self.device,
                     state.render_set,
                     view,
-                    resources.sampler,
+                    resources.sampler.handle(),
                 );
             }
         }
@@ -1364,7 +1328,7 @@ impl VkContext {
     // Free every per-emitter pool/counter buffer. Called from
     // `Drop for VkContext` after `device_wait_idle`. Sibling of
     // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &Device) {
+    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
         // The pooled per-emitter buffers retire through the allocator as the
         // states drop.
         self.particle_emitter_state.clear();
@@ -1372,7 +1336,7 @@ impl VkContext {
 }
 
 fn write_render_albedo_binding(
-    device: &Device,
+    device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
     sampler: vk::Sampler,

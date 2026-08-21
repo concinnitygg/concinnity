@@ -32,9 +32,9 @@ use objc2_metal::{
 };
 
 use crate::gfx::particles::{ParticleEmitterRecord, ParticleSpawnState};
-use crate::gfx::render_types::ParticleParams;
 
 use super::context::MtlContext;
+use super::encode::{ComputeEncode, RenderEncode};
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
@@ -280,7 +280,7 @@ impl MtlContext {
                     .ok_or("failed to get particle compute encoder")?,
                 "particles: simulate",
             );
-            enc.setComputePipelineState(&pipelines.simulate);
+            enc.set_pipeline(&pipelines.simulate);
             for (i, (rec_slot, gpu_slot)) in self
                 .particle
                 .records
@@ -294,22 +294,9 @@ impl MtlContext {
                 };
                 let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
                 let params = rec.params(dt, spawn_budget, frame_index);
-                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-                // `size_of` as the length, and every bound resource outlives the encoder; the
-                // indices are the slots the shaders declare.
-                unsafe {
-                    enc.setBuffer_offset_atIndex(Some(gpu.pool.as_ref()), 0, 0);
-                    enc.setBuffer_offset_atIndex(
-                        Some(gpu.spawn_counter.as_ref()),
-                        counter_offset,
-                        1,
-                    );
-                    enc.setBytes_length_atIndex(
-                        std::ptr::NonNull::from(&params).cast(),
-                        std::mem::size_of::<ParticleParams>(),
-                        2,
-                    );
-                }
+                enc.set_buffer(gpu.pool.as_ref(), 0, 0);
+                enc.set_buffer(gpu.spawn_counter.as_ref(), counter_offset, 1);
+                enc.set_value(&params, 2);
                 let grid = MTLSize {
                     width: rec.max_particles as usize,
                     height: 1,
@@ -353,18 +340,9 @@ impl MtlContext {
                 .ok_or("failed to get particle render encoder")?,
             "particles: draw",
         );
-        enc.setRenderPipelineState(&pipelines.render);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(&view).cast(),
-                std::mem::size_of::<ParticleView>(),
-                1,
-            );
-            enc.setFragmentSamplerState_atIndex(Some(&pipelines.sampler), 0);
-        }
+        enc.set_pipeline(&pipelines.render);
+        enc.set_vertex_value(&view, 1);
+        enc.set_fragment_sampler(&pipelines.sampler, 0);
 
         let mut draw_calls: u32 = 0;
         for (i, (rec_slot, gpu_slot)) in self
@@ -387,17 +365,11 @@ impl MtlContext {
             // (it reads `age` / `lifetime` straight from the pool).
             let params = rec.params(0.0, 0, frame_index);
             let slot = rec.texture_slot.min(last_tex);
-            // SAFETY: the pool buffer outlives the encoder, the params pointer is derived from a
-            // live borrow with its `size_of` as the length, and the four strip vertices are
-            // generated from `[[vertex_id]]` in the shader.
+            enc.set_vertex_buffer(gpu.pool.as_ref(), 0, 0);
+            enc.set_vertex_value(&params, 2);
+            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            // SAFETY: the four strip vertices are generated from `[[vertex_id]]` in the shader.
             unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(gpu.pool.as_ref()), 0, 0);
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&params).cast(),
-                    std::mem::size_of::<ParticleParams>(),
-                    2,
-                );
-                enc.setFragmentTexture_atIndex(Some(self.textures[slot].as_ref()), 0);
                 enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
                     MTLPrimitiveType::TriangleStrip,
                     0,

@@ -17,6 +17,7 @@ use objc2_metal::{
 use crate::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
 
 use super::context::MtlContext;
+use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -54,33 +55,24 @@ impl MtlContext {
                 .ok_or("failed to get light-cull compute encoder")?,
             "clustered light cull",
         );
-        enc.setComputePipelineState(pipeline);
+        enc.set_pipeline(pipeline);
 
-        // SAFETY: the pointer is derived from the live `cluster_params` with its `size_of` as the
-        // length, both buffers outlive the encoder, and the dispatch covers exactly the cluster
-        // count those params describe.
-        unsafe {
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(cluster_params).cast(),
-                std::mem::size_of::<ClusterParams>(),
-                0,
-            );
-            enc.setBuffer_offset_atIndex(Some(&self.local_light_buffer), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&self.light_cull.cluster_buffer), 0, 2);
+        enc.set_value(cluster_params, 0);
+        enc.set_buffer(&self.local_light_buffer, 0, 1);
+        enc.set_buffer(&self.light_cull.cluster_buffer, 0, 2);
 
-            // One thread per cluster; the kernel builds one cluster's list.
-            let tg = MTLSize {
-                width: 64,
-                height: 1,
-                depth: 1,
-            };
-            let grid = MTLSize {
-                width: CLUSTER_COUNT as usize,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
-        }
+        // One thread per cluster; the kernel builds one cluster's list.
+        let tg = MTLSize {
+            width: 64,
+            height: 1,
+            depth: 1,
+        };
+        let grid = MTLSize {
+            width: CLUSTER_COUNT as usize,
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
         Ok(0)
     }
 }

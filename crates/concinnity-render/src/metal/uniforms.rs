@@ -14,7 +14,7 @@
 // velocity passes, and Metal's water / glass_mesh_rt.
 
 // Per-draw-call model matrix pushed at buffer(2) before each draw.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ModelUniforms {
     // Model-to-world matrix (column-major).
@@ -23,7 +23,7 @@ pub struct ModelUniforms {
 
 // Per-draw material roughness pushed to the SSR pre-pass fragment at
 // buffer(0). Layout matches the `PpMat` struct in the SSR pre-pass MSL.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrPrepassMat {
     // Perceptual roughness `[0, 1]` of this draw's material.
@@ -34,7 +34,7 @@ pub struct SsrPrepassMat {
 // Per-frame inputs to the GPU-driven cull kernel, pushed inline at
 // the compute encoder's buffer(2). Layout (208 bytes, a multiple of 16) must
 // match the `CullUniforms` struct in the cull kernel MSL (`build_cull_pipeline`).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CullUniforms {
     // The six frustum planes (left/right/bottom/top/near/far), each
@@ -166,7 +166,7 @@ pub struct GlassMeshParams {
 
 // Per-frame view inputs the raymarch pass binds at buffer(0). Layout matches
 // `RaymarchView` in `shaders/raymarch_helpers.metal`. 160 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RaymarchView {
     pub vp: [[f32; 4]; 4],
@@ -188,7 +188,7 @@ pub struct RaymarchView {
 // Per-volume uniforms uploaded at buffer(1). Layout matches `SdfVolumeUniforms`
 // in `shaders/raymarch_helpers.metal`. 176 bytes (two packed_float3 + pad = 32,
 // four scalars = 16, 32 float params = 128).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RaymarchVolumeUniforms {
     // World-space centre (`packed_float3` + pad).
@@ -214,7 +214,7 @@ pub struct RaymarchVolumeUniforms {
 // Cascade selector pushed at buffer(4) for the raymarch shadow-caster pipeline.
 // Picks `shadow.light_vps[cascade_idx]` in both stages. Matches
 // `RaymarchShadowCascade` in `shaders/raymarch_shadow.metal`. 16 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RaymarchShadowCascade {
     pub cascade_idx: u32,
@@ -229,7 +229,7 @@ pub const MAX_MORPH_TARGETS: usize = 64;
 // MSL `VsMorphParams` in main.metal: four uints then the weight array.
 // 272 bytes.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct VsMorphParams {
     pub vertex_base: u32,
     pub vertex_count: u32,
@@ -241,7 +241,7 @@ pub struct VsMorphParams {
 // Per-dispatch parameters for the `rt_skin` compute kernel. Matches the MSL
 // `SkinParams` in `shaders/rt_skin.metal`. 16 bytes.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, bytemuck::NoUninit)]
 pub struct SkinParams {
     pub vertex_base: u32,
     pub vertex_count: u32,

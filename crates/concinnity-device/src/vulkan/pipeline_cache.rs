@@ -16,6 +16,8 @@
 
 use ash::vk::Handle;
 use ash::{Device, vk};
+
+use super::owned::{OwnedPipeline, VkDevice};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -42,36 +44,89 @@ fn current() -> vk::PipelineCache {
 }
 
 // `vkCreateGraphicsPipelines` through the installed cache, timed for the init
-// tally. Signature mirrors ash so call sites keep their error mapping.
+// tally. The only way to build a graphics pipeline in this backend, so every
+// pipeline is both cached and owned.
 //
-// # Safety
-// Same contract as `ash::Device::create_graphics_pipelines`.
-pub(in crate::vulkan) unsafe fn create_graphics_pipelines(
-    device: &Device,
+// Safe because each create-info is a borrow that outlives the call, and because
+// what comes back is owned: a partial failure (ash hands back the pipelines it
+// did manage to create alongside the error) retires them instead of leaking
+// them, and success hands each one to a wrapper that destroys it.
+pub(in crate::vulkan) fn create_graphics_pipelines(
+    device: &VkDevice,
     infos: &[vk::GraphicsPipelineCreateInfo],
-) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)> {
+) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let result = unsafe { device.create_graphics_pipelines(current(), infos, None) };
     crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
-    result
+    own(device, result)
+}
+
+// The one-pipeline case, which is every call site but the wireframe twins.
+pub(in crate::vulkan) fn create_graphics_pipeline(
+    device: &VkDevice,
+    info: &vk::GraphicsPipelineCreateInfo,
+) -> Result<OwnedPipeline, vk::Result> {
+    Ok(one(create_graphics_pipelines(
+        device,
+        std::slice::from_ref(info),
+    )?))
 }
 
 // `vkCreateComputePipelines` counterpart of [`create_graphics_pipelines`].
-//
-// # Safety
-// Same contract as `ash::Device::create_compute_pipelines`.
-pub(in crate::vulkan) unsafe fn create_compute_pipelines(
-    device: &Device,
+pub(in crate::vulkan) fn create_compute_pipelines(
+    device: &VkDevice,
     infos: &[vk::ComputePipelineCreateInfo],
-) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)> {
+) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
+    // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
+    // they name belongs to this device.
     let result = unsafe { device.create_compute_pipelines(current(), infos, None) };
     crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
-    result
+    own(device, result)
+}
+
+// The one-pipeline case of [`create_compute_pipelines`].
+pub(in crate::vulkan) fn create_compute_pipeline(
+    device: &VkDevice,
+    info: &vk::ComputePipelineCreateInfo,
+) -> Result<OwnedPipeline, vk::Result> {
+    Ok(one(create_compute_pipelines(
+        device,
+        std::slice::from_ref(info),
+    )?))
+}
+
+// Take ownership of what ash returned. On the error arm ash reports every slot,
+// null for the ones it did not reach, so the created ones are owned too and
+// retire as this function returns.
+fn own(
+    device: &VkDevice,
+    result: Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
+) -> Result<Vec<OwnedPipeline>, vk::Result> {
+    let wrap = |handles: Vec<vk::Pipeline>| -> Vec<OwnedPipeline> {
+        handles
+            .into_iter()
+            .filter(|h| *h != vk::Pipeline::null())
+            .map(|h| OwnedPipeline::new(device, h))
+            .collect()
+    };
+    match result {
+        Ok(handles) => Ok(wrap(handles)),
+        Err((partial, e)) => {
+            drop(wrap(partial));
+            Err(e)
+        }
+    }
+}
+
+// Unwrap the single pipeline a one-info create returns. `vkCreate*Pipelines`
+// fills one slot per create-info, so a success with one info has exactly one.
+fn one(mut pipelines: Vec<OwnedPipeline>) -> OwnedPipeline {
+    pipelines
+        .pop()
+        .expect("a successful one-info pipeline create returns one pipeline")
 }
 
 // The raw handle for callers that pass a cache to foreign pipeline builders

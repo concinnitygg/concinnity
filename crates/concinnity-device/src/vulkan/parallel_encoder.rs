@@ -41,6 +41,15 @@
 //   5. `skinned.deformed_primed` (`AtomicBool`) - the G-buffer pass's
 //      first-frame velocity priming gate, stored during encode; atomic, so
 //      concurrent access is sound.
+//   6. The owning device handle (`VkDevice`), reachable through `&VkContext`
+//      from every owned pipeline / layout / render pass. It is `Arc` +
+//      `Mutex`, so cloning it here and retiring a handle from here are both
+//      sound. That is not a spare tyre: several passes on this fan-out
+//      (`encode_main_pass`, `encode_main_pass_phase2`, the shadow, probe and RT
+//      passes) do clone it, and while it was `Rc` that raced the refcount and
+//      tore the device down early. An earlier version of this note argued the
+//      case was safe because no pass *retires* during encode; that was the
+//      wrong question, since a plain clone touches the same counter.
 // Re-audit this list whenever a new pass migrates onto the fan-out.
 
 use super::context::VkContext;

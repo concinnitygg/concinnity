@@ -22,6 +22,7 @@ use crate::gfx::mesh_payload::Vertex;
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
+use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders::{self, SlangLib};
 use crate::metal::uniforms::SsrPrepassMat;
@@ -381,19 +382,10 @@ impl MtlContext {
             return Ok(draws);
         }
 
-        enc.setRenderPipelineState(static_ps);
-        enc.setDepthStencilState(Some(&self.depth_state));
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(view).cast(),
-                std::mem::size_of::<GBufferView>(),
-                0,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-        }
+        enc.set_pipeline(static_ps);
+        enc.set_depth_stencil(&self.depth_state);
+        enc.set_vertex_value(view, 0);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
 
         // Static geometry: model (cur + prev for motion) at vertex(2), roughness
         // at fragment(0). prev_model collapses to cur when velocity is inactive.
@@ -410,21 +402,8 @@ impl MtlContext {
                 roughness: obj.material.roughness,
                 _pad: [0.0; 3],
             };
-            // SAFETY: each pointer is derived from a live borrow and paired with that type's
-            // `size_of` as the length, so the encoder copies exactly the bytes it was handed; the
-            // buffer indices are the slots the shaders declare.
-            unsafe {
-                enc.setVertexBytes_length_atIndex(
-                    std::ptr::NonNull::from(&model).cast(),
-                    std::mem::size_of::<GBufferModel>(),
-                    2,
-                );
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::from(&mat).cast(),
-                    std::mem::size_of::<SsrPrepassMat>(),
-                    0,
-                );
-            }
+            enc.set_vertex_value(&model, 2);
+            enc.set_fragment_value(&mat, 0);
         });
 
         // GPU-instanced clusters: instance transforms are immutable, so binding
@@ -433,23 +412,14 @@ impl MtlContext {
         if let Some(inst_ps) = &self.gbuffer.instanced_pipeline
             && !prepared_instances.clusters.is_empty()
         {
-            enc.setRenderPipelineState(inst_ps);
+            enc.set_pipeline(inst_ps);
             draws +=
                 self.draw_prepared_instances(&enc, prepared_instances, true, |enc, cluster| {
                     let mat = SsrPrepassMat {
                         roughness: cluster.material.roughness,
                         _pad: [0.0; 3],
                     };
-                    // SAFETY: each pointer is derived from a live borrow and paired with that
-                    // type's `size_of` as the length, so the encoder copies exactly the bytes it
-                    // was handed; the buffer indices are the slots the shaders declare.
-                    unsafe {
-                        enc.setFragmentBytes_length_atIndex(
-                            std::ptr::NonNull::from(&mat).cast(),
-                            std::mem::size_of::<SsrPrepassMat>(),
-                            0,
-                        );
-                    }
+                    enc.set_fragment_value(&mat, 0);
                 });
         }
 
@@ -462,12 +432,8 @@ impl MtlContext {
             &self.skinned.index_buffer,
         ) && !self.skinned.draw_objects.is_empty()
         {
-            enc.setRenderPipelineState(skinned_ps);
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(svb), 0, 1);
-            }
+            enc.set_pipeline(skinned_ps);
+            enc.set_vertex_buffer(svb, 0, 1);
             draws += self.draw_skinned_objects(&enc, sib, cam_pos, |enc, obj, i| {
                 let model = GBufferModel {
                     cur_model: obj.model,
@@ -478,23 +444,10 @@ impl MtlContext {
                     _pad: [0.0; 3],
                 };
                 let prev = prev_joint_bufs.get(i).unwrap_or(&cur_joint_bufs[i]);
-                // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-                // `size_of` as the length, and every bound resource outlives the encoder; the
-                // indices are the slots the shaders declare.
-                unsafe {
-                    enc.setVertexBytes_length_atIndex(
-                        std::ptr::NonNull::from(&model).cast(),
-                        std::mem::size_of::<GBufferModel>(),
-                        2,
-                    );
-                    enc.setFragmentBytes_length_atIndex(
-                        std::ptr::NonNull::from(&mat).cast(),
-                        std::mem::size_of::<SsrPrepassMat>(),
-                        0,
-                    );
-                    enc.setVertexBuffer_offset_atIndex(Some(&cur_joint_bufs[i]), 0, 8);
-                    enc.setVertexBuffer_offset_atIndex(Some(prev), 0, 9);
-                }
+                enc.set_vertex_value(&model, 2);
+                enc.set_fragment_value(&mat, 0);
+                enc.set_vertex_buffer(&cur_joint_bufs[i], 0, 8);
+                enc.set_vertex_buffer(prev, 0, 9);
             });
         }
         Ok(draws)
@@ -538,28 +491,19 @@ impl MtlContext {
         if self.cull.icbs.is_empty() {
             return 0;
         }
-        enc.setRenderPipelineState(pipeline);
-        enc.setDepthStencilState(Some(&self.depth_state));
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            // GBufferView (vbuf 0), current vertex stream (vbuf 1), previous
-            // vertex stream (vbuf 2), object records (vbuf 9), prev_model parallel
-            // buffer (vbuf 10). The ICB commands inherit these bindings; the cull
-            // baked base_instance = record id, so the VS reads objects[id].model
-            // + prev_models[id]. The prefix binds the static VB to BOTH streams
-            // (prev_pos == cur_pos), so its motion is purely the model delta.
-            enc.setVertexBytes_length_atIndex(
-                std::ptr::NonNull::from(view).cast(),
-                std::mem::size_of::<GBufferView>(),
-                0,
-            );
-            enc.setVertexBuffer_offset_atIndex(Some(object_buffer), 0, 9);
-            enc.setVertexBuffer_offset_atIndex(Some(prev_models), 0, 10);
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 1);
-            enc.setVertexBuffer_offset_atIndex(Some(&self.vertex_buffer), 0, 2);
-        }
+        enc.set_pipeline(pipeline);
+        enc.set_depth_stencil(&self.depth_state);
+        // GBufferView (vbuf 0), current vertex stream (vbuf 1), previous
+        // vertex stream (vbuf 2), object records (vbuf 9), prev_model parallel
+        // buffer (vbuf 10). The ICB commands inherit these bindings; the cull
+        // baked base_instance = record id, so the VS reads objects[id].model
+        // + prev_models[id]. The prefix binds the static VB to BOTH streams
+        // (prev_pos == cur_pos), so its motion is purely the model delta.
+        enc.set_vertex_value(view, 0);
+        enc.set_vertex_buffer(object_buffer, 0, 9);
+        enc.set_vertex_buffer(prev_models, 0, 10);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.vertex_buffer, 0, 2);
 
         let counts = self.draw_record_counts();
         let mut draw_calls = 0u32;
@@ -605,12 +549,8 @@ impl MtlContext {
             } else {
                 deformed
             };
-            // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at the
-            // buffer/texture indices the shaders declare.
-            unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(deformed), 0, 1);
-                enc.setVertexBuffer_offset_atIndex(Some(prev), 0, 2);
-            }
+            enc.set_vertex_buffer(deformed, 0, 1);
+            enc.set_vertex_buffer(prev, 0, 2);
             if let Some(skinned_ib) = self.skinned.index_buffer.as_ref() {
                 enc.useResource_usage_stages(
                     ProtocolObject::from_ref(&**skinned_ib),

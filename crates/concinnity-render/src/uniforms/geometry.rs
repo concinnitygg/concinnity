@@ -5,7 +5,7 @@
 
 // Per-frame view inputs to the projected-decal pass. Matches `DecalView` in
 // `shaders/decal.slang`. 144 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct DecalView {
     // View-projection matrix used by the main pass (jittered when TAA is on).
@@ -20,7 +20,7 @@ pub struct DecalView {
 
 // Per-decal uniforms uploaded before each draw. Matches `DecalParams` in
 // `shaders/decal.slang`. 160 bytes (two float4x4s, a float4 tint, four scalars).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct DecalParams {
     pub model: [[f32; 4]; 4],
@@ -34,7 +34,7 @@ pub struct DecalParams {
 
 // Per-frame view inputs to the line pass. Matches `LineView` in
 // `shaders/line.slang`. 80 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LineView {
     // View-projection matrix used by the main pass (jittered when TAA is on),
@@ -47,7 +47,7 @@ pub struct LineView {
 
 // Per-frame view inputs to the particle render pass. Matches `ParticleView` in
 // `shaders/particle.slang`. 96 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleView {
     // View-projection matrix used by the main pass.

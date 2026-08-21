@@ -26,7 +26,9 @@
 // main pass and the raymarch templates are still hand-written per backend, and
 // `glass_mesh_rt` / `water` are deliberately Metal-only, so a struct used only
 // by those has no `.slang` to reflect and its hand assert is the only check it
-// has. Vertex payloads are the other exclusion: slangc binds a vertex input by
+// has. The reverse gap exists too: slangc rejects `TraceRayInline` on the Metal
+// target, so `rt_reflections.slang` reflects on Vulkan and DirectX only and
+// `RtParams` / `RtGeomEntry` have no check against the Metal RT sources. Vertex payloads are the other exclusion: slangc binds a vertex input by
 // attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
 // `MorphDelta` / `TextVertex` / `LineVertex` reflect no layout at all. The
 // surviving asserts are listed in private/docs/shader-single-source.md.

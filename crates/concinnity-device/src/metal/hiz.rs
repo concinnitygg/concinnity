@@ -40,6 +40,7 @@ use objc2_metal::{
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
 use super::descriptors::TextureDesc;
+use super::encode::ComputeEncode;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) push struct; lives in concinnity-render so its layout test
@@ -241,19 +242,10 @@ impl MtlContext {
             src_mip: 0,
             sample_count: HDR_SAMPLE_COUNT,
         };
-        enc.setComputePipelineState(&hiz.init_pipeline);
-        // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's `size_of`
-        // as the length, and every bound resource outlives the encoder; the indices are the slots
-        // the shaders declare.
-        unsafe {
-            enc.setBytes_length_atIndex(
-                std::ptr::NonNull::from(&init_params).cast(),
-                std::mem::size_of::<HizParams>(),
-                0,
-            );
-            enc.setTexture_atIndex(Some(depth), 0);
-            enc.setTexture_atIndex(Some(hiz.mip_views[0].as_ref()), 1);
-        }
+        enc.set_pipeline(&hiz.init_pipeline);
+        enc.set_value(&init_params, 0);
+        enc.set_texture(depth, 0);
+        enc.set_texture(hiz.mip_views[0].as_ref(), 1);
         dispatch_2d(&enc, hiz.width, hiz.height);
 
         // Downsample chain: each dispatch reads the prior mip through its
@@ -270,19 +262,10 @@ impl MtlContext {
                 src_mip: mip - 1,
                 sample_count: 0,
             };
-            enc.setComputePipelineState(&hiz.downsample_pipeline);
-            // SAFETY: each `setBytes` pointer is derived from a live borrow with that type's
-            // `size_of` as the length, and every bound resource outlives the encoder; the indices
-            // are the slots the shaders declare.
-            unsafe {
-                enc.setBytes_length_atIndex(
-                    std::ptr::NonNull::from(&params).cast(),
-                    std::mem::size_of::<HizParams>(),
-                    0,
-                );
-                enc.setTexture_atIndex(Some(hiz.mip_views[(mip - 1) as usize].as_ref()), 0);
-                enc.setTexture_atIndex(Some(hiz.mip_views[mip as usize].as_ref()), 1);
-            }
+            enc.set_pipeline(&hiz.downsample_pipeline);
+            enc.set_value(&params, 0);
+            enc.set_texture(hiz.mip_views[(mip - 1) as usize].as_ref(), 0);
+            enc.set_texture(hiz.mip_views[mip as usize].as_ref(), 1);
             dispatch_2d(&enc, next_w, next_h);
             cur_w = next_w;
             cur_h = next_h;
