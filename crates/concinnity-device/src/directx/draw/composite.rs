@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
 
 use crate::directx::context::DxContext;
+use crate::directx::upload_ring::UPLOAD_ALIGN;
 use concinnity_core::gfx::render_types::TextUniforms;
 
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
@@ -281,7 +282,7 @@ impl DxContext {
         // never reallocates out from under an already-bound sub-view). The frame
         // fence in `draw_frame` has already confirmed the GPU is done with this
         // slot, so resetting / growing it now is race-free.
-        let text_bytes = super::text_upload::text_calls_byte_size(text_calls);
+        let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text_upload
             .reserve(&self.alloc, frame_idx, text_bytes)?;
 

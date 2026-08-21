@@ -26,7 +26,6 @@ mod composite;
 mod main;
 mod shadow;
 mod spot_shadow;
-mod text_upload;
 
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
 // that lives in concinnity-render; re-export it so

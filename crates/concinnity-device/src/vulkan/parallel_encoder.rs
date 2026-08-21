@@ -31,11 +31,14 @@
 //      reachable through `&VkContext` from every pooled resource: creating,
 //      cloning, or dropping a `PooledBuffer` / `PooledImage` mutates it with
 //      no synchronization. Only `encode_composite_and_text` does any of that
-//      during encode (the transient text buffers), and Composite stays on the
-//      main thread (not fanned out). A pass that touches a pooled resource's
-//      lifetime -- not just its cached handles -- must never migrate onto the
-//      fan-out.
-//   4. `skinned.deformed_primed` (`AtomicBool`) - the G-buffer pass's
+//      during encode (growing a text-upload ring slot), and Composite stays on
+//      the main thread (not fanned out). A pass that touches a pooled
+//      resource's lifetime -- not just its cached handles -- must never migrate
+//      onto the fan-out.
+//   4. The text-upload ring (`text_upload`'s `RefCell<Slot>` slots and their
+//      map pointers) - reserved and appended to by the Composite pass alone,
+//      which stays on the main thread.
+//   5. `skinned.deformed_primed` (`AtomicBool`) - the G-buffer pass's
 //      first-frame velocity priming gate, stored during encode; atomic, so
 //      concurrent access is sound.
 // Re-audit this list whenever a new pass migrates onto the fan-out.
@@ -49,8 +52,9 @@ pub(super) type ParallelCtxRef<'a> = crate::gfx::parallel_ctx::ParallelCtxRef<'a
 // SAFETY: see the module doc above for the complete audit of interior-mutable
 // state reachable during `encode_pass_into` (atomic draw-call accumulator,
 // atomic deformed-primed priming gate, particle Cell state hoisted before the
-// fan-out, the RefCell device allocator touched only by the main-thread
-// Composite pass). Vulkan handles are safe for concurrent shared read, and
+// fan-out, the RefCell device allocator and the RefCell text-upload ring
+// touched only by the main-thread Composite pass). Vulkan handles are safe for
+// concurrent shared read, and
 // each worker records into a distinct command buffer from a distinct command
 // pool.
 unsafe impl crate::gfx::parallel_ctx::ParallelEncodeCtx for VkContext {}

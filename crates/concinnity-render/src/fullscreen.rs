@@ -53,6 +53,31 @@ pub fn clip_rect_to_scissor(
     Some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
+// Round `offset` up to the next multiple of `align` (a power of two).
+pub fn align_up(offset: u64, align: u64) -> u64 {
+    (offset + align - 1) & !(align - 1)
+}
+
+// Total bytes a frame's text geometry occupies in a backend's per-frame upload
+// buffer, once each label's vertex and index blocks start on an `align`-byte
+// boundary. Every sub-allocation aligns its start up and a prior aligned start
+// plus an aligned size stays aligned, so this sum is an exact upper bound on the
+// buffer cursor after all of a frame's blocks are appended: a slot reserved to
+// it can never overflow mid-frame.
+//
+// `align` is per backend: the alignment its buffer bindings require of a
+// sub-range's offset.
+pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
+    text_calls
+        .iter()
+        .map(|c| {
+            let v = std::mem::size_of_val(c.vertices.as_slice()) as u64;
+            let i = std::mem::size_of_val(c.indices.as_slice()) as u64;
+            align_up(v, align) + align_up(i, align)
+        })
+        .sum()
+}
+
 pub trait BloomEncoder {
     // Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
@@ -96,10 +121,17 @@ pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args)
 // the swapchain image, then layer the text overlay on top in the same pass. Its
 // begin -> composite-draw -> text-loop -> end shape is identical on every
 // backend; the swapchain target lifecycle, the descriptor binding, and the
-// transient text-buffer uploads stay backend-specific behind the trait. `Args`
+// text-geometry uploads stay backend-specific behind the trait. `Args`
 // carries the per-frame binding context each backend needs (DX: the swapchain
 // back-buffer + its RTV, the scene SRV, the window size, the frame slot; VK: the
 // acquired image index + the frame slot).
+//
+// Every backend uploads a frame's text geometry into one persistent buffer per
+// frame-in-flight slot, reserved up front with [`text_upload_bytes`] and
+// appended to per call, and binds sub-ranges of it: no GPU buffer is created
+// per label per frame anywhere. DX and VK append inside `text_draw`; Metal
+// (which drives its own composite loop rather than this trait) writes the whole
+// frame's geometry into its slot before the render graph runs.
 pub trait CompositeEncoder {
     // Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
@@ -116,10 +148,9 @@ pub trait CompositeEncoder {
     // Bind the text pipeline + any one-time text state. Returns false when text
     // is inert (no pipeline or no atlases), so the driver skips the call loop.
     fn begin_text(&self, rec: &Self::Rec, args: &Self::Args) -> bool;
-    // Encode one text draw call: upload its vertex/index geometry, bind the
-    // atlas, and draw. How the geometry is uploaded is backend-specific (DX
-    // appends into a persistent per-frame upload buffer; VK allocates transient
-    // buffers and stashes them for deferred destruction).
+    // Encode one text draw call: append its vertex/index geometry to this frame
+    // slot's persistent upload buffer, bind the atlas plus the two sub-ranges,
+    // and draw.
     fn text_draw(
         &self,
         rec: &Self::Rec,
@@ -282,6 +313,71 @@ mod tests {
             atlas_slot: 0,
             clip_rect: None,
             layer: 0,
+        }
+    }
+
+    // A call carrying `glyphs` quads: 4 vertices + 6 indices each, the shape
+    // `gfx::text::build_text_calls` emits.
+    fn glyph_call(glyphs: usize) -> TextDrawCall {
+        TextDrawCall {
+            vertices: vec![
+                crate::render_types::TextVertex {
+                    pos: [0.0; 2],
+                    uv: [0.0; 2],
+                    color: [0.0; 3],
+                    mode: 0.0,
+                };
+                glyphs * 4
+            ],
+            indices: vec![0u16; glyphs * 6],
+            atlas_slot: 0,
+            clip_rect: None,
+            layer: 0,
+        }
+    }
+
+    #[test]
+    fn align_up_rounds_to_multiple() {
+        assert_eq!(align_up(0, 16), 0);
+        assert_eq!(align_up(1, 16), 16);
+        assert_eq!(align_up(16, 16), 16);
+        assert_eq!(align_up(17, 16), 32);
+        assert_eq!(align_up(257, 256), 512);
+    }
+
+    #[test]
+    fn text_upload_bytes_is_zero_without_calls() {
+        assert_eq!(text_upload_bytes(&[], 256), 0);
+        // An empty call still contributes nothing: both blocks are zero bytes.
+        assert_eq!(text_upload_bytes(&[text_call()], 256), 0);
+    }
+
+    #[test]
+    fn text_upload_bytes_aligns_each_block() {
+        // One glyph: 4 * 32 B of vertices (already a multiple of 16) and 12 B of
+        // indices (rounded up).
+        assert_eq!(text_upload_bytes(&[glyph_call(1)], 16), 128 + 16);
+        assert_eq!(text_upload_bytes(&[glyph_call(1)], 256), 256 + 256);
+    }
+
+    // The reserved size must be an upper bound on the cursor after a run of
+    // appends (an aligned start plus an aligned size stays aligned), so a slot
+    // reserved to it can never overflow mid-frame.
+    #[test]
+    fn text_upload_bytes_bounds_a_simulated_cursor() {
+        let calls = [glyph_call(3), glyph_call(1), glyph_call(17), glyph_call(0)];
+        for align in [16u64, 256] {
+            let total = text_upload_bytes(&calls, align);
+            let mut cursor = 0u64;
+            for c in &calls {
+                for block in [
+                    std::mem::size_of_val(c.vertices.as_slice()) as u64,
+                    std::mem::size_of_val(c.indices.as_slice()) as u64,
+                ] {
+                    cursor = align_up(cursor, align) + block;
+                    assert!(cursor <= total, "cursor {cursor} exceeded reserved {total}");
+                }
+            }
         }
     }
 

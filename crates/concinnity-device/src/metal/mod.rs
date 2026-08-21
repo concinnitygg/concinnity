@@ -42,6 +42,7 @@ mod screenshot;
 mod shader_reflect;
 mod slang_shaders;
 mod streaming;
+mod text_upload;
 mod texture;
 mod transient;
 mod transient_pool;

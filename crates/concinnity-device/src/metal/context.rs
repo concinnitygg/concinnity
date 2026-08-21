@@ -603,6 +603,10 @@ pub struct MtlContext {
     // fills this frame's slot once; the main / SSR / SSAO / velocity passes
     // share the result instead of each re-uploading the instance matrices.
     pub(super) instance_ring: super::transient::InstanceRing,
+    // Ring of per-frame HUD text geometry buffers. `draw_frame` writes the whole
+    // frame's labels into this frame's slot before the graph runs; the composite
+    // pass binds sub-ranges of it. See [`super::text_upload::TextUploadRing`].
+    pub(super) text_upload: super::text_upload::TextUploadRing,
     // Reused scratch for the `GpuObjectData` / `GpuDrawArgs` builds so the
     // per-frame `collect` reuses one heap allocation instead of allocating a
     // fresh `Vec` each frame. `mem::take`n during the build and returned after.

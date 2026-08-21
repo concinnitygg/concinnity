@@ -809,6 +809,14 @@ impl MtlContext {
         } else {
             None
         };
+        // This frame's HUD text geometry, written into this slot's persistent
+        // upload buffer up front so the composite pass binds sub-ranges of one
+        // buffer instead of minting a pair per label mid-encode. Done here, past
+        // the frames-in-flight fence, so overwriting the slot cannot race a GPU
+        // read of the frame that last used it.
+        self.text_upload
+            .upload(&self.device, ring_slot, text_calls)?;
+
         let params = GraphFrameParams {
             cmd_buf: &cmd_buf,
             cam_pos,

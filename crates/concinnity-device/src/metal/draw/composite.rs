@@ -4,15 +4,16 @@
 // reads `scene_color`, the bloom mip-0 target, and the 3D colour-grading LUT,
 // then writes ACES tonemap + gamma + FXAA into the drawable. Text is drawn
 // after in the same render pass so it sits on top of the tonemapped image in
-// display-referred LDR space.
+// display-referred LDR space; its geometry comes from sub-ranges of this
+// frame's text-upload slot, filled by `draw_frame` before the graph ran (see
+// [`crate::metal::text_upload::TextUploadRing`]).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::MTLDevice as _;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLIndexType, MTLLoadAction, MTLPrimitiveType,
-    MTLRenderCommandEncoder as _, MTLResourceOptions, MTLScissorRect, MTLStoreAction, MTLTexture,
+    MTLRenderCommandEncoder as _, MTLScissorRect, MTLStoreAction, MTLTexture,
 };
 
 use crate::gfx::render_types::TextDrawCall;
@@ -48,8 +49,8 @@ impl MtlContext {
                 super::super::pass_timing::PassId::Composite,
             );
         }
-        // ScopedEncoder guarantees the pass ends even if the text-overlay block
-        // below hits an `?` (empty glyph slice / buffer-alloc failure) mid-encode.
+        // ScopedEncoder ends the pass however this function leaves, including on
+        // an `?` mid-encode: a render encoder left open crashes at commit.
         let post_encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&composite_pass_desc)
@@ -117,7 +118,7 @@ impl MtlContext {
         // Text overlay: rendered in the same composite pass so it sits on
         // top of the tonemapped image in display-referred LDR space.
         if let Some(text_ps) = self.text_pipeline_state.clone()
-            && !text_calls.is_empty()
+            && let Some((text_buffer, text_ranges)) = self.text_upload.binding()
             && !self.text_atlas_textures.is_empty()
         {
             let logical = self.mtk_view.bounds().size;
@@ -148,7 +149,7 @@ impl MtlContext {
 
             post_encoder.setRenderPipelineState(&text_ps);
 
-            for call in text_calls {
+            for (call, range) in text_calls.iter().zip(text_ranges) {
                 if call.vertices.is_empty() {
                     continue;
                 }
@@ -204,47 +205,22 @@ impl MtlContext {
                     );
                 }
 
-                let vert_bytes_slice: &[u8] = bytemuck::cast_slice(&call.vertices);
-                let idx_bytes_slice: &[u8] = bytemuck::cast_slice(&call.indices);
-                // SAFETY: the pointer and length describe the live `vert_bytes_slice` allocation,
-                // and Metal copies those bytes into the new buffer before the call returns.
-                let text_vbuf = unsafe {
-                    let ptr = std::ptr::NonNull::new(vert_bytes_slice.as_ptr() as *mut _)
-                        .ok_or("text vertex slice is empty")?;
-                    self.device
-                        .newBufferWithBytes_length_options(
-                            ptr,
-                            vert_bytes_slice.len(),
-                            MTLResourceOptions::StorageModeShared,
-                        )
-                        .ok_or("failed to create text vertex buffer")?
-                };
-                // SAFETY: the pointer and length describe the live `idx_bytes_slice` allocation,
-                // and Metal copies those bytes into the new buffer before the call returns.
-                let text_ibuf = unsafe {
-                    let ptr = std::ptr::NonNull::new(idx_bytes_slice.as_ptr() as *mut _)
-                        .ok_or("text index slice is empty")?;
-                    self.device
-                        .newBufferWithBytes_length_options(
-                            ptr,
-                            idx_bytes_slice.len(),
-                            MTLResourceOptions::StorageModeShared,
-                        )
-                        .ok_or("failed to create text index buffer")?
-                };
-
-                // SAFETY: `text_vbuf` and `text_ibuf` were just built from this call's own
-                // vertex/index data and outlive the encoder, so the index count is exactly the
-                // range they cover.
+                // SAFETY: `text_buffer` is owned by the ring and outlives the encoder, and this
+                // call's blocks were written at `range`'s offsets from this same call's vertex /
+                // index data, so the index count is exactly the range they cover.
                 unsafe {
-                    post_encoder.setVertexBuffer_offset_atIndex(Some(&text_vbuf), 0, 1);
+                    post_encoder.setVertexBuffer_offset_atIndex(
+                        Some(text_buffer),
+                        range.vertex_offset,
+                        1,
+                    );
                     post_encoder
                         .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                             MTLPrimitiveType::Triangle,
                             call.indices.len(),
                             MTLIndexType::UInt16,
-                            &text_ibuf,
-                            0,
+                            text_buffer,
+                            range.index_offset,
                         );
                 }
                 draw_calls += 1;

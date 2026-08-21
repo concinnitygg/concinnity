@@ -9,14 +9,17 @@
 //
 // The shape mirrors `metal/draw/composite.rs::encode_composite_and_text`;
 // the graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
-// `PassId::Composite` here.
+// `PassId::Composite` here. Text geometry is appended into this frame slot's
+// persistent upload buffer (see [`super::upload_ring::UploadRing`]) and drawn
+// from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
 
-use crate::gfx::render_types::{CompositeParams, TextDrawCall, TextVertex};
+use crate::gfx::render_types::{CompositeParams, TextDrawCall};
 use concinnity_core::gfx::render_types::TextUniforms;
 
 use super::context::VkContext;
+use super::upload_ring::UPLOAD_ALIGN;
 
 // Per-invocation binding context for the composite pass. `pub` because it is the
 // `Args` associated type of the (cross-crate) `render::fullscreen::CompositeEncoder`
@@ -130,7 +133,7 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
     fn text_draw(
         &self,
         cmd: &Self::Rec,
-        _args: &Self::Args,
+        args: &Self::Args,
         call: &TextDrawCall,
     ) -> Result<(), String> {
         if call.vertices.is_empty() || self.descriptors.text_atlas_sets.is_empty() {
@@ -145,8 +148,8 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
 
         // Scissor a clipped (scrollable-panel) call to its band, restoring the
         // full-window scissor for an unclipped call so chrome is never cropped.
-        // Resolved first so a fully-scrolled-out row skips before allocating its
-        // transient buffers.
+        // Resolved first so a fully-scrolled-out row skips before it takes any
+        // room in the frame's upload buffer.
         let scissor = match call.clip_rect {
             Some(clip) => {
                 match crate::gfx::fullscreen::clip_rect_to_scissor(
@@ -176,43 +179,19 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
             .atlas_slot
             .min(self.descriptors.text_atlas_sets.len() - 1);
 
-        // Transient vertex + index buffers for this text call.
-        let vert_size = (call.vertices.len() * std::mem::size_of::<TextVertex>()) as u64;
-        let idx_size = (call.indices.len() * std::mem::size_of::<u16>()) as u64;
+        // Append this label's vertex + index geometry into the frame slot's
+        // persistent upload buffer (sized up front by `reserve` in
+        // `encode_composite_and_text`) and bind sub-ranges of it.
+        let (vert_buf, vert_offset) = self
+            .text_upload
+            .push(args.frame_idx, bytemuck::cast_slice(&call.vertices))?;
+        let (idx_buf, idx_offset) = self
+            .text_upload
+            .push(args.frame_idx, bytemuck::cast_slice(&call.indices))?;
 
-        let tvbuf = self
-            .alloc
-            .create_buffer(
-                vert_size,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )
-            .map_err(|e| format!("text vtx buf: {e}"))?;
-        let tibuf = self
-            .alloc
-            .create_buffer(
-                idx_size,
-                vk::BufferUsageFlags::INDEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )
-            .map_err(|e| format!("text idx buf: {e}"))?;
-
-        // SAFETY: the destination UBO was created HOST_VISIBLE | HOST_COHERENT and sized to hold a
-        // `TextUniforms`, so `mapped_ptr()` is a live mapping of at least that many bytes and the
-        // source is a separate live borrow. `cmd` is in the recording state, and every handle and
-        // slice the commands name is live for the call.
+        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
+        // live for the call.
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                call.vertices.as_ptr() as *const u8,
-                tvbuf.mapped_ptr(),
-                vert_size as usize,
-            );
-            std::ptr::copy_nonoverlapping(
-                call.indices.as_ptr() as *const u8,
-                tibuf.mapped_ptr(),
-                idx_size as usize,
-            );
-
             device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -232,14 +211,11 @@ impl crate::gfx::fullscreen::CompositeEncoder for VkContext {
                 ),
             );
             device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(*cmd, 0, &[tvbuf.buffer()], &[0]);
-            device.cmd_bind_index_buffer(*cmd, tibuf.buffer(), 0, vk::IndexType::UINT16);
+            device.cmd_bind_vertex_buffers(*cmd, 0, &[vert_buf], &[vert_offset]);
+            device.cmd_bind_index_buffer(*cmd, idx_buf, idx_offset, vk::IndexType::UINT16);
             device.cmd_draw_indexed(*cmd, call.indices.len() as u32, 1, 0, 0, 0);
         }
         self.inc_draw_calls(1);
-
-        // Dropping the buffers here is safe: the allocator withholds their
-        // ranges until every in-flight frame has retired.
         Ok(())
     }
 
@@ -261,6 +237,15 @@ impl VkContext {
         frame_idx: usize,
         text_calls: &[TextDrawCall],
     ) -> Result<(), String> {
+        // Reset this slot's text-upload cursor and ensure its buffer holds the
+        // whole frame's text up front, so each `text_draw` only appends (and
+        // never reallocates out from under an already-bound sub-range). The
+        // frame fence waited before this frame's recording has already confirmed
+        // the GPU is done with this slot, so resetting / growing it is race-free.
+        let text_bytes = crate::gfx::fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
+        self.text_upload
+            .reserve(&self.alloc, frame_idx, text_bytes)?;
+
         let args = VkCompositeArgs {
             image_index: image_index as usize,
             frame_idx,

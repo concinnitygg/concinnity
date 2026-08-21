@@ -20,6 +20,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::texture::create_buffer;
+// Sub-range offset rounding, shared with the other backends' text uploads.
+pub(in crate::directx) use crate::gfx::fullscreen::align_up;
 
 // Sub-allocation alignment. 16 bytes satisfies the index-buffer address
 // requirement (a multiple of the R16 element size) and keeps each vertex
@@ -29,11 +31,6 @@ pub(in crate::directx) const UPLOAD_ALIGN: u64 = 16;
 // First-allocation capacity for a slot's buffer. A HUD's worth of text is a few
 // kilobytes, so this avoids any growth in practice while staying tiny.
 const UPLOAD_MIN_CAPACITY: u64 = 64 * 1024;
-
-// Round `offset` up to the next multiple of `align` (a power of two).
-pub(in crate::directx) fn align_up(offset: u64, align: u64) -> u64 {
-    (offset + align - 1) & !(align - 1)
-}
 
 // New capacity for a slot that must hold at least `needed` bytes, given its
 // current `capacity`. Grows geometrically (doubling from the minimum) so a burst
@@ -154,22 +151,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn align_up_rounds_to_multiple() {
-        assert_eq!(align_up(0, 16), 0);
-        assert_eq!(align_up(1, 16), 16);
-        assert_eq!(align_up(16, 16), 16);
-        assert_eq!(align_up(17, 16), 32);
-        assert_eq!(align_up(31, 16), 32);
-    }
-
-    #[test]
-    fn align_up_is_idempotent_on_aligned_offsets() {
-        for n in [0u64, 16, 32, 48, 1024] {
-            assert_eq!(align_up(n, 16), n);
-        }
-    }
-
-    #[test]
     fn grow_capacity_starts_at_minimum() {
         assert_eq!(grow_capacity(0, 1), UPLOAD_MIN_CAPACITY);
         assert_eq!(grow_capacity(0, 0), UPLOAD_MIN_CAPACITY);
@@ -187,20 +168,5 @@ mod tests {
     fn grow_capacity_never_shrinks_below_existing() {
         let cap = grow_capacity(UPLOAD_MIN_CAPACITY * 8, 10);
         assert_eq!(cap, UPLOAD_MIN_CAPACITY * 8);
-    }
-
-    // The aligned-block sum must be an exact upper bound on the cursor after a
-    // run of pushes (an aligned start plus an aligned size stays aligned), so a
-    // reserve of that size can never overflow.
-    #[test]
-    fn byte_size_bounds_simulated_cursor() {
-        let block_sizes: [u64; 4] = [3, 16, 17, 100];
-        let total: u64 = block_sizes.iter().map(|&n| align_up(n, UPLOAD_ALIGN)).sum();
-        let mut cursor = 0u64;
-        for &n in &block_sizes {
-            let offset = align_up(cursor, UPLOAD_ALIGN);
-            cursor = offset + n;
-            assert!(cursor <= total, "cursor {cursor} exceeded reserved {total}");
-        }
     }
 }

@@ -1406,6 +1406,7 @@ impl MtlContext {
             joint_ring: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
             prev_joint_ring: super::transient::JointRing::new(frames_in_flight),
             instance_ring: super::transient::InstanceRing::new(frames_in_flight),
+            text_upload: super::text_upload::TextUploadRing::new(frames_in_flight),
             object_scratch: Vec::new(),
             draw_args_scratch: Vec::new(),
             prev_model_scratch: Vec::new(),

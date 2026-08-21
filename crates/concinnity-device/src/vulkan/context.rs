@@ -1107,6 +1107,12 @@ pub struct VkContext {
     // that publishes lines. See [`crate::vulkan::line::LineState`].
     pub(super) lines: crate::vulkan::line::LineState,
 
+    // Per-frame-slot persistent upload buffers for transient HUD text geometry.
+    // Each slot's cursor resets and its buffer grows inside the ring's
+    // `reserve`, which the composite pass calls once the frame fence confirms
+    // the GPU is done with that slot. See [`super::upload_ring::UploadRing`].
+    pub(super) text_upload: super::upload_ring::UploadRing,
+
     // Volumetric fog. `Some` only when the world declared a `VolumetricFog`
     // asset; with none, both fields stay `None` and the fog pass is skipped
     // entirely. The settings are cached so the per-frame encoder can build
@@ -2444,6 +2450,9 @@ impl VkContext {
         if let Some(mut lines) = self.lines.resources.take() {
             lines.destroy(device);
         }
+
+        // Per-frame text-geometry upload buffers.
+        self.text_upload.destroy();
 
         // Volumetric-fog resources (pipeline + per-frame uniforms).
         if let Some(mut fog) = self.fog_resources.take() {

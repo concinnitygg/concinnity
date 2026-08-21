@@ -3981,6 +3981,7 @@ impl VkContext {
             decals: Vec::new(),
             decal_free_slots: Vec::new(),
             lines: crate::vulkan::line::LineState::empty(),
+            text_upload: crate::vulkan::upload_ring::UploadRing::new(frames),
             hdr_mode,
             vsync,
             particle_resources: None,
