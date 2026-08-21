@@ -20,7 +20,7 @@ use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
     MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLTextureType, MTLTextureUsage,
 };
 
 use crate::gfx::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
@@ -28,6 +28,7 @@ use crate::gfx::render_types::{FogFroxelParams, FogParams};
 use crate::gfx::volumetric_fog::FogSettings;
 
 use super::context::MtlContext;
+use super::descriptors::TextureDesc;
 use super::pipeline::ns_str;
 use super::post::fullscreen::{
     FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
@@ -266,18 +267,16 @@ pub(super) fn build_fog_froxel_pipeline(
 pub(super) fn build_fog_froxel_volume(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    desc.setTextureType(MTLTextureType::Type3D);
-    desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setWidth(FOG_FROXEL_X as usize);
-        desc.setHeight(FOG_FROXEL_Y as usize);
-        desc.setDepth(FOG_FROXEL_Z as usize);
-        desc.setMipmapLevelCount(1);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type3D,
+        format: MTLPixelFormat::RGBA16Float,
+        width: FOG_FROXEL_X as usize,
+        height: FOG_FROXEL_Y as usize,
+        depth: FOG_FROXEL_Z as usize,
+        usage: MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+        ..Default::default()
     }
-    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite);
-    desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    .build();
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| "failed to allocate fog froxel volume texture".to_string())

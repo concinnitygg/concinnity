@@ -50,6 +50,7 @@ use crate::gfx::render_graph::{
     PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::TextureDesc;
 
 struct PooledTexture {
     label: &'static str,
@@ -201,21 +202,19 @@ fn new_slot_heap(
 // mip count and usage all come from the graph, so there is no second table here
 // that could disagree with it. GPU-private to match its heap's storage mode.
 fn texture_descriptor(spec: &TransientTexture) -> Retained<MTLTextureDescriptor> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(texture_type(spec));
-        desc.setPixelFormat(pixel_format(spec.format));
-        desc.setWidth(spec.width.max(1) as usize);
-        desc.setHeight(spec.height.max(1) as usize);
-        desc.setDepth(spec.depth.max(1) as usize);
-        desc.setArrayLength(spec.array_layers.max(1) as usize);
-        desc.setMipmapLevelCount(spec.mip_levels.max(1) as usize);
-        desc.setSampleCount(spec.sample_count.max(1) as usize);
-        desc.setUsage(texture_usage(spec.usage));
-        desc.setStorageMode(MTLStorageMode::Private);
+    TextureDesc {
+        kind: texture_type(spec),
+        format: pixel_format(spec.format),
+        width: spec.width.max(1) as usize,
+        height: spec.height.max(1) as usize,
+        depth: spec.depth.max(1) as usize,
+        array_length: spec.array_layers.max(1) as usize,
+        mip_count: spec.mip_levels.max(1) as usize,
+        sample_count: spec.sample_count.max(1) as usize,
+        usage: texture_usage(spec.usage),
+        ..Default::default()
     }
-    desc
+    .build()
 }
 
 fn texture_type(spec: &TransientTexture) -> MTLTextureType {

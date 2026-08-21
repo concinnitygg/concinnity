@@ -614,11 +614,11 @@ fn create_decal_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert)
+            .module(vert.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag)
+            .module(frag.handle())
             .name(&entry),
     ];
     let bindings = [vk::VertexInputBindingDescription::default()
@@ -693,12 +693,6 @@ fn create_decal_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create decal pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert, None);
-        device.destroy_shader_module(frag, None);
-    }
     Ok(pipeline)
 }
 

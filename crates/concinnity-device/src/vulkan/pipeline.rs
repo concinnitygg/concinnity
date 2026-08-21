@@ -156,7 +156,7 @@ pub(super) fn create_cull_pipeline(
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module)
+        .module(module.handle())
         .name(&entry);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
@@ -167,9 +167,6 @@ pub(super) fn create_cull_pipeline(
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create cull pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
 
@@ -291,20 +288,56 @@ fn compile_glsl_rt_uncached(
     })
 }
 
-pub(in crate::vulkan) fn spv_module(
-    device: &Device,
+// A shader module scoped to pipeline creation: destroyed on drop, so the
+// early-return error paths between module and pipeline creation cannot leak it.
+pub(in crate::vulkan) struct SpvModule<'d> {
+    device: &'d Device,
+    module: vk::ShaderModule,
+}
+
+impl SpvModule<'_> {
+    pub(in crate::vulkan) fn handle(&self) -> vk::ShaderModule {
+        self.module
+    }
+}
+
+impl Drop for SpvModule<'_> {
+    fn drop(&mut self) {
+        // SAFETY: the module was created from this device and is destroyed exactly once here. A
+        // module may be destroyed as soon as the pipelines that consumed it exist, and a module
+        // dropped on an error path has no consumers at all.
+        unsafe { self.device.destroy_shader_module(self.module, None) };
+    }
+}
+
+// SPIR-V is a stream of 32-bit words and ash requires it 4-byte aligned, so
+// copy the bytes into an aligned `Vec<u32>`. A length that is not a whole
+// number of words means a truncated or corrupt module: `is_spirv` only checks
+// the magic number, so reject it here rather than rounding it down.
+fn spirv_words(spv: &[u8]) -> Result<Vec<u32>, String> {
+    if !spv.len().is_multiple_of(4) {
+        return Err(format!(
+            "SPIR-V length {} is not a whole number of words",
+            spv.len()
+        ));
+    }
+    Ok(spv
+        .chunks_exact(4)
+        .map(|w| u32::from_ne_bytes([w[0], w[1], w[2], w[3]]))
+        .collect())
+}
+
+pub(in crate::vulkan) fn spv_module<'d>(
+    device: &'d Device,
     spv: &[u8],
-) -> Result<vk::ShaderModule, String> {
-    // ash requires 4-byte aligned SPIR-V; copy into aligned Vec<u32>.
-    let len = spv.len() / 4;
-    let mut code = vec![0u32; len];
-    // SAFETY: `code` was just allocated with `spv.len() / 4` u32s, so it holds at least `spv.len()`
-    // bytes rounded down to a multiple of four; source and destination are distinct allocations.
-    unsafe { std::ptr::copy_nonoverlapping(spv.as_ptr(), code.as_mut_ptr() as *mut u8, spv.len()) };
+) -> Result<SpvModule<'d>, String> {
+    let code = spirv_words(spv).map_err(|e| format!("shader module: {e}"))?;
     let info = vk::ShaderModuleCreateInfo::default().code(&code);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    unsafe { device.create_shader_module(&info, None) }.map_err(|e| format!("shader module: {e}"))
+    let module = unsafe { device.create_shader_module(&info, None) }
+        .map_err(|e| format!("shader module: {e}"))?;
+    Ok(SpvModule { device, module })
 }
 
 // Resolve vertex/fragment/shadow SPIR-V bytes: use caller bytes if they are
@@ -682,11 +715,11 @@ fn create_main_pipeline_filled(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod)
+            .module(vert_mod.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod)
+            .module(frag_mod.handle())
             .name(&entry),
     ];
 
@@ -763,12 +796,6 @@ fn create_main_pipeline_filled(
     }
     .map_err(|(_, e)| format!("create main pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert_mod, None);
-        device.destroy_shader_module(frag_mod, None);
-    }
     Ok(pipeline)
 }
 
@@ -795,7 +822,7 @@ pub(super) fn create_shadow_pipeline(
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::VERTEX)
-        .module(vert_mod)
+        .module(vert_mod.handle())
         .name(&entry)];
 
     // `shadow.vert` only reads position (it writes depth-only NDC), so the
@@ -872,9 +899,6 @@ pub(super) fn create_shadow_pipeline(
     }
     .map_err(|(_, e)| format!("create shadow pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(vert_mod, None) };
     Ok(pipeline)
 }
 
@@ -918,11 +942,11 @@ fn create_skinned_pipeline_filled(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod)
+            .module(vert_mod.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod)
+            .module(frag_mod.handle())
             .name(&entry),
     ];
 
@@ -999,12 +1023,6 @@ fn create_skinned_pipeline_filled(
     }
     .map_err(|(_, e)| format!("create skinned pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert_mod, None);
-        device.destroy_shader_module(frag_mod, None);
-    }
     Ok(pipeline)
 }
 
@@ -1021,7 +1039,7 @@ pub(super) fn create_skinned_shadow_pipeline(
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::VERTEX)
-        .module(vert_mod)
+        .module(vert_mod.handle())
         .name(&entry)];
 
     let (bindings, attrs) = skinned_shadow_vertex_input();
@@ -1091,9 +1109,6 @@ pub(super) fn create_skinned_shadow_pipeline(
     }
     .map_err(|(_, e)| format!("create skinned shadow pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(vert_mod, None) };
     Ok(pipeline)
 }
 
@@ -1112,11 +1127,11 @@ pub(super) fn create_text_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod)
+            .module(vert_mod.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod)
+            .module(frag_mod.handle())
             .name(&entry),
     ];
 
@@ -1194,12 +1209,6 @@ pub(super) fn create_text_pipeline(
     }
     .map_err(|(_, e)| format!("create text pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert_mod, None);
-        device.destroy_shader_module(frag_mod, None);
-    }
     Ok(pipeline)
 }
 
@@ -1220,11 +1229,11 @@ pub(super) fn create_composite_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod)
+            .module(vert_mod.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod)
+            .module(frag_mod.handle())
             .name(&entry),
     ];
 
@@ -1293,12 +1302,6 @@ pub(super) fn create_composite_pipeline(
     }
     .map_err(|(_, e)| format!("create composite pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert_mod, None);
-        device.destroy_shader_module(frag_mod, None);
-    }
     Ok(pipeline)
 }
 
@@ -1307,8 +1310,37 @@ mod tests {
     use super::{
         builtins, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
         compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shaders, is_spirv,
-        resolve_instanced_shader, resolve_main_shaders,
+        resolve_instanced_shader, resolve_main_shaders, spirv_words,
     };
+
+    // Whole words become native-endian u32s, matching the raw reinterpretation
+    // the driver does of the byte stream.
+    #[test]
+    fn spirv_words_reads_whole_words() {
+        let bytes = [0x03, 0x02, 0x23, 0x07, 0x00, 0x01, 0x00, 0x00];
+        let words = spirv_words(&bytes).expect("a two-word blob converts");
+        assert_eq!(
+            words,
+            vec![
+                u32::from_ne_bytes([0x03, 0x02, 0x23, 0x07]),
+                u32::from_ne_bytes([0x00, 0x01, 0x00, 0x00]),
+            ]
+        );
+        assert_eq!(spirv_words(&[]).expect("empty converts"), Vec::<u32>::new());
+    }
+
+    // A trailing partial word is a truncated module. It used to be copied past
+    // the end of the destination allocation; it must be rejected instead.
+    #[test]
+    fn spirv_words_rejects_a_partial_word() {
+        for len in [1usize, 2, 3, 5, 7] {
+            let bytes = vec![0xFFu8; len];
+            assert!(
+                spirv_words(&bytes).is_err(),
+                "length {len} is not a whole number of words"
+            );
+        }
+    }
 
     // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
     // GPU-driven shadow `SHADOW_CULL` variant all compile to valid SPIR-V from

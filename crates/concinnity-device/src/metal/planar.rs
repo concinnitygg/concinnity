@@ -30,12 +30,10 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage,
-};
+use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
 
 use super::context::MtlContext;
+use super::descriptors::TextureDesc;
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
 // geometry exactly on the surface is not lost to near-plane precision.
@@ -82,50 +80,44 @@ pub(in crate::metal) fn create_planar_targets(
     sample_count: u32,
 ) -> Result<PlanarReflectionTargets, String> {
     let color = {
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2DMultisample);
-            desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-            desc.setWidth(width as usize);
-            desc.setHeight(height as usize);
-            desc.setSampleCount(sample_count as usize);
-            desc.setUsage(MTLTextureUsage::RenderTarget);
-            desc.setStorageMode(MTLStorageMode::Private);
+        let desc = TextureDesc {
+            kind: MTLTextureType::Type2DMultisample,
+            format: MTLPixelFormat::RGBA16Float,
+            width: width as usize,
+            height: height as usize,
+            sample_count: sample_count as usize,
+            usage: MTLTextureUsage::RenderTarget,
+            ..Default::default()
         }
+        .build();
         device
             .newTextureWithDescriptor(&desc)
             .ok_or("planar: failed to create MSAA colour target")?
     };
     let depth = {
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2DMultisample);
-            desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-            desc.setWidth(width as usize);
-            desc.setHeight(height as usize);
-            desc.setSampleCount(sample_count as usize);
-            desc.setUsage(MTLTextureUsage::RenderTarget);
-            desc.setStorageMode(MTLStorageMode::Private);
+        let desc = TextureDesc {
+            kind: MTLTextureType::Type2DMultisample,
+            format: MTLPixelFormat::Depth32Float,
+            width: width as usize,
+            height: height as usize,
+            sample_count: sample_count as usize,
+            usage: MTLTextureUsage::RenderTarget,
+            ..Default::default()
         }
+        .build();
         device
             .newTextureWithDescriptor(&desc)
             .ok_or("planar: failed to create MSAA depth target")?
     };
     let resolve = {
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-            desc.setWidth(width as usize);
-            desc.setHeight(height as usize);
-            desc.setUsage(MTLTextureUsage(
-                MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-            ));
-            desc.setStorageMode(MTLStorageMode::Private);
+        let desc = TextureDesc {
+            format: MTLPixelFormat::RGBA16Float,
+            width: width as usize,
+            height: height as usize,
+            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+            ..Default::default()
         }
+        .build();
         device
             .newTextureWithDescriptor(&desc)
             .ok_or("planar: failed to create resolve target")?

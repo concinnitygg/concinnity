@@ -30,6 +30,7 @@ use objc2_metal::{
     MTLVertexStepFunction,
 };
 
+use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::shader_layout::{EngineStage, ReflectedField, ReflectedStruct, validate_stage};
 
 // A no-input fragment used only to make vertex/shadow reflection pipelines
@@ -263,28 +264,45 @@ fn function_names(lib: &ProtocolObject<dyn MTLLibrary>) -> Vec<String> {
 // the vertex/shadow stages to link during reflection.
 fn standard_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     const STREAM: usize = 1;
-    let vd = MTLVertexDescriptor::new();
-    let attrs = [
-        (0u32, MTLVertexFormat::Float3, 0usize),
-        (1, MTLVertexFormat::Float3, 12),
-        (2, MTLVertexFormat::Float3, 24),
-        (3, MTLVertexFormat::Float3, 36),
-        (4, MTLVertexFormat::Float2, 48),
-    ];
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        for (idx, fmt, offset) in attrs {
-            let a = vd.attributes().objectAtIndexedSubscript(idx as usize);
-            a.setFormat(fmt);
-            a.setOffset(offset);
-            a.setBufferIndex(STREAM);
-        }
-        let layout = vd.layouts().objectAtIndexedSubscript(STREAM);
-        layout.setStride(std::mem::size_of::<crate::gfx::mesh_payload::Vertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
-    vd
+    vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: STREAM,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: STREAM,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: STREAM,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: STREAM,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: STREAM,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: STREAM,
+            stride: std::mem::size_of::<crate::gfx::mesh_payload::Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    )
 }
 
 #[cfg(test)]

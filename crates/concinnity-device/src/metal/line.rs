@@ -20,10 +20,11 @@ use objc2_metal::{
     MTLBlendFactor, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
     MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
     MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLStoreAction,
-    MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use super::context::MtlContext;
+use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::render_types::LineVertex;
@@ -161,28 +162,33 @@ fn build_line_pipeline(
 
     // Vertex layout: `LineVertex` (position, edge, colour) at 32 bytes,
     // asserted by `line_vertex_layout_matches_shaders`.
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(VERTEX_BUFFER_INDEX);
-        let attr1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        attr1.setFormat(MTLVertexFormat::Float);
-        attr1.setOffset(12);
-        attr1.setBufferIndex(VERTEX_BUFFER_INDEX);
-        let attr2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        attr2.setFormat(MTLVertexFormat::Float4);
-        attr2.setOffset(16);
-        attr2.setBufferIndex(VERTEX_BUFFER_INDEX);
-        let layout = vert_desc
-            .layouts()
-            .objectAtIndexedSubscript(VERTEX_BUFFER_INDEX);
-        layout.setStride(std::mem::size_of::<LineVertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: VERTEX_BUFFER_INDEX,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float,
+                offset: 12,
+                buffer_index: VERTEX_BUFFER_INDEX,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float4,
+                offset: 16,
+                buffer_index: VERTEX_BUFFER_INDEX,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: VERTEX_BUFFER_INDEX,
+            stride: std::mem::size_of::<LineVertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));

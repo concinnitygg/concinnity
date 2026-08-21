@@ -9,10 +9,11 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
 };
 
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::TextureDesc;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
 };
@@ -107,18 +108,14 @@ pub(crate) fn create_bloom_targets(
     for i in 1..count {
         let mw = (full_w >> (i + 1)).max(1) as usize;
         let mh = (full_h >> (i + 1)).max(1) as usize;
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(BLOOM_FORMAT);
-            desc.setWidth(mw);
-            desc.setHeight(mh);
-            desc.setUsage(MTLTextureUsage(
-                MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-            ));
-            desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+        let desc = TextureDesc {
+            format: BLOOM_FORMAT,
+            width: mw,
+            height: mh,
+            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+            ..Default::default()
         }
+        .build();
         let tex = device
             .newTextureWithDescriptor(&desc)
             .ok_or_else(|| format!("failed to create bloom mip {} texture", i))?;

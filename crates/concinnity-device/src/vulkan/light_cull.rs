@@ -167,7 +167,7 @@ pub(in crate::vulkan) fn build_light_cull(
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module)
+        .module(module.handle())
         .name(&entry);
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
@@ -181,9 +181,6 @@ pub(in crate::vulkan) fn build_light_cull(
         )
     }
     .map_err(|(_, e)| format!("light cull pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(module, None) };
 
     // One compute set per frame, each pointing at that frame's params UBO.
     let f = frames as u32;

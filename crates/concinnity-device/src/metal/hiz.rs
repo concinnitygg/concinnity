@@ -35,11 +35,11 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLLibrary as _, MTLPixelFormat, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
-    MTLTextureType, MTLTextureUsage,
+    MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
+use super::descriptors::TextureDesc;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) push struct; lives in concinnity-render so its layout test
@@ -122,19 +122,15 @@ fn create_hiz_texture_and_views(
     height: u32,
     mip_count: u32,
 ) -> Result<HizTextureAndViews, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(MTLPixelFormat::R32Float);
-        desc.setWidth(width.max(1) as usize);
-        desc.setHeight(height.max(1) as usize);
-        desc.setMipmapLevelCount(mip_count.max(1) as usize);
-        desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0,
-        ));
-        desc.setStorageMode(MTLStorageMode::Private);
+    let desc = TextureDesc {
+        format: MTLPixelFormat::R32Float,
+        width: width.max(1) as usize,
+        height: height.max(1) as usize,
+        mip_count: mip_count.max(1) as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0),
+        ..Default::default()
     }
+    .build();
     let texture = device
         .newTextureWithDescriptor(&desc)
         .ok_or("failed to create hiz texture")?;

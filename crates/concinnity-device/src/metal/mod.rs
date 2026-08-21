@@ -7,6 +7,7 @@ mod backend;
 mod context;
 mod cull;
 mod decal;
+mod descriptors;
 mod error;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs (MainPassCamera, DrawInputs,

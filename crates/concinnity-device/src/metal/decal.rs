@@ -17,11 +17,12 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBlendFactor, MTLCommandBuffer as _, MTLDevice as _, MTLIndexType, MTLLoadAction,
     MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction, MTLVertexDescriptor,
-    MTLVertexFormat, MTLVertexStepFunction,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction, MTLVertexFormat,
+    MTLVertexStepFunction,
 };
 
 use super::context::MtlContext;
+use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 
 use super::scoped_encoder::ScopedEncoder;
 use crate::gfx::decal::DecalRecord;
@@ -244,18 +245,19 @@ pub(super) fn build_decal_pipeline(
 
     // Vertex layout: a single float3 position at buffer(2). The cube buffer
     // holds 8 unit-cube corners in [-0.5, 0.5]^3.
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(2);
-        let layout = vert_desc.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(12);
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[VertexAttr {
+            index: 0,
+            format: MTLVertexFormat::Float3,
+            offset: 0,
+            buffer_index: 2,
+        }],
+        &[VertexLayout {
+            buffer_index: 2,
+            stride: 12,
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));

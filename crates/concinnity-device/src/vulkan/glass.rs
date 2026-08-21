@@ -881,11 +881,11 @@ fn create_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert)
+            .module(vert.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag)
+            .module(frag.handle())
             .name(&entry),
     ];
 
@@ -956,12 +956,6 @@ fn create_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create glass pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert, None);
-        device.destroy_shader_module(frag, None);
-    }
     Ok(pipeline)
 }
 

@@ -61,10 +61,11 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLCommandBufferStatus, MTLCommandQueue as _,
     MTLDevice as _, MTLOrigin, MTLPixelFormat, MTLRegion, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::context::{HDR_SAMPLE_COUNT, MtlContext};
+use super::descriptors::TextureDesc;
 use crate::gfx::image_decode::f16_to_f32;
 use crate::gfx::reflection_probe::{self, BakeAction, BakePhase};
 
@@ -661,17 +662,16 @@ fn make_msaa_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2DMultisample);
-        desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        desc.setWidth(size as usize);
-        desc.setHeight(size as usize);
-        desc.setSampleCount(HDR_SAMPLE_COUNT as usize);
-        desc.setUsage(MTLTextureUsage::RenderTarget);
-        desc.setStorageMode(MTLStorageMode::Private);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2DMultisample,
+        format: MTLPixelFormat::RGBA16Float,
+        width: size as usize,
+        height: size as usize,
+        sample_count: HDR_SAMPLE_COUNT as usize,
+        usage: MTLTextureUsage::RenderTarget,
+        ..Default::default()
     }
+    .build();
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| "probe: failed to create MSAA colour face".into())
@@ -683,17 +683,16 @@ fn make_msaa_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2DMultisample);
-        desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        desc.setWidth(size as usize);
-        desc.setHeight(size as usize);
-        desc.setSampleCount(HDR_SAMPLE_COUNT as usize);
-        desc.setUsage(MTLTextureUsage::RenderTarget);
-        desc.setStorageMode(MTLStorageMode::Private);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2DMultisample,
+        format: MTLPixelFormat::Depth32Float,
+        width: size as usize,
+        height: size as usize,
+        sample_count: HDR_SAMPLE_COUNT as usize,
+        usage: MTLTextureUsage::RenderTarget,
+        ..Default::default()
     }
+    .build();
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| "probe: failed to create MSAA depth face".into())
@@ -705,18 +704,15 @@ fn make_resolve_shared(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        desc.setWidth(size as usize);
-        desc.setHeight(size as usize);
-        desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        desc.setStorageMode(MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        format: MTLPixelFormat::RGBA16Float,
+        width: size as usize,
+        height: size as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        storage: MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| "probe: failed to create resolve face".into())

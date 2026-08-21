@@ -15,13 +15,11 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice as _, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
-    MTLTextureType, MTLTextureUsage,
-};
+use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
 use objc2_metal_fx::{MTLFXTemporalScaler, MTLFXTemporalScalerBase, MTLFXTemporalScalerDescriptor};
 
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::TextureDesc;
 
 // All MetalFX-temporal-upscaling state grouped into one feature unit: the
 // scaler instance, the input/output scale ratio, the per-frame projection
@@ -176,20 +174,18 @@ impl MetalFXUpscaler {
         // requirement so the post stack can sample the result.
         // SAFETY: a property read on the live scaler just created above.
         let required_output_usage = unsafe { scaler.outputTextureUsage() };
-        let output_desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            output_desc.setTextureType(MTLTextureType::Type2D);
-            output_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-            output_desc.setWidth(output_width.max(1) as usize);
-            output_desc.setHeight(output_height.max(1) as usize);
-            output_desc.setStorageMode(MTLStorageMode::Private);
-            output_desc.setUsage(MTLTextureUsage(
+        let output_desc = TextureDesc {
+            format: MTLPixelFormat::RGBA16Float,
+            width: output_width.max(1) as usize,
+            height: output_height.max(1) as usize,
+            usage: MTLTextureUsage(
                 required_output_usage.0
                     | MTLTextureUsage::ShaderRead.0
                     | MTLTextureUsage::RenderTarget.0,
-            ));
+            ),
+            ..Default::default()
         }
+        .build();
         let output = device
             .newTextureWithDescriptor(&output_desc)
             .ok_or("MetalFX: failed to create upscaler output texture")?;

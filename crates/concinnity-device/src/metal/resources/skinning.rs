@@ -18,6 +18,7 @@ use crate::gfx::render_types::SkinnedDrawObject;
 use crate::metal::context::{
     HDR_SAMPLE_COUNT, MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice,
 };
+use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::math::IDENTITY4;
 use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
@@ -114,28 +115,57 @@ pub(crate) struct MorphBinding {
 // [`MtlContext::upload_skinned`]) and the hot-reload pipeline rebuild path
 // so both produce byte-for-byte identical descriptors.
 pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    let vdesc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let set = |idx: usize, fmt: MTLVertexFormat, offset: usize| {
-            let attr = vdesc.attributes().objectAtIndexedSubscript(idx);
-            attr.setFormat(fmt);
-            attr.setOffset(offset);
-            attr.setBufferIndex(1);
-        };
-        set(0, MTLVertexFormat::Float3, 0);
-        set(1, MTLVertexFormat::Float3, 12);
-        set(2, MTLVertexFormat::Float3, 24);
-        set(3, MTLVertexFormat::Float3, 36);
-        set(4, MTLVertexFormat::Float2, 48);
-        set(5, MTLVertexFormat::UShort4, 56);
-        set(6, MTLVertexFormat::Float4, 64);
-        let layout = vdesc.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<SkinnedVertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
-    vdesc
+    vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 5,
+                format: MTLVertexFormat::UShort4,
+                offset: 56,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 6,
+                format: MTLVertexFormat::Float4,
+                offset: 64,
+                buffer_index: 1,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 1,
+            stride: std::mem::size_of::<SkinnedVertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    )
 }
 
 // Build the main skinned pipeline: pairs `vertex_main_skinned` (from the

@@ -24,6 +24,7 @@ use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
 use super::cull::{build_cull_pipeline, build_shadow_cull_pipeline};
 use super::decal::build_decal_pipeline;
+use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
@@ -182,26 +183,45 @@ fn is_relevant(event: &Event) -> bool {
 // init; kept in sync by construction since both touch the 56-byte static
 // `Vertex` struct.
 fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    let vdesc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let set = |idx: usize, fmt: MTLVertexFormat, offset: usize| {
-            let attr = vdesc.attributes().objectAtIndexedSubscript(idx);
-            attr.setFormat(fmt);
-            attr.setOffset(offset);
-            attr.setBufferIndex(1);
-        };
-        set(0, MTLVertexFormat::Float3, 0);
-        set(1, MTLVertexFormat::Float3, 12);
-        set(2, MTLVertexFormat::Float3, 24);
-        set(3, MTLVertexFormat::Float3, 36);
-        set(4, MTLVertexFormat::Float2, 48);
-        let layout = vdesc.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(std::mem::size_of::<crate::gfx::mesh_payload::Vertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
-    vdesc
+    vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 1,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 1,
+            stride: std::mem::size_of::<crate::gfx::mesh_payload::Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    )
 }
 
 impl MtlContext {

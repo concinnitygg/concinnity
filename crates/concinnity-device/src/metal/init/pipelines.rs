@@ -22,6 +22,7 @@ use crate::metal::context::{
     BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX, HDR_SAMPLE_COUNT,
 };
 use crate::metal::cull::build_cull_pipeline;
+use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::pipeline::{load_library, ns_str, stage_library};
 
 pub(crate) struct MainPipelineBundle {
@@ -46,46 +47,45 @@ pub(crate) struct MainPipelineBundle {
 //   buffer(1): interleaved [float3 pos, float3 normal, float3 tangent, float3 color, float2 uv]
 //   stride = sizeof(Vertex) = 56 bytes
 pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        // attribute 0: pos, float3, offset 0
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(1);
-
-        // attribute 1: normal, float3, offset 12
-        let attr1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        attr1.setFormat(MTLVertexFormat::Float3);
-        attr1.setOffset(12);
-        attr1.setBufferIndex(1);
-
-        // attribute 2: tangent, float3, offset 24
-        let attr2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        attr2.setFormat(MTLVertexFormat::Float3);
-        attr2.setOffset(24);
-        attr2.setBufferIndex(1);
-
-        // attribute 3: color, float3, offset 36
-        let attr3 = vert_desc.attributes().objectAtIndexedSubscript(3);
-        attr3.setFormat(MTLVertexFormat::Float3);
-        attr3.setOffset(36);
-        attr3.setBufferIndex(1);
-
-        // attribute 4: uv, float2, offset 48
-        let attr4 = vert_desc.attributes().objectAtIndexedSubscript(4);
-        attr4.setFormat(MTLVertexFormat::Float2);
-        attr4.setOffset(48);
-        attr4.setBufferIndex(1);
-
-        // layout for buffer(1): per-vertex stride
-        let layout1 = vert_desc.layouts().objectAtIndexedSubscript(1);
-        layout1.setStride(std::mem::size_of::<Vertex>());
-        layout1.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
-    vert_desc
+    vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 1,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 1,
+            stride: std::mem::size_of::<Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    )
 }
 
 // Build the main static pipeline together with everything it implies:

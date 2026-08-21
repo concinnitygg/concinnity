@@ -10,11 +10,12 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderCommandEncoder as _,
-    MTLRenderPipelineState, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLRenderPipelineState, MTLTexture, MTLTextureUsage,
 };
 
 use crate::gfx::ssr::SsrSettings;
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::TextureDesc;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
@@ -130,18 +131,14 @@ pub(crate) fn create_ssr_targets(
 ) -> Result<SsrTargets, String> {
     let blur_scale = blur_scale.max(1);
     let make_at = |w: usize, h: usize| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-            desc.setWidth(w);
-            desc.setHeight(h);
-            desc.setUsage(MTLTextureUsage(
-                MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-            ));
-            desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+        let desc = TextureDesc {
+            format: MTLPixelFormat::RGBA16Float,
+            width: w,
+            height: h,
+            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+            ..Default::default()
         }
+        .build();
         device.newTextureWithDescriptor(&desc)
     };
     let w = width.max(1) as usize;

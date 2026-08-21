@@ -935,12 +935,7 @@ pub(super) fn build_skin_pipeline(
             None,
         )
     }
-    .map_err(|e| {
-        // SAFETY: the shader module was created from this device, and a module may be destroyed as
-        // soon as the pipelines that consumed it exist.
-        unsafe { device.destroy_shader_module(module, None) };
-        format!("rt skin descriptor set layout: {e}")
-    })?;
+    .map_err(|e| format!("rt skin descriptor set layout: {e}"))?;
 
     let pc = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
@@ -958,19 +953,16 @@ pub(super) fn build_skin_pipeline(
         )
     }
     .map_err(|e| {
-        // SAFETY: the shader module was created from this device, and a module may be destroyed as
-        // soon as the pipelines that consumed it exist.
-        unsafe {
-            device.destroy_shader_module(module, None);
-            device.destroy_descriptor_set_layout(set_layout, None);
-        }
+        // SAFETY: the set layout was created from this device and is destroyed exactly once here,
+        // with no pipeline layout referencing it yet.
+        unsafe { device.destroy_descriptor_set_layout(set_layout, None) };
         format!("rt skin pipeline layout: {e}")
     })?;
 
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module)
+        .module(module.handle())
         .name(&entry);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
@@ -980,9 +972,6 @@ pub(super) fn build_skin_pipeline(
     let pipeline = unsafe {
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     };
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(module, None) };
     let pipeline = pipeline.map_err(|(_, e)| {
         // SAFETY: every handle here was created from this device and is destroyed exactly once; the
         // caller has already waited for the device to go idle, so no submission still references

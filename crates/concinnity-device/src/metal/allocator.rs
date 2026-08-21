@@ -487,23 +487,21 @@ fn new_heap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2_metal::{MTLPixelFormat, MTLTextureUsage};
+
+    use crate::metal::descriptors::TextureDesc;
 
     fn device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>> {
         objc2_metal::MTLCreateSystemDefaultDevice()
     }
 
     fn shared_texture_desc(width: usize) -> Retained<MTLTextureDescriptor> {
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-            desc.setWidth(width);
-            desc.setHeight(width);
-            desc.setUsage(MTLTextureUsage::ShaderRead);
-            desc.setStorageMode(MTLStorageMode::Shared);
+        TextureDesc {
+            width,
+            height: width,
+            storage: MTLStorageMode::Shared,
+            ..Default::default()
         }
-        desc
+        .build()
     }
 
     #[test]

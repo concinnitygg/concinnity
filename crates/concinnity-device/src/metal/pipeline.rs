@@ -16,6 +16,7 @@ use objc2_metal::{
     MTLDevice as _, MTLPixelFormat, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
 };
 
+use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::post::fullscreen::{FullscreenBlend, build_slang_fullscreen_pipeline};
 
 pub(super) fn ns_str(s: &str) -> Retained<NSString> {
@@ -159,9 +160,7 @@ pub(super) fn build_text_pipeline(
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    use objc2_metal::{
-        MTLBlendFactor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
-    };
+    use objc2_metal::{MTLBlendFactor, MTLVertexFormat, MTLVertexStepFunction};
 
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
@@ -178,30 +177,39 @@ pub(super) fn build_text_pipeline(
 
     // Vertex layout: pos (float2) @ 0, uv (float2) @ 8, color (float3) @ 16,
     // mode (float) @ 28; buffer(1). Mirrors TextVertex in render_types.rs.
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let a0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        a0.setFormat(MTLVertexFormat::Float2);
-        a0.setOffset(0);
-        a0.setBufferIndex(1);
-        let a1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        a1.setFormat(MTLVertexFormat::Float2);
-        a1.setOffset(8);
-        a1.setBufferIndex(1);
-        let a2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        a2.setFormat(MTLVertexFormat::Float3);
-        a2.setOffset(16);
-        a2.setBufferIndex(1);
-        let a3 = vert_desc.attributes().objectAtIndexedSubscript(3);
-        a3.setFormat(MTLVertexFormat::Float);
-        a3.setOffset(28);
-        a3.setBufferIndex(1);
-        let layout = vert_desc.layouts().objectAtIndexedSubscript(1);
-        layout.setStride(32);
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float2,
+                offset: 0,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float2,
+                offset: 8,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 16,
+                buffer_index: 1,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float,
+                offset: 28,
+                buffer_index: 1,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 1,
+            stride: 32,
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let pipeline_desc = MTLRenderPipelineDescriptor::new();
     pipeline_desc.setVertexDescriptor(Some(&vert_desc));

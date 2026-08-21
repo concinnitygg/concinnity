@@ -470,11 +470,11 @@ fn create_line_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert)
+            .module(vert.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag)
+            .module(frag.handle())
             .name(&entry),
     ];
     // `LineVertex` (position, edge, colour) at 32 bytes, asserted by
@@ -558,12 +558,6 @@ fn create_line_pipeline(
         )
     }
     .map_err(|(_, e)| format!("create line pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert, None);
-        device.destroy_shader_module(frag, None);
-    }
     Ok(pipeline)
 }
 

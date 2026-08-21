@@ -570,11 +570,11 @@ fn create_taa_pipeline(
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_mod)
+            .module(vert_mod.handle())
             .name(&entry),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_mod)
+            .module(frag_mod.handle())
             .name(&entry),
     ];
 
@@ -635,12 +635,6 @@ fn create_taa_pipeline(
     }
     .map_err(|(_, e)| format!("create TAA pipeline: {e}"))?[0];
 
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe {
-        device.destroy_shader_module(vert_mod, None);
-        device.destroy_shader_module(frag_mod, None);
-    }
     Ok(pipeline)
 }
 

@@ -2,12 +2,10 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage,
-};
+use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
 
 use super::allocator::{DeviceAllocator, PooledTexture};
+use super::descriptors::TextureDesc;
 
 // Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain.
 // The chain is box-filtered on the CPU (`crate::gfx::mipmap`) and every level
@@ -35,17 +33,14 @@ pub(super) fn upload_texture(
 
     let chain = crate::gfx::mipmap::generate_mip_chain(width, height, pixels);
 
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-        desc.setWidth(width as usize);
-        desc.setHeight(height as usize);
-        desc.setMipmapLevelCount(chain.len());
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        width: width as usize,
+        height: height as usize,
+        mip_count: chain.len(),
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
 
     let texture = alloc.alloc_texture(&desc)?;
 
@@ -107,17 +102,15 @@ pub(super) fn upload_texture_image(
         .first()
         .ok_or("compressed texture image has no mip level")?;
 
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(pixel_format);
-        desc.setWidth(base.width as usize);
-        desc.setHeight(base.height as usize);
-        desc.setMipmapLevelCount(image.mips.len());
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        format: pixel_format,
+        width: base.width as usize,
+        height: base.height as usize,
+        mip_count: image.mips.len(),
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in image.mips.iter().enumerate() {
@@ -174,17 +167,13 @@ pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> Result<PooledT
 pub(super) fn create_shadow_map_fallback(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2DArray);
-        desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        desc.setWidth(1);
-        desc.setHeight(1);
-        desc.setArrayLength(1);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2DArray,
+        format: MTLPixelFormat::Depth32Float,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = device
         .newTextureWithDescriptor(&desc)
         .ok_or("failed to create shadow map fallback texture")?;
@@ -234,16 +223,15 @@ pub(super) fn upload_cubemap(
         ));
     }
 
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::TypeCube);
-        desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
-        desc.setWidth(face_size as usize);
-        desc.setHeight(face_size as usize);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        kind: MTLTextureType::TypeCube,
+        format: MTLPixelFormat::RGBA32Float,
+        width: face_size as usize,
+        height: face_size as usize,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
 
     let texture = alloc.alloc_texture(&desc)?;
 
@@ -295,16 +283,13 @@ pub(super) fn create_fallback_cubemap(
     alloc: &DeviceAllocator,
     value: [f32; 4],
 ) -> Result<PooledTexture, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::TypeCube);
-        desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
-        desc.setWidth(1);
-        desc.setHeight(1);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        kind: MTLTextureType::TypeCube,
+        format: MTLPixelFormat::RGBA32Float,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = alloc.alloc_texture(&desc)?;
     let bytes_per_row = 4 * 4;
     let bytes_per_image = bytes_per_row;
@@ -355,17 +340,15 @@ pub(super) fn upload_color_lut(
         ));
     }
 
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type3D);
-        desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-        desc.setWidth(n);
-        desc.setHeight(n);
-        desc.setDepth(n);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type3D,
+        width: n,
+        height: n,
+        depth: n,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = alloc.alloc_texture(&desc)?;
 
     // SAFETY: `region` covers the whole n^3 volume and the length check above proved `data` holds
@@ -447,17 +430,16 @@ fn upload_prefilter_cube(
     mip_bytes: &[&[u8]],
 ) -> Result<PooledTexture, String> {
     let mip_count = mip_bytes.len() as u32;
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::TypeCube);
-        desc.setPixelFormat(MTLPixelFormat::RGBA32Float);
-        desc.setWidth(face_size as usize);
-        desc.setHeight(face_size as usize);
-        desc.setMipmapLevelCount(mip_count as usize);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        kind: MTLTextureType::TypeCube,
+        format: MTLPixelFormat::RGBA32Float,
+        width: face_size as usize,
+        height: face_size as usize,
+        mip_count: mip_count as usize,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
@@ -517,20 +499,17 @@ pub(super) fn create_shadow_map_array(
     size: u32,
     layers: u32,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2DArray);
-        desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        desc.setWidth(size as usize);
-        desc.setHeight(size as usize);
-        desc.setArrayLength(layers as usize);
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2DArray,
+        format: MTLPixelFormat::Depth32Float,
+        width: size as usize,
+        height: size as usize,
+        array_length: layers as usize,
         // RenderTarget (0x4) | ShaderRead (0x1)
-        desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
     }
+    .build();
     device
         .newTextureWithDescriptor(&desc)
         .ok_or("failed to create shadow map array texture".to_string())
@@ -593,34 +572,29 @@ pub(super) fn create_hdr_targets(
     let h = height.max(1) as usize;
 
     // MSAA HDR color: RGBA16Float, multi-sample 2D, render-target only.
-    let color_desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        color_desc.setTextureType(MTLTextureType::Type2DMultisample);
-        color_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        color_desc.setWidth(w);
-        color_desc.setHeight(h);
-        color_desc.setSampleCount(sample_count as usize);
-        color_desc.setUsage(MTLTextureUsage::RenderTarget);
-        color_desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    let color_desc = TextureDesc {
+        kind: MTLTextureType::Type2DMultisample,
+        format: MTLPixelFormat::RGBA16Float,
+        width: w,
+        height: h,
+        sample_count: sample_count as usize,
+        usage: MTLTextureUsage::RenderTarget,
+        ..Default::default()
     }
+    .build();
     let hdr_color = device
         .newTextureWithDescriptor(&color_desc)
         .ok_or("failed to create MSAA HDR color texture")?;
 
     // Single-sample resolve target: same RGBA16Float; sampled by the post pass.
-    let resolve_desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        resolve_desc.setTextureType(MTLTextureType::Type2D);
-        resolve_desc.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        resolve_desc.setWidth(w);
-        resolve_desc.setHeight(h);
-        resolve_desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        resolve_desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    let resolve_desc = TextureDesc {
+        format: MTLPixelFormat::RGBA16Float,
+        width: w,
+        height: h,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
     }
+    .build();
     let hdr_resolve = device
         .newTextureWithDescriptor(&resolve_desc)
         .ok_or("failed to create HDR resolve texture")?;
@@ -645,19 +619,16 @@ pub(super) fn create_hdr_targets(
     // MSAA depth: matches the color sample count. `ShaderRead` is enabled so
     // the decal pass (and any future post-pass that needs scene depth) can
     // sample it as a `depth2d_ms<float>` after the main pass stores it.
-    let depth_desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        depth_desc.setTextureType(MTLTextureType::Type2DMultisample);
-        depth_desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        depth_desc.setWidth(w);
-        depth_desc.setHeight(h);
-        depth_desc.setSampleCount(sample_count as usize);
-        depth_desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        depth_desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    let depth_desc = TextureDesc {
+        kind: MTLTextureType::Type2DMultisample,
+        format: MTLPixelFormat::Depth32Float,
+        width: w,
+        height: h,
+        sample_count: sample_count as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
     }
+    .build();
     let depth = device
         .newTextureWithDescriptor(&depth_desc)
         .ok_or("failed to create MSAA depth texture")?;
@@ -667,19 +638,14 @@ pub(super) fn create_hdr_targets(
     // raymarch pass binds this as its writable depth attachment; water /
     // decal / fog sample it so they see raymarched surface depth alongside
     // rasterised depth.
-    let depth_resolve_desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        depth_resolve_desc.setTextureType(MTLTextureType::Type2D);
-        depth_resolve_desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        depth_resolve_desc.setWidth(w);
-        depth_resolve_desc.setHeight(h);
-        depth_resolve_desc.setSampleCount(1);
-        depth_resolve_desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        depth_resolve_desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+    let depth_resolve_desc = TextureDesc {
+        format: MTLPixelFormat::Depth32Float,
+        width: w,
+        height: h,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
     }
+    .build();
     let depth_resolve = device
         .newTextureWithDescriptor(&depth_resolve_desc)
         .ok_or("failed to create single-sample depth resolve texture")?;
@@ -718,16 +684,14 @@ pub(super) fn create_lut_texture(
         n => return Err(format!("unsupported LUT component count {n}")),
     };
 
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(format);
-        desc.setWidth(size as usize);
-        desc.setHeight(size as usize);
-        desc.setUsage(MTLTextureUsage::ShaderRead);
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Shared);
+    let desc = TextureDesc {
+        format,
+        width: size as usize,
+        height: size as usize,
+        storage: objc2_metal::MTLStorageMode::Shared,
+        ..Default::default()
     }
+    .build();
     let texture = alloc.alloc_texture(&desc)?;
 
     let bytes_per_row = (size as usize) * components * 4;

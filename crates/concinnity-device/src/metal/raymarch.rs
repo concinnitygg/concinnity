@@ -33,8 +33,7 @@ use objc2_metal::{
     MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCullMode, MTLDevice, MTLIndexType,
     MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
-    MTLResourceOptions, MTLStoreAction, MTLVertexDescriptor, MTLVertexFormat,
-    MTLVertexStepFunction,
+    MTLResourceOptions, MTLStoreAction, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::assets::sdf_volume::SdfVolume;
@@ -42,6 +41,7 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::LightUniforms;
 
 use super::context::MtlContext;
+use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 // GPU-free repr(C) structs; live in concinnity-render so their layout tests
@@ -176,39 +176,45 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     // `Vertex` struct so the pipeline matches the engine's standard
     // vertex descriptor: keeps the pass compatible with the same
     // mesh format the rest of the engine uses.
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
-    // vertex descriptor declares.
-    unsafe {
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(2);
-
-        let attr1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        attr1.setFormat(MTLVertexFormat::Float3);
-        attr1.setOffset(12);
-        attr1.setBufferIndex(2);
-
-        let attr2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        attr2.setFormat(MTLVertexFormat::Float3);
-        attr2.setOffset(24);
-        attr2.setBufferIndex(2);
-
-        let attr3 = vert_desc.attributes().objectAtIndexedSubscript(3);
-        attr3.setFormat(MTLVertexFormat::Float3);
-        attr3.setOffset(36);
-        attr3.setBufferIndex(2);
-
-        let attr4 = vert_desc.attributes().objectAtIndexedSubscript(4);
-        attr4.setFormat(MTLVertexFormat::Float2);
-        attr4.setOffset(48);
-        attr4.setBufferIndex(2);
-
-        let layout = vert_desc.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(std::mem::size_of::<Vertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 2,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 2,
+            stride: std::mem::size_of::<Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));
@@ -280,39 +286,45 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
         })?;
 
     // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
-    // vertex descriptor declares.
-    unsafe {
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(2);
-
-        let attr1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        attr1.setFormat(MTLVertexFormat::Float3);
-        attr1.setOffset(12);
-        attr1.setBufferIndex(2);
-
-        let attr2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        attr2.setFormat(MTLVertexFormat::Float3);
-        attr2.setOffset(24);
-        attr2.setBufferIndex(2);
-
-        let attr3 = vert_desc.attributes().objectAtIndexedSubscript(3);
-        attr3.setFormat(MTLVertexFormat::Float3);
-        attr3.setOffset(36);
-        attr3.setBufferIndex(2);
-
-        let attr4 = vert_desc.attributes().objectAtIndexedSubscript(4);
-        attr4.setFormat(MTLVertexFormat::Float2);
-        attr4.setOffset(48);
-        attr4.setBufferIndex(2);
-
-        let layout = vert_desc.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(std::mem::size_of::<Vertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 2,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 2,
+            stride: std::mem::size_of::<Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));
@@ -372,39 +384,45 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         })?;
 
     // Same proxy-cube vertex layout as the main pass (Vertex at buffer(2)).
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted attribute slots are the ones this
-    // vertex descriptor declares.
-    unsafe {
-        let attr0 = vert_desc.attributes().objectAtIndexedSubscript(0);
-        attr0.setFormat(MTLVertexFormat::Float3);
-        attr0.setOffset(0);
-        attr0.setBufferIndex(2);
-
-        let attr1 = vert_desc.attributes().objectAtIndexedSubscript(1);
-        attr1.setFormat(MTLVertexFormat::Float3);
-        attr1.setOffset(12);
-        attr1.setBufferIndex(2);
-
-        let attr2 = vert_desc.attributes().objectAtIndexedSubscript(2);
-        attr2.setFormat(MTLVertexFormat::Float3);
-        attr2.setOffset(24);
-        attr2.setBufferIndex(2);
-
-        let attr3 = vert_desc.attributes().objectAtIndexedSubscript(3);
-        attr3.setFormat(MTLVertexFormat::Float3);
-        attr3.setOffset(36);
-        attr3.setBufferIndex(2);
-
-        let attr4 = vert_desc.attributes().objectAtIndexedSubscript(4);
-        attr4.setFormat(MTLVertexFormat::Float2);
-        attr4.setOffset(48);
-        attr4.setBufferIndex(2);
-
-        let layout = vert_desc.layouts().objectAtIndexedSubscript(2);
-        layout.setStride(std::mem::size_of::<Vertex>());
-        layout.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
+    let vert_desc = vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 2,
+                format: MTLVertexFormat::Float3,
+                offset: 24,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 2,
+            },
+            VertexAttr {
+                index: 4,
+                format: MTLVertexFormat::Float2,
+                offset: 48,
+                buffer_index: 2,
+            },
+        ],
+        &[VertexLayout {
+            buffer_index: 2,
+            stride: std::mem::size_of::<Vertex>(),
+            step: MTLVertexStepFunction::PerVertex,
+        }],
+    );
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(&vert_desc));

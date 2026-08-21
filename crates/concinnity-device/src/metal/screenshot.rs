@@ -24,13 +24,14 @@
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLCommandQueue as _, MTLDevice as _, MTLOrigin, MTLPixelFormat, MTLRegion, MTLSize,
-    MTLStorageMode, MTLTexture as _, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLStorageMode, MTLTexture as _,
 };
 
 use crate::gfx::hdr_output::HdrEncoding;
 use crate::gfx::image_decode::{self, PixelLayout};
 
 use super::context::MtlContext;
+use super::descriptors::TextureDesc;
 
 impl MtlContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
@@ -57,16 +58,14 @@ impl MtlContext {
         // so blit into a `StorageModeShared` texture we control and `getBytes`
         // from that. `ShaderRead` is the default usage and is enough for a blit
         // destination.
-        let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            desc.setTextureType(MTLTextureType::Type2D);
-            desc.setPixelFormat(self.swap_pixel_format);
-            desc.setWidth(width);
-            desc.setHeight(height);
-            desc.setUsage(MTLTextureUsage::ShaderRead);
-            desc.setStorageMode(MTLStorageMode::Shared);
+        let desc = TextureDesc {
+            format: self.swap_pixel_format,
+            width,
+            height,
+            storage: MTLStorageMode::Shared,
+            ..Default::default()
         }
+        .build();
         let staging = self
             .device
             .newTextureWithDescriptor(&desc)

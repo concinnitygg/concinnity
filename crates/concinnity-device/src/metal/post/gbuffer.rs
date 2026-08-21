@@ -14,13 +14,14 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer as _, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLVertexDescriptor,
+    MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::gfx::mesh_payload::Vertex;
 
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::scoped_encoder::ScopedEncoder;
 use crate::metal::slang_shaders::{self, SlangLib};
 use crate::metal::uniforms::SsrPrepassMat;
@@ -79,19 +80,15 @@ pub(crate) fn create_gbuffer_targets(
     width: u32,
     height: u32,
 ) -> Result<GBufferTargets, String> {
-    let desc = MTLTextureDescriptor::new();
-    // SAFETY: plain descriptor property setters, all values in range.
-    unsafe {
-        desc.setTextureType(MTLTextureType::Type2D);
-        desc.setPixelFormat(MTLPixelFormat::Depth32Float);
-        desc.setWidth(width.max(1) as usize);
-        desc.setHeight(height.max(1) as usize);
+    let desc = TextureDesc {
+        format: MTLPixelFormat::Depth32Float,
+        width: width.max(1) as usize,
+        height: height.max(1) as usize,
         // Sampleable (MetalFX reads it), unlike the old prepass depths.
-        desc.setUsage(MTLTextureUsage(
-            MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0,
-        ));
-        desc.setStorageMode(objc2_metal::MTLStorageMode::Private);
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
     }
+    .build();
     let depth = device
         .newTextureWithDescriptor(&desc)
         .ok_or("failed to create G-buffer depth texture")?;
@@ -151,35 +148,49 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
 // Stream 1 reads only position at offset 0; its stride is the full 56-byte
 // `Vertex` so the cull-baked `base_vertex` indexes it identically to stream 0.
 pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    let vert_desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal,
-        // colour for the skybox sentinel). Tangent/uv are unused by the G-buffer.
-        let set0 = |idx: usize, fmt: MTLVertexFormat, offset: usize| {
-            let attr = vert_desc.attributes().objectAtIndexedSubscript(idx);
-            attr.setFormat(fmt);
-            attr.setOffset(offset);
-            attr.setBufferIndex(1);
-        };
-        set0(0, MTLVertexFormat::Float3, 0); // pos
-        set0(1, MTLVertexFormat::Float3, 12); // normal
-        set0(3, MTLVertexFormat::Float3, 36); // color
-        let layout1 = vert_desc.layouts().objectAtIndexedSubscript(1);
-        layout1.setStride(std::mem::size_of::<Vertex>());
-        layout1.setStepFunction(MTLVertexStepFunction::PerVertex);
-
-        // Stream 1 (buffer 2): previous vertex position only.
-        let attr5 = vert_desc.attributes().objectAtIndexedSubscript(5);
-        attr5.setFormat(MTLVertexFormat::Float3);
-        attr5.setOffset(0);
-        attr5.setBufferIndex(2);
-        let layout2 = vert_desc.layouts().objectAtIndexedSubscript(2);
-        layout2.setStride(std::mem::size_of::<Vertex>());
-        layout2.setStepFunction(MTLVertexStepFunction::PerVertex);
-    }
-    vert_desc
+    // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal,
+    // colour for the skybox sentinel). Tangent/uv are unused by the G-buffer.
+    // Stream 1 (buffer 2): previous vertex position only.
+    vertex_descriptor(
+        &[
+            VertexAttr {
+                index: 0,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 1,
+            }, // pos
+            VertexAttr {
+                index: 1,
+                format: MTLVertexFormat::Float3,
+                offset: 12,
+                buffer_index: 1,
+            }, // normal
+            VertexAttr {
+                index: 3,
+                format: MTLVertexFormat::Float3,
+                offset: 36,
+                buffer_index: 1,
+            }, // color
+            VertexAttr {
+                index: 5,
+                format: MTLVertexFormat::Float3,
+                offset: 0,
+                buffer_index: 2,
+            }, // prev pos
+        ],
+        &[
+            VertexLayout {
+                buffer_index: 1,
+                stride: std::mem::size_of::<Vertex>(),
+                step: MTLVertexStepFunction::PerVertex,
+            },
+            VertexLayout {
+                buffer_index: 2,
+                stride: std::mem::size_of::<Vertex>(),
+                step: MTLVertexStepFunction::PerVertex,
+            },
+        ],
+    )
 }
 
 // Build the GPU-driven bindless G-buffer pre-pass pipeline:

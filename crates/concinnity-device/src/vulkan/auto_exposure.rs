@@ -421,7 +421,7 @@ fn create_compute_pipeline(
     let entry = std::ffi::CString::new("main").unwrap();
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module)
+        .module(module.handle())
         .name(&entry);
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
@@ -432,9 +432,6 @@ fn create_compute_pipeline(
         crate::vulkan::pipeline_cache::create_compute_pipelines(device, std::slice::from_ref(&info))
     }
     .map_err(|(_, e)| format!("create auto-exposure pipeline: {e}"))?[0];
-    // SAFETY: the shader module was created from this device, and a module may be destroyed as soon
-    // as the pipelines that consumed it exist.
-    unsafe { device.destroy_shader_module(module, None) };
     Ok(pipeline)
 }
 
