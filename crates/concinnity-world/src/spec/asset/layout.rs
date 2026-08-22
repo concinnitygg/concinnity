@@ -2,8 +2,8 @@
 
 use crate::spec::AssetSpec;
 
-// A Panel (a titled background box) at `rect` ([x, y, w, h], window pixels). The
-// colour, corner radius, and title styling keep their defaults.
+/// A Panel (a titled background box) at `rect` ([x, y, w, h], window pixels). The
+/// colour, corner radius, and title styling keep their defaults.
 pub fn panel(name: impl Into<String>, rect: [f32; 4], title: impl Into<String>) -> AssetSpec {
     AssetSpec::new(name, "Panel")
         .set("x", rect[0])
@@ -13,7 +13,7 @@ pub fn panel(name: impl Into<String>, rect: [f32; 4], title: impl Into<String>) 
         .set("title", title.into())
 }
 
-// A Screen (a UI layer), shown at start when `initial` is set.
+/// A Screen (a UI layer), shown at start when `initial` is set.
 pub fn screen(name: impl Into<String>, initial: bool) -> AssetSpec {
     AssetSpec::new(name, "Screen").set("initial", initial)
 }

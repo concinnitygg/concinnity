@@ -1,14 +1,12 @@
-// src/gfx/ssgi.rs
-//
-// Screen-space global illumination (SSGI) configuration. Backend-agnostic
-// resolve of the authored `PostProcessConfig` SSGI fields into clamped
-// settings, plus the per-frame GPU uniform. SSGI is a refinement of SSR: it
-// reuses the same depth + normal pre-pass G-buffer and screen-space ray-march,
-// but integrates bounced radiance over a cosine-weighted hemisphere instead of
-// along a single reflection vector, and adds the result on top of the IBL
-// ambient term. The hemisphere gather itself lives in each backend's shader;
-// this module owns only the parameter math so it can be unit-tested without a
-// GPU.
+//! Screen-space global illumination (SSGI) configuration. Backend-agnostic
+//! resolve of the authored `PostProcessConfig` SSGI fields into clamped
+//! settings, plus the per-frame GPU uniform. SSGI is a refinement of SSR: it
+//! reuses the same depth + normal pre-pass G-buffer and screen-space ray-march,
+//! but integrates bounced radiance over a cosine-weighted hemisphere instead of
+//! along a single reflection vector, and adds the result on top of the IBL
+//! ambient term. The hemisphere gather itself lives in each backend's shader;
+//! this module owns only the parameter math so it can be unit-tested without a
+//! GPU.
 
 use crate::gfx::camera::view_ray_scale;
 
@@ -30,7 +28,8 @@ const MAX_DISTANCE: f32 = 100.0;
 // `PostProcessConfig.ssgi_rays` default, owned by the schema crate and
 // re-exported here so the authored default and the runtime clamp path stay a
 // single source of truth.
-pub const DEFAULT_RAYS: u32 = concinnity_asset::DEFAULT_SSGI_RAYS;
+#[cfg(test)]
+pub(crate) const DEFAULT_RAYS: u32 = concinnity_asset::DEFAULT_SSGI_RAYS;
 const MIN_RAYS: u32 = 1;
 const MAX_RAYS: u32 = 32;
 
@@ -38,7 +37,8 @@ const MAX_RAYS: u32 = 32;
 // so a longer ray spends a longer stride rather than more samples. The default
 // is the authored `PostProcessConfig.ssgi_steps` default, owned by the schema
 // crate and re-exported here.
-pub const DEFAULT_STEPS: u32 = concinnity_asset::DEFAULT_SSGI_STEPS;
+#[cfg(test)]
+pub(crate) const DEFAULT_STEPS: u32 = concinnity_asset::DEFAULT_SSGI_STEPS;
 const MIN_STEPS: u32 = 1;
 const MAX_STEPS: u32 = 64;
 
@@ -48,28 +48,28 @@ const MAX_STEPS: u32 = 64;
 // punch through thin geometry.
 const THICKNESS_SCALE: f32 = 2.0;
 
-// Clamped SSGI tunables resolved from the authored asset fields. Held by the
-// backend and turned into a per-frame [`SsgiParams`] once the camera is known.
+/// Clamped SSGI tunables resolved from the authored asset fields. Held by the
+/// backend and turned into a per-frame [`SsgiParams`] once the camera is known.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SsgiSettings {
-    // Indirect-bounce blend strength multiplier in `[0, MAX_INTENSITY]`.
+    /// Indirect-bounce blend strength multiplier in `[0, MAX_INTENSITY]`.
     pub intensity: f32,
-    // World-space distance a hemisphere ray marches before giving up.
+    /// World-space distance a hemisphere ray marches before giving up.
     pub max_distance: f32,
-    // Hemisphere rays cast per pixel, clamped to `[MIN_RAYS, MAX_RAYS]`.
+    /// Hemisphere rays cast per pixel, clamped to `[MIN_RAYS, MAX_RAYS]`.
     pub rays: u32,
-    // Ray-march samples per ray, clamped to `[MIN_STEPS, MAX_STEPS]`.
+    /// Ray-march samples per ray, clamped to `[MIN_STEPS, MAX_STEPS]`.
     pub steps: u32,
-    // Render-resolution divisor for the gather target: 1 is full resolution,
-    // 2 is half (a quarter of the pixels), 4 a quarter. The composite pass is a
-    // depth-aware bilateral filter, so it upsamples the lower-resolution gather
-    // back to full resolution for free. Backends that always allocate the
-    // gather at full resolution treat this as 1.
+    /// Render-resolution divisor for the gather target: 1 is full resolution,
+    /// 2 is half (a quarter of the pixels), 4 a quarter. The composite pass is a
+    /// depth-aware bilateral filter, so it upsamples the lower-resolution gather
+    /// back to full resolution for free. Backends that always allocate the
+    /// gather at full resolution treat this as 1.
     pub gi_scale: u32,
 }
 
 impl SsgiSettings {
-    // Clamp the authored tunables into safe ranges.
+    /// Clamp the authored tunables into safe ranges.
     pub fn resolve(
         intensity: f32,
         max_distance: f32,
@@ -86,8 +86,8 @@ impl SsgiSettings {
         }
     }
 
-    // Gather-target dimensions for a given render resolution: the render size
-    // divided by `gi_scale`, never below 1x1.
+    /// Gather-target dimensions for a given render resolution: the render size
+    /// divided by `gi_scale`, never below 1x1.
     pub fn gi_dimensions(&self, render_w: u32, render_h: u32) -> (u32, u32) {
         (
             (render_w / self.gi_scale).max(1),
@@ -95,10 +95,10 @@ impl SsgiSettings {
         )
     }
 
-    // Build the per-frame GPU uniform from these settings and the active
-    // camera. `fov_y_radians` is the vertical field of view and `aspect` the
-    // viewport width / height ratio: together they give the view-ray scale
-    // the gather pass needs to project a view-space ray point to a UV.
+    /// Build the per-frame GPU uniform from these settings and the active
+    /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
+    /// viewport width / height ratio: together they give the view-ray scale
+    /// the gather pass needs to project a view-space ray point to a UV.
     pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsgiParams {
         let stride = self.max_distance / self.steps as f32;
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);

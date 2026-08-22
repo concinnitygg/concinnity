@@ -1,39 +1,43 @@
-// Semantic validation of an expanded world: per-asset arg checks, cross-asset
-// reference checks, and world-shape rules (crate::check::shape). Structural
-// validation (name/type present, known type, unique names) happens earlier in
-// crate::world::load_world.
-//
-// The checks here are pure JSON-shape validation. A few asset types validate
-// by running their compiler (mesh generators, texture generators, ...); those
-// compilers live in concinnity-cook, which passes them into `check_world_with`
-// as the per-asset `extra` hook and composes the full check set behind its own
-// entry points.
+//! Semantic validation of an expanded world: per-asset arg checks, cross-asset
+//! reference checks, and world-shape rules (crate::check::shape). Structural
+//! validation (name/type present, known type, unique names) happens earlier in
+//! crate::world::load_world.
+//!
+//! The checks here are pure JSON-shape validation. A few asset types validate
+//! by running their compiler (mesh generators, texture generators, ...); those
+//! compilers live in concinnity-cook, which passes them into `check_world_with`
+//! as the per-asset `extra` hook and composes the full check set behind its own
+//! entry points.
 
-pub mod anim_graph;
+pub(crate) mod anim_graph;
 pub(crate) mod asset_refs;
 pub mod audio;
 pub mod behavior;
 pub mod cross_reference;
 pub mod fault;
-pub mod instanced_prop;
+pub(crate) mod instanced_prop;
 pub mod physics;
+/// `Prop` argument checks.
 pub mod prop;
+/// `SdfVolume` argument checks.
 pub mod sdf_volume;
+/// `Shader` argument checks.
 pub mod shader;
 pub(crate) mod shape;
 pub mod voxel_chunk;
-pub mod voxel_world;
+pub(crate) mod voxel_world;
 
 use crate::world::WorldJsonlAsset;
 
 // A per-asset check supplied by the caller, run alongside the built-in ones:
 // (normalized type, asset name, args) -> error message on failure. cook uses
 // this to plug in its compile-backed checks.
-pub type ExtraAssetCheck<'a> = &'a dyn Fn(&str, &str, &serde_json::Value) -> Result<(), String>;
+pub(crate) type ExtraAssetCheck<'a> =
+    &'a dyn Fn(&str, &str, &serde_json::Value) -> Result<(), String>;
 
-// Print each validation error in CLI form and collapse them into a single
-// io::Error. Shared by the `cn test` command and the build orchestrator so a
-// failed world surfaces every problem in one pass.
+/// Print each validation error in CLI form and collapse them into a single
+/// io::Error. Shared by the `cn test` command and the build orchestrator so a
+/// failed world surfaces every problem in one pass.
 pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
     for e in errors {
         eprintln!("error:   {}", e);
@@ -45,9 +49,9 @@ pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
     )
 }
 
-// The pure per-asset checks. Types whose validation runs their compiler
-// (mesh/proceduralmesh, texture, cubemap, environment map) are not handled
-// here; cook covers them through the `extra` hook.
+/// The pure per-asset checks. Types whose validation runs their compiler
+/// (mesh/proceduralmesh, texture, cubemap, environment map) are not handled
+/// here; cook covers them through the `extra` hook.
 pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     match type_norm {
         "animgraph" => anim_graph::check(name, args),
@@ -67,10 +71,10 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
     }
 }
 
-// Run all semantic validation on a fully expanded world, with the caller's
-// extra per-asset checks folded into the same pass. Collects every problem
-// found (per-asset arg errors, unresolved cross-references, and graphics-rule
-// violations) so the caller can report them in a single pass.
+/// Run all semantic validation on a fully expanded world, with the caller's
+/// extra per-asset checks folded into the same pass. Collects every problem
+/// found (per-asset arg errors, unresolved cross-references, and graphics-rule
+/// violations) so the caller can report them in a single pass.
 pub fn check_world_with(
     assets: &[WorldJsonlAsset],
     extra: ExtraAssetCheck,
@@ -128,8 +132,8 @@ pub fn check_world_with(
     }
 }
 
-// `check_world_with` with no extra checks: the pure-validation subset. Callers
-// that have the compilers available (cook) compose theirs in instead.
+/// `check_world_with` with no extra checks: the pure-validation subset. Callers
+/// that have the compilers available (cook) compose theirs in instead.
 pub fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
     check_world_with(assets, &|_, _, _| Ok(()))
 }

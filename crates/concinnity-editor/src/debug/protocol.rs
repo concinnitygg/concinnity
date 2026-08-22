@@ -25,14 +25,18 @@ pub(super) fn reply_ok(reply: &Value) -> bool {
     reply.get("ok").and_then(Value::as_bool).unwrap_or(false)
 }
 
-// A read-only snapshot the `watch` command can poll. Each maps to the matching
-// server command; `label` names it in the poll banner. Argv parsing lives in
-// the CLI binary, which maps its own value-enum onto this type.
+/// A read-only snapshot the `watch` command can poll. Each maps to the matching
+/// server command; `label` names it in the poll banner. Argv parsing lives in
+/// the CLI binary, which maps its own value-enum onto this type.
 #[derive(Clone, Copy, Debug)]
 pub enum WatchTarget {
+    /// The camera's live pose.
     Camera,
+    /// The world's system and component state.
     State,
+    /// Streaming residency counts and byte budgets.
     Streaming,
+    /// Per-frame CPU and GPU timings.
     Profile,
 }
 

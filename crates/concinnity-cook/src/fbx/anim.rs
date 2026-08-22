@@ -29,7 +29,7 @@ use crate::glb::{ImportedAnimation, ImportedAnimationTrack, ImportedKeyframe};
 const KTIME_PER_SEC: f64 = 46_186_158_000.0;
 
 // Names of every animation stack (clip) in declaration order.
-pub fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
+pub(crate) fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
     let tree = super::load_tree(path)?;
     let root = tree.root();
     let objects = root
@@ -42,10 +42,10 @@ pub fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-// Import one animation clip, selected by `animation_name` (precedence) or
-// `animation_index`, baked at `sample_rate` keys per second and resolved
-// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
-// that are not skeleton joints are dropped, mirroring the glTF importer.
+/// Import one animation clip, selected by `animation_name` (precedence) or
+/// `animation_index`, baked at `sample_rate` keys per second and resolved
+/// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
+/// that are not skeleton joints are dropped, mirroring the glTF importer.
 pub fn import_fbx_animation(
     path: &str,
     animation_index: u32,

@@ -1,53 +1,56 @@
-// src/build/texture.rs
-//
-// Texture payload format helpers shared between the runtime and the build
-// crate. The file -> pixels decoders (PNG / JPEG / DDS / TGA / KTX2 /
-// glb-embedded images) live in `concinnity_cook::texture`; this module keeps
-// only what a running engine needs with no image-decode dependencies: turning a
-// compiled payload back into a [`TextureImage`] (`deserialise`) and the
-// box-filter `downscale_rgba` the build pipeline uses to cap oversized source
-// maps.
-//
-// One tagged format serves every 2D texture (little-endian):
-//   u32  magic      = b"TEX2"
-//   u32  format_id  (0 RGBA8, 1 BC1, 2 BC3, 3 BC5, 4 BC7)
-//   u32  mip_count  (>= 1)
-//   per mip, level 0 first (largest):
-//     u32  width
-//     u32  height
-//     u32  byte_len
-//     byte_len bytes of level data
-//
-// RGBA8 sources (PNG / JPEG / procedural generators) carry a single mip; the
-// backend upload generates the minification chain (`concinnity_render::mipmap`).
-// Block-compressed sources (KTX2 / DDS) carry the container's full mip chain and
-// upload it verbatim, since no runtime BCn encoder exists.
+//! Texture payload format helpers shared between the runtime and the build
+//! crate. The file -> pixels decoders (PNG / JPEG / DDS / TGA / KTX2 /
+//! glb-embedded images) live in `concinnity_cook::texture`; this module keeps
+//! only what a running engine needs with no image-decode dependencies: turning a
+//! compiled payload back into a [`TextureImage`] (`deserialise`) and the
+//! box-filter `downscale_rgba` the build pipeline uses to cap oversized source
+//! maps.
+//!
+//! One tagged format serves every 2D texture (little-endian):
+//!   u32  magic      = b"TEX2"
+//!   u32  format_id  (0 RGBA8, 1 BC1, 2 BC3, 3 BC5, 4 BC7)
+//!   u32  mip_count  (>= 1)
+//!   per mip, level 0 first (largest):
+//!     u32  width
+//!     u32  height
+//!     u32  byte_len
+//!     byte_len bytes of level data
+//!
+//! RGBA8 sources (PNG / JPEG / procedural generators) carry a single mip; the
+//! backend upload generates the minification chain (`concinnity_render::mipmap`).
+//! Block-compressed sources (KTX2 / DDS) carry the container's full mip chain and
+//! upload it verbatim, since no runtime BCn encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
 use crate::decode::{ByteReader, checked_product};
 
-// A u32 dimension bottoms out at 1x1 after at most this many halvings, so a
-// file or payload declaring more levels than this is malformed rather than
-// large. Decoders bound a declared mip count against it before reserving.
+/// A u32 dimension bottoms out at 1x1 after at most this many halvings, so a
+/// file or payload declaring more levels than this is malformed rather than
+/// large. Decoders bound a declared mip count against it before reserving.
 pub const MAX_MIP_LEVELS: usize = 32;
 
-pub const TEXTURE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"TEX2");
+pub(crate) const TEXTURE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"TEX2");
 const HEADER_BYTES: usize = 12;
 
-// GPU pixel format of a compiled texture payload. RGBA8 is the uncompressed
-// path (runtime mip generation); the rest are block-compressed formats uploaded
-// with their container mip chains.
+/// GPU pixel format of a compiled texture payload. RGBA8 is the uncompressed
+/// path (runtime mip generation); the rest are block-compressed formats uploaded
+/// with their container mip chains.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TextureFormat {
+    /// Uncompressed 8-bit RGBA; mips are generated at upload.
     Rgba8,
+    /// BC1 block compression.
     Bc1,
+    /// BC3 block compression.
     Bc3,
+    /// BC5 block compression, for normal maps.
     Bc5,
+    /// BC7 block compression.
     Bc7,
 }
 
 impl TextureFormat {
-    // Stable on-disk identifier written into the payload header.
+    /// Stable on-disk identifier written into the payload header.
     pub fn id(self) -> u32 {
         match self {
             TextureFormat::Rgba8 => 0,
@@ -58,7 +61,7 @@ impl TextureFormat {
         }
     }
 
-    pub fn from_id(id: u32) -> Option<Self> {
+    pub(crate) fn from_id(id: u32) -> Option<Self> {
         match id {
             0 => Some(TextureFormat::Rgba8),
             1 => Some(TextureFormat::Bc1),
@@ -69,12 +72,8 @@ impl TextureFormat {
         }
     }
 
-    pub fn is_compressed(self) -> bool {
-        !matches!(self, TextureFormat::Rgba8)
-    }
-
-    // Bytes per 4x4 block for a compressed format. `None` for RGBA8, which is
-    // sized per pixel rather than per block.
+    /// Bytes per 4x4 block for a compressed format. `None` for RGBA8, which is
+    /// sized per pixel rather than per block.
     pub fn block_bytes(self) -> Option<usize> {
         match self {
             TextureFormat::Rgba8 => None,
@@ -83,10 +82,10 @@ impl TextureFormat {
         }
     }
 
-    // Byte length one mip of `width` x `height` occupies in this format.
-    // Dimensions are read out of the file being decoded, so a footprint that
-    // overflows `usize` is reported rather than wrapped into a small length
-    // that would pass the caller's bounds check.
+    /// Byte length one mip of `width` x `height` occupies in this format.
+    /// Dimensions are read out of the file being decoded, so a footprint that
+    /// overflows `usize` is reported rather than wrapped into a small length
+    /// that would pass the caller's bounds check.
     pub fn mip_byte_len(self, width: u32, height: u32) -> Result<usize, String> {
         match self.block_bytes() {
             None => checked_product("texture mip", &[width as usize, height as usize, 4]),
@@ -102,27 +101,32 @@ impl TextureFormat {
     }
 }
 
-// One mip level: dimensions plus its tightly packed level bytes (RGBA8 pixels or
-// block-compressed data, per the owning image's format).
+/// One mip level: dimensions plus its tightly packed level bytes (RGBA8 pixels or
+/// block-compressed data, per the owning image's format).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureMip {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Pixels or compressed blocks of this level.
     pub data: Vec<u8>,
 }
 
-// A decoded 2D texture: its GPU format plus one or more mip levels, level 0
-// first. The backend uploads `mips` directly for compressed formats and
-// generates the minification chain from `mips[0]` for RGBA8.
+/// A decoded 2D texture: its GPU format plus one or more mip levels, level 0
+/// first. The backend uploads `mips` directly for compressed formats and
+/// generates the minification chain from `mips[0]` for RGBA8.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureImage {
+    /// GPU pixel format of every mip.
     pub format: TextureFormat,
+    /// Mip levels, level 0 first.
     pub mips: Vec<TextureMip>,
 }
 
 impl TextureImage {
-    // Wrap a single RGBA8 level (the PNG / JPEG / procedural path). The upload
-    // path generates the mip chain.
+    /// Wrap a single RGBA8 level (the PNG / JPEG / procedural path). The upload
+    /// path generates the mip chain.
     pub fn rgba8(width: u32, height: u32, pixels: Vec<u8>) -> Self {
         TextureImage {
             format: TextureFormat::Rgba8,
@@ -134,23 +138,24 @@ impl TextureImage {
         }
     }
 
-    // Base (level 0) dimensions.
+    /// Base (level 0) dimensions.
     pub fn width(&self) -> u32 {
         self.mips.first().map(|m| m.width).unwrap_or(0)
     }
 
+    /// Base (level 0) height in pixels.
     pub fn height(&self) -> u32 {
         self.mips.first().map(|m| m.height).unwrap_or(0)
     }
 
-    // Total resident bytes across every mip level (streaming budget accounting).
+    /// Total resident bytes across every mip level (streaming budget accounting).
     pub fn byte_len(&self) -> usize {
         self.mips.iter().map(|m| m.data.len()).sum()
     }
 
-    // Recover the base RGBA8 pixels, or an error if the image is block
-    // compressed. Used by the sprite / glyph-atlas paths, which upload RGBA8
-    // only.
+    /// Recover the base RGBA8 pixels, or an error if the image is block
+    /// compressed. Used by the sprite / glyph-atlas paths, which upload RGBA8
+    /// only.
     pub fn into_rgba8(self) -> Result<(u32, u32, Vec<u8>), String> {
         if self.format != TextureFormat::Rgba8 {
             return Err(format!(
@@ -167,9 +172,9 @@ impl TextureImage {
     }
 }
 
-// Serialise a [`TextureImage`] into the tagged payload the runtime reads. The
-// build crate writes payloads through this so the reader and writer share one
-// format definition.
+/// Serialise a [`TextureImage`] into the tagged payload the runtime reads. The
+/// build crate writes payloads through this so the reader and writer share one
+/// format definition.
 pub fn serialise(image: &TextureImage) -> Vec<u8> {
     let total: usize = HEADER_BYTES + image.mips.iter().map(|m| 12 + m.data.len()).sum::<usize>();
     let mut buf = Vec::with_capacity(total);
@@ -185,10 +190,10 @@ pub fn serialise(image: &TextureImage) -> Vec<u8> {
     buf
 }
 
-// Deserialise a tagged payload back into a [`TextureImage`].
-//
-// Called by GraphicsSystem at runtime to recover texture format, dimensions,
-// and mip data before uploading to the GPU.
+/// Deserialise a tagged payload back into a [`TextureImage`].
+///
+/// Called by GraphicsSystem at runtime to recover texture format, dimensions,
+/// and mip data before uploading to the GPU.
 pub fn deserialise(bytes: &[u8]) -> Result<TextureImage, String> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
     let format_id = r.u32()?;
@@ -227,10 +232,10 @@ pub fn deserialise(bytes: &[u8]) -> Result<TextureImage, String> {
     Ok(TextureImage { format, mips })
 }
 
-// Box-filter an RGBA image down so its longest edge is at most `max_size`. A
-// `max_size` of 0 (or an image already within budget) returns the input
-// unchanged. Used to keep oversized source maps (4K+ DDS) from exploding the
-// compiled blob, which stores raw RGBA8.
+/// Box-filter an RGBA image down so its longest edge is at most `max_size`. A
+/// `max_size` of 0 (or an image already within budget) returns the input
+/// unchanged. Used to keep oversized source maps (4K+ DDS) from exploding the
+/// compiled blob, which stores raw RGBA8.
 pub fn downscale_rgba(
     width: u32,
     height: u32,

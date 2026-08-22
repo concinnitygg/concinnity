@@ -11,7 +11,7 @@ as their native path.
 
 ## Values
 
-- `auto`
-- `fsr3`
-- `dlss`
-- `xess`
+- `auto`: Pick the best backend the device offers.
+- `fsr3`: AMD FidelityFX Super Resolution 3.
+- `dlss`: NVIDIA DLSS, through NGX.
+- `xess`: Intel XeSS.

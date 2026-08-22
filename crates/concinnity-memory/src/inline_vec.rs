@@ -50,11 +50,13 @@ impl<T> InlineVec<T> {
         Self(Repr::One(value))
     }
 
-    /// Whether the contents live on the heap rather than inline.
-    pub fn spilled(&self) -> bool {
+    // Whether the contents live on the heap rather than inline.
+    #[cfg(test)]
+    pub(crate) fn spilled(&self) -> bool {
         matches!(self.0, Repr::Spilled(_))
     }
 
+    /// The contents as a slice.
     pub fn as_slice(&self) -> &[T] {
         match &self.0 {
             Repr::Empty => &[],
@@ -63,6 +65,7 @@ impl<T> InlineVec<T> {
         }
     }
 
+    /// The contents as a mutable slice.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         match &mut self.0 {
             Repr::Empty => &mut [],
@@ -115,8 +118,8 @@ impl<T> InlineVec<T> {
         self.0 = Repr::Empty;
     }
 
-    /// The contents as an owned `Vec`, allocating when they were held inline.
-    pub fn into_vec(self) -> Vec<T> {
+    // The contents as an owned `Vec`, allocating when they were held inline.
+    pub(crate) fn into_vec(self) -> Vec<T> {
         match self.0 {
             Repr::Empty => Vec::new(),
             Repr::One(value) => alloc::vec![value],

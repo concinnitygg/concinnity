@@ -48,50 +48,50 @@ enum TargetMode {
     Graph(GraphTarget),
 }
 
-// One hot-reload entry for a file-backed `Animation`. Captured at init
-// alongside the runtime clip; consulted by the per-step reload pass when the
-// shared `PENDING_ANIMATIONS` flag fires (see
-// [`crate::app::dev_flags::take_pending_animations`]). Inline-authored
-// animations (no `source`) carry no entry; there's no file to watch and
-// the build pipeline never expanded one.
-//
-// `pub` (with public fields) because the editor crate's hot-reload drive reads
-// these to re-import the clip from source, then pushes the result back through
-// `AnimationSystem::apply_reloaded_clip`. The GLB decode itself lives in the
-// editor crate; the runtime crate only stores the catalogue.
+/// One hot-reload entry for a file-backed `Animation`. Captured at init
+/// alongside the runtime clip; consulted by the per-step reload pass when the
+/// shared `PENDING_ANIMATIONS` flag fires (see
+/// [`crate::app::dev_flags::take_pending_animations`]). Inline-authored
+/// animations (no `source`) carry no entry; there's no file to watch and
+/// the build pipeline never expanded one.
+///
+/// `pub` (with public fields) because the editor crate's hot-reload drive reads
+/// these to re-import the clip from source, then pushes the result back through
+/// `AnimationSystem::apply_reloaded_clip`. The GLB decode itself lives in the
+/// editor crate; the runtime crate only stores the catalogue.
 #[derive(Debug, Clone)]
 pub struct AnimationReloadEntry {
-    // Target `SkinnedMesh` handle, also the key into
-    // [`AnimationSystem::targets`] where this clip lives.
+    /// Target `SkinnedMesh` handle, also the key into
+    /// `AnimationSystem::targets` where this clip lives.
     pub target: SkinnedMeshHandle,
-    // Position in the target bucket's `clips`. Set at init when the clip is
-    // first pushed; stable for the process lifetime since the Vec is
-    // neither rebuilt nor trimmed.
+    /// Position in the target bucket's `clips`. Set at init when the clip is
+    /// first pushed; stable for the process lifetime since the Vec is
+    /// neither rebuilt nor trimmed.
     pub clip_index: usize,
-    // `.glb` source path verbatim from the asset declaration; used as-is by
-    // the GLB parser at reload time.
+    /// `.glb` source path verbatim from the asset declaration; used as-is by
+    /// the GLB parser at reload time.
     pub source: String,
-    // The target mesh's [`SkinnedMesh::skin_index`]: the clip re-imports
-    // against the same skeleton the build cooked it against.
+    /// The target mesh's `skin_index`: the clip re-imports
+    /// against the same skeleton the build cooked it against.
     pub skin_index: u32,
-    // Mirrors [`Animation::animation_index`].
+    /// Mirrors [`Animation::animation_index`].
     pub animation_index: u32,
-    // Mirrors [`Animation::animation_name`] (precedence over index when
-    // non-empty).
+    /// Mirrors [`Animation::animation_name`] (precedence over index when
+    /// non-empty).
     pub animation_name: String,
-    // Mirrors [`Animation::sample_rate`]; the FBX reload path bakes at the
-    // same rate the build used.
+    /// Mirrors [`Animation::sample_rate`]; the FBX reload path bakes at the
+    /// same rate the build used.
     pub sample_rate: f32,
-    // Mirrors [`Animation::weight`]; the .glb has nothing equivalent, so
-    // it's carried through the reload unchanged.
+    /// Mirrors [`Animation::weight`]; the .glb has nothing equivalent, so
+    /// it's carried through the reload unchanged.
     pub weight: f32,
-    // Mirrors [`Animation::looping`]; same rationale as `weight`.
+    /// Mirrors [`Animation::looping`]; same rationale as `weight`.
     pub looping: bool,
 }
 
-// Skeletal animation playback behavior. Constructed internally by
-// `World::start` when the world declares any `Animation` or `AnimGraph`;
-// never a world-declared asset, so it carries no config.
+/// Skeletal animation playback behavior. Constructed internally by
+/// `World::start` when the world declares any `Animation` or `AnimGraph`;
+/// never a world-declared asset, so it carries no config.
 pub struct AnimationSystem {
     // Per-target clip buckets keyed by the `SkinnedMesh` handle they animate.
     // Ordered so per-frame iteration (and the RootMotion events it emits) is
@@ -135,8 +135,8 @@ impl Default for AnimationSystem {
 }
 
 impl AnimationSystem {
-    // Fresh playback state with no clips. Clips and graphs are drained from
-    // the world's components in [`System::init`].
+    /// Fresh playback state with no clips. Clips and graphs are drained from
+    /// the world's components in [`System::init`].
     pub fn new() -> Self {
         Self {
             targets: BTreeMap::new(),
@@ -150,22 +150,22 @@ impl AnimationSystem {
         }
     }
 
-    // The file-backed clips captured at init under `cn debug`. The editor
-    // crate's hot-reload drive reads these to re-import each clip from source.
-    // Empty when hot-reload is off or every clip is inline.
-    // `dead_code` allowed while the runtime crate still carries the legacy
-    // binary; the only caller is the editor crate (external). Removed when the
-    // binary moves out of the runtime crate.
+    /// The file-backed clips captured at init under `cn debug`. The editor
+    /// crate's hot-reload drive reads these to re-import each clip from source.
+    /// Empty when hot-reload is off or every clip is inline.
+    /// `dead_code` allowed while the runtime crate still carries the legacy
+    /// binary; the only caller is the editor crate (external). Removed when the
+    /// binary moves out of the runtime crate.
     pub fn reload_entries(&self) -> &[AnimationReloadEntry] {
         &self.reload_entries
     }
 
-    // Swap a freshly re-imported `clip` into the bucket slot identified by
-    // `target` + `clip_index`, restoring its declared `weight`. Returns false
-    // if the target bucket disappeared or the slot index is out of range
-    // (a half-applied reload is impossible: nothing is mutated on miss). The
-    // editor crate calls this after decoding the source GLB; the runtime crate
-    // does no decoding of its own.
+    /// Swap a freshly re-imported `clip` into the bucket slot identified by
+    /// `target` + `clip_index`, restoring its declared `weight`. Returns false
+    /// if the target bucket disappeared or the slot index is out of range
+    /// (a half-applied reload is impossible: nothing is mutated on miss). The
+    /// editor crate calls this after decoding the source GLB; the runtime crate
+    /// does no decoding of its own.
     pub fn apply_reloaded_clip(
         &mut self,
         target: SkinnedMeshHandle,

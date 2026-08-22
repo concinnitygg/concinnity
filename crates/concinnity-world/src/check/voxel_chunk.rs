@@ -1,7 +1,8 @@
-// Structural validation for VoxelChunk args. Cross-asset palette lookups are
-// handled by crate::check::cross_reference::validate_cross_references; this check
-// only catches problems we can see from the chunk's own args alone.
+//! Structural validation for VoxelChunk args. Cross-asset palette lookups are
+//! handled by crate::check::cross_reference::validate_cross_references; this check
+//! only catches problems we can see from the chunk's own args alone.
 
+/// Check a `VoxelChunk`'s authored args.
 pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let dim = args.get("dim").and_then(|v| v.as_array()).ok_or_else(|| {
         format!(

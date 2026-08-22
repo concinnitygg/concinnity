@@ -1,28 +1,26 @@
-// src/csm.rs
-//
-// Cascaded shadow map cascade computation. Produces a `ShadowUniforms` carrying
-// one orthographic light-view-projection matrix per cascade plus the view-space
-// far depth for each cascade (the fragment shader uses these to select which
-// cascade slice to sample).
-//
-// Algorithm (per-frame, called from each backend's draw loop):
-//
-//   1. Split the camera's [near, shadow_distance] depth range into N cascade
-//      sub-ranges using the practical PSSM blend
-//      (lambda * logarithmic + (1 - lambda) * linear).
-//   2. For each cascade, compute the 8 frustum corners at its near/far depths,
-//      then bound the corners with a sphere. The sphere bound makes the
-//      orthographic light frustum rotation-invariant, eliminating shimmer
-//      when the camera rotates.
-//   3. Snap the sphere centre, in world space along the light's right/up axes,
-//      to a per-cascade texel grid so the grid stays anchored in the world and
-//      individual texels don't crawl as the camera translates.
-//   4. Build a RH look_at from outside the sphere along the light direction
-//      and an ortho projection that exactly encloses the sphere.
-//
-// The math is shared across all three backends: Metal, Vulkan, and DirectX
-// all use RH view matrices with [0, 1] depth in their orthographic
-// projections, so the same VPs are valid for every backend's shadow sampling.
+//! Cascaded shadow map cascade computation. Produces a `ShadowUniforms` carrying
+//! one orthographic light-view-projection matrix per cascade plus the view-space
+//! far depth for each cascade (the fragment shader uses these to select which
+//! cascade slice to sample).
+//!
+//! Algorithm (per-frame, called from each backend's draw loop):
+//!
+//!   1. Split the camera's [near, shadow_distance] depth range into N cascade
+//!      sub-ranges using the practical PSSM blend
+//!      (lambda * logarithmic + (1 - lambda) * linear).
+//!   2. For each cascade, compute the 8 frustum corners at its near/far depths,
+//!      then bound the corners with a sphere. The sphere bound makes the
+//!      orthographic light frustum rotation-invariant, eliminating shimmer
+//!      when the camera rotates.
+//!   3. Snap the sphere centre, in world space along the light's right/up axes,
+//!      to a per-cascade texel grid so the grid stays anchored in the world and
+//!      individual texels don't crawl as the camera translates.
+//!   4. Build a RH look_at from outside the sphere along the light direction
+//!      and an ortho projection that exactly encloses the sphere.
+//!
+//! The math is shared across all three backends: Metal, Vulkan, and DirectX
+//! all use RH view matrices with [0, 1] depth in their orthographic
+//! projections, so the same VPs are valid for every backend's shadow sampling.
 
 use crate::mat::{
     IDENTITY4, add3, cross3, dot3, look_at, mat4_mul, normalize3, ortho_rh, scale3, sub3,
@@ -31,9 +29,9 @@ use crate::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 
 const SPLIT_LAMBDA: f32 = 0.5;
 
-// Fallback uniforms used when no shadow pass is active: identity VPs and a
-// single split at +inf so the fragment shader always picks cascade 0 with a
-// 1x1 fallback texture (returns "fully lit").
+/// Fallback uniforms used when no shadow pass is active: identity VPs and a
+/// single split at +inf so the fragment shader always picks cascade 0 with a
+/// 1x1 fallback texture (returns "fully lit").
 pub fn empty_shadow_uniforms() -> ShadowUniforms {
     ShadowUniforms {
         light_vps: [IDENTITY4; NUM_SHADOW_CASCADES],
@@ -43,34 +41,34 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
     }
 }
 
-// Camera, light, and shadow-configuration inputs to
-// [`compute_shadow_uniforms`].
+/// Camera, light, and shadow-configuration inputs to
+/// [`compute_shadow_uniforms`].
 #[derive(Clone, Copy)]
 pub struct ShadowUniformInputs {
-    // Camera view matrix (column-major, RH, same convention as look_at).
+    /// Camera view matrix (column-major, RH, same convention as look_at).
     pub view: [[f32; 4]; 4],
-    // World-space camera position.
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
-    // Vertical FOV in radians.
+    /// Vertical FOV in radians.
     pub fov_y_rad: f32,
-    // Viewport aspect ratio (width / height).
+    /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    // Camera near plane.
+    /// Camera near plane.
     pub near: f32,
-    // Far end of the last cascade. Cascades cover [near, shadow_distance].
+    /// Far end of the last cascade. Cascades cover [near, shadow_distance].
     pub shadow_distance: f32,
-    // Unit vector pointing TOWARD the light. Same convention as
-    // `DirectionalLight.direction`; renormalised internally.
+    /// Unit vector pointing TOWARD the light. Same convention as
+    /// `DirectionalLight.direction`; renormalised internally.
     pub light_dir_to_source: [f32; 3],
-    // Per-cascade texture resolution; used for texel snapping.
+    /// Per-cascade texture resolution; used for texel snapping.
     pub shadow_map_size: u32,
-    // How many of the `NUM_SHADOW_CASCADES` slots are live (1..=4); only the
-    // first `active` are split + projected, the rest hold a negative split
-    // sentinel and an identity VP so the shader never selects them.
+    /// How many of the `NUM_SHADOW_CASCADES` slots are live (1..=4); only the
+    /// first `active` are split + projected, the rest hold a negative split
+    /// sentinel and an identity VP so the shader never selects them.
     pub active_cascades: u32,
 }
 
-// Compute cascade VPs + split depths from camera + light parameters.
+/// Compute cascade VPs + split depths from camera + light parameters.
 pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     let ShadowUniformInputs {
         view,

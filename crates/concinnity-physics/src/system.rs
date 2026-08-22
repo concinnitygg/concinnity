@@ -22,8 +22,8 @@ use concinnity_core::ecs::{
 };
 use std::collections::{HashMap, HashSet};
 
-// Acceleration due to gravity in world units per second squared. Shared with
-// the third-person controller so its jump takeoff matches the rig's fall.
+/// Acceleration due to gravity in world units per second squared. Shared with
+/// the third-person controller so its jump takeoff matches the rig's fall.
 pub const GRAVITY: f32 = 20.0;
 
 // Reach distance for picking up a Prop, in world units.
@@ -37,8 +37,8 @@ const HOLD_DROP: f32 = 0.35;
 // Launch speed applied to a prop when it is dropped/thrown.
 const THROW_SPEED: f32 = 6.0;
 
-// Rapier rigid-body simulation behavior. Constructed internally by
-// `World::start` from the world's `PhysicsConfig`; never a declarable asset.
+/// Rapier rigid-body simulation behavior. Constructed internally by
+/// `World::start` from the world's `PhysicsConfig`; never a declarable asset.
 #[derive(Debug)]
 pub struct PhysicsSystem {
     // Camera eye Y at spawn; the flat-floor fallback derives nothing from it,
@@ -135,8 +135,8 @@ impl PhysicsSystem {
         self.world.as_ref().map_or(0, |w| w.collider_count())
     }
 
-    // Build the simulation from the world's `PhysicsConfig` (floor / terrain).
-    // Bodies and colliders are added from the ECS in [`System::init`].
+    /// Build the simulation from the world's `PhysicsConfig` (floor / terrain).
+    /// Bodies and colliders are added from the ECS in [`System::init`].
     pub fn new(config: PhysicsConfig) -> Self {
         let terrain = if config.terrain_subdivisions > 0 {
             Some(TerrainParams {

@@ -1,11 +1,9 @@
-// src/decode/size.rs
-//
-// Checked arithmetic over sizes read out of an untrusted buffer. Decoders take
-// dimensions from the payload itself, so every product and sum derived from
-// them is attacker-reachable and has to be range-checked before it is used as
-// a length.
+//! Checked arithmetic over sizes read out of an untrusted buffer. Decoders take
+//! dimensions from the payload itself, so every product and sum derived from
+//! them is attacker-reachable and has to be range-checked before it is used as
+//! a length.
 
-// Product of `factors`, or an error naming `label` if it overflows `usize`.
+/// Product of `factors`, or an error naming `label` if it overflows `usize`.
 pub fn checked_product(label: &str, factors: &[usize]) -> Result<usize, String> {
     let mut acc: usize = 1;
     for f in factors {
@@ -17,7 +15,8 @@ pub fn checked_product(label: &str, factors: &[usize]) -> Result<usize, String> 
 }
 
 // Sum of `terms`, or an error naming `label` if it overflows `usize`.
-pub fn checked_sum(label: &str, terms: &[usize]) -> Result<usize, String> {
+#[cfg(test)]
+pub(crate) fn checked_sum(label: &str, terms: &[usize]) -> Result<usize, String> {
     let mut acc: usize = 0;
     for t in terms {
         acc = acc

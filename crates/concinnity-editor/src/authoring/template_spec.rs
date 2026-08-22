@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub use concinnity_world::spec::{arg_value_to_json, spec_args, spec_to_value};
 
-// A world template's assets as world-line entries, in application order.
+/// A world template's assets as world-line entries, in application order.
 pub fn world_template_entries(t: &WorldTemplate) -> Vec<Value> {
     t.assets().iter().map(spec_to_value).collect()
 }

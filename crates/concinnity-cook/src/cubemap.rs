@@ -1,22 +1,20 @@
-// src/cubemap.rs
-//
-// Compiles a CubemapTexture component's args into the binary payload that the
-// renderer reads at runtime. A cubemap is six square HDR faces stored as
-// RGBA32F in face-major order (face 0 → face 5, each face row-major top-down).
-//
-// Source format: equirectangular Radiance HDR (.hdr / RGBE). The
-// equirect is resampled at build time into six cube faces using bilinear
-// interpolation in HDR space.
-//
-// Payload format (little-endian):
-//   u32  magic     = b"CUBE" = 0x45425543
-//   u32  face_size
-//   u32  mip_count = 1
-//   u32  format_id = 0  (RGBA32F)
-//   6 * face_size * face_size * 4 * 4 bytes  raw RGBA32F, face-major
-//
-// Face order matches the standard cube convention used by Metal / Vulkan / DX:
-//   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z
+//! Compiles a CubemapTexture component's args into the binary payload that the
+//! renderer reads at runtime. A cubemap is six square HDR faces stored as
+//! RGBA32F in face-major order (face 0 → face 5, each face row-major top-down).
+//!
+//! Source format: equirectangular Radiance HDR (.hdr / RGBE). The
+//! equirect is resampled at build time into six cube faces using bilinear
+//! interpolation in HDR space.
+//!
+//! Payload format (little-endian):
+//!   u32  magic     = b"CUBE" = 0x45425543
+//!   u32  face_size
+//!   u32  mip_count = 1
+//!   u32  format_id = 0  (RGBA32F)
+//!   6 * face_size * face_size * 4 * 4 bytes  raw RGBA32F, face-major
+//!
+//! Face order matches the standard cube convention used by Metal / Vulkan / DX:
+//!   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z
 
 use crate::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
@@ -38,7 +36,7 @@ fn cubemap_source(args: &serde_json::Value) -> Result<&str, String> {
 }
 
 // Validate that args specify either a supported source extension or omit it.
-pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
     cubemap_source(args)?;
     let face_size = args
         .get("face_size")
@@ -60,7 +58,7 @@ pub fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), String> {
 }
 
 // Compile a CubemapTexture component's JSON args into a packed binary payload.
-pub fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     validate_cubemap_args(args)?;
     let source = cubemap_source(args)?;
     let face_size = args

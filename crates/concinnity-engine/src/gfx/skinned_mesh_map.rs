@@ -18,19 +18,19 @@ use crate::ecs::asset_id::AssetId;
 // Interned-name -> handle index for the skinned meshes, published as a world
 // resource by GraphicsSystem while it loads the SkinnedMesh resource table.
 #[derive(Debug, Default, Clone)]
-pub struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
+pub(crate) struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
 
 // Each skinned mesh's source-file skin selector, indexed by handle and
 // published alongside the name index. An animation clip re-imported at
 // hot-reload must resolve against the same skin its target mesh was cooked
 // from; the reload catalogue reads the selector from here at init.
 #[derive(Debug, Default, Clone)]
-pub struct SkinnedMeshSkinIndex(pub Vec<u32>);
+pub(crate) struct SkinnedMeshSkinIndex(pub Vec<u32>);
 
 impl SkinnedMeshSkinIndex {
     // The selector for a mesh handle; 0 (the file's first skinned mesh) when
     // the handle is unknown, matching the asset default.
-    pub fn get(&self, handle: SkinnedMeshHandle) -> u32 {
+    pub(crate) fn get(&self, handle: SkinnedMeshHandle) -> u32 {
         self.0.get(handle.index()).copied().unwrap_or(0)
     }
 }
@@ -42,7 +42,7 @@ impl SkinnedMeshNameIndex {
     // through the resolver's interner fallback, so both sides of the
     // correlation carry the interned id and the identity mapping matches them.
     // In a real build every name a debug command can address is in the index.
-    pub fn get(&self, name_id: AssetId) -> SkinnedMeshHandle {
+    pub(crate) fn get(&self, name_id: AssetId) -> SkinnedMeshHandle {
         self.0
             .get(&name_id)
             .copied()

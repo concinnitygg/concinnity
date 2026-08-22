@@ -1,17 +1,17 @@
-// JSON-args source selection for the shader-backed asset types.
-//
-// A Shader stage / SdfVolume declares its shader source as a single path plus
-// an optional per-platform map; the build pipeline and the world checks pick
-// the building backend's entry straight from the raw args JSON. The runtime
-// selects from the typed struct instead (`StageSourceExt` and the SdfVolume
-// clamp in concinnity-core), so the runtime tier carries no JSON parsing.
+//! JSON-args source selection for the shader-backed asset types.
+//!
+//! A Shader stage / SdfVolume declares its shader source as a single path plus
+//! an optional per-platform map; the build pipeline and the world checks pick
+//! the building backend's entry straight from the raw args JSON. The runtime
+//! selects from the typed struct instead (`StageSourceExt` and the SdfVolume
+//! clamp in concinnity-core), so the runtime tier carries no JSON parsing.
 
 use concinnity_core::platform::Platform;
 
-/// Resolve a shader stage source filename for `platform` from its raw stage args:
-/// the `sources` map entry for the platform wins, then the single `source`
-/// path when its file extension matches the platform.
-pub fn stage_source_path(args: &serde_json::Value, platform: Platform) -> Option<String> {
+// Resolve a shader stage source filename for `platform` from its raw stage args:
+// the `sources` map entry for the platform wins, then the single `source`
+// path when its file extension matches the platform.
+pub(crate) fn stage_source_path(args: &serde_json::Value, platform: Platform) -> Option<String> {
     if let Some(obj) = args.get("sources").and_then(|v| v.as_object())
         && let Some(src) = obj.get(platform.key()).and_then(|v| v.as_str())
     {
@@ -38,10 +38,13 @@ pub fn resolve_source_from_args(args: &serde_json::Value) -> Option<String> {
     stage_source_path(args, Platform::current())
 }
 
-/// Resolve an SdfVolume's fragment shader path for `platform` from its raw
-/// args: the `fragment_shaders` map entry wins, then the single
-/// `fragment_shader` path when its extension matches the platform.
-pub fn sdf_volume_source_path(args: &serde_json::Value, platform: Platform) -> Option<String> {
+// Resolve an SdfVolume's fragment shader path for `platform` from its raw
+// args: the `fragment_shaders` map entry wins, then the single
+// `fragment_shader` path when its extension matches the platform.
+pub(crate) fn sdf_volume_source_path(
+    args: &serde_json::Value,
+    platform: Platform,
+) -> Option<String> {
     if let Some(obj) = args.get("fragment_shaders").and_then(|v| v.as_object())
         && let Some(src) = obj
             .get(platform.key())

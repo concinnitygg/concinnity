@@ -1,22 +1,21 @@
-// src/skinned_pool.rs
-//
-// Free pool for pre-reserved skinned instance slots. A skinned mesh that opts
-// into runtime spawning (SkinnedMesh.max_instances > 0) has that many hidden
-// bind-pose copies appended to the skinned geometry at load. Each copy is its
-// own skinned draw object with its own vertex region in the shared skinned
-// buffer, which is required because the GPU skin fold writes the deformed
-// buffer keyed by global vertex index: two live instances sharing a region
-// would clobber each other's pose. This pool tracks, per template, which of
-// those copies are currently free so a spawn can claim one and a despawn can
-// return it. Slot indices are stable skinned-draw-object indices; nothing is
-// compacted, so the per-frame skinned arrays that parallel them stay valid.
-//
-// Built and consumed by every graphics backend's runtime skinned-spawn path
-// (Metal, DirectX, Vulkan).
+//! Free pool for pre-reserved skinned instance slots. A skinned mesh that opts
+//! into runtime spawning (SkinnedMesh.max_instances > 0) has that many hidden
+//! bind-pose copies appended to the skinned geometry at load. Each copy is its
+//! own skinned draw object with its own vertex region in the shared skinned
+//! buffer, which is required because the GPU skin fold writes the deformed
+//! buffer keyed by global vertex index: two live instances sharing a region
+//! would clobber each other's pose. This pool tracks, per template, which of
+//! those copies are currently free so a spawn can claim one and a despawn can
+//! return it. Slot indices are stable skinned-draw-object indices; nothing is
+//! compacted, so the per-frame skinned arrays that parallel them stay valid.
+//!
+//! Built and consumed by every graphics backend's runtime skinned-spawn path
+//! (Metal, DirectX, Vulkan).
 
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
+/// Recycles skinned draw slots as skinned instances spawn and despawn.
 pub struct SkinnedInstancePool {
     // template skinned-draw-object index -> its currently free instance slots.
     free: HashMap<usize, Vec<usize>>,
@@ -27,26 +26,27 @@ pub struct SkinnedInstancePool {
 }
 
 impl SkinnedInstancePool {
+    /// An empty pool.
     pub fn new() -> Self {
         Self::default()
     }
 
-    // Record a pre-reserved instance slot as free and owned by `template`.
-    // Called once per expanded copy at load.
+    /// Record a pre-reserved instance slot as free and owned by `template`.
+    /// Called once per expanded copy at load.
     pub fn reserve(&mut self, template: usize, instance: usize) {
         self.owner.insert(instance, template);
         self.free.entry(template).or_default().push(instance);
     }
 
-    // Claim a free instance slot for `template`, or `None` when the reserve is
-    // exhausted (more live copies than were pre-reserved).
+    /// Claim a free instance slot for `template`, or `None` when the reserve is
+    /// exhausted (more live copies than were pre-reserved).
     pub fn acquire(&mut self, template: usize) -> Option<usize> {
         self.free.get_mut(&template).and_then(|slots| slots.pop())
     }
 
-    // Return a live instance slot to its template's free list. Returns false if
-    // the slot was never a pre-reserved instance (e.g. an authored template
-    // slot), so the caller can tell a recyclable slot from a fixed one.
+    /// Return a live instance slot to its template's free list. Returns false if
+    /// the slot was never a pre-reserved instance (e.g. an authored template
+    /// slot), so the caller can tell a recyclable slot from a fixed one.
     pub fn release(&mut self, instance: usize) -> bool {
         let Some(&template) = self.owner.get(&instance) else {
             return false;
@@ -55,9 +55,9 @@ impl SkinnedInstancePool {
         true
     }
 
-    // Total free slots across every template. Surfaced through the debug
-    // profile so a probe can watch the pool drain on spawn and refill on
-    // despawn, a direct check on the free-list recycle.
+    /// Total free slots across every template. Surfaced through the debug
+    /// profile so a probe can watch the pool drain on spawn and refill on
+    /// despawn, a direct check on the free-list recycle.
     pub fn total_free(&self) -> usize {
         self.free.values().map(Vec::len).sum()
     }

@@ -1,16 +1,14 @@
-// concinnity-eas/src/lib.rs
-//
-// Concinnity EAS (Entity-Asset-System): the engine's closed-world ECS
-// mechanism, in its own crate so it carries no engine domain types. It provides
-// the generic primitives only: entities, typed storage columns, change ticks,
-// component masks and a join index, resources, events, the deferred command
-// buffer, and system access sets for conflict-free scheduling. The concrete
-// component set is registered by concinnity-core through the define_components!
-// macro; nothing here knows about meshes, blobs, or rendering.
-//
-// Closed-world by design: EAS stores only the component types the project
-// defines, registered at compile time. There is no TypeId-keyed type erasure
-// and no open-world insert of arbitrary external types.
+//! Concinnity EAS (Entity-Asset-System): the engine's closed-world ECS
+//! mechanism, in its own crate so it carries no engine domain types. It provides
+//! the generic primitives only: entities, typed storage columns, change ticks,
+//! component masks and a join index, resources, events, the deferred command
+//! buffer, and system access sets for conflict-free scheduling. The concrete
+//! component set is registered by concinnity-core through the define_components!
+//! macro; nothing here knows about meshes, blobs, or rendering.
+//!
+//! Closed-world by design: EAS stores only the component types the project
+//! defines, registered at compile time. There is no TypeId-keyed type erasure
+//! and no open-world insert of arbitrary external types.
 
 #![no_std]
 
@@ -38,7 +36,7 @@ mod storage;
 mod tick;
 
 pub use access::Access;
-pub use column::{Column, ColumnTicks, StorageKind};
+pub use column::{Column, ColumnTicks};
 pub use command::{Command, CommandQueue, CommandTarget, Commands};
 pub use entity::{Entities, Entity};
 pub use event::{EventCursor, Events};
@@ -46,6 +44,6 @@ pub use event_store::EventStore;
 pub use join::JoinIndex;
 pub use mask::{ComponentId, ComponentMask};
 pub use resource::Resources;
-pub use shard::{Shard, ShardColumn, split_shards};
+pub use shard::ShardColumn;
 pub use sparse::SparseColumn;
 pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};

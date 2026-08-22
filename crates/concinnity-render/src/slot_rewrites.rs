@@ -1,15 +1,14 @@
-// src/slot_rewrites.rs
-//
-// Propagates a streamed texture-pool slot swap across per-frame descriptor
-// copies without stalling the device. Backends that bake the texture pool
-// into per-frame-in-flight descriptor sets (Vulkan) or heap regions (DirectX)
-// cannot legally rewrite a descriptor while a command buffer referencing it
-// is pending; instead a swap queues its slot here, and each `draw_frame`
-// applies the queued slots to the copy owned by the frame slot it just
-// fence-waited (which is therefore not referenced by any pending work). An
-// entry retires once every frame-in-flight copy has been rewritten.
+//! Propagates a streamed texture-pool slot swap across per-frame descriptor
+//! copies without stalling the device. Backends that bake the texture pool
+//! into per-frame-in-flight descriptor sets (Vulkan) or heap regions (DirectX)
+//! cannot legally rewrite a descriptor while a command buffer referencing it
+//! is pending; instead a swap queues its slot here, and each `draw_frame`
+//! applies the queued slots to the copy owned by the frame slot it just
+//! fence-waited (which is therefore not referenced by any pending work). An
+//! entry retires once every frame-in-flight copy has been rewritten.
 
 #[derive(Debug)]
+/// Defers draw-slot rewrites until every in-flight frame has retired.
 pub struct SlotRewriteQueue {
     // (pool slot, applications remaining). A slot appears at most once.
     entries: Vec<(usize, usize)>,
@@ -17,6 +16,7 @@ pub struct SlotRewriteQueue {
 }
 
 impl SlotRewriteQueue {
+    /// A queue sized for `frames_in_flight` in-flight frames.
     pub fn new(frames_in_flight: usize) -> Self {
         Self {
             entries: Vec::new(),
@@ -24,10 +24,10 @@ impl SlotRewriteQueue {
         }
     }
 
-    // Queue pool `slot` for rewriting in every per-frame copy. Re-queueing a
-    // slot mid-propagation restarts its countdown, so every copy ends on the
-    // view the caller swapped in last (the rewrite reads the pool at apply
-    // time, not at queue time).
+    /// Queue pool `slot` for rewriting in every per-frame copy. Re-queueing a
+    /// slot mid-propagation restarts its countdown, so every copy ends on the
+    /// view the caller swapped in last (the rewrite reads the pool at apply
+    /// time, not at queue time).
     pub fn queue(&mut self, slot: usize) {
         if let Some(entry) = self.entries.iter_mut().find(|(s, _)| *s == slot) {
             entry.1 = self.frames_in_flight;
@@ -36,9 +36,9 @@ impl SlotRewriteQueue {
         }
     }
 
-    // The slots whose descriptor must be rewritten in the frame copy about to
-    // record. Call exactly once per frame, after the frame slot's fence wait.
-    // Entries that have now covered every copy are dropped.
+    /// The slots whose descriptor must be rewritten in the frame copy about to
+    /// record. Call exactly once per frame, after the frame slot's fence wait.
+    /// Entries that have now covered every copy are dropped.
     pub fn begin_frame(&mut self) -> Vec<usize> {
         let slots: Vec<usize> = self.entries.iter().map(|(s, _)| *s).collect();
         for entry in &mut self.entries {
@@ -48,12 +48,13 @@ impl SlotRewriteQueue {
         slots
     }
 
-    // Drop a queued slot: the caller rewrote every copy itself (e.g. a
-    // fallback full rewrite under a device drain).
+    /// Drop a queued slot: the caller rewrote every copy itself (e.g. a
+    /// fallback full rewrite under a device drain).
     pub fn remove(&mut self, slot: usize) {
         self.entries.retain(|(s, _)| *s != slot);
     }
 
+    /// Whether nothing is queued.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

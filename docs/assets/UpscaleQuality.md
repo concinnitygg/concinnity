@@ -9,7 +9,7 @@ and `UltraPerformance` at 1/9.
 
 ## Values
 
-- `quality`
-- `balanced`
-- `performance`
-- `ultra_performance`
+- `quality`: 4/9 of the output pixel count.
+- `balanced`: Roughly a third of the output pixel count.
+- `performance`: A quarter of the output pixel count.
+- `ultra_performance`: A ninth of the output pixel count.

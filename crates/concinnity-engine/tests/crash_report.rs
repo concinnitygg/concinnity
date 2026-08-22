@@ -1,6 +1,6 @@
-// End-to-end panic reporting: a child process (this test binary re-run with
-// the ignored probe selected) installs the crash hooks and panics; the parent
-// asserts a complete report lands under the state root's crashes dir.
+//! End-to-end panic reporting: a child process (this test binary re-run with
+//! the ignored probe selected) installs the crash hooks and panics; the parent
+//! asserts a complete report lands under the state root's crashes dir.
 
 use std::process::Command;
 

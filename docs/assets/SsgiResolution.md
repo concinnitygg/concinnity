@@ -12,6 +12,6 @@ resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 
 ## Values
 
-- `full`
-- `half`
-- `quarter`
+- `full`: Gather at native resolution.
+- `half`: Gather at half resolution per axis.
+- `quarter`: Gather at quarter resolution per axis.

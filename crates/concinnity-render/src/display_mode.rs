@@ -1,31 +1,32 @@
-// src/display_mode.rs
-//
-// The backend-agnostic display-mode list behind the "Resolution" settings row.
-// A backend enumerates the modes (width x height at refresh rate) the display
-// it renders to supports; this module holds the shared shaping: the row/list
-// label format, the dedup + sort that turns a raw enumeration into the menu
-// list, the persisted-choice -> list-index recovery, and the static fallback a
-// backend without enumeration (or an embedded view with no window) uses so the
-// row still drives the windowed resize path.
-//
-// How a chosen mode is applied stays per window mode: windowed resizes the
-// window's content area to the resolution; fullscreen switches the display to
-// the mode itself (resolution + refresh rate); borderless always covers the
-// display's current mode, so the row is inert there.
+//! The backend-agnostic display-mode list behind the "Resolution" settings row.
+//! A backend enumerates the modes (width x height at refresh rate) the display
+//! it renders to supports; this module holds the shared shaping: the row/list
+//! label format, the dedup + sort that turns a raw enumeration into the menu
+//! list, the persisted-choice -> list-index recovery, and the static fallback a
+//! backend without enumeration (or an embedded view with no window) uses so the
+//! row still drives the windowed resize path.
+//!
+//! How a chosen mode is applied stays per window mode: windowed resizes the
+//! window's content area to the resolution; fullscreen switches the display to
+//! the mode itself (resolution + refresh rate); borderless always covers the
+//! display's current mode, so the row is inert there.
 
-// One display mode the hardware supports: pixel dimensions plus refresh rate.
-// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
-// then omits the rate and a fullscreen apply keeps the display's current rate.
+/// One display mode the hardware supports: pixel dimensions plus refresh rate.
+/// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
+/// then omits the rate and a fullscreen apply keeps the display's current rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DisplayMode {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Refresh rate in Hz; 0 when the display reports none.
     pub refresh_hz: u32,
 }
 
 impl DisplayMode {
-    // The option text shown in the Resolution row and its dropdown list, e.g.
-    // "2560 x 1440 (165Hz)"; a mode with an unknown rate reads "2560 x 1440".
+    /// The option text shown in the Resolution row and its dropdown list, e.g.
+    /// "2560 x 1440 (165Hz)"; a mode with an unknown rate reads "2560 x 1440".
     pub fn label(&self) -> String {
         if self.refresh_hz == 0 {
             format!("{} x {}", self.width, self.height)
@@ -35,20 +36,20 @@ impl DisplayMode {
     }
 }
 
-// The menu list for a raw enumeration: duplicates collapsed, ordered by width,
-// then height, then refresh rate ascending (each resolution's rate variants
-// group together).
+/// The menu list for a raw enumeration: duplicates collapsed, ordered by width,
+/// then height, then refresh rate ascending (each resolution's rate variants
+/// group together).
 pub fn normalize(mut modes: Vec<DisplayMode>) -> Vec<DisplayMode> {
     modes.sort();
     modes.dedup();
     modes
 }
 
-// The list index for a (possibly persisted) choice. An exact match wins; a
-// choice whose resolution is listed but whose rate is not (the display
-// changed) snaps to that resolution's nearest rate; otherwise the nearest
-// resolution by pixel count, so a stale persisted mode still lands somewhere
-// sensible. Returns 0 for an empty list (callers guard, but stay total).
+/// The list index for a (possibly persisted) choice. An exact match wins; a
+/// choice whose resolution is listed but whose rate is not (the display
+/// changed) snaps to that resolution's nearest rate; otherwise the nearest
+/// resolution by pixel count, so a stale persisted mode still lands somewhere
+/// sensible. Returns 0 for an empty list (callers guard, but stay total).
 pub fn index_of(modes: &[DisplayMode], choice: DisplayMode) -> usize {
     if let Some(i) = modes.iter().position(|m| *m == choice) {
         return i;
@@ -77,13 +78,13 @@ pub fn index_of(modes: &[DisplayMode], choice: DisplayMode) -> usize {
         .unwrap_or(0)
 }
 
-// The index in `modes` of the native mode to apply for `want`: an exact
-// (resolution, rate) match wins; a `want` with an unknown rate (0) or a rate
-// the display no longer offers takes the matching resolution's highest rate;
-// `None` when no mode has that resolution (e.g. a stale persisted choice from
-// another monitor), so the caller leaves the display alone. Used by the
-// DirectX + Vulkan apply paths; Metal does the same matching natively over
-// CGDisplayModes (`find_native_mode`), so this is dead on a Metal-only build.
+/// The index in `modes` of the native mode to apply for `want`: an exact
+/// (resolution, rate) match wins; a `want` with an unknown rate (0) or a rate
+/// the display no longer offers takes the matching resolution's highest rate;
+/// `None` when no mode has that resolution (e.g. a stale persisted choice from
+/// another monitor), so the caller leaves the display alone. Used by the
+/// DirectX + Vulkan apply paths; Metal does the same matching natively over
+/// CGDisplayModes (`find_native_mode`), so this is dead on a Metal-only build.
 pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usize> {
     let mut best: Option<(u32, usize)> = None;
     for (i, m) in modes.iter().enumerate() {
@@ -100,9 +101,9 @@ pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usi
     best.map(|(_, i)| i)
 }
 
-// The static list used when the backend cannot enumerate the display (DirectX /
-// Vulkan today, or an embedded view with no window). Common resolutions with no
-// rate, so the row keeps driving the windowed resize path.
+/// The static list used when the backend cannot enumerate the display (DirectX /
+/// Vulkan today, or an embedded view with no window). Common resolutions with no
+/// rate, so the row keeps driving the windowed resize path.
 pub fn fallback_modes() -> Vec<DisplayMode> {
     [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)]
         .into_iter()

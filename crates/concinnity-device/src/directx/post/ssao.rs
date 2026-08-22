@@ -27,7 +27,7 @@ use crate::directx::texture::{
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value. Both the GTAO kernel and the
 // depth-aware blur target this format.
-pub const SSAO_OCCLUSION_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
+pub(crate) const SSAO_OCCLUSION_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
 
 // Shader compilation
 

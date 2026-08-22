@@ -151,7 +151,7 @@ where
 }
 
 // Decode a BC1 (DXT1) buffer into RGBA8. Honours 1-bit punch-through alpha.
-pub fn decode_bc1(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_bc1(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     assemble(data, width, height, 8, |block| {
         decode_bc1_block(block, false)
     })
@@ -159,7 +159,7 @@ pub fn decode_bc1(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
 
 // Decode a BC3 (DXT5) buffer into RGBA8: an 8-byte alpha block followed by an
 // 8-byte opaque BC1 colour block per 4x4 tile.
-pub fn decode_bc3(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_bc3(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     assemble(data, width, height, 16, |block| {
         let alpha = decode_bc4_block(&block[0..8]);
         let mut rgba = decode_bc1_block(&block[8..16], true);
@@ -173,7 +173,7 @@ pub fn decode_bc3(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
 // Decode a BC5 (ATI2) two-channel buffer into RGBA8, reconstructing the blue
 // channel as the unit-length normal Z so tangent-space normal maps read
 // correctly. Red block first, green block second.
-pub fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     assemble(data, width, height, 16, |block| {
         let red = decode_bc4_block(&block[0..8]);
         let green = decode_bc4_block(&block[8..16]);
@@ -192,7 +192,7 @@ pub fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
 // Decode a block-compressed level to RGBA8, selecting the decoder from the
 // format tag. BC7 has no CPU decoder; callers that can render a fallback check
 // for it before calling.
-pub fn decode(
+pub(crate) fn decode(
     format: TextureFormat,
     blocks: &[u8],
     width: u32,

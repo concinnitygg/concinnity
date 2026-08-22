@@ -83,10 +83,10 @@ use hook::EditorHook;
 const SEED_GRAPHICS_CONFIG: &str =
     "{\"name\":\"editor_default_gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}";
 
-// Editor entry point (`cn editor`). Brings up a renderable world -- building the
-// blobs first if they are missing, and falling back to an empty in-memory world
-// when there is nothing to load -- injects the editor HUD, and runs the world
-// loop driven by the editor hook (plus the debug server when a port is given).
+/// Editor entry point (`cn editor`). Brings up a renderable world -- building the
+/// blobs first if they are missing, and falling back to an empty in-memory world
+/// when there is nothing to load -- injects the editor HUD, and runs the world
+/// loop driven by the editor hook (plus the debug server when a port is given).
 pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
     // Instead of the engine's plain `init_logging`: the same stderr formatter
     // plus a layer mirroring this crate's events into the Console panel's log.

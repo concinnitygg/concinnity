@@ -34,7 +34,7 @@ impl DxContext {
     // so the backend forwarder is unambiguous; `#[allow(dead_code)]` because it
     // is reached only through the `RenderBackend` vtable (bin-only `cn debug`).
     #[allow(dead_code)]
-    pub fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
+    pub(crate) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());
         };

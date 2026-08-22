@@ -1,12 +1,10 @@
-// src/gfx/mod.rs
-//
-// The GPU-facing half of the runtime vocabulary: the `#[repr(C)]` structs the
-// CPU and the shaders both name (`render_types`), the transform and skeleton
-// types animation is expressed in, the culling and LOD-selection primitives the
-// backends test against, the screen-overlay and chunk-grid coordinate spaces,
-// and the post-process / quality setting structs. Data and the small total
-// functions over it; the CPU compute that consumes it (skinning, decimation,
-// rasterisation, IBL convolution) lives in concinnity-cpu.
+//! The GPU-facing half of the runtime vocabulary: the `#[repr(C)]` structs the
+//! CPU and the shaders both name (`render_types`), the transform and skeleton
+//! types animation is expressed in, the culling and LOD-selection primitives the
+//! backends test against, the screen-overlay and chunk-grid coordinate spaces,
+//! and the post-process / quality setting structs. Data and the small total
+//! functions over it; the CPU compute that consumes it (skinning, decimation,
+//! rasterisation, IBL convolution) lives in concinnity-cpu.
 pub mod anim_graph;
 pub mod auto_exposure;
 pub mod camera;

@@ -8,9 +8,9 @@ use crate::app::state::App;
 use crate::debug_hook::DebugHook;
 use crate::world::find_world_jsonl;
 
-// The `cn debug` server path: start the localhost debug server on `port`,
-// then run interpreted with it as the per-frame hook. This is the entry point
-// the CLI binary calls; the hook assembly stays inside this crate.
+/// The `cn debug` server path: start the localhost debug server on `port`,
+/// then run interpreted with it as the per-frame hook. This is the entry point
+/// the CLI binary calls; the hook assembly stays inside this crate.
 pub fn run_debug(json_path: Option<&str>, port: u16) -> std::io::Result<()> {
     let debug_hook: Box<dyn DebugHook> = match crate::debug::DebugServer::start(port) {
         Ok(srv) => Box::new(srv),

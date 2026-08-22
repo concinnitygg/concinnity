@@ -39,20 +39,20 @@ const PEAK_SAMPLE_ALLOCS: usize = 1024;
 // peak on the spot rather than waiting for the count to come round.
 const PEAK_SAMPLE_BYTES: usize = 1 << 20;
 
-// A snapshot of the tracked heap. Counters are relaxed, so the fields are
-// individually accurate but need not agree with each other to the byte under
-// concurrent allocation.
+/// A snapshot of the tracked heap. Counters are relaxed, so the fields are
+/// individually accurate but need not agree with each other to the byte under
+/// concurrent allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MemStats {
-    // Bytes currently allocated and not yet freed.
+    /// Bytes currently allocated and not yet freed.
     pub live_bytes: u64,
-    // High-water mark of `live_bytes`, sampled as the shards are re-summed.
+    /// High-water mark of `live_bytes`, sampled as the shards are re-summed.
     pub peak_bytes: u64,
-    // Allocations made since process start. With `free_count`, this is the
-    // churn rate; a reallocation resizes an existing block and counts as
-    // neither.
+    /// Allocations made since process start. With `free_count`, this is the
+    /// churn rate; a reallocation resizes an existing block and counts as
+    /// neither.
     pub alloc_count: u64,
-    // Frees made since process start.
+    /// Frees made since process start.
     pub free_count: u64,
 }
 
@@ -78,13 +78,13 @@ impl Shard {
 // The counter block behind the global allocator. Split out from `TrackingAlloc`
 // so the accounting is testable on its own instance: the allocator itself can
 // only ever drive the one process-global block.
-pub struct Counters {
+pub(crate) struct Counters {
     shards: [Shard; SHARDS],
     peak: AtomicUsize,
 }
 
 impl Counters {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             shards: [const { Shard::new() }; SHARDS],
             peak: AtomicUsize::new(0),
@@ -153,7 +153,7 @@ impl Counters {
     // Allocations counted by this block since process start, without the peak
     // refresh a full `snapshot` pays. Cheap enough to sample around every
     // system step; `None` under the same condition as `snapshot`.
-    pub fn alloc_count(&self) -> Option<u64> {
+    pub(crate) fn alloc_count(&self) -> Option<u64> {
         let count = self
             .shards
             .iter()
@@ -163,7 +163,7 @@ impl Counters {
 
     // `None` until something allocates through this block, which for the global
     // block means "no binary installed the allocator".
-    pub fn snapshot(&self) -> Option<MemStats> {
+    pub(crate) fn snapshot(&self) -> Option<MemStats> {
         let (alloc_count, free_count) = self.shards.iter().fold((0u64, 0u64), |(a, f), s| {
             (
                 a + s.allocs.load(Relaxed) as u64,

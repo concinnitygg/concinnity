@@ -25,7 +25,7 @@ use super::range_alloc::RangeAllocator;
 
 // Where a resource was placed: which block, and the byte offset within it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Placement {
+pub(crate) struct Placement {
     pub block: usize,
     pub offset: u64,
 }
@@ -64,7 +64,7 @@ impl BlockState {
 }
 
 // A pool of blocks that resources are placed inside. See the module comment.
-pub struct BlockAllocator {
+pub(crate) struct BlockAllocator {
     // `None` marks a slot whose block was released; positions stay stable so a
     // live `Placement` keeps naming its own block.
     blocks: Vec<Option<BlockState>>,
@@ -73,7 +73,7 @@ pub struct BlockAllocator {
 
 impl BlockAllocator {
     // A pool with no blocks yet, which will ask for `block_size`-byte blocks.
-    pub fn new(block_size: u64) -> Self {
+    pub(crate) fn new(block_size: u64) -> Self {
         Self {
             blocks: Vec::new(),
             block_size: block_size.max(1),
@@ -88,7 +88,7 @@ impl BlockAllocator {
     // Dedicated blocks are skipped: they are sized for one resource, and
     // letting a later small request settle in one would keep the whole block
     // alive long after the resource it was created for is gone.
-    pub fn alloc(&mut self, size: u64, align: u64) -> Option<Placement> {
+    pub(crate) fn alloc(&mut self, size: u64, align: u64) -> Option<Placement> {
         for (block, state) in self.blocks.iter_mut().enumerate() {
             let Some(state) = state.as_mut() else {
                 continue;
@@ -107,7 +107,7 @@ impl BlockAllocator {
     // Place `size` bytes in `block` specifically. How a caller fills the block
     // it just added, which `alloc` will not choose when that block is
     // dedicated.
-    pub fn alloc_in(&mut self, block: usize, size: u64, align: u64) -> Option<Placement> {
+    pub(crate) fn alloc_in(&mut self, block: usize, size: u64, align: u64) -> Option<Placement> {
         let state = self.blocks.get_mut(block)?.as_mut()?;
         let offset = state.ranges.alloc_aligned(size, align)?;
         state.in_use += size;
@@ -118,7 +118,7 @@ impl BlockAllocator {
     // index `Placement::block` will name. A block larger than the pool's
     // standard size is dedicated: it hosts the one request it was created for
     // and is never shared.
-    pub fn add_block(&mut self, size: u64) -> usize {
+    pub(crate) fn add_block(&mut self, size: u64) -> usize {
         let dedicated = size > self.block_size;
         let state = BlockState::new(size, dedicated);
         // Reuse a released slot when one is free, so a pool that churns whole
@@ -136,7 +136,7 @@ impl BlockAllocator {
     // in use immediately but are not placed again until `reclaim` runs for a
     // frame at or past `retire_frame`, so a resource a command buffer still
     // references is never overwritten.
-    pub fn free(&mut self, placement: Placement, size: u64, retire_frame: u64) {
+    pub(crate) fn free(&mut self, placement: Placement, size: u64, retire_frame: u64) {
         let Some(Some(state)) = self.blocks.get_mut(placement.block) else {
             return;
         };
@@ -145,7 +145,7 @@ impl BlockAllocator {
     }
 
     // Make every free whose `retire_frame` has passed placeable again.
-    pub fn reclaim(&mut self, current_frame: u64) {
+    pub(crate) fn reclaim(&mut self, current_frame: u64) {
         for state in self.blocks.iter_mut().flatten() {
             state.ranges.reclaim(current_frame);
         }
@@ -155,7 +155,7 @@ impl BlockAllocator {
     // the indices so the caller can release the backing device allocations. A
     // block with a free still awaiting reclaim is retained, since a command
     // buffer may still reference it.
-    pub fn take_empty_blocks(&mut self) -> Vec<usize> {
+    pub(crate) fn take_empty_blocks(&mut self) -> Vec<usize> {
         let mut released = Vec::new();
         for (index, slot) in self.blocks.iter_mut().enumerate() {
             if slot.as_ref().is_some_and(BlockState::is_empty) {
@@ -168,18 +168,18 @@ impl BlockAllocator {
 
     // Bytes held in blocks, whether or not a resource occupies them. What the
     // device has actually committed.
-    pub fn reserved_bytes(&self) -> u64 {
+    pub(crate) fn reserved_bytes(&self) -> u64 {
         self.blocks.iter().flatten().map(|b| b.size).sum()
     }
 
     // Bytes live resources occupy. The gap to `reserved_bytes` is the pool's
     // slack: alignment padding, fragmentation, and unfilled block tails.
-    pub fn in_use_bytes(&self) -> u64 {
+    pub(crate) fn in_use_bytes(&self) -> u64 {
         self.blocks.iter().flatten().map(|b| b.in_use).sum()
     }
 
     // Live blocks, i.e. how many device allocations this pool is holding.
-    pub fn block_count(&self) -> usize {
+    pub(crate) fn block_count(&self) -> usize {
         self.blocks.iter().flatten().count()
     }
 }

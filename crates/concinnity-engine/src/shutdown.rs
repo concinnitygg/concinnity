@@ -1,28 +1,27 @@
-// src/shutdown.rs
-//
-// Cooperative shutdown signal shared across threads. Clones observe the same
-// flag: any clone's `cancel()` is visible to every other clone's
-// `is_cancelled()`. Cancellation is one-way and sticky.
+//! Cooperative shutdown signal shared across threads. Clones observe the same
+//! flag: any clone's `cancel()` is visible to every other clone's
+//! `is_cancelled()`. Cancellation is one-way and sticky.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// Cloneable one-shot cancellation flag. The run loop polls `is_cancelled`
-// each tick; signal handlers and debug servers call `cancel` to stop it.
+/// Cloneable one-shot cancellation flag. The run loop polls `is_cancelled`
+/// each tick; signal handlers and debug servers call `cancel` to stop it.
 #[derive(Debug, Clone, Default)]
 pub struct ShutdownToken(Arc<AtomicBool>);
 
 impl ShutdownToken {
+    /// A fresh, uncancelled token.
     pub fn new() -> Self {
         Self::default()
     }
 
-    // Signal shutdown to every clone of this token.
+    /// Signal shutdown to every clone of this token.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
 
-    // Whether any clone has signalled shutdown.
+    /// Whether any clone has signalled shutdown.
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }

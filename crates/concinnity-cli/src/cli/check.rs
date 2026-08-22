@@ -6,7 +6,7 @@
 use concinnity_cook::world::find_world_jsonl;
 use concinnity_editor::check_at_path;
 
-pub fn check(json_path: &str) -> std::io::Result<()> {
+pub(crate) fn check(json_path: &str) -> std::io::Result<()> {
     let resolved;
     let json_path = if !std::path::Path::new(json_path).exists() {
         resolved = find_world_jsonl(None)?;

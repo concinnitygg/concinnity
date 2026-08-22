@@ -45,7 +45,7 @@ impl DxContext {
     // current draws, so any subsequent `upload_mesh` will fail allocation.
     // `cn debug`-only assumption: the caller (asset hot-reload) runs this
     // at frame start, when the renderer is otherwise quiet.
-    pub fn rebuild_static_geometry(
+    pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
     ) -> Result<(), String> {
@@ -386,7 +386,7 @@ impl DxContext {
     // (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
     // are untouched. Skeleton-shape changes (joint-count mismatch) route
     // through `update_skinned_skeleton`, not this call.
-    pub fn rebuild_skinned_geometry(
+    pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
     ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {

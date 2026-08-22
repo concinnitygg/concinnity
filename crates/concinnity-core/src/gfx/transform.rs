@@ -1,10 +1,8 @@
-// src/gfx/transform.rs
-//
-// The engine's transform convention, in one place: the column-major 4x4 layout
-// every renderer uniform is written in, the `T * R(YXZ) * S` composition joints
-// and props both build their matrix through, and the quaternion conversions
-// that let a rotation be interpolated along the shorter arc rather than
-// component-wise through its Euler angles.
+//! The engine's transform convention, in one place: the column-major 4x4 layout
+//! every renderer uniform is written in, the `T * R(YXZ) * S` composition joints
+//! and props both build their matrix through, and the quaternion conversions
+//! that let a rotation be interpolated along the shorter arc rather than
+//! component-wise through its Euler angles.
 
 use crate::math::{acos, atan2, sin, sin_cos, sqrt};
 
@@ -70,13 +68,13 @@ pub fn mat4_affine_inverse(m: Mat4) -> Mat4 {
 /// Column-major 3x3 rotation matrix, `m[col][row]`.
 pub type Mat3 = [[f32; 3]; 3];
 
-/// Unit quaternion `(x, y, z, w)` representing a rotation.
-pub type Quat = [f32; 4];
+// Unit quaternion `(x, y, z, w)` representing a rotation.
+pub(crate) type Quat = [f32; 4];
 
-/// Column-major 3x3 rotation matrix from YXZ Euler degrees. Identical trig to
-/// [`JointPose::to_matrix`](crate::gfx::skeleton::JointPose::to_matrix),
-/// without the scale or translation.
-pub fn rotation_mat3(rotation_deg: [f32; 3]) -> Mat3 {
+// Column-major 3x3 rotation matrix from YXZ Euler degrees. Identical trig to
+// [`JointPose::to_matrix`](crate::gfx::skeleton::JointPose::to_matrix),
+// without the scale or translation.
+pub(crate) fn rotation_mat3(rotation_deg: [f32; 3]) -> Mat3 {
     let [pitch, yaw, roll] = rotation_deg;
     let (sp, cp) = sin_cos(pitch.to_radians());
     let (syw, cyw) = sin_cos(yaw.to_radians());
@@ -107,9 +105,9 @@ pub fn trs_matrix(position: [f32; 3], rotation_deg: [f32; 3], scale: [f32; 3]) -
     compose(rotation_mat3(rotation_deg), scale, position)
 }
 
-/// Quaternion of a column-major rotation 3x3 (Shepperd's method: picks the
-/// largest-magnitude component to keep the division well-conditioned).
-pub fn quat_from_mat3(m: Mat3) -> Quat {
+// Quaternion of a column-major rotation 3x3 (Shepperd's method: picks the
+// largest-magnitude component to keep the division well-conditioned).
+pub(crate) fn quat_from_mat3(m: Mat3) -> Quat {
     let (m00, m11, m22) = (m[0][0], m[1][1], m[2][2]);
     let trace = m00 + m11 + m22;
     if trace > 0.0 {
@@ -147,8 +145,8 @@ pub fn quat_from_mat3(m: Mat3) -> Quat {
     }
 }
 
-/// Column-major rotation 3x3 of a unit quaternion.
-pub fn quat_to_mat3(q: Quat) -> Mat3 {
+// Column-major rotation 3x3 of a unit quaternion.
+pub(crate) fn quat_to_mat3(q: Quat) -> Mat3 {
     let [x, y, z, w] = q;
     [
         [
@@ -169,9 +167,9 @@ pub fn quat_to_mat3(q: Quat) -> Mat3 {
     ]
 }
 
-/// Scale a quaternion to unit length, falling back to identity when it is too
-/// short to normalise.
-pub fn quat_normalize(q: Quat) -> Quat {
+// Scale a quaternion to unit length, falling back to identity when it is too
+// short to normalise.
+pub(crate) fn quat_normalize(q: Quat) -> Quat {
     let len = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     if len < 1e-12 {
         return [0.0, 0.0, 0.0, 1.0];
@@ -179,12 +177,12 @@ pub fn quat_normalize(q: Quat) -> Quat {
     [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
 }
 
-/// Spherical linear interpolation between two unit quaternions. Negates `b`
-/// when the pair points to opposite hemispheres so the interpolation always
-/// takes the shorter arc, and falls back to a normalised lerp when the two
-/// rotations are nearly parallel (the slerp denominator approaches zero there
-/// and nlerp is visually identical at that angle). `f` is clamped to `[0, 1]`.
-pub fn quat_slerp(a: Quat, mut b: Quat, f: f32) -> Quat {
+// Spherical linear interpolation between two unit quaternions. Negates `b`
+// when the pair points to opposite hemispheres so the interpolation always
+// takes the shorter arc, and falls back to a normalised lerp when the two
+// rotations are nearly parallel (the slerp denominator approaches zero there
+// and nlerp is visually identical at that angle). `f` is clamped to `[0, 1]`.
+pub(crate) fn quat_slerp(a: Quat, mut b: Quat, f: f32) -> Quat {
     let f = f.clamp(0.0, 1.0);
     let mut dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
     if dot < 0.0 {
@@ -255,7 +253,7 @@ pub fn blend_matrices(a: Mat4, b: Mat4, f: f32) -> Mat4 {
 }
 
 /// YXZ Euler angles in degrees recovered from a unit rotation quaternion: the
-/// inverse of [`rotation_mat3`] composed with [`quat_to_mat3`]. glTF stores node
+/// inverse of `rotation_mat3` composed with `quat_to_mat3`. glTF stores node
 /// rotations as quaternions; the glTF importer converts them to the Euler
 /// [`JointPose`](crate::gfx::skeleton::JointPose) representation this engine's
 /// joints use. The conversion is matrix-exact for non-degenerate rotations; at

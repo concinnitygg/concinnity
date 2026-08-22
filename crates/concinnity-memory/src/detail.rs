@@ -20,17 +20,18 @@
 
 // Class `c` above zero holds allocations of `2^(c-1) .. 2^c - 1` bytes. The top
 // class is a catch-all, so a 64-bit size cannot run off the end of the table.
-pub const CLASS_COUNT: usize = 33;
+pub(crate) const CLASS_COUNT: usize = 33;
 
-// One size class as read at a moment.
+/// One size class as read at a moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SizeClass {
+    /// Smallest allocation size in this class, in bytes.
     pub min_bytes: u64,
-    // Inclusive. `u64::MAX` in the catch-all top class.
+    /// Inclusive. `u64::MAX` in the catch-all top class.
     pub max_bytes: u64,
-    // Allocations of this size made since process start.
+    /// Allocations of this size made since process start.
     pub allocs: u64,
-    // Blocks of this size allocated and not yet freed.
+    /// Blocks of this size allocated and not yet freed.
     pub live_blocks: u64,
 }
 
@@ -151,8 +152,8 @@ mod imp {
 
 pub(crate) use imp::{record_alloc, record_free, record_realloc};
 
-// The heap's size-class histogram, or `None` when the crate was built without
-// the `detail` feature.
+/// The heap's size-class histogram, or `None` when the crate was built without
+/// the `detail` feature.
 pub fn size_classes() -> Option<SizeClasses> {
     imp::snapshot()
 }

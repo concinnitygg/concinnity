@@ -24,6 +24,7 @@ use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Sprite {
+    /// Assigned by the loader; not authored.
     #[serde(skip)]
     pub asset_id: AssetId,
     /// Left edge in screen pixels from the window's top-left.

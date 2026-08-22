@@ -1,10 +1,8 @@
-// src/gfx/anim_graph/mod.rs
-//
-// Animation state-machine runtime: the cursor that walks a compiled graph.
-// The client's AnimationSystem owns one `GraphCursor` per graph target,
-// advancing it each frame and sampling the blended pose through
-// `sample_graph_pose`. The compiled graph the cursor walks lives in
-// concinnity-core, re-exported here under its historical path.
+//! Animation state-machine runtime: the cursor that walks a compiled graph.
+//! The client's AnimationSystem owns one `GraphCursor` per graph target,
+//! advancing it each frame and sampling the blended pose through
+//! `sample_graph_pose`. The compiled graph the cursor walks lives in
+//! concinnity-core, re-exported here under its historical path.
 
 mod root;
 mod sample;
@@ -15,42 +13,49 @@ pub use concinnity_core::gfx::anim_graph::{
     Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
     CompiledTransition, ParamSpec, StatePlay, blend1d_weights, blend2d_weights,
 };
-pub use root::{cursor_root_delta, state_root_delta};
+pub use root::cursor_root_delta;
 pub use sample::sample_graph_pose_into;
 
-// An in-flight crossfade from the previous state. The outgoing state's clock
-// keeps advancing during the fade so its pose stays live rather than frozen.
+/// An in-flight crossfade from the previous state. The outgoing state's clock
+/// keeps advancing during the fade so its pose stays live rather than frozen.
 #[derive(Debug, Clone)]
 pub struct StateFade {
+    /// The state being faded out of.
     pub from_state: usize,
+    /// The outgoing state's clock, which keeps advancing during the fade.
     pub from_clock: f32,
+    /// Seconds elapsed since the fade started.
     pub elapsed_secs: f32,
+    /// Duration in seconds.
     pub duration_secs: f32,
 }
 
 impl StateFade {
-    // Fade progress in [0, 1]: 0 = all outgoing pose, 1 = all incoming.
+    /// Fade progress in [0, 1]: 0 = all outgoing pose, 1 = all incoming.
     pub fn progress(&self) -> f32 {
         (self.elapsed_secs / self.duration_secs.max(1e-6)).clamp(0.0, 1.0)
     }
 }
 
-// The live position in a graph: current state, its clock, and any in-flight
-// crossfade. One per graph target, owned by the client's AnimationSystem.
-//
-// Clock units depend on the state's play: seconds (scaled by `rate`) for
-// single clips and non-sync blendspaces, normalized phase (one full pass of
-// the blend = 1.0) for phase-synced blendspaces, where member clips of
-// different lengths must share one wrap point.
+/// The live position in a graph: current state, its clock, and any in-flight
+/// crossfade. One per graph target, owned by the client's AnimationSystem.
+///
+/// Clock units depend on the state's play: seconds (scaled by `rate`) for
+/// single clips and non-sync blendspaces, normalized phase (one full pass of
+/// the blend = 1.0) for phase-synced blendspaces, where member clips of
+/// different lengths must share one wrap point.
 #[derive(Debug, Clone)]
 pub struct GraphCursor {
+    /// The state the cursor is in.
     pub state: usize,
+    /// The state's clock, in the units its play uses.
     pub clock: f32,
+    /// The in-flight crossfade, when one is running.
     pub fade: Option<StateFade>,
 }
 
 impl GraphCursor {
-    // A cursor parked at the graph's initial state.
+    /// A cursor parked at the graph's initial state.
     pub fn start(graph: &CompiledGraph) -> Self {
         Self {
             state: graph.initial,
@@ -59,12 +64,12 @@ impl GraphCursor {
         }
     }
 
-    // Advance clocks by `dt_secs` and take at most one transition. Transition
-    // checks run against the current state's outgoing list in declaration
-    // order; the first whose exit-time gate and conditions all pass wins.
-    // Taking a transition while a fade is in flight replaces the fade: the
-    // new fade blends from the interrupted fade's *incoming* state only, so a
-    // rapid double transition can pop the older outgoing pose.
+    /// Advance clocks by `dt_secs` and take at most one transition. Transition
+    /// checks run against the current state's outgoing list in declaration
+    /// order; the first whose exit-time gate and conditions all pass wins.
+    /// Taking a transition while a fade is in flight replaces the fade: the
+    /// new fade blends from the interrupted fade's *incoming* state only, so a
+    /// rapid double transition can pop the older outgoing pose.
     pub fn advance(&mut self, graph: &CompiledGraph, params: &[f32], dt_secs: f32) {
         let dt = dt_secs.max(0.0);
         let state = &graph.states[self.state];
@@ -123,11 +128,11 @@ fn advance_clock(state: &CompiledState, params: &[f32], dt: f32, clock: &mut f32
     }
 }
 
-// A state's normalized time in [0, 1]: the fraction of one full pass covered
-// by the clock. Looping states report the fraction within the current pass,
-// so an `exit_time` gate re-opens every loop; non-looping states saturate at
-// 1. Blendspace passes are measured against the weight-averaged member
-// duration at the current parameters.
+/// A state's normalized time in [0, 1]: the fraction of one full pass covered
+/// by the clock. Looping states report the fraction within the current pass,
+/// so an `exit_time` gate re-opens every loop; a non-looping state saturates
+/// at one. Blendspace passes are measured against the weight-averaged member
+/// duration at the current parameters.
 pub fn normalized_time(state: &CompiledState, clock: f32, params: &[f32]) -> f32 {
     let phase = if state.play.sync() {
         clock

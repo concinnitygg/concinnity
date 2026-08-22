@@ -1,10 +1,8 @@
-// src/error.rs
-//
-// The typed error vocabulary of the `RenderBackend` boundary. Backends map
-// their native failure codes (VkResult, HRESULT, MTLCommandBuffer status) into
-// these classes at the detection sites; the frame loop dispatches recovery
-// policy on the class, never on prose. `Other` carries legacy string errors so
-// interior call sites can migrate incrementally.
+//! The typed error vocabulary of the `RenderBackend` boundary. Backends map
+//! their native failure codes (VkResult, HRESULT, MTLCommandBuffer status) into
+//! these classes at the detection sites; the frame loop dispatches recovery
+//! policy on the class, never on prose. `Other` carries legacy string errors so
+//! interior call sites can migrate incrementally.
 
 use thiserror::Error;
 
@@ -36,7 +34,9 @@ pub enum RenderError {
     /// backend prose for the log (e.g. the `GetDeviceRemovedReason` message).
     #[error("device lost ({reason}): {detail}")]
     DeviceLost {
+        /// Why the device was lost.
         reason: DeviceLostReason,
+        /// Backend prose for the log.
         detail: String,
     },
     /// A GPU allocation failed for lack of device memory.
@@ -55,6 +55,7 @@ pub enum RenderError {
     Other(String),
 }
 
+/// A backend call's result.
 pub type RenderResult<T> = Result<T, RenderError>;
 
 impl From<String> for RenderError {

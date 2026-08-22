@@ -13,27 +13,28 @@ use std::time::{Duration, Instant};
 // Total CPU time consumed by this process since it started, summed over every
 // thread and over user + kernel time. `None` if the platform query is
 // unsupported or fails.
-pub fn process_cpu_time() -> Option<Duration> {
+pub(crate) fn process_cpu_time() -> Option<Duration> {
     imp::process_cpu_time()
 }
 
-// Turns successive `process_cpu_time` readings into a utilization rate.
-//
-// The unit is cores: 1.0 means one core saturated for the whole interval, 4.0
-// means four. It is deliberately not a percentage, because the useful
-// comparison is against `ThreadBudget::total_cores` rather than against 100.
+/// Turns successive `process_cpu_time` readings into a utilization rate.
+///
+/// The unit is cores: 1.0 means one core saturated for the whole interval, 4.0
+/// means four. It is deliberately not a percentage, because the useful
+/// comparison is against `ThreadBudget::total_cores` rather than against 100.
 #[derive(Debug, Default)]
 pub struct CpuSampler {
     last: Option<(Duration, Instant)>,
 }
 
 impl CpuSampler {
+    /// A sampler with no prior reading.
     pub fn new() -> Self {
         Self { last: None }
     }
 
-    // Samples the process clock now. `None` on the first call (a rate needs two
-    // readings), when the platform query fails, or when no time has passed.
+    /// Samples the process clock now. `None` on the first call (a rate needs two
+    /// readings), when the platform query fails, or when no time has passed.
     pub fn sample(&mut self) -> Option<f32> {
         self.fold(process_cpu_time()?, Instant::now())
     }

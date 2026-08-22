@@ -1,15 +1,13 @@
-// src/precompile.rs
-//
-// Export-time compilation of the engine's built-in shaders. The DirectX and
-// Vulkan backends declare their compile set as static data (each backend's
-// builtins.rs); this module iterates those declarations and makes sure every
-// enumerable variant's artifact exists in a bundle's shader-cache/ directory.
-// Compilation is pure CPU (FXC / DXC / shaderc need no GPU device), so this
-// runs inside `cn export` with no window, no adapter, and no child process.
-// Renderer init compiles through the same declarations and the same cache
-// keys, so a shipped bundle's first launch reuses every artifact written here;
-// anything not enumerable (a world-authored SdfVolume fragment, an unusual
-// runtime parameter) still compiles at init exactly as before.
+//! Export-time compilation of the engine's built-in shaders. The DirectX and
+//! Vulkan backends declare their compile set as static data (each backend's
+//! builtins.rs); this module iterates those declarations and makes sure every
+//! enumerable variant's artifact exists in a bundle's shader-cache/ directory.
+//! Compilation is pure CPU (FXC / DXC / shaderc need no GPU device), so this
+//! runs inside `cn export` with no window, no adapter, and no child process.
+//! Renderer init compiles through the same declarations and the same cache
+//! keys, so a shipped bundle's first launch reuses every artifact written here;
+//! anything not enumerable (a world-authored SdfVolume fragment, an unusual
+//! runtime parameter) still compiles at init exactly as before.
 
 use std::path::Path;
 
@@ -22,8 +20,11 @@ use crate::shader_cache::Ensured;
 /// bundle's first launch.
 #[derive(Debug, Default)]
 pub struct Report {
+    /// Artifacts already in place or copied from the local cache.
     pub reused: usize,
+    /// Artifacts compiled fresh this run.
     pub compiled: usize,
+    /// Programs that failed, with their compile diagnostics.
     pub failed: Vec<String>,
 }
 

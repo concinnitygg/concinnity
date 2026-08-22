@@ -23,6 +23,8 @@ use crate::mask::{ComponentId, ComponentMask};
 const NO_ROW: u32 = u32::MAX;
 
 #[derive(Default, Debug)]
+/// Entity to component-row index: which components an entity has, and
+/// where each one's row sits in its column.
 pub struct JoinIndex {
     // entity index -> the entity currently occupying that index (None = unused).
     // Generation-checked so a recycled index rejects the old occupant's handle.
@@ -35,13 +37,14 @@ pub struct JoinIndex {
 }
 
 impl JoinIndex {
+    /// An empty index.
     pub fn new() -> JoinIndex {
         JoinIndex::default()
     }
 
-    // Record that `entity` has component `id`, stored at `row` in that
-    // component's column. If `entity` is a fresh occupant of its index (first
-    // use, or a recycled index), the previous occupant's state is dropped first.
+    /// Record that `entity` has component `id`, stored at `row` in that
+    /// component's column. If `entity` is a fresh occupant of its index (first
+    /// use, or a recycled index), the previous occupant's state is dropped first.
     pub fn set(&mut self, entity: Entity, id: ComponentId, row: u32) {
         let index = entity.index() as usize;
         self.grow_to(index);
@@ -57,8 +60,8 @@ impl JoinIndex {
         column[index] = row;
     }
 
-    // Forget that `entity` has component `id`. Frees the index slot once the
-    // entity has no components left, so the index reads as unused again.
+    /// Forget that `entity` has component `id`. Frees the index slot once the
+    /// entity has no components left, so the index reads as unused again.
     pub fn clear(&mut self, entity: Entity, id: ComponentId) {
         let index = entity.index() as usize;
         if self.occupants.get(index).copied().flatten() != Some(entity) {
@@ -77,7 +80,7 @@ impl JoinIndex {
         }
     }
 
-    // Forget every component of `entity`. Called when the entity is despawned.
+    /// Forget every component of `entity`. Called when the entity is despawned.
     pub fn clear_entity(&mut self, entity: Entity) {
         let index = entity.index() as usize;
         if self.occupants.get(index).copied().flatten() != Some(entity) {
@@ -86,7 +89,7 @@ impl JoinIndex {
         self.reset_index(index);
     }
 
-    // The set of components `entity` has. An empty mask for a stale handle.
+    /// The set of components `entity` has. An empty mask for a stale handle.
     pub fn mask(&self, entity: Entity) -> ComponentMask {
         let index = entity.index() as usize;
         if self.occupants.get(index).copied().flatten() != Some(entity) {
@@ -98,8 +101,8 @@ impl JoinIndex {
             .unwrap_or(ComponentMask::EMPTY)
     }
 
-    // The row of `entity` in component `id`'s column, or `None` if it lacks that
-    // component (or the handle is stale).
+    /// The row of `entity` in component `id`'s column, or `None` if it lacks that
+    /// component (or the handle is stale).
     pub fn row(&self, entity: Entity, id: ComponentId) -> Option<u32> {
         let index = entity.index() as usize;
         if self.occupants.get(index).copied().flatten() != Some(entity) {
@@ -109,7 +112,7 @@ impl JoinIndex {
         (row != NO_ROW).then_some(row)
     }
 
-    // Whether `entity` has all of `required` and none of `excluded`.
+    /// Whether `entity` has all of `required` and none of `excluded`.
     pub fn matches(
         &self,
         entity: Entity,

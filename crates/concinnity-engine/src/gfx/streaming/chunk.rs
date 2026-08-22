@@ -31,7 +31,7 @@ use crate::gfx::mesh_payload::Vertex;
 // the slow part (terrain generation, meshing); the streamer only ever sees
 // the finished [`DecodedMesh`]. `detail` selects full voxel geometry
 // ([`ChunkDetail::Near`]) or a coarse distant impostor ([`ChunkDetail::Far`]).
-pub trait ChunkSource: Send + Sync {
+pub(crate) trait ChunkSource: Send + Sync {
     // Build the geometry for chunk `coord` at `detail`, or return a
     // human-readable error. Called off the main thread.
     fn generate(&self, coord: ChunkCoord, detail: ChunkDetail) -> Result<DecodedMesh, String>;
@@ -43,7 +43,7 @@ pub trait ChunkSource: Send + Sync {
 // the generator and meshes the result. Because generation is a pure function
 // of the seed and the coordinate, a chunk that streams out and back in is
 // regenerated identically -- no RAM or disk copy is kept.
-pub struct ProceduralChunkSource {
+pub(crate) struct ProceduralChunkSource {
     generator: ChunkGenerator,
     palette: Vec<ChunkBlockType>,
     chunk_blocks: [u32; 3],
@@ -57,7 +57,7 @@ pub struct ProceduralChunkSource {
 impl ProceduralChunkSource {
     // A source for a world with the given seed, chunk dimensions, block size,
     // resolved `BlockType` palette, and distant-impostor coarse step.
-    pub fn new(
+    pub(crate) fn new(
         seed: u64,
         chunk_blocks: [u32; 3],
         block_size: f32,
@@ -151,7 +151,7 @@ struct LoadResult {
 //
 // [`plan_and_dispatch`]: ChunkStreamer::plan_and_dispatch
 // [`drain_completed`]: ChunkStreamer::drain_completed
-pub struct ChunkStreamer {
+pub(crate) struct ChunkStreamer {
     window: ChunkWindow,
     // World-space size of one chunk on X / Z -- to map a camera position to
     // its chunk coordinate.
@@ -169,7 +169,7 @@ impl ChunkStreamer {
     // `load_budget` caps generations dispatched per frame, and `chunk_w` /
     // `chunk_d` are one chunk's world-space X / Z size (for the
     // camera-to-chunk mapping).
-    pub fn new(
+    pub(crate) fn new(
         source: Arc<dyn ChunkSource>,
         near_radius: i32,
         far_radius: i32,
@@ -196,14 +196,14 @@ impl ChunkStreamer {
     }
 
     // The chunk a world-space camera position falls in.
-    pub fn camera_chunk(&self, camera: [f32; 3]) -> ChunkCoord {
+    pub(crate) fn camera_chunk(&self, camera: [f32; 3]) -> ChunkCoord {
         ChunkCoord::from_world(camera[0], camera[2], self.chunk_w, self.chunk_d)
     }
 
     // Run the window policy for a camera in chunk `camera`: dispatch this
     // frame's chunk generations to the worker and return the chunks the
     // caller must remove from the GPU (they have left the view window).
-    pub fn plan_and_dispatch(&mut self, camera: ChunkCoord) -> Vec<ChunkCoord> {
+    pub(crate) fn plan_and_dispatch(&mut self, camera: ChunkCoord) -> Vec<ChunkCoord> {
         let plan = self.window.plan(camera);
         for &(coord, detail) in &plan.to_load {
             let sent = self.worker.send((coord, detail));
@@ -224,7 +224,7 @@ impl ChunkStreamer {
     // A chunk evicted while its generation was still in flight is dropped --
     // the window no longer tracks it, so its mesh is discarded rather than
     // uploaded into a chunk the camera has already left behind.
-    pub fn drain_completed(
+    pub(crate) fn drain_completed(
         &mut self,
         mut upload: impl FnMut(ChunkCoord, Vec<Vertex>, Vec<u16>),
     ) -> usize {
@@ -260,13 +260,13 @@ impl ChunkStreamer {
     }
 
     // `(resident, pending)` chunk counts -- for diagnostics.
-    pub fn stats(&self) -> (usize, usize) {
+    pub(crate) fn stats(&self) -> (usize, usize) {
         self.window.counts()
     }
 
     // `(near_resident, far_resident)` chunk counts -- resident full chunks vs
     // resident distant impostors, for diagnostics.
-    pub fn detail_counts(&self) -> (usize, usize) {
+    pub(crate) fn detail_counts(&self) -> (usize, usize) {
         self.window.counts_by_detail()
     }
 
@@ -274,17 +274,17 @@ impl ChunkStreamer {
     // window clamps its effective view radius down to hold resident chunk bytes
     // at or under the budget, shedding the far impostor band before the near
     // full-detail band.
-    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.window.set_byte_budget(budget);
     }
 
     // Total resident chunk bytes, for diagnostics.
-    pub fn resident_bytes(&self) -> u64 {
+    pub(crate) fn resident_bytes(&self) -> u64 {
         self.window.resident_bytes()
     }
 
     // The active resident-byte budget, or `None` when byte accounting is off.
-    pub fn byte_budget(&self) -> Option<u64> {
+    pub(crate) fn byte_budget(&self) -> Option<u64> {
         self.window.byte_budget()
     }
 }

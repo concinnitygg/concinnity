@@ -50,7 +50,7 @@ fn joint_def_to_payload(j: &crate::assets::JointDef) -> crate::gfx::mesh_payload
     }
 }
 
-// Compile a Mesh component's JSON args into a packed binary payload.
+/// Compile a Mesh component's JSON args into a packed binary payload.
 pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -107,7 +107,7 @@ pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String>
 // collider grid is the mesh's own per-vertex Y in row-major order, so the
 // physics terrain collider tracks the rendered surface vertex-for-vertex with
 // no runtime image decode.
-pub fn compile_heightfield_payload(
+pub(crate) fn compile_heightfield_payload(
     args: &serde_json::Value,
     img_w: u32,
     img_h: u32,
@@ -256,7 +256,7 @@ fn bounding_sphere_radius(positions: &[[f32; 3]]) -> f32 {
 //
 // Normals are computed from triangle geometry; tangents from UV gradients.
 // Shared by the inline Mesh path and file-backed mesh formats (e.g. OBJ).
-pub fn compile_mesh_from_vertex_data(
+pub(crate) fn compile_mesh_from_vertex_data(
     vertex_data: &[crate::assets::VertexData],
     indices: &[u16],
 ) -> Vec<u8> {
@@ -298,7 +298,7 @@ pub fn compile_mesh_from_vertex_data(
 // exactly `lod_levels - 1` thresholds. Decimation is QEM half-edge collapse
 // against the LOD0 vertex set, mirroring the static [`build_lod_alternates`]
 // path.
-pub fn compile_skinned_mesh_payload_with_lods(
+pub(crate) fn compile_skinned_mesh_payload_with_lods(
     vertex_data: &[crate::assets::SkinnedVertexData],
     indices: &[u16],
     skeleton: &[crate::assets::JointDef],
@@ -447,7 +447,7 @@ pub fn compile_skinned_mesh_payload_with_lods(
 // `palette_lookup` resolves each palette entry name to its BlockType args
 // (typically by scanning the world.jsonl asset list). Non-solid entries
 // (`solid: false`) become `None` in the resolved palette and emit no faces.
-pub fn compile_voxel_chunk_payload<F>(
+pub(crate) fn compile_voxel_chunk_payload<F>(
     args: &serde_json::Value,
     mut palette_lookup: F,
 ) -> Result<Vec<u8>, String>
@@ -549,7 +549,7 @@ fn parse_u32x3(v: Option<&serde_json::Value>, label: &str) -> Result<[u32; 3], S
 // `half_width` / `half_depth` / `ceiling_height` fields. Texture references
 // in the args are ignored here; they are resolved by the build pipeline and
 // GraphicsSystem at load time.
-pub fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let (half_width, half_depth, ceiling_height) = if let Some(size) = args
         .get("size")
         .and_then(|v| v.as_array())

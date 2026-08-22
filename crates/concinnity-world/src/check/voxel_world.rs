@@ -2,7 +2,7 @@
 // lookups are handled by build/pipeline.rs::validate_cross_references; this
 // check only catches problems visible from the world's own args.
 
-pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     // palette: at least air + one solid block so the generator has geometry.
     let palette = args
         .get("palette")

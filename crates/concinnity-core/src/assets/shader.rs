@@ -1,11 +1,9 @@
-// src/assets/shader.rs
-//
-// Runtime behavior for the Shader asset. The authored schema (Shader,
-// StageSource, ShaderKind, and the ShaderPayload container) lives in
-// concinnity-asset; this file keeps the `Component` impl and the
-// `StageSourceExt::current_platform_source` extension the engine init and
-// hot-reload paths use. The JSON-args source selection and validation live in
-// concinnity-world (`source_args`, `check::shader`).
+//! Runtime behavior for the Shader asset. The authored schema (Shader,
+//! StageSource, ShaderKind, and the ShaderPayload container) lives in
+//! concinnity-asset; this file keeps the `Component` impl and the
+//! `StageSourceExt::current_platform_source` extension the engine init and
+//! hot-reload paths use. The JSON-args source selection and validation live in
+//! concinnity-world (`source_args`, `check::shader`).
 
 use alloc::string::String;
 
@@ -13,15 +11,17 @@ pub use concinnity_asset::{Shader, ShaderKind, ShaderPayload, StageSource};
 
 use crate::ecs::{Component, PayloadLocator};
 
-// Resolve the source filename for the current build platform from a stage's
-// declared `source` / `sources`. Mirrors the build-time selection
-// (concinnity-world `source_args`) so the hot-reload subsystem picks the
-// same per-platform source the build read at compile time. Returns `None` when
-// no current-platform source is declared (e.g. a stage that only declares `glsl`
-// running on the Metal backend, which loads the embedded GLSL fallback at init
-// and has no on-disk file to hot-reload). Exposed as an extension trait because
-// the schema type lives in concinnity-asset.
+/// Resolve the source filename for the current build platform from a stage's
+/// declared `source` / `sources`. Mirrors the build-time selection
+/// (concinnity-world `source_args`) so the hot-reload subsystem picks the
+/// same per-platform source the build read at compile time. Returns `None` when
+/// no current-platform source is declared (e.g. a stage that only declares `glsl`
+/// running on the Metal backend, which loads the embedded GLSL fallback at init
+/// and has no on-disk file to hot-reload). Exposed as an extension trait because
+/// the schema type lives in concinnity-asset.
 pub trait StageSourceExt {
+    /// The source path declared for the running platform, or `None` when the
+    /// stage declares none.
     fn current_platform_source(&self) -> Option<String>;
 }
 

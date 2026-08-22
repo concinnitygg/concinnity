@@ -1,11 +1,9 @@
-// src/check/fault.rs
-//
-// A validation failure and where in an asset's args it was found. A checker
-// walks authored JSON by descending into it, so the walk already knows where it
-// is: each frame attaches the one hop it descended through as the error unwinds,
-// and the location assembles itself outermost-first without any frame having to
-// know the whole path. An editor can then point at the value at fault instead of
-// leaving the author to find it from the message alone.
+//! A validation failure and where in an asset's args it was found. A checker
+//! walks authored JSON by descending into it, so the walk already knows where it
+//! is: each frame attaches the one hop it descended through as the error unwinds,
+//! and the location assembles itself outermost-first without any frame having to
+//! know the whole path. An editor can then point at the value at fault instead of
+//! leaving the author to find it from the message alone.
 
 /// One hop into an asset's authored args: an object key or an array index.
 #[derive(Debug, Clone, PartialEq, Eq)]

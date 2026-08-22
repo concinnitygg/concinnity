@@ -36,6 +36,7 @@ pub struct FrameContext<'a> {
 }
 
 impl<'a> FrameContext<'a> {
+    /// A context over one frame's scratch arena.
     pub fn new(scratch: &'a Arena) -> Self {
         Self { scratch }
     }
@@ -106,7 +107,9 @@ impl<'a> FrameContext<'a> {
 /// decline and the frame loop reports it, so an undersized reserve surfaces
 /// instead of quietly costing allocations again.
 pub enum FrameVec<'a, T: Copy> {
+    /// Gathered into the frame scratch arena.
     Scratch(ArenaVec<'a, T>),
+    /// Gathered on the heap, after the arena declined.
     Heap(Vec<T>),
 }
 

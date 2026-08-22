@@ -55,7 +55,7 @@ pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
 impl DxContext {
     // Construct a fresh context (new device + window + swapchain) from the
     // assembled backend inputs (see `crate::gfx::backend_init::BackendInit`).
-    pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 

@@ -1,29 +1,29 @@
-// Finding an authored source asset on disk.
-//
-// A `source` string in world.jsonl may be a bare filename (a texture, HDRI,
-// `.cube` LUT, or shader named without a directory), which resolves against
-// `.concinnity/assets/` by recursive search. Anything carrying a directory
-// component is a path already and is used verbatim, so absolute and relative
-// paths still work.
-//
-// Two callers need this: the compile pipeline, and the hot-reload watcher, which
-// resolves a source to its on-disk path so it can subscribe to the right parent
-// directory. The shipped runtime plays compiled blobs and never resolves a
-// source file.
+//! Finding an authored source asset on disk.
+//!
+//! A `source` string in world.jsonl may be a bare filename (a texture, HDRI,
+//! `.cube` LUT, or shader named without a directory), which resolves against
+//! `.concinnity/assets/` by recursive search. Anything carrying a directory
+//! component is a path already and is used verbatim, so absolute and relative
+//! paths still work.
+//!
+//! Two callers need this: the compile pipeline, and the hot-reload watcher, which
+//! resolves a source to its on-disk path so it can subscribe to the right parent
+//! directory. The shipped runtime plays compiled blobs and never resolves a
+//! source file.
 
 use std::path::{Path, PathBuf};
 
 use crate::paths;
 
-// Recursively search `assets_dir()` for a file matching the given bare
-// filename, returning the first match.
+/// Recursively search `assets_dir()` for a file matching the given bare
+/// filename, returning the first match.
 pub fn find_in_assets(filename: &str) -> Option<String> {
     walk(&paths::assets_dir(), filename).map(|p| p.to_string_lossy().into_owned())
 }
 
-// Resolve a source string into a filesystem path: bare filenames are searched
-// for under the assets dir and fall back to sitting directly in it, so a miss
-// still names the file the read error will report.
+/// Resolve a source string into a filesystem path: bare filenames are searched
+/// for under the assets dir and fall back to sitting directly in it, so a miss
+/// still names the file the read error will report.
 pub fn resolve_source_path(source: &str) -> String {
     resolve_in(source, &paths::assets_dir())
 }

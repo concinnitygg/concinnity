@@ -1,79 +1,77 @@
-// src/gfx/profile.rs
-//
-// Per-frame profiling data. Backend-agnostic: `World::step` records each
-// system's CPU step time here, the active render backend writes its draw /
-// GPU stats here, and `StatHud` reads it back to drive the on-screen HUD.
-// The debug server's `profile` command also reports it for headless
-// verification.
+//! Per-frame profiling data. Backend-agnostic: `World::step` records each
+//! system's CPU step time here, the active render backend writes its draw /
+//! GPU stats here, and `StatHud` reads it back to drive the on-screen HUD.
+//! The debug server's `profile` command also reports it for headless
+//! verification.
 
-// Maximum number of per-pass GPU timings tracked by [`RenderStats`]. Must be
-// at least the client render graph's `PassId` count (`PASS_COUNT`), which the
-// per-pass timing loop iterates; sized with headroom so unused slots carry the
-// `""` sentinel name and a zero microsecond reading.
 use alloc::vec::Vec;
 
+/// Maximum number of per-pass GPU timings tracked by [`RenderStats`]. Must be
+/// at least the client render graph's `PassId` count (`PASS_COUNT`), which the
+/// per-pass timing loop iterates; sized with headroom so unused slots carry the
+/// `""` sentinel name and a zero microsecond reading.
 pub const MAX_PASS_TIMINGS: usize = 32;
 
-// One per-pass GPU timing measurement: a stable pass name and the GPU
-// microseconds spent in that pass during the most recently completed frame.
-// Empty-string entries are unused slots, not real passes.
+/// One per-pass GPU timing measurement: a stable pass name and the GPU
+/// microseconds spent in that pass during the most recently completed frame.
+/// Empty-string entries are unused slots, not real passes.
 pub type PassTiming = (&'static str, u32);
 
-// Per-frame render-backend statistics.
+/// Per-frame render-backend statistics.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderStats {
-    // CPU-issued geometry draw calls this frame: the shadow, main, and
-    // composite + text passes. The optional screen-space-effect passes (SSR,
-    // SSAO, TAA, bloom) issue a fixed handful of fullscreen draws and are not
-    // counted here -- `gpu_frame_us` still covers their GPU time.
+    /// CPU-issued geometry draw calls this frame: the shadow, main, and
+    /// composite + text passes. The optional screen-space-effect passes (SSR,
+    /// SSAO, TAA, bloom) issue a fixed handful of fullscreen draws and are not
+    /// counted here -- `gpu_frame_us` still covers their GPU time.
     pub draw_calls: u32,
-    // Renderable objects in the scene this frame: static draw objects, every
-    // instanced-cluster instance, and skinned meshes.
+    /// Renderable objects in the scene this frame: static draw objects, every
+    /// instanced-cluster instance, and skinned meshes.
     pub objects: u32,
-    // Visible skinned objects this frame: the authored skinned meshes plus any
-    // live runtime-spawned instances, excluding the hidden pre-reserved
-    // instance-pool slots. Unlike `objects` (which counts the whole pre-reserved
-    // pool and so stays flat across skinned spawn/despawn), this tracks the live
-    // count, so a spawn bumps it and a despawn drops it.
+    /// Visible skinned objects this frame: the authored skinned meshes plus any
+    /// live runtime-spawned instances, excluding the hidden pre-reserved
+    /// instance-pool slots. Unlike `objects` (which counts the whole pre-reserved
+    /// pool and so stays flat across skinned spawn/despawn), this tracks the live
+    /// count, so a spawn bumps it and a despawn drops it.
     pub skinned_visible: u32,
-    // Free slots remaining in the pre-reserved skinned instance pool across all
-    // templates. Drains by one when a skinned instance spawns and refills when
-    // one despawns, so a probe can watch the free-list recycle directly.
+    /// Free slots remaining in the pre-reserved skinned instance pool across all
+    /// templates. Drains by one when a skinned instance spawns and refills when
+    /// one despawns, so a probe can watch the free-list recycle directly.
     pub skinned_pool_free: u32,
-    // GPU execution time of the most recently completed frame, in
-    // microseconds. Reported one or more frames late: the GPU timestamps are
-    // only known once that frame's command buffer completion handler fires.
+    /// GPU execution time of the most recently completed frame, in
+    /// microseconds. Reported one or more frames late: the GPU timestamps are
+    /// only known once that frame's command buffer completion handler fires.
     pub gpu_frame_us: u32,
-    // Bytes of GPU memory currently allocated by the render device. On
-    // unified-memory hardware (Apple Silicon) this is the device's share of
-    // system memory rather than dedicated VRAM.
+    /// Bytes of GPU memory currently allocated by the render device. On
+    /// unified-memory hardware (Apple Silicon) this is the device's share of
+    /// system memory rather than dedicated VRAM.
     pub vram_bytes: u64,
-    // Bytes the render graph's transient pool holds: the aliased footprint of
-    // the slots backing the graph-owned transients. Part of `vram_bytes`, which
-    // is a device-wide total; carried separately so the shared memory ledger can
-    // attribute it rather than leaving it in the unaccounted remainder.
+    /// Bytes the render graph's transient pool holds: the aliased footprint of
+    /// the slots backing the graph-owned transients. Part of `vram_bytes`, which
+    /// is a device-wide total; carried separately so the shared memory ledger can
+    /// attribute it rather than leaving it in the unaccounted remainder.
     pub transient_pool_bytes: u64,
-    // Per-pass GPU microseconds for the most recently completed frame.
-    // Filled by the active backend only when its GPU supports timestamp
-    // sampling; otherwise every slot stays at the default
-    // `("", 0)`. Slot order is backend-defined and stable for the process
-    // lifetime.
+    /// Per-pass GPU microseconds for the most recently completed frame.
+    /// Filled by the active backend only when its GPU supports timestamp
+    /// sampling; otherwise every slot stays at the default
+    /// `("", 0)`. Slot order is backend-defined and stable for the process
+    /// lifetime.
     pub pass_times_us: [PassTiming; MAX_PASS_TIMINGS],
-    // Current adapted exposure value (EV) from the auto-exposure EMA.
-    // `None` when the world did not opt in to auto-exposure (or the active
-    // backend has not yet wired the readout). The `StatHud` overlay reads
-    // this to render the on-screen EV chip; downstream consumers can map
-    // it to an exposure multiplier via `2^ev`.
+    /// Current adapted exposure value (EV) from the auto-exposure EMA.
+    /// `None` when the world did not opt in to auto-exposure (or the active
+    /// backend has not yet wired the readout). The `StatHud` overlay reads
+    /// this to render the on-screen EV chip; downstream consumers can map
+    /// it to an exposure multiplier via `2^ev`.
     pub auto_exposure_ev: Option<f32>,
-    // Active display's reported maximum extended-range colour-component
-    // multiplier when the renderer is on the HDR path. `Some(2.0)` on a
-    // typical HDR400 panel, `Some(8.0+)` on HDR1000-class panels; `None`
-    // on SDR (because the world disabled HDR, the platform fell back, or
-    // the active backend has not wired the readout). The `StatHud` overlay
-    // reads this to render the on-screen `EDR` chip; the value is also
-    // the linear scaling factor between SDR reference white and the
-    // panel's peak brightness, so a colour-grading consumer can interpret
-    // it directly.
+    /// Active display's reported maximum extended-range colour-component
+    /// multiplier when the renderer is on the HDR path. `Some(2.0)` on a
+    /// typical HDR400 panel, `Some(8.0+)` on HDR1000-class panels; `None`
+    /// on SDR (because the world disabled HDR, the platform fell back, or
+    /// the active backend has not wired the readout). The `StatHud` overlay
+    /// reads this to render the on-screen `EDR` chip; the value is also
+    /// the linear scaling factor between SDR reference white and the
+    /// panel's peak brightness, so a colour-grading consumer can interpret
+    /// it directly.
     pub max_edr: Option<f32>,
 }
 
@@ -94,11 +92,11 @@ impl Default for RenderStats {
     }
 }
 
-// Timing collected for one frame and read back by the profiler overlay.
-//
-// The system timings are double-buffered: a frame accumulates into
-// `current`, and `begin_frame` rotates the just-finished frame into `last`
-// so a reader always sees a complete frame rather than a partial one.
+/// Timing collected for one frame and read back by the profiler overlay.
+///
+/// The system timings are double-buffered: a frame accumulates into
+/// `current`, and `begin_frame` rotates the just-finished frame into `last`
+/// so a reader always sees a complete frame rather than a partial one.
 #[derive(Debug, Default)]
 pub struct FrameProfile {
     // System CPU step times from the last fully completed frame, in step
@@ -116,15 +114,15 @@ pub struct FrameProfile {
     // Heap allocations counted across the whole most recent frame. `None` in
     // release builds and in binaries without the tracking allocator.
     frame_allocs: Option<u32>,
-    // Render-backend stats for the most recent drawn frame. Left at the
-    // default when no graphics backend is running.
+    /// Render-backend stats for the most recent drawn frame. Left at the
+    /// default when no graphics backend is running.
     pub render: RenderStats,
 }
 
 impl FrameProfile {
-    // Rotate the system-timing buffers at the start of a frame: the frame
-    // that just finished becomes the readable snapshot and the accumulator
-    // is cleared for the new frame.
+    /// Rotate the system-timing buffers at the start of a frame: the frame
+    /// that just finished becomes the readable snapshot and the accumulator
+    /// is cleared for the new frame.
     pub fn begin_frame(&mut self) {
         core::mem::swap(&mut self.last, &mut self.current);
         self.current.clear();
@@ -132,39 +130,39 @@ impl FrameProfile {
         self.current_allocs.clear();
     }
 
-    // Record one system's CPU step time for the in-progress frame.
+    /// Record one system's CPU step time for the in-progress frame.
     pub fn record_system(&mut self, name: &'static str, micros: u32) {
         self.current.push((name, micros));
     }
 
-    // Record the heap allocations counted during one system's step.
+    /// Record the heap allocations counted during one system's step.
     pub fn record_system_allocs(&mut self, name: &'static str, allocs: u32) {
         self.current_allocs.push((name, allocs));
     }
 
-    // Record the heap allocations counted across the frame that just finished.
-    // Written at the end of a step rather than rotated: the value is complete
-    // the moment the frame is, so readers between steps see the latest frame.
+    /// Record the heap allocations counted across the frame that just finished.
+    /// Written at the end of a step rather than rotated: the value is complete
+    /// the moment the frame is, so readers between steps see the latest frame.
     pub fn set_frame_allocs(&mut self, allocs: u32) {
         self.frame_allocs = Some(allocs);
     }
 
-    // System step times from the last fully completed frame, in step order.
-    // Read by the runtime debug server's `profile` command (a binary-only
-    // module), so the lib build sees no caller.
+    /// System step times from the last fully completed frame, in step order.
+    /// Read by the runtime debug server's `profile` command (a binary-only
+    /// module), so the lib build sees no caller.
     pub fn system_timings(&self) -> &[(&'static str, u32)] {
         &self.last
     }
 
-    // Per-system heap-allocation counts from the last fully completed frame,
-    // in step order. Empty unless the frame loop sampled them (dev builds with
-    // the tracking allocator installed).
+    /// Per-system heap-allocation counts from the last fully completed frame,
+    /// in step order. Empty unless the frame loop sampled them (dev builds with
+    /// the tracking allocator installed).
     pub fn system_allocs(&self) -> &[(&'static str, u32)] {
         &self.last_allocs
     }
 
-    // Heap allocations counted across the most recent frame, under the same
-    // conditions as `system_allocs`.
+    /// Heap allocations counted across the most recent frame, under the same
+    /// conditions as `system_allocs`.
     pub fn frame_allocs(&self) -> Option<u32> {
         self.frame_allocs
     }

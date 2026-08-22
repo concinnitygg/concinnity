@@ -22,8 +22,11 @@ use crate::ecs::Component;
 /// ```
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera3D {
+    /// Vertical field of view in degrees.
     pub fov_y_degrees: f32,
+    /// Near clip distance in world units.
     pub near: f32,
+    /// Far clip distance in world units.
     pub far: f32,
     /// Current view matrix, written each step by the active camera system.
     /// Column-major, matching the GLSL mat4 convention.
@@ -47,9 +50,9 @@ pub struct Camera3D {
 }
 
 impl Camera3D {
-    // Translate the authored args into the runtime camera: compose the initial
-    // view matrix and zero the runtime state. Run by cook at build time (the
-    // baked blob record carries the result) and by tests that need a camera.
+    /// Translate the authored args into the runtime camera: compose the initial
+    /// view matrix and zero the runtime state. Run by cook at build time (the
+    /// baked blob record carries the result) and by tests that need a camera.
     pub fn bake(args: Camera3DArgs) -> Self {
         Self {
             fov_y_degrees: args.fov_y_degrees,

@@ -27,16 +27,16 @@ use crate::glb::ImportedSkinnedMesh;
 // The skinning-relevant slice of an FBX document: the first skinned geometry,
 // its skeleton, and its per-control-point weights.
 pub(super) struct FbxSkin {
-    pub geometry_id: i64,
+    pub(crate) geometry_id: i64,
     // Mesh world at bind (cluster `Transform` x geometric offset): baked into
     // vertex positions so they live in the same frame as the joint worlds.
-    pub mesh_bind: Mat4,
+    pub(crate) mesh_bind: Mat4,
     // Meters per file unit; joint translations are already normalized by it,
     // and evaluated animation translations must be too.
-    pub unit_scale: f32,
+    pub(crate) unit_scale: f32,
     pub joints: Vec<JointDef>,
     // Model object id -> joint index, for resolving animation curve targets.
-    pub model_to_joint: HashMap<i64, usize>,
+    pub(crate) model_to_joint: HashMap<i64, usize>,
     // Control-point index -> accumulated (joint, weight) pairs.
     pub weights: HashMap<i32, Vec<(usize, f32)>>,
 }
@@ -327,7 +327,10 @@ pub(super) fn parse_skin(
 
 // Import the `skin_index`-th skinned mesh of a binary FBX into the inline
 // `SkinnedMesh` fields, mirroring the glTF importer's output shape.
-pub fn import_skinned_fbx(path: &str, skin_index: u32) -> Result<ImportedSkinnedMesh, String> {
+pub(crate) fn import_skinned_fbx(
+    path: &str,
+    skin_index: u32,
+) -> Result<ImportedSkinnedMesh, String> {
     let tree = super::load_tree(path)?;
     let root = tree.root();
     let skin = parse_skin(root, path, skin_index)?;

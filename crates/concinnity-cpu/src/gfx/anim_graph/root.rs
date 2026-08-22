@@ -10,12 +10,12 @@ use concinnity_core::gfx::root_motion::{add3, scale3};
 
 use super::{CompiledGraph, CompiledState, GraphCursor};
 
-// The displacement covered between the cursor snapshots taken before and
-// after one `advance`, in the mesh's local space. A frame that took a
-// transition contributes nothing (the clocks reset mid-frame; one frame of
-// root motion at a state change is imperceptible and never wrong-direction).
-// While a fade is in flight the outgoing state's displacement blends in by
-// the fade's progress, matching the pose crossfade.
+/// The displacement covered between the cursor snapshots taken before and
+/// after one `advance`, in the mesh's local space. A frame that took a
+/// transition contributes nothing (the clocks reset mid-frame; one frame of
+/// root motion at a state change is imperceptible and never wrong-direction).
+/// While a fade is in flight the outgoing state's displacement blends in by
+/// the fade's progress, matching the pose crossfade.
 pub fn cursor_root_delta<'a>(
     graph: &CompiledGraph,
     before: &GraphCursor,
@@ -50,7 +50,7 @@ pub fn cursor_root_delta<'a>(
 // current weights. Members without a root track contribute nothing -- a
 // blend may mix a root-motion walk with an in-place idle and the character
 // slows down accordingly.
-pub fn state_root_delta<'a>(
+pub(crate) fn state_root_delta<'a>(
     state: &CompiledState,
     clock0: f32,
     clock1: f32,

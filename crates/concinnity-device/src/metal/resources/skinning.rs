@@ -256,7 +256,7 @@ impl MtlContext {
     // level above this call (in `reload_assets`) -- they would need the
     // original `vert_lib_bytes` / `frag_lib_bytes` / `shadow_lib_bytes`
     // which `upload_skinned` consumes and drops.
-    pub fn rebuild_skinned_geometry(
+    pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>,
     ) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String> {
@@ -493,7 +493,7 @@ impl MtlContext {
     // libraries + pipelines stay untouched on every skinned reload path;
     // joint-count changes resize the per-slot joint-matrix buffers via
     // [`Self::update_skinned_skeleton`].
-    pub fn update_skinned_mesh_geometry(
+    pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
         vertex_base: u16,
@@ -570,7 +570,7 @@ impl MtlContext {
     //
     // `_shadow_lib_bytes` is retained for the cross-backend `RenderBackend`
     // signature but unused on Metal: the shadow shader is engine-internal here.
-    pub fn upload_skinned(
+    pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u16],
@@ -705,7 +705,7 @@ impl MtlContext {
     // Upload morph-target delta buffers for the skinned draw objects.
     // `morphs[i]` pairs with draw object `i`; instance copies share their
     // template's `Arc`, so each unique delta set becomes one GPU buffer.
-    pub fn upload_skinned_morphs(
+    pub(crate) fn upload_skinned_morphs(
         &mut self,
         morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
     ) -> Result<(), String> {
@@ -761,7 +761,7 @@ impl MtlContext {
 
     // Replace one skinned object's morph weights. Out-of-range indices and
     // objects without morph targets are ignored; extra weights are dropped.
-    pub fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+    pub(crate) fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
         if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
             for (i, w) in slot.iter_mut().enumerate() {
                 *w = weights.get(i).copied().unwrap_or(0.0);
@@ -772,7 +772,7 @@ impl MtlContext {
     // Replace the skinning matrices for one skinned object. Called each frame
     // from `GraphicsSystem` with the pose `AnimationSystem` computed. Out-of-
     // range indices are ignored.
-    pub fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
+    pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
             slot.clear();
             slot.extend_from_slice(matrices);
@@ -793,7 +793,7 @@ impl MtlContext {
     // undeformed until the next `update_skinned_pose` writes the new pose.
     // `prev_skinned_joint_matrices` is resized in lockstep so the velocity
     // pre-pass sees zero skinned motion on the post-reload frame.
-    pub fn update_skinned_skeleton(
+    pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
@@ -825,7 +825,7 @@ impl MtlContext {
     // palette to the bind pose so it does not flash its previous occupant's
     // last frame (the owning `SkeletonPose`'s first pose push replaces it next
     // frame). A no-op if the index is out of range.
-    pub fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+    pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
         let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
             return;
         };
@@ -841,7 +841,7 @@ impl MtlContext {
 
     // Hide a skinned object; the engine's instance pool recycles the slot. A
     // no-op if the index is out of range.
-    pub fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
+    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
         if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
             obj.visible = false;
         }
@@ -852,7 +852,7 @@ impl MtlContext {
     // rebuild reads `obj.model` directly (the skinned records are rebuilt
     // every frame), so this only writes the fields. Out-of-range indices
     // have no effect.
-    pub fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(skinned_index, model) in updates {
             if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {
                 obj.model = model;

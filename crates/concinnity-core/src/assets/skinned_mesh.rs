@@ -9,12 +9,12 @@
 
 use crate::assets::{JointDef, SkinnedMesh};
 
-// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
-// conversion `GraphicsSystem::init` does at world load time: each
-// `JointDef.parent` becomes `Some(usize)` for valid indices (negative values
-// mark roots), and each `JointDef`'s translation / rotation / scale becomes the
-// joint's bind `JointPose`. Used at init and by the asset hot-reload's
-// skeleton-shape change path.
+/// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
+/// conversion `GraphicsSystem::init` does at world load time: each
+/// `JointDef.parent` becomes `Some(usize)` for valid indices (negative values
+/// mark roots), and each `JointDef`'s translation / rotation / scale becomes the
+/// joint's bind `JointPose`. Used at init and by the asset hot-reload's
+/// skeleton-shape change path.
 pub fn build_skeleton_from_joint_defs(defs: &[JointDef]) -> crate::gfx::skeleton::Skeleton {
     use crate::gfx::skeleton as skinning;
     let joints = defs
@@ -32,11 +32,12 @@ pub fn build_skeleton_from_joint_defs(defs: &[JointDef]) -> crate::gfx::skeleton
     skinning::Skeleton::new(joints)
 }
 
-// Column-major world matrix from a SkinnedMesh's transform. Kept in core (not
-// the schema crate) because the matrix build goes through `gfx::skeleton`, which
-// needs std transcendentals. Exposed as an extension trait so call sites keep
-// method syntax (`sm.model_matrix()`), matching `geometry.rs`.
+/// Column-major world matrix from a SkinnedMesh's transform. Kept in core (not
+/// the schema crate) because the matrix build goes through `gfx::skeleton`, which
+/// needs std transcendentals. Exposed as an extension trait so call sites keep
+/// method syntax (`sm.model_matrix()`), matching `geometry.rs`.
 pub trait SkinnedMeshGeometry {
+    /// Column-major world matrix built from the mesh's transform.
     fn model_matrix(&self) -> [[f32; 4]; 4];
 }
 

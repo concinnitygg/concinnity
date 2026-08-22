@@ -1,26 +1,29 @@
-// The shader `Platform` selector: which shader source language the running
-// backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
-// foundation rather than the build module -- the engine picks a `Shader` stage's
-// current-platform source at runtime, and the build pipeline reuses the same
-// selection at compile time.
+//! The shader `Platform` selector: which shader source language the running
+//! backend consumes. Pure (no I/O, cfg-resolved), so it sits in the runtime
+//! foundation rather than the build module -- the engine picks a `Shader` stage's
+//! current-platform source at runtime, and the build pipeline reuses the same
+//! selection at compile time.
 
-// Shader source language families supported by the engine. Each variant
-// matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).
-//
-// A given build only ever constructs the variant for its own backend (see
-// `current`), so the other two read as never-constructed; `key` still matches
-// all three, so the type stays whole.
+/// Shader source language families supported by the engine. Each variant
+/// matches one render backend: Metal, HLSL (DirectX), or GLSL (Vulkan).
+///
+/// A given build only ever constructs the variant for its own backend (see
+/// `current`), so the other two read as never-constructed; `key` still matches
+/// all three, so the type stays whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
+    /// Metal Shading Language, for the Metal backend.
     Metal,
+    /// HLSL, for the DirectX backend.
     Hlsl,
+    /// GLSL, for the Vulkan backend.
     Glsl,
 }
 
 impl Platform {
-    // The shader platform the current binary's rendering backend was built
-    // for. Resolved from the backend cfg (see build.rs), not the target OS, so
-    // a Windows Vulkan build correctly selects GLSL rather than HLSL.
+    /// The shader platform the current binary's rendering backend was built
+    /// for. Resolved from the backend cfg (see build.rs), not the target OS, so
+    /// a Windows Vulkan build correctly selects GLSL rather than HLSL.
     pub fn current() -> Self {
         #[cfg(backend_metal)]
         {
@@ -36,7 +39,7 @@ impl Platform {
         }
     }
 
-    // String key used in the `sources` map of a `Shader` stage.
+    /// String key used in the `sources` map of a `Shader` stage.
     pub fn key(self) -> &'static str {
         match self {
             Platform::Metal => "metal",
@@ -45,15 +48,15 @@ impl Platform {
         }
     }
 
-    // Whether a shader source with the given file extension is usable on this
-    // platform. The matching extension (`metal` / `hlsl` / `glsl`) is accepted;
-    // a non-matching shader extension is rejected so a single-path source
-    // authored for one backend doesn't get fed to another; an unknown
-    // extension is accepted by default (the build step surfaces a real compile
-    // error later if the file truly can't be built).
-    //
-    // Shared by the per-platform source selection of `Shader` stages and
-    // `SdfVolume` so both apply identical fallback rules.
+    /// Whether a shader source with the given file extension is usable on this
+    /// platform. The matching extension (`metal` / `hlsl` / `glsl`) is accepted;
+    /// a non-matching shader extension is rejected so a single-path source
+    /// authored for one backend doesn't get fed to another; an unknown
+    /// extension is accepted by default (the build step surfaces a real compile
+    /// error later if the file truly can't be built).
+    ///
+    /// Shared by the per-platform source selection of `Shader` stages and
+    /// `SdfVolume` so both apply identical fallback rules.
     pub fn accepts_ext(self, ext: &str) -> bool {
         !matches!(ext, "metal" | "hlsl" | "glsl") || ext == self.key()
     }

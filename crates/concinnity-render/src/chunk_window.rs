@@ -1,27 +1,25 @@
-// src/chunk_window.rs
-//
-// Sliding-window streaming policy for an infinite voxel world.
-//
-// `gfx::streaming::StreamPlanner` streams a *fixed* pool of items known at
-// init (textures, build-time meshes). An infinite chunk world is different:
-// the item set is unbounded and only a bounded *window* around the camera is
-// ever resident. This module is that policy -- given the camera's chunk and a
-// view radius it decides which chunks to load (nearest first, budget-limited)
-// and which to evict (those that have fallen well outside the window).
-//
-// Two concentric bands: chunks within `near_radius` stream at full voxel
-// detail; chunks beyond it but within `far_radius` stream as cheap coarse
-// "impostors" (a low-poly surface mesh). As the camera moves a chunk crosses
-// the near/far boundary and is *re-detailed* -- evicted and reloaded at the new
-// detail. A small detail hysteresis keeps a chunk pacing across the boundary
-// from thrashing. When `far_radius == near_radius` (the default) the far band
-// is empty, so the window behaves exactly as the original single-detail one.
-//
-// Like `crate::streaming` and `crate::chunk_coord` this is written against
-// `core` + `alloc` only -- no threads, no I/O, no `std` collections (a
-// `BTreeMap`, not a `HashMap`) -- so it can move into a future `no_std`
-// runtime unchanged. The `std`-side driver (background generation thread,
-// GPU upload) lives in concinnity-engine's `app::chunk_stream`.
+//! Sliding-window streaming policy for an infinite voxel world.
+//!
+//! `gfx::streaming::StreamPlanner` streams a *fixed* pool of items known at
+//! init (textures, build-time meshes). An infinite chunk world is different:
+//! the item set is unbounded and only a bounded *window* around the camera is
+//! ever resident. This module is that policy -- given the camera's chunk and a
+//! view radius it decides which chunks to load (nearest first, budget-limited)
+//! and which to evict (those that have fallen well outside the window).
+//!
+//! Two concentric bands: chunks within `near_radius` stream at full voxel
+//! detail; chunks beyond it but within `far_radius` stream as cheap coarse
+//! "impostors" (a low-poly surface mesh). As the camera moves a chunk crosses
+//! the near/far boundary and is *re-detailed* -- evicted and reloaded at the new
+//! detail. A small detail hysteresis keeps a chunk pacing across the boundary
+//! from thrashing. When `far_radius == near_radius` (the default) the far band
+//! is empty, so the window behaves exactly as the original single-detail one.
+//!
+//! Like `crate::streaming` and `crate::chunk_coord` this is written against
+//! `core` + `alloc` only -- no threads, no I/O, no `std` collections (a
+//! `BTreeMap`, not a `HashMap`) -- so it can move into a future `no_std`
+//! runtime unchanged. The `std`-side driver (background generation thread,
+//! GPU upload) lives in concinnity-engine's `app::chunk_stream`.
 
 // `BTreeMap` is an `alloc` collection (re-exported here through `std`); a
 // `HashMap` would pull in `std`-only hashing. `Vec` comes from the prelude.
@@ -52,20 +50,20 @@ const BYTE_BUDGET_LOW_PCT: u64 = 75;
 // `Unloaded` state, since the grid is infinite and tracking every never-seen
 // chunk would be unbounded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ChunkState {
+pub(crate) enum ChunkState {
     // A background generation+upload has been dispatched but not completed.
     Pending,
     // The chunk's mesh is resident on the GPU.
     Resident,
 }
 
-// Which representation a chunk is streamed at.
+/// Which representation a chunk is streamed at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChunkDetail {
-    // Full voxel geometry for chunks within `near_radius`.
+    /// Full voxel geometry for chunks within `near_radius`.
     Near,
-    // A coarse distant-impostor surface mesh for chunks beyond `near_radius` but
-    // within `far_radius`.
+    /// A coarse distant-impostor surface mesh for chunks beyond `near_radius` but
+    /// within `far_radius`.
     Far,
 }
 
@@ -79,29 +77,29 @@ struct Slot {
     bytes: u64,
 }
 
-// The load / evict decisions produced by one [`ChunkWindow::plan`] call.
+/// The load / evict decisions produced by one [`ChunkWindow::plan`] call.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChunkPlan {
-    // Chunks whose background load should be dispatched this frame, nearest
-    // to the camera first, each tagged with the detail to generate it at.
-    // Already marked [`ChunkState::Pending`].
+    /// Chunks whose background load should be dispatched this frame, nearest
+    /// to the camera first, each tagged with the detail to generate it at.
+    /// Already marked `ChunkState::Pending`.
     pub to_load: Vec<(ChunkCoord, ChunkDetail)>,
-    // Chunks removed from the GPU this frame: those that fell outside the
-    // evict radius, plus those crossing the near/far boundary (which reload at
-    // the new detail). Already dropped from the window's tracking map.
+    /// Chunks removed from the GPU this frame: those that fell outside the
+    /// evict radius, plus those crossing the near/far boundary (which reload at
+    /// the new detail). Already dropped from the window's tracking map.
     pub to_evict: Vec<ChunkCoord>,
 }
 
-// Decides which chunks stream in and out of the camera-centred view window,
-// and at which detail.
-//
-// The window owns only residency *bookkeeping* -- it never generates a chunk
-// or touches a GPU resource. Each frame the driver calls [`plan`] with the
-// camera's current chunk, dispatches the loads, applies the evictions, and
-// reports completed loads back via [`mark_resident`].
-//
-// [`plan`]: ChunkWindow::plan
-// [`mark_resident`]: ChunkWindow::mark_resident
+/// Decides which chunks stream in and out of the camera-centred view window,
+/// and at which detail.
+///
+/// The window owns only residency *bookkeeping* -- it never generates a chunk
+/// or touches a GPU resource. Each frame the driver calls [`plan`] with the
+/// camera's current chunk, dispatches the loads, applies the evictions, and
+/// reports completed loads back via [`mark_resident`].
+///
+/// [`plan`]: ChunkWindow::plan
+/// [`mark_resident`]: ChunkWindow::mark_resident
 pub struct ChunkWindow {
     // Tracked chunks only: a chunk absent from the map is unloaded.
     states: BTreeMap<ChunkCoord, Slot>,
@@ -125,14 +123,14 @@ pub struct ChunkWindow {
 }
 
 impl ChunkWindow {
-    // A window with a full-detail radius of `near_radius`, an outer impostor
-    // radius of `far_radius`, and a per-frame load budget of `load_budget`
-    // chunks.
-    //
-    // `near_radius` is floored at 0 (a lone chunk), `far_radius` at
-    // `near_radius` (so it never undercuts the full-detail band; equal means
-    // "no impostors"), and `load_budget` at 1 so a stray 0 cannot wedge
-    // streaming permanently.
+    /// A window with a full-detail radius of `near_radius`, an outer impostor
+    /// radius of `far_radius`, and a per-frame load budget of `load_budget`
+    /// chunks.
+    ///
+    /// `near_radius` is floored at 0 (a lone chunk), `far_radius` at
+    /// `near_radius` (so it never undercuts the full-detail band; equal means
+    /// "no impostors"), and `load_budget` at 1 so a stray 0 cannot wedge
+    /// streaming permanently.
     pub fn new(near_radius: i32, far_radius: i32, load_budget: usize) -> Self {
         let near_radius = near_radius.max(0);
         let far_radius = far_radius.max(near_radius);
@@ -146,16 +144,16 @@ impl ChunkWindow {
         }
     }
 
-    // Set (or clear with `None`) the total resident-chunk-byte budget. `None`
-    // keeps the pure radius-based window; `Some(b)` additionally clamps the
-    // effective view radius down until resident bytes fit `b`. Off by default
-    // so worlds that never set it behave exactly as the radius-only window.
+    /// Set (or clear with `None`) the total resident-chunk-byte budget. `None`
+    /// keeps the pure radius-based window; `Some(b)` additionally clamps the
+    /// effective view radius down until resident bytes fit `b`. Off by default
+    /// so worlds that never set it behave exactly as the radius-only window.
     pub fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.byte_budget = budget;
     }
 
-    // The active resident-byte budget, or `None` when byte accounting is off
-    // (the pure radius window). For diagnostics.
+    /// The active resident-byte budget, or `None` when byte accounting is off
+    /// (the pure radius window). For diagnostics.
     pub fn byte_budget(&self) -> Option<u64> {
         self.byte_budget
     }
@@ -232,15 +230,15 @@ impl ChunkWindow {
         }
     }
 
-    // Decide this frame's chunk loads and evictions for a camera in chunk
-    // `camera`.
-    //
-    // First reconciles the effective view radius against the byte budget (a
-    // no-op when none is set), then evicts every tracked chunk now beyond the
-    // effective evict radius, re-details any tracked chunk that has crossed the
-    // near/far boundary (evict + reload at the new detail), and dispatches the
-    // nearest in-window chunks not yet tracked, up to the load budget, marking
-    // each `Pending`.
+    /// Decide this frame's chunk loads and evictions for a camera in chunk
+    /// `camera`.
+    ///
+    /// First reconciles the effective view radius against the byte budget (a
+    /// no-op when none is set), then evicts every tracked chunk now beyond the
+    /// effective evict radius, re-details any tracked chunk that has crossed the
+    /// near/far boundary (evict + reload at the new detail), and dispatches the
+    /// nearest in-window chunks not yet tracked, up to the load budget, marking
+    /// each `Pending`.
     pub fn plan(&mut self, camera: ChunkCoord) -> ChunkPlan {
         // 0. Reconcile the effective window with the byte budget. The clamp only
         //    ever shrinks below the configured radii, so a world with no budget
@@ -316,13 +314,13 @@ impl ChunkWindow {
         ChunkPlan { to_load, to_evict }
     }
 
-    // Mark a dispatched chunk resident once its mesh is on the GPU, recording
-    // its GPU footprint in `bytes` (the decoded vertex + index buffer size).
-    // `bytes` may be 0 when nothing was uploaded (e.g. a generation that
-    // deterministically failed and is being retired to stop retrying it).
-    //
-    // A no-op if the chunk is no longer tracked -- the camera may have moved
-    // far enough to evict it while its load was still in flight.
+    /// Mark a dispatched chunk resident once its mesh is on the GPU, recording
+    /// its GPU footprint in `bytes` (the decoded vertex + index buffer size).
+    /// `bytes` may be 0 when nothing was uploaded (e.g. a generation that
+    /// deterministically failed and is being retired to stop retrying it).
+    ///
+    /// A no-op if the chunk is no longer tracked -- the camera may have moved
+    /// far enough to evict it while its load was still in flight.
     pub fn mark_resident(&mut self, coord: ChunkCoord, bytes: u64) {
         if let Some(slot) = self.states.get_mut(&coord) {
             slot.state = ChunkState::Resident;
@@ -330,8 +328,8 @@ impl ChunkWindow {
         }
     }
 
-    // Total bytes of all currently Resident chunks, for diagnostics and the
-    // byte-budget clamp. Pending chunks (not yet uploaded) are excluded.
+    /// Total bytes of all currently Resident chunks, for diagnostics and the
+    /// byte-budget clamp. Pending chunks (not yet uploaded) are excluded.
     pub fn resident_bytes(&self) -> u64 {
         self.states
             .values()
@@ -340,24 +338,24 @@ impl ChunkWindow {
             .sum()
     }
 
-    // Drop `coord` from tracking so a later [`plan`](Self::plan) will
-    // re-dispatch it.
-    //
-    // The driver calls this when a dispatch could not be delivered to the
-    // background worker, so the chunk is retried rather than stuck `Pending`.
+    /// Drop `coord` from tracking so a later [`plan`](Self::plan) will
+    /// re-dispatch it.
+    ///
+    /// The driver calls this when a dispatch could not be delivered to the
+    /// background worker, so the chunk is retried rather than stuck `Pending`.
     pub fn forget(&mut self, coord: ChunkCoord) {
         self.states.remove(&coord);
     }
 
-    // Whether the window is still tracking `coord` (pending or resident).
-    //
-    // The driver checks this when a background load completes: a chunk
-    // evicted mid-flight is no longer tracked and its mesh should be dropped.
+    /// Whether the window is still tracking `coord` (pending or resident).
+    ///
+    /// The driver checks this when a background load completes: a chunk
+    /// evicted mid-flight is no longer tracked and its mesh should be dropped.
     pub fn is_tracked(&self, coord: ChunkCoord) -> bool {
         self.states.contains_key(&coord)
     }
 
-    // `(resident, pending)` chunk counts -- for diagnostics.
+    /// `(resident, pending)` chunk counts -- for diagnostics.
     pub fn counts(&self) -> (usize, usize) {
         let mut resident = 0;
         let mut pending = 0;
@@ -370,8 +368,8 @@ impl ChunkWindow {
         (resident, pending)
     }
 
-    // `(near_resident, far_resident)` counts -- resident full chunks vs
-    // resident impostors, for diagnostics / verifying the far band is active.
+    /// `(near_resident, far_resident)` counts -- resident full chunks vs
+    /// resident impostors, for diagnostics / verifying the far band is active.
     pub fn counts_by_detail(&self) -> (usize, usize) {
         let mut near = 0;
         let mut far = 0;

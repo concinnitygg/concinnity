@@ -1,11 +1,9 @@
-// benches/memory.rs
-//
-// Benchmarks over the engine's allocation layer: the frame arena against the
-// heap path it replaces, pool churn, the inline-vec single-element case, and
-// the tagged ledger's report cost. The ledger benchmark reports into the
-// device realm, which also exercises the harness's vram accounting end to end.
-//
-// Run with `cargo bench -p concinnity-bench --bench memory`.
+//! Benchmarks over the engine's allocation layer: the frame arena against the
+//! heap path it replaces, pool churn, the inline-vec single-element case, and
+//! the tagged ledger's report cost. The ledger benchmark reports into the
+//! device realm, which also exercises the harness's vram accounting end to end.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench memory`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 

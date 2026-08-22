@@ -1,21 +1,19 @@
-// src/gfx.rs
-//
-// The client's render layer. The backend-agnostic render-prep helpers (record
-// builders, render graph, trait seam, CPU-side render math, plus the GPU-free
-// cursor / sprite / text / lights / streaming layout helpers) now live in
-// concinnity-render and are re-exported below under the historical
-// crate::gfx::<module> paths so the rest of the client and the device backends
-// keep resolving. What remains declared here are the game/runtime render systems
-// (the renderer driver, animation, camera controllers, draw list) and the
-// client-only settings/quality-preset resolution.
-//
-// The GPU data layouts and render math (camera, frustum, post-process settings)
-// live in concinnity-core; the CPU kernels over them (mesh payloads, skinning,
-// IK, line expansion, the animation cursor) in concinnity-cpu. Both are
-// re-exported here so the crate::gfx::<module> paths keep resolving.
-// `pub` so the editor crate can reach them through `concinnity_engine::gfx::*`
-// (e.g. shader-layout reflection); `chunk_coord` is named only by the
-// chunk-streaming drive, so it stays crate-private.
+//! The client's render layer. The backend-agnostic render-prep helpers (record
+//! builders, render graph, trait seam, CPU-side render math, plus the GPU-free
+//! cursor / sprite / text / lights / streaming layout helpers) now live in
+//! concinnity-render and are re-exported below under the historical
+//! `crate::gfx::<module>` paths so the rest of the client and the device backends
+//! keep resolving. What remains declared here are the game/runtime render systems
+//! (the renderer driver, animation, camera controllers, draw list) and the
+//! client-only settings/quality-preset resolution.
+//!
+//! The GPU data layouts and render math (camera, frustum, post-process settings)
+//! live in concinnity-core; the CPU kernels over them (mesh payloads, skinning,
+//! IK, line expansion, the animation cursor) in concinnity-cpu. Both are
+//! re-exported here so the `crate::gfx::<module>` paths keep resolving.
+//! `pub` so the editor crate can reach them through `concinnity_engine::gfx::*`
+//! (e.g. shader-layout reflection); `chunk_coord` is named only by the
+//! chunk-streaming drive, so it stays crate-private.
 pub(crate) use concinnity_core::gfx::chunk_coord;
 pub use concinnity_core::gfx::lod_select as lod;
 pub use concinnity_core::gfx::{
@@ -47,21 +45,21 @@ pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
 #[cfg(test)]
 pub(crate) use concinnity_render::skinned_pool;
 
-// Skeletal animation playback. Internal system, constructed by `World::start`
-// when the world declares any `Animation`; produces per-frame skinning matrices.
-// `pub` so the editor crate can drive the clip hot-reload through the
-// `AnimationSystem` setter API.
+/// Skeletal animation playback. Internal system, constructed by `World::start`
+/// when the world declares any `Animation`; produces per-frame skinning matrices.
+/// `pub` so the editor crate can drive the clip hot-reload through the
+/// `AnimationSystem` setter API.
 pub mod animation;
 // First-person / fly-through camera controller. Internal system, constructed by
 // `World::start` from a `Camera3D`'s controller settings.
 pub(crate) mod camera_controller;
-pub mod draw_list;
+pub(crate) mod draw_list;
 // Transform -> GlobalTransform propagation down the Parent hierarchy, and the
 // runtime reparent that recomposes it. Driven per frame by GraphicsSystem.
-pub(crate) mod transform_propagation;
-// The renderer driver. An internal system (not a declarable asset), constructed
-// by `World::start` when the world declares a `GraphicsConfig`.
+/// The renderer driver. An internal system (not a declarable asset), constructed
+/// by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;
+pub(crate) mod transform_propagation;
 // Per-frame input sampling + FrameInput publish. Internal system, constructed
 // alongside GraphicsSystem (same gate) and scheduled immediately after it.
 pub(crate) mod input_system;
@@ -78,11 +76,11 @@ pub(crate) mod settings_system;
 // Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`)
 // plus the `std` texture / mesh / chunk drivers it schedules.
 pub(crate) mod streaming;
-// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
-// camera-relative view publish. Internal system, constructed alongside
-// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
-// editor's debug server can name `StreamingStats` (its state lives in the parked
-// `StreamingState` resource, read via `World::streaming_stats`).
+/// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
+/// camera-relative view publish. Internal system, constructed alongside
+/// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
+/// editor's debug server can name `StreamingStats` (its state lives in the parked
+/// `StreamingState` resource, read via `World::streaming_stats`).
 pub mod streaming_system;
 // Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
 // compiled only into the unit-test binary. Implements concinnity-render's

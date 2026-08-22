@@ -17,7 +17,7 @@ pub(super) struct LineFrame {
     // World offset from authored space into the space the frame renders in.
     // Zero unless a streaming voxel world rebased the scene onto its chunk
     // render origin.
-    pub rebase: [f32; 3],
+    pub(crate) rebase: [f32; 3],
     pub fov_y_radians: f32,
     pub near: f32,
     pub viewport: (f32, f32),

@@ -36,76 +36,85 @@ use super::compile::CompiledGraph;
 use super::frame::FrameGraphInputs;
 use super::types::{ClearValue, PixelFormat, TextureUsage};
 
-// One pooled transient, resolved against a concrete drawable extent. The
-// backend translates this into its native texture descriptor; nothing here is
-// backend-specific.
-//
-// `PartialEq` but not `Eq`: the clear value is floats.
+/// One pooled transient, resolved against a concrete drawable extent. The
+/// backend translates this into its native texture descriptor; nothing here is
+/// backend-specific.
+///
+/// `PartialEq` but not `Eq`: the clear value is floats.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransientTexture {
-    // The graph label, which is also how a feature reads the texture back out
-    // of the pool and how the barrier registry names it.
+    /// The graph label, which is also how a feature reads the texture back out
+    /// of the pool and how the barrier registry names it.
     pub label: &'static str,
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
-    // 1 for a 2D texture, > 1 for a volume.
+    /// 1 for a 2D texture, > 1 for a volume.
     pub depth: u32,
+    /// Texel format.
     pub format: PixelFormat,
+    /// MSAA sample count; 1 for non-multisample.
     pub sample_count: u32,
+    /// Array layers; 1 for plain 2D.
     pub array_layers: u32,
+    /// Mip levels in the chain.
     pub mip_levels: u32,
+    /// How passes bind the texture.
     pub usage: TextureUsage,
-    // What the writing pass clears this target to. Carried through because
-    // D3D12 bakes it into the resource at creation; see `TextureDesc::clear`.
+    /// What the writing pass clears this target to. Carried through because
+    /// D3D12 bakes it into the resource at creation; see `TextureDesc::clear`.
     pub clear: ClearValue,
 }
 
-// One slot: the members that share a backing allocation, in the order they
-// reuse it (lifetime-start). A single-member slot is a plain pooled target; a
-// multi-member slot is a realised alias, and the order is what each backend's
-// aliasing barriers are wired from.
+/// One slot: the members that share a backing allocation, in the order they
+/// reuse it (lifetime-start). A single-member slot is a plain pooled target; a
+/// multi-member slot is a realised alias, and the order is what each backend's
+/// aliasing barriers are wired from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransientSlot {
+    /// Textures sharing this slot, with pairwise-disjoint lifetimes.
     pub members: Vec<TransientTexture>,
 }
 
 impl TransientSlot {
+    /// The member textures' labels, in assignment order.
     pub fn labels(&self) -> Vec<&'static str> {
         self.members.iter().map(|m| m.label).collect()
     }
 }
 
-// The inputs a pool plans its slots against, given the configuration it was
-// built for. `build` carries the flags the pool is rebuilt on (SSAO and bloom
-// being switched on or off both rebuild it, as does a resize); every gated pass
-// is forced on here, so no lifetime a pass would extend is missing from the
-// graph the grouping is decided on.
-//
-// `composite_reads_ao` is ON, and the history is worth keeping. It used to be
-// off, on the argument that it describes a different frame rather than a fuller
-// one (it is reachable only in the occlusion view, which forces bloom off) and
-// that planning against it would refuse the only aliasing the pool had. The
-// second half has expired now that the G-buffer channels are pooled: there is
-// plenty else to alias, and turning it on costs this plan nothing.
-//
-// The first half turned out to be a trap. Modelling `ao_output` as short-lived
-// is only safe while nothing else is pooled around the reflection resolve --
-// the moment a one-pass post-stack target joins the pool, the greedy pairs it
-// with `ao_output` and the sweep reports the overlap the occlusion view really
-// has. Measured, not argued: adding such a target made both sweeps fail here.
-// Extending a lifetime is always the safe direction, so it stays on.
-//
-// `upscale_enabled` is NOT forced on, and a lifetime read out of this graph can
-// therefore be shorter than the real maximal one. Upscale substitutes for
-// TaaResolve, so forcing it would drop the TAA branch instead; neither branch
-// dominates the other and one graph cannot hold both. The concrete casualty is
-// `gbuffer_depth`, whose only consumer is the upscaler and which looks one-pass
-// here -- see `the_prepass_depth_is_short_lived_only_in_the_planning_graph`.
-//
-// Nothing here is load-bearing on its own. What makes the grouping sound is the
-// sweep over the reachable space in this module's tests plus each executor's
-// per-frame assertion; if this graph ever becomes too permissive the sweep is
-// what fails.
+/// The inputs a pool plans its slots against, given the configuration it was
+/// built for. `build` carries the flags the pool is rebuilt on (SSAO and bloom
+/// being switched on or off both rebuild it, as does a resize); every gated pass
+/// is forced on here, so no lifetime a pass would extend is missing from the
+/// graph the grouping is decided on.
+///
+/// `composite_reads_ao` is ON, and the history is worth keeping. It used to be
+/// off, on the argument that it describes a different frame rather than a fuller
+/// one (it is reachable only in the occlusion view, which forces bloom off) and
+/// that planning against it would refuse the only aliasing the pool had. The
+/// second half has expired now that the G-buffer channels are pooled: there is
+/// plenty else to alias, and turning it on costs this plan nothing.
+///
+/// The first half turned out to be a trap. Modelling `ao_output` as short-lived
+/// is only safe while nothing else is pooled around the reflection resolve --
+/// the moment a one-pass post-stack target joins the pool, the greedy pairs it
+/// with `ao_output` and the sweep reports the overlap the occlusion view really
+/// has. Measured, not argued: adding such a target made both sweeps fail here.
+/// Extending a lifetime is always the safe direction, so it stays on.
+///
+/// `upscale_enabled` is NOT forced on, and a lifetime read out of this graph can
+/// therefore be shorter than the real maximal one. Upscale substitutes for
+/// TaaResolve, so forcing it would drop the TAA branch instead; neither branch
+/// dominates the other and one graph cannot hold both. The concrete casualty is
+/// `gbuffer_depth`, whose only consumer is the upscaler and which looks one-pass
+/// here -- see `the_prepass_depth_is_short_lived_only_in_the_planning_graph`.
+///
+/// Nothing here is load-bearing on its own. What makes the grouping sound is the
+/// sweep over the reachable space in this module's tests plus each executor's
+/// per-frame assertion; if this graph ever becomes too permissive the sweep is
+/// what fails.
 pub fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
     FrameGraphInputs {
         // `world_hidden` masks passes off rather than on, so leaving it false
@@ -138,7 +147,7 @@ pub fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
 // nothing. Returns `None` when the planning graph fails to compile, which is a
 // caller's cue to fall back to one slot per managed resource rather than
 // silently aliasing on a plan that was never made.
-pub fn plan_transient_slots(
+pub(crate) fn plan_transient_slots(
     build: &FrameGraphInputs,
     poolable: &dyn Fn(&str) -> bool,
     drawable_w: u32,
@@ -160,20 +169,20 @@ pub fn plan_transient_slots(
     )
 }
 
-// The transients a backend pool owns; everything else the graph declares
-// transient stays backend-owned. One set for every backend, because which
-// labels are pooled is policy rather than a per-backend capability: a set that
-// differed per backend would make their footprints incomparable and would leave
-// the soundness sweep below checking a grouping no backend builds.
-//
-// `gbuffer_depth` is deliberately absent while its three colour siblings are
-// here. D3D12 creates a shader-readable depth target with a typeless resource
-// format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`, while
-// `PixelFormat::Depth32Float` names one format for all three roles, so the pool
-// would create a resource the feature's SRV cannot view. Pooling it would
-// reclaim nothing anyway: its one-pass planning lifetime is an artifact of a
-// graph that cannot model the upscaler (see
-// `the_prepass_depth_is_short_lived_only_in_the_planning_graph`).
+/// The transients a backend pool owns; everything else the graph declares
+/// transient stays backend-owned. One set for every backend, because which
+/// labels are pooled is policy rather than a per-backend capability: a set that
+/// differed per backend would make their footprints incomparable and would leave
+/// the soundness sweep below checking a grouping no backend builds.
+///
+/// `gbuffer_depth` is deliberately absent while its three colour siblings are
+/// here. D3D12 creates a shader-readable depth target with a typeless resource
+/// format (`R32_TYPELESS`) and views it as `D32_FLOAT` / `R32_FLOAT`, while
+/// `PixelFormat::Depth32Float` names one format for all three roles, so the pool
+/// would create a resource the feature's SRV cannot view. Pooling it would
+/// reclaim nothing anyway: its one-pass planning lifetime is an artifact of a
+/// graph that cannot model the upscaler (see
+/// `the_prepass_depth_is_short_lived_only_in_the_planning_graph`).
 pub fn pooled(label: &str) -> bool {
     matches!(
         label,
@@ -185,34 +194,34 @@ pub fn pooled(label: &str) -> bool {
     )
 }
 
-// The feature gates a backend's transient pool is built for, i.e. the ones it
-// is rebuilt on. Everything else `planning_inputs` forces live.
+/// The feature gates a backend's transient pool is built for, i.e. the ones it
+/// is rebuilt on. Everything else `planning_inputs` forces live.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PoolGates {
-    // SSAO is built, so `ao_output` exists.
+    /// SSAO is built, so `ao_output` exists.
     pub ssao: bool,
-    // The bloom chain's top octave is managed. Metal and DirectX pass `true`
-    // unconditionally: they toggle bloom per frame off the post-process
-    // intensity while the composite binds mip 0 either way, so a pool built at
-    // init / resize cannot gate on it. Vulkan rebuilds on the flag and passes
-    // the real value.
+    /// The bloom chain's top octave is managed. Metal and DirectX pass `true`
+    /// unconditionally: they toggle bloom per frame off the post-process
+    /// intensity while the composite binds mip 0 either way, so a pool built at
+    /// init / resize cannot gate on it. Vulkan rebuilds on the flag and passes
+    /// the real value.
     pub bloom: bool,
-    // The unified G-buffer pre-pass is built, so its colour channels exist.
+    /// The unified G-buffer pre-pass is built, so its colour channels exist.
     pub gbuffer: bool,
 }
 
-// The alias-slot list a pool built for `gates` should allocate, taken straight
-// from the graph: the grouping and each member's extent, format and usage come
-// from one planning graph, so init and resize cannot drift apart and neither
-// can the graph and the resource it describes.
-//
-// `render_extent` sizes the render-resolution transients and `output_extent` is
-// the drawable the half-resolution ones scale off; under temporal upscaling
-// they differ, which is why both are passed rather than derived.
-//
-// A planning graph that does not compile is a hard error rather than an empty
-// pool: every consumer reads its target back out by label, so silently pooling
-// nothing would fail later and further from the cause.
+/// The alias-slot list a pool built for `gates` should allocate, taken straight
+/// from the graph: the grouping and each member's extent, format and usage come
+/// from one planning graph, so init and resize cannot drift apart and neither
+/// can the graph and the resource it describes.
+///
+/// `render_extent` sizes the render-resolution transients and `output_extent` is
+/// the drawable the half-resolution ones scale off; under temporal upscaling
+/// they differ, which is why both are passed rather than derived.
+///
+/// A planning graph that does not compile is a hard error rather than an empty
+/// pool: every consumer reads its target back out by label, so silently pooling
+/// nothing would fail later and further from the cause.
 pub fn plan_pool_slots(
     gates: PoolGates,
     render_extent: (u32, u32),
@@ -264,7 +273,7 @@ fn resolve(
 // Two members of one slot whose lifetimes overlap in a graph, i.e. two
 // resources that would be live at once on the same bytes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct SlotConflict {
+pub(crate) struct SlotConflict {
     pub slot: usize,
     pub a: &'static str,
     pub b: &'static str,
@@ -288,7 +297,10 @@ impl std::fmt::Display for SlotConflict {
 // Labels absent from `graph` are skipped -- a pool holds a resource for as long
 // as its build configuration says so, and a frame that omits the pass writing
 // it simply does not use it.
-pub fn slot_conflicts(graph: &CompiledGraph, slots: &[Vec<&'static str>]) -> Vec<SlotConflict> {
+pub(crate) fn slot_conflicts(
+    graph: &CompiledGraph,
+    slots: &[Vec<&'static str>],
+) -> Vec<SlotConflict> {
     let lifetime = |label: &str| {
         graph
             .resources
@@ -315,17 +327,17 @@ pub fn slot_conflicts(graph: &CompiledGraph, slots: &[Vec<&'static str>]) -> Vec
     conflicts
 }
 
-// Panic if any alias slot has two members live at once in `graph`. Members of a
-// slot share bytes, so two live at once means one reads memory the other
-// overwrote, and unlike a barrier gap there is no validation layer behind it on
-// any backend. Every executor calls this per frame under `debug_assertions`,
-// over the graph it is about to run; `backend` names the caller in the message.
-//
-// This is the layer the sweep in this module's tests cannot be: the pool is
-// planned once per build configuration while graphs compile per frame, and
-// passes that *substitute* for one another mean there is no single maximal
-// graph to plan against. The sweep covers the input space it models; this
-// covers the graph actually in hand.
+/// Panic if any alias slot has two members live at once in `graph`. Members of a
+/// slot share bytes, so two live at once means one reads memory the other
+/// overwrote, and unlike a barrier gap there is no validation layer behind it on
+/// any backend. Every executor calls this per frame under `debug_assertions`,
+/// over the graph it is about to run; `backend` names the caller in the message.
+///
+/// This is the layer the sweep in this module's tests cannot be: the pool is
+/// planned once per build configuration while graphs compile per frame, and
+/// passes that *substitute* for one another mean there is no single maximal
+/// graph to plan against. The sweep covers the input space it models; this
+/// covers the graph actually in hand.
 pub fn assert_slot_aliasing_sound(
     graph: &CompiledGraph,
     slot_labels: &[Vec<&'static str>],

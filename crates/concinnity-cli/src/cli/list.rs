@@ -30,7 +30,7 @@ pub(crate) fn provenance(loaded: &concinnity_cook::world::LoadedWorld, name: &st
     loaded.provenance(name).to_string()
 }
 
-pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
+pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
 
     let content = std::fs::read_to_string(&json_path).map_err(|e| {

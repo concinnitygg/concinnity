@@ -29,9 +29,9 @@ use crate::define_components;
 use crate::ecs::{BlobAssetDef, Component, PayloadLocator};
 use crate::result::CnResult;
 
-// The one component list. `$cb` is a macro that receives the `Variant => Type`
-// entries and expands to whatever registry it builds from them. Type paths are
-// absolute so the list resolves from any crate that consumes it.
+/// The one component list. `$cb` is a macro that receives the `Variant => Type`
+/// entries and expands to whatever registry it builds from them. Type paths are
+/// absolute so the list resolves from any crate that consumes it.
 #[macro_export]
 macro_rules! for_each_component {
     ($cb:ident) => {
@@ -126,15 +126,15 @@ macro_rules! for_each_component {
     };
 }
 
-// The resource-asset list: asset types that are compiled into the blob's
-// resource stream and addressed at runtime by a per-kind handle, rather than
-// stored as ECS components. These have left `for_each_component!` (no
-// `ComponentTag`, no `ComponentAsset`, no `impl Component`): the runtime keeps
-// them in per-kind resource tables owned by the system that uses them, not in a
-// component column. Cook still recognizes them as declarable asset types (it
-// builds a `ResourceAssetType` from this list), compiles their payload, assigns
-// their handle, and emits a resource record. Each entry is
-// `Variant => Type { resource: <ResourceKind>, <flags...> }`.
+/// The resource-asset list: asset types that are compiled into the blob's
+/// resource stream and addressed at runtime by a per-kind handle, rather than
+/// stored as ECS components. These have left `for_each_component!` (no
+/// `ComponentTag`, no `ComponentAsset`, no `impl Component`): the runtime keeps
+/// them in per-kind resource tables owned by the system that uses them, not in a
+/// component column. Cook still recognizes them as declarable asset types (it
+/// builds a `ResourceAssetType` from this list), compiles their payload, assigns
+/// their handle, and emits a resource record. Each entry is
+/// `Variant => Type { resource: <ResourceKind>, <flags...> }`.
 #[macro_export]
 macro_rules! for_each_resource_asset {
     ($cb:ident) => {

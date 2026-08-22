@@ -1,45 +1,49 @@
-// The `slangc` invocation, shared by build scripts and the renderer.
-//
-// The engine's single-source shaders (`crates/concinnity-device/src/shaders/
-// *.slang`) compile through the `slangc` binary: at build time to Metal
-// metallibs (the device build script), and at renderer init to SPIR-V for the
-// Vulkan backend (plus Metal hot-reload rebuilds). Both call sites assemble the
-// full source text first (defines injected as `#define` lines), so a compile is
-// a pure function of that text, the entry list, and the target -- which is what
-// lets the renderer's content-addressed shader cache key it.
-//
-// Being needed on both sides is why this is its own crate rather than a module
-// of `concinnity-toolchain`: that crate is build-script support, consumed only
-// under `[build-dependencies]` and never linked into a shipped binary, and it
-// stays that way. This one sits below it, holds no policy, and depends on
-// nothing but std -- a compile here is a subprocess, not a linked compiler.
-// The single invocation is the point: the build script and the runtime must
-// produce byte-identical artifacts or the content-addressed cache serves one
-// path's bytes to the other, so the flag list exists exactly once.
-//
-// slangc resolves from PATH first, then `$VULKAN_SDK/bin`, taking the first
-// candidate that meets `MIN_SLANGC`. A host without it degrades the same way a
-// missing Metal toolchain does: the build script emits a stub lookup and the
-// renderer falls back to compiling at startup, which then needs slangc at
-// runtime and reports a clear error when it is absent or too old.
+//! The `slangc` invocation, shared by build scripts and the renderer.
+//!
+//! The engine's single-source shaders (`crates/concinnity-device/src/shaders/
+//! *.slang`) compile through the `slangc` binary: at build time to Metal
+//! metallibs (the device build script), and at renderer init to SPIR-V for the
+//! Vulkan backend (plus Metal hot-reload rebuilds). Both call sites assemble the
+//! full source text first (defines injected as `#define` lines), so a compile is
+//! a pure function of that text, the entry list, and the target -- which is what
+//! lets the renderer's content-addressed shader cache key it.
+//!
+//! Being needed on both sides is why this is its own crate rather than a module
+//! of `concinnity-toolchain`: that crate is build-script support, consumed only
+//! under `[build-dependencies]` and never linked into a shipped binary, and it
+//! stays that way. This one sits below it, holds no policy, and depends on
+//! nothing but std -- a compile here is a subprocess, not a linked compiler.
+//! The single invocation is the point: the build script and the runtime must
+//! produce byte-identical artifacts or the content-addressed cache serves one
+//! path's bytes to the other, so the flag list exists exactly once.
+//!
+//! slangc resolves from PATH first, then `$VULKAN_SDK/bin`, taking the first
+//! candidate that meets `MIN_SLANGC`. A host without it degrades the same way a
+//! missing Metal toolchain does: the build script emits a stub lookup and the
+//! renderer falls back to compiling at startup, which then needs slangc at
+//! runtime and reports a clear error when it is absent or too old.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-// What slangc should emit. `Metal` (MSL text) and `Hlsl` exist for build-time
-// binding assertions and diagnostics; shipped artifacts are `Spirv`,
-// `Metallib`, and `Dxil`.
+/// What slangc should emit. `Metal` (MSL text) and `Hlsl` exist for build-time
+/// binding assertions and diagnostics; shipped artifacts are `Spirv`,
+/// `Metallib`, and `Dxil`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlangTarget {
+    /// SPIR-V for Vulkan.
     Spirv,
+    /// A Metal library for the Metal backend.
     Metallib,
+    /// MSL source text, for build-time assertions and diagnostics.
     Metal,
-    // A signed DXIL container for D3D12. The shader-model profile rides the
-    // variant because DXIL has no usable default: it sets the container's
-    // feature floor (SM 6.0 is what `NonUniformResourceIndex` needs) and a
-    // stage-correct profile is not inferable from the target alone.
+    /// A signed DXIL container for D3D12. The shader-model profile rides the
+    /// variant because DXIL has no usable default: it sets the container's
+    /// feature floor (SM 6.0 is what `NonUniformResourceIndex` needs) and a
+    /// stage-correct profile is not inferable from the target alone.
     Dxil(&'static str),
+    /// HLSL source text for the named profile, for build-time assertions.
     Hlsl(&'static str),
 }
 
@@ -73,14 +77,16 @@ impl SlangTarget {
     }
 }
 
-// One slangc compile: assembled source text in, artifact bytes out.
+/// One slangc compile: assembled source text in, artifact bytes out.
 pub struct SlangJob<'a> {
-    // Fully assembled source (defines already injected as `#define` lines).
+    /// Fully assembled source (defines already injected as `#define` lines).
     pub source: &'a str,
-    // File name the source is written under in `work_dir`; also the name
-    // slangc diagnostics and `#line` directives carry.
+    /// File name the source is written under in `work_dir`; also the name
+    /// slangc diagnostics and `#line` directives carry.
     pub file_name: &'a str,
+    /// Entry points to compile from the source.
     pub entries: &'a [&'a str],
+    /// What slangc should emit.
     pub target: SlangTarget,
 }
 
@@ -103,15 +109,15 @@ fn resolved() -> &'static Result<Slangc, String> {
     SLANGC.get_or_init(probe_slangc)
 }
 
-// The slangc to invoke, or `None` when no candidate is usable.
+/// The slangc to invoke, or `None` when no candidate is usable.
 pub fn slangc_path() -> Option<&'static Path> {
     resolved().as_ref().ok().map(|s| s.path.as_path())
 }
 
-// Identifies the compiler for the renderer's content-addressed shader cache.
-// Two slangc releases can emit different bytes for identical source, so an
-// artifact keyed without the version outlives the toolchain that produced it
-// and gets served to a later one.
+/// Identifies the compiler for the renderer's content-addressed shader cache.
+/// Two slangc releases can emit different bytes for identical source, so an
+/// artifact keyed without the version outlives the toolchain that produced it
+/// and gets served to a later one.
 pub fn compiler_id() -> &'static str {
     static ID: OnceLock<String> = OnceLock::new();
     ID.get_or_init(|| match resolved() {
@@ -170,7 +176,7 @@ fn parse_version(version: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-// Compile `job` under `work_dir`, returning the artifact bytes.
+/// Compile `job` under `work_dir`, returning the artifact bytes.
 pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     let produced = run(job, work_dir, false)?;
     if produced.artifact.is_empty() {
@@ -182,13 +188,13 @@ pub fn compile(job: &SlangJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     Ok(produced.artifact)
 }
 
-// The layout slangc gives `job`'s declarations, as its `-reflection-json`
-// emits it. The invocation is the one `compile` uses, so the offsets reported
-// are the ones the shipped artifact carries -- and they are per target: MSL
-// sizes a constant-buffer `float3` at 16 bytes where SPIR-V and DXIL pack a
-// scalar after it, and SPIR-V rounds an array element stride up to 16 where
-// neither of the others does. A caller comparing a `#[repr(C)]` mirror has to
-// ask each target separately.
+/// The layout slangc gives `job`'s declarations, as its `-reflection-json`
+/// emits it. The invocation is the one `compile` uses, so the offsets reported
+/// are the ones the shipped artifact carries -- and they are per target: MSL
+/// sizes a constant-buffer `float3` at 16 bytes where SPIR-V and DXIL pack a
+/// scalar after it, and SPIR-V rounds an array element stride up to 16 where
+/// neither of the others does. A caller comparing a `#[repr(C)]` mirror has to
+/// ask each target separately.
 pub fn reflect(job: &SlangJob<'_>, work_dir: &Path) -> Result<String, String> {
     let produced = run(job, work_dir, true)?;
     produced
@@ -299,9 +305,9 @@ fn command_args(job: &SlangJob<'_>) -> Vec<String> {
     args
 }
 
-// Prepend `#define` lines for each `(name, value)` pair. The defines become
-// part of the source text on purpose: the renderer's shader cache keys on the
-// assembled source, so two pool sizes can never share an artifact.
+/// Prepend `#define` lines for each `(name, value)` pair. The defines become
+/// part of the source text on purpose: the renderer's shader cache keys on the
+/// assembled source, so two pool sizes can never share an artifact.
 pub fn inject_defines(source: &str, defines: &[(&str, &str)]) -> String {
     if defines.is_empty() {
         return source.to_string();

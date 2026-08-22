@@ -47,7 +47,7 @@ fn normalize(v: Vec3) -> Vec3 {
 // enough to read and impossible to get wrong case by case.
 //
 // Returns the vertex count; entries past it are untouched.
-pub fn clip_quad_to_horizon(quad: &[Vec3; 4], out: &mut [Vec3; 5]) -> usize {
+pub(crate) fn clip_quad_to_horizon(quad: &[Vec3; 4], out: &mut [Vec3; 5]) -> usize {
     let mut n = 0;
     for i in 0..4 {
         let current = quad[i];
@@ -93,7 +93,7 @@ fn integrate_edge(v1: Vec3, v2: Vec3) -> f32 {
 //
 // `two_sided` keeps the contribution of a polygon seen from behind; a one-sided
 // light contributes nothing there.
-pub fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32 {
+pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32 {
     let mut clipped = [[0.0_f32; 3]; 5];
     let n = clip_quad_to_horizon(quad, &mut clipped);
     if n < 3 {
@@ -124,7 +124,7 @@ pub fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32 {
 // `m_inv` the LTC inverse transform (the identity for the diffuse term). The
 // frame puts `n` on +z with its first tangent in the view plane, matching how
 // the lookup table was fitted.
-pub fn evaluate(
+pub(crate) fn evaluate(
     n: Vec3,
     v: Vec3,
     p: Vec3,

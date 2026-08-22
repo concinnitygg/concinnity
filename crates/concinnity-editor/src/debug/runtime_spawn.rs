@@ -160,7 +160,7 @@ pub(crate) struct CameraMotion {
 impl CameraMotion {
     // Build a motion from a drained `camera-move` request. `frames == 0` maps
     // to an indefinite hold.
-    pub fn from_args(args: &CameraMoveArgs) -> Self {
+    pub(crate) fn from_args(args: &CameraMoveArgs) -> Self {
         Self {
             forward: args.forward,
             right: args.right,
@@ -178,7 +178,7 @@ impl CameraMotion {
     // The motion to apply next frame, after one step has just been applied: a
     // finite countdown decremented by one (returning `None` once exhausted),
     // an indefinite hold returning itself unchanged.
-    pub fn advanced(self) -> Option<Self> {
+    pub(crate) fn advanced(self) -> Option<Self> {
         match self.frames_left {
             None => Some(self),
             Some(n) if n > 1 => Some(Self {

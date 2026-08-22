@@ -59,7 +59,7 @@ impl MtlContext {
     // If the world started with no `VolumetricFog` (so `fog_pipeline` is
     // `None`), a `Some` update logs once and is dropped: re-enabling fog
     // mid-run requires a relaunch.
-    pub fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
+    pub(crate) fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
         if settings.is_some() && self.fog.pipeline.is_none() {
             tracing::warn!(
                 "VolumetricFog hot-reload: world started without fog, so the fog \

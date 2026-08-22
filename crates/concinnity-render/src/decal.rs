@@ -1,45 +1,47 @@
-// src/decal.rs
-//
-// Backend-agnostic decal helpers. Owns the per-decal model / inverse-model
-// matrix math the projected-decal pass needs at runtime, plus the `DecalRecord`
-// the backends consume. Decals are stamped onto the scene depth buffer by
-// drawing a unit-box volume per decal: the fragment shader reconstructs the
-// world-space point of each rasterised pixel from depth and tests whether it
-// lies inside the box.
+//! Backend-agnostic decal helpers. Owns the per-decal model / inverse-model
+//! matrix math the projected-decal pass needs at runtime, plus the `DecalRecord`
+//! the backends consume. Decals are stamped onto the scene depth buffer by
+//! drawing a unit-box volume per decal: the fragment shader reconstructs the
+//! world-space point of each rasterised pixel from depth and tests whether it
+//! lies inside the box.
 
 use crate::assets::Decal;
 
-// Per-decal data the renderer consumes each frame. Built once at
-// `GraphicsSystem` init from the world's `Decal` components.
-//
-// `model` is the local→world transform of a unit cube spanning `[-0.5, 0.5]^3`
-// in local space. `inv_model` is its inverse; the fragment shader uses it to
-// pull a reconstructed world-space sample point back into decal-local space
-// and test it against the unit box. `texture_slot` indexes the renderer's
-// albedo texture pool; `tint` is RGB×alpha applied to every projected sample.
+/// Per-decal data the renderer consumes each frame. Built once at
+/// `GraphicsSystem` init from the world's `Decal` components.
+///
+/// `model` is the local→world transform of a unit cube spanning `[-0.5, 0.5]^3`
+/// in local space. `inv_model` is its inverse; the fragment shader uses it to
+/// pull a reconstructed world-space sample point back into decal-local space
+/// and test it against the unit box. `texture_slot` indexes the renderer's
+/// albedo texture pool; `tint` is RGB×alpha applied to every projected sample.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecalRecord {
+    /// Model matrix, column-major.
     pub model: [[f32; 4]; 4],
+    /// Inverse model matrix, column-major.
     pub inv_model: [[f32; 4]; 4],
+    /// Index into the shared texture pool for the decal's image.
     pub texture_slot: usize,
+    /// Linear RGBA tint multiplied into the sampled image.
     pub tint: [f32; 4],
 }
 
 impl DecalRecord {
-    // World-space AABB enclosing the decal's unit-cube volume. Used by the
-    // per-frame frustum-cull skip so a record that lands fully outside the
-    // camera frustum costs no draw call. The AABB is the transform of
-    // `[-0.5, 0.5]^3` by `model`; for a non-rotated decal this exactly
-    // matches the authored `size`, and for a rotated decal it is the
-    // minimum AABB enclosing the rotated box.
+    /// World-space AABB enclosing the decal's unit-cube volume. Used by the
+    /// per-frame frustum-cull skip so a record that lands fully outside the
+    /// camera frustum costs no draw call. The AABB is the transform of
+    /// `[-0.5, 0.5]^3` by `model`; for a non-rotated decal this exactly
+    /// matches the authored `size`, and for a rotated decal it is the
+    /// minimum AABB enclosing the rotated box.
     pub fn aabb(&self) -> ([f32; 3], [f32; 3]) {
         crate::frustum::transform_aabb([-0.5; 3], [0.5; 3], self.model)
     }
 }
 
-// Build the world-space `model` matrix for a decal: `T(position) * R_yxz *
-// S(size)`. Column-major; the inner index is the row. Matches the rotation
-// convention used by `Prop::model_matrix`.
+/// Build the world-space `model` matrix for a decal: `T(position) * R_yxz *
+/// S(size)`. Column-major; the inner index is the row. Matches the rotation
+/// convention used by `Prop::model_matrix`.
 pub fn decal_model_matrix(
     position: [f32; 3],
     rotation_deg: [f32; 3],
@@ -72,13 +74,13 @@ pub fn decal_model_matrix(
     ]
 }
 
-// Invert an affine TRS matrix of the form built by [`decal_model_matrix`].
-// The 3×3 linear part is `R * diag(size)`; its inverse is
-// `diag(1/size) * R_transpose`. The translation flips into the inverted
-// frame: `-inv_linear * translation`.
-//
-// Returns `None` when any size component is non-finite or zero, a degenerate
-// decal whose volume has collapsed. The renderer skips such decals.
+/// Invert an affine TRS matrix of the form built by [`decal_model_matrix`].
+/// The 3×3 linear part is `R * diag(size)`; its inverse is
+/// `diag(1/size) * R_transpose`. The translation flips into the inverted
+/// frame: `-inv_linear * translation`.
+///
+/// Returns `None` when any size component is non-finite or zero, a degenerate
+/// decal whose volume has collapsed. The renderer skips such decals.
 pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     // Columns of the 3×3 are scaled rotation basis vectors; their lengths are
     // |size_x|, |size_y|, |size_z|.
@@ -120,15 +122,15 @@ pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     ])
 }
 
-// Resolve a list of `Decal` components into `DecalRecord`s the backend can
-// consume. Skips decals whose texture reference is missing, invisible decals,
-// and decals whose size is degenerate (any non-positive component).
-//
-// A decal's `texture` carries its cook-assigned `TextureHandle`, whose value is
-// the texture's slot in the backend's albedo texture pool; `texture_count` is
-// that pool's size and bounds the handle. A decal whose handle is out of range
-// is logged and dropped. A decal with no `texture` falls back to texture slot 0
-// (the renderer's white fallback) so the tint colour still stamps.
+/// Resolve a list of `Decal` components into `DecalRecord`s the backend can
+/// consume. Skips decals whose texture reference is missing, invisible decals,
+/// and decals whose size is degenerate (any non-positive component).
+///
+/// A decal's `texture` carries its cook-assigned `TextureHandle`, whose value is
+/// the texture's slot in the backend's albedo texture pool; `texture_count` is
+/// that pool's size and bounds the handle. A decal whose handle is out of range
+/// is logged and dropped. A decal with no `texture` falls back to texture slot 0
+/// (the renderer's white fallback) so the tint colour still stamps.
 pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<DecalRecord> {
     let mut out = Vec::new();
     for d in decals {

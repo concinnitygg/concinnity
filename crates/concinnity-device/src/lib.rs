@@ -1,13 +1,11 @@
-// src/lib.rs
-//
-// The device backends. The proprietary, hardware-facing renderers - Metal
-// (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
-// Win32 window/input layer. Exactly one backend compiles per build (resolved by
-// build.rs into a single backend_* cfg). Depends on concinnity-render (the
-// RenderBackend/SceneControl trait seam + render-prep) and concinnity-cpu; owns
-// no gameplay, ECS-runtime, audio, or physics. The client drives these through a
-// `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
-// context type.
+//! The device backends. The proprietary, hardware-facing renderers - Metal
+//! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
+//! Win32 window/input layer. Exactly one backend compiles per build (resolved by
+//! build.rs into a single backend_* cfg). Depends on concinnity-render (the
+//! RenderBackend/SceneControl trait seam + render-prep) and concinnity-cpu; owns
+//! no gameplay, ECS-runtime, audio, or physics. The client drives these through a
+//! `Box<dyn RenderBackend>` obtained from `init_backend`, never naming a concrete
+//! context type.
 
 // Bridge so the backends' historical `crate::gfx::<X>` paths resolve: the GPU
 // data layouts and render math (concinnity-core), the CPU kernels over them
@@ -17,12 +15,12 @@
 // crate-wide rather than gate every item per backend.
 #[allow(unused_imports)]
 pub(crate) mod gfx {
-    pub use concinnity_core::gfx::lod_select as lod;
-    pub use concinnity_core::gfx::{
+    pub(crate) use concinnity_core::gfx::lod_select as lod;
+    pub(crate) use concinnity_core::gfx::{
         frustum, profile, render_types, rt_reflections, ssao, ssgi, ssr,
     };
-    pub use concinnity_cpu::gfx::{auto_exposure, image_decode, mesh_payload};
-    pub use concinnity_render::{
+    pub(crate) use concinnity_cpu::gfx::{auto_exposure, image_decode, mesh_payload};
+    pub(crate) use concinnity_render::{
         backend, backend_init, bvh, csm, decal, display_mode, draw_slot, error, fullscreen,
         hdr_output, input, keymap, ltc, mipmap, parallel_ctx, particles, planar_reflection,
         reflection_probe, render_graph, rt_geom, rt_refit, rt_topology, scene_flow,
@@ -38,11 +36,11 @@ pub(crate) use concinnity_cpu::{build, geometry};
 pub(crate) use concinnity_render::jobs;
 
 #[cfg(backend_dx)]
-pub mod directx;
+pub(crate) mod directx;
 #[cfg(backend_metal)]
 pub mod metal;
 #[cfg(backend_vk)]
-pub mod vulkan;
+pub(crate) mod vulkan;
 // Native Win32 window/input/display-mode layer shared by the HWND-rendering
 // backends (DirectX always; Vulkan on Windows instead of GLFW).
 #[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]

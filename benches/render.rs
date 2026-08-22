@@ -1,12 +1,10 @@
-// benches/render.rs
-//
-// Benchmarks over the GPU-free render-prep layer: BVH build and frustum
-// query (the visibility path), light packing for the clustered forward
-// pass, the streaming planner's per-frame re-rank under pool pressure, and
-// draw-slot recycling. Everything here runs on the CPU side of the
-// render / device split; no backend is involved.
-//
-// Run with `cargo bench -p concinnity-bench --bench render`.
+//! Benchmarks over the GPU-free render-prep layer: BVH build and frustum
+//! query (the visibility path), light packing for the clustered forward
+//! pass, the streaming planner's per-frame re-rank under pool pressure, and
+//! draw-slot recycling. Everything here runs on the CPU side of the
+//! render / device split; no backend is involved.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench render`.
 
 use concinnity_asset::{PointLight, RectAreaLight, SpotLight};
 use concinnity_bench::Bench;

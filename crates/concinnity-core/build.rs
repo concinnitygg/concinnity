@@ -1,13 +1,11 @@
-// build.rs
-//
-// Resolves the rendering backend cfg the same way the client crate's build.rs
-// does. `Platform::current` is the only consumer: it reports which shader
-// source language the target backend consumes.
-//
-//   backend_metal  macOS, default
-//   backend_dx     Windows, default
-//   backend_vk     Linux (always), or macOS / Windows with the `vulkan` feature
-// The choice must stay in lockstep with concinnity-engine/build.rs.
+//! Resolves the rendering backend cfg the same way the client crate's build.rs
+//! does. `Platform::current` is the only consumer: it reports which shader
+//! source language the target backend consumes.
+//!
+//!   backend_metal  macOS, default
+//!   backend_dx     Windows, default
+//!   backend_vk     Linux (always), or macOS / Windows with the `vulkan` feature
+//! The choice must stay in lockstep with concinnity-engine/build.rs.
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(backend_metal)");
     println!("cargo::rustc-check-cfg=cfg(backend_dx)");

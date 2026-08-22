@@ -57,13 +57,6 @@ impl ResourceDecl {
         }
     }
 
-    // `true` for `ResourceDecl::Texture`. Used by the compile pass to
-    // route declared reads / writes through the right state machine
-    // (textures vs buffers differ only by label / executor lookup).
-    pub(super) fn is_texture(&self) -> bool {
-        matches!(self, ResourceDecl::Texture { .. })
-    }
-
     // The texture description (format / size / sample count), or `None` for a
     // buffer. The compile pass carries it onto `CompiledResource` so the
     // aliasing planner can size each transient resource.
@@ -120,7 +113,7 @@ pub(super) struct PassDecl {
 
 // Collects resource and pass declarations to feed `compile()`. Held by
 // value, never shared; each frame's graph builds fresh.
-pub struct GraphBuilder {
+pub(crate) struct GraphBuilder {
     pub(super) resources: Vec<ResourceDecl>,
     pub(super) passes: Vec<PassDecl>,
 }
@@ -132,7 +125,7 @@ impl Default for GraphBuilder {
 }
 
 impl GraphBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             resources: Vec::with_capacity(32),
             passes: Vec::with_capacity(super::passes::PASS_COUNT),
@@ -141,24 +134,33 @@ impl GraphBuilder {
 
     // Declare an engine-owned texture the graph references but does
     // not allocate. Returns a fresh handle at version 0.
-    pub fn import_texture(&mut self, label: &'static str, desc: TextureDesc) -> TextureHandle {
+    pub(crate) fn import_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+    ) -> TextureHandle {
         self.push_texture(label, desc, ResourceOrigin::Imported)
     }
 
     // Declare an engine-owned buffer the graph references but does
     // not allocate. Returns a fresh handle at version 0.
-    pub fn import_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
+    pub(crate) fn import_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
         self.push_buffer(label, desc, ResourceOrigin::Imported)
     }
 
     // Declare a graph-tracked transient texture. The graph just tracks
     // lifetime; it does not yet allocate from a pool.
-    pub fn create_texture(&mut self, label: &'static str, desc: TextureDesc) -> TextureHandle {
+    pub(crate) fn create_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+    ) -> TextureHandle {
         self.push_texture(label, desc, ResourceOrigin::Transient)
     }
 
     // Buffer counterpart to `create_texture`.
-    pub fn create_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
+    #[cfg(test)]
+    pub(crate) fn create_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
         self.push_buffer(label, desc, ResourceOrigin::Transient)
     }
 
@@ -167,7 +169,7 @@ impl GraphBuilder {
     // dispatched in the order returned by `compile`'s topological
     // sort, not in the order they were added here; the order this
     // matters for is purely "tie-breaking when toposort has flexibility".
-    pub fn add_pass(&mut self, id: PassId, kind: PassKind) -> PassBuilder<'_> {
+    pub(crate) fn add_pass(&mut self, id: PassId, kind: PassKind) -> PassBuilder<'_> {
         let pass_idx = self.passes.len();
         self.passes.push(PassDecl {
             id,
@@ -225,7 +227,7 @@ impl GraphBuilder {
 // without doing anything; the pass declaration lives in
 // `GraphBuilder.passes` from the moment `add_pass` returns; this struct
 // only mediates safe `&mut` access to it.
-pub struct PassBuilder<'g> {
+pub(crate) struct PassBuilder<'g> {
     builder: &'g mut GraphBuilder,
     pass_idx: usize,
 }
@@ -234,7 +236,7 @@ impl PassBuilder<'_> {
     // Declare that this pass reads `h`. Silently no-ops on
     // `TextureHandle::INVALID` so conditional graph builds stay
     // branch-free. Returns `&mut Self` for chaining.
-    pub fn read_texture(&mut self, h: TextureHandle) -> &mut Self {
+    pub(crate) fn read_texture(&mut self, h: TextureHandle) -> &mut Self {
         if h.is_valid() {
             self.builder.passes[self.pass_idx]
                 .reads
@@ -248,7 +250,7 @@ impl PassBuilder<'_> {
 
     // Declare that this pass reads `h`. Same INVALID-safety as
     // `read_texture`.
-    pub fn read_buffer(&mut self, h: BufferHandle) -> &mut Self {
+    pub(crate) fn read_buffer(&mut self, h: BufferHandle) -> &mut Self {
         if h.is_valid() {
             self.builder.passes[self.pass_idx]
                 .reads
@@ -266,7 +268,7 @@ impl PassBuilder<'_> {
     //
     // Returns `TextureHandle::INVALID` when called with the invalid
     // sentinel so optional passes can chain freely.
-    pub fn write_texture(&mut self, h: TextureHandle) -> TextureHandle {
+    pub(crate) fn write_texture(&mut self, h: TextureHandle) -> TextureHandle {
         if !h.is_valid() {
             return TextureHandle::INVALID;
         }
@@ -284,7 +286,7 @@ impl PassBuilder<'_> {
     }
 
     // Buffer counterpart to `write_texture`.
-    pub fn write_buffer(&mut self, h: BufferHandle) -> BufferHandle {
+    pub(crate) fn write_buffer(&mut self, h: BufferHandle) -> BufferHandle {
         if !h.is_valid() {
             return BufferHandle::INVALID;
         }
@@ -305,7 +307,7 @@ impl PassBuilder<'_> {
     // The compile pass requires exactly one of these per graph; failing
     // that produces a `GraphError::MissingPresenter` or
     // `GraphError::MultiplePresenters`.
-    pub fn presents(&mut self) -> &mut Self {
+    pub(crate) fn presents(&mut self) -> &mut Self {
         self.builder.passes[self.pass_idx].presents = true;
         self
     }

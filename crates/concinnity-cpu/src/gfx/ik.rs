@@ -1,10 +1,8 @@
-// src/gfx/ik.rs
-//
-// Analytic two-bone inverse kinematics: bend a root-mid-end joint chain (a
-// leg or an arm) so the end joint lands on a target, with a pole vector
-// picking the bend side. Operates on the sampled local pose matrices after
-// blending and before `skinning_matrices`, so the solve composes with any
-// animation. Pure math, no ECS or backend types.
+//! Analytic two-bone inverse kinematics: bend a root-mid-end joint chain (a
+//! leg or an arm) so the end joint lands on a target, with a pole vector
+//! picking the bend side. Operates on the sampled local pose matrices after
+//! blending and before `skinning_matrices`, so the solve composes with any
+//! animation. Pure math, no ECS or backend types.
 
 use crate::geometry::vec3::{add, cross, dot, length, scale, sub};
 
@@ -100,14 +98,18 @@ fn rotate_mat4_about(r: Mat3, pivot: Vec3, m: Mat4) -> Mat4 {
     out
 }
 
-// One two-bone chain resolved to joint indices. `mid` must be the direct
-// child of `root` and `end` the direct child of `mid` (the local-pose
-// write-back assumes it); `pole` is the bend direction in mesh space.
+/// One two-bone chain resolved to joint indices. `mid` must be the direct
+/// child of `root` and `end` the direct child of `mid` (the local-pose
+/// write-back assumes it); `pole` is the bend direction in mesh space.
 #[derive(Debug, Clone)]
 pub struct TwoBoneChain {
+    /// Index of the chain's root joint.
     pub root: usize,
+    /// Index of the middle joint, a direct child of `root`.
     pub mid: usize,
+    /// Index of the end joint, a direct child of `mid`.
     pub end: usize,
+    /// Bend direction in mesh space.
     pub pole: Vec3,
 }
 
@@ -117,7 +119,7 @@ pub struct TwoBoneChain {
 // target is reach-clamped, so an out-of-range target straightens the chain
 // toward it. `None` when the chain is degenerate (zero-length bones or a
 // target on top of the root).
-pub fn solve_two_bone(
+pub(crate) fn solve_two_bone(
     root: Vec3,
     mid: Vec3,
     end: Vec3,
@@ -184,13 +186,13 @@ pub fn solve_two_bone(
     Some((r_root, r_mid))
 }
 
-// Apply one chain to a sampled local pose in place. `target` is the desired
-// end-joint position in mesh space; `weight` in `[0, 1]` fades the solve by
-// pulling the effective target from the animated end position toward
-// `target`. Locals shorter than the chain's joints grow from the bind pose
-// first, so a partial sample still solves correctly. `world` is a reusable
-// buffer the hierarchy composes through, so a steady-state solve allocates
-// nothing.
+/// Apply one chain to a sampled local pose in place. `target` is the desired
+/// end-joint position in mesh space; `weight` in `[0, 1]` fades the solve by
+/// pulling the effective target from the animated end position toward
+/// `target`. Locals shorter than the chain's joints grow from the bind pose
+/// first, so a partial sample still solves correctly. `world` is a reusable
+/// buffer the hierarchy composes through, so a steady-state solve allocates
+/// nothing.
 pub fn apply_two_bone_ik(
     skeleton: &Skeleton,
     locals: &mut Vec<Mat4>,

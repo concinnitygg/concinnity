@@ -1,3 +1,4 @@
+/// Check a `Prop`'s authored args.
 pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let has_model = !args
         .get("model")

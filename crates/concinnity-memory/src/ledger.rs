@@ -66,7 +66,7 @@ impl TagUsage {
         }
     }
 
-    pub fn is_reported(&self) -> bool {
+    pub(crate) fn is_reported(&self) -> bool {
         self.bytes > 0 || self.peak_bytes > 0 || self.budget.is_some()
     }
 
@@ -82,19 +82,20 @@ impl TagUsage {
     }
 }
 
-// Every tag's usage in every realm, read in one pass.
+/// Every tag's usage in every realm, read in one pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedgerSnapshot {
     entries: [TagUsage; MemTag::COUNT * Realm::COUNT],
 }
 
 impl LedgerSnapshot {
+    /// One tag's usage in one realm.
     pub fn get(&self, tag: MemTag, realm: Realm) -> TagUsage {
         self.entries[entry_index(tag, realm)]
     }
 
-    // The tags something has reported into, in realm order. What a readout
-    // lists: an unreported tag is absent rather than a row of zeroes.
+    /// The tags something has reported into, in realm order. What a readout
+    /// lists: an unreported tag is absent rather than a row of zeroes.
     pub fn reported(&self, realm: Realm) -> impl Iterator<Item = TagUsage> + '_ {
         MemTag::ALL
             .into_iter()
@@ -102,9 +103,9 @@ impl LedgerSnapshot {
             .filter(TagUsage::is_reported)
     }
 
-    // Bytes attributed across every tag in `realm`. Always a floor on the
-    // realm's real usage: it counts what reporters explain, not everything
-    // allocated.
+    /// Bytes attributed across every tag in `realm`. Always a floor on the
+    /// realm's real usage: it counts what reporters explain, not everything
+    /// allocated.
     pub fn realm_bytes(&self, realm: Realm) -> u64 {
         MemTag::ALL
             .into_iter()
@@ -112,6 +113,7 @@ impl LedgerSnapshot {
             .sum()
     }
 
+    /// Whether nothing has reported into any tag.
     pub fn is_empty(&self) -> bool {
         !self.entries.iter().any(TagUsage::is_reported)
     }
@@ -131,14 +133,15 @@ const fn entry_index(tag: MemTag, realm: Realm) -> usize {
     tag.index() * Realm::COUNT + realm.index()
 }
 
-// The tagged accounting itself. One process-global instance backs the engine
-// (`crate::ledger()`); the type is public so the accounting is testable on its
-// own instance.
+/// The tagged accounting itself. One process-global instance backs the engine
+/// (`crate::ledger()`); the type is public so the accounting is testable on its
+/// own instance.
 pub struct Ledger {
     cells: [Cell; MemTag::COUNT * Realm::COUNT],
 }
 
 impl Ledger {
+    /// A ledger with every cell at zero and no budgets set.
     pub const fn new() -> Self {
         Self {
             cells: [const { Cell::new() }; MemTag::COUNT * Realm::COUNT],
@@ -149,17 +152,17 @@ impl Ledger {
         &self.cells[entry_index(tag, realm)]
     }
 
-    // Take on `bytes` under `tag`. For a subsystem that grows and shrinks in
-    // increments; one that knows its total should `set` it instead.
+    /// Take on `bytes` under `tag`. For a subsystem that grows and shrinks in
+    /// increments; one that knows its total should `set` it instead.
     pub fn add(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
         let total = cell.bytes.fetch_add(bytes, Relaxed).saturating_add(bytes);
         cell.observe(total);
     }
 
-    // Give up `bytes` under `tag`. Saturates at zero: a reporter that
-    // double-releases should read as holding nothing, never as holding an
-    // enormous amount.
+    /// Give up `bytes` under `tag`. Saturates at zero: a reporter that
+    /// double-releases should read as holding nothing, never as holding an
+    /// enormous amount.
     pub fn release(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
         let _ = cell
@@ -167,22 +170,23 @@ impl Ledger {
             .fetch_update(Relaxed, Relaxed, |held| Some(held.saturating_sub(bytes)));
     }
 
-    // Declare the tag's whole holding. Idempotent, so a pool that recomputes
-    // its resident bytes each frame cannot drift the way paired add/release
-    // calls can.
+    /// Declare the tag's whole holding. Idempotent, so a pool that recomputes
+    /// its resident bytes each frame cannot drift the way paired add/release
+    /// calls can.
     pub fn set(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
         cell.bytes.store(bytes, Relaxed);
         cell.observe(bytes);
     }
 
-    // The ceiling the tag is expected to stay under. `None` clears it.
+    /// The ceiling the tag is expected to stay under. `None` clears it.
     pub fn set_budget(&self, tag: MemTag, realm: Realm, budget: Option<u64>) {
         self.cell(tag, realm)
             .budget
             .store(budget.unwrap_or(0), Relaxed);
     }
 
+    /// Set (or clear, with `None`) the byte budget for one tag and realm.
     pub fn usage(&self, tag: MemTag, realm: Realm) -> TagUsage {
         let cell = self.cell(tag, realm);
         let budget = cell.budget.load(Relaxed);
@@ -195,6 +199,7 @@ impl Ledger {
         }
     }
 
+    /// One tag's current usage in one realm.
     pub fn snapshot(&self) -> LedgerSnapshot {
         LedgerSnapshot {
             entries: core::array::from_fn(|i| {
@@ -203,8 +208,8 @@ impl Ledger {
         }
     }
 
-    // Drop every report and budget, including the peaks. For a host tearing a
-    // world down and building another, whose old numbers describe nothing.
+    /// Drop every report and budget, including the peaks. For a host tearing a
+    /// world down and building another, whose old numbers describe nothing.
     pub fn clear(&self) {
         for cell in &self.cells {
             cell.bytes.store(0, Relaxed);

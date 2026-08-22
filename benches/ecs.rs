@@ -1,13 +1,11 @@
-// benches/ecs.rs
-//
-// Benchmarks over the EAS storage primitives: spawn and despawn churn, column
-// scans, multi-component joins, targeted lookups, deferred commands, the
-// sparse column, and the event queue. Fixtures are deterministic, and partner
-// columns are laid out in shuffled entity order so join probes pay a real
-// scattered read rather than a coincidentally sequential one.
-//
-// Run with `cargo bench -p concinnity-bench --bench ecs`, optionally followed
-// by `-- <substring>` to select benchmarks.
+//! Benchmarks over the EAS storage primitives: spawn and despawn churn, column
+//! scans, multi-component joins, targeted lookups, deferred commands, the
+//! sparse column, and the event queue. Fixtures are deterministic, and partner
+//! columns are laid out in shuffled entity order so join probes pay a real
+//! scattered read rather than a coincidentally sequential one.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench ecs`, optionally followed
+//! by `-- <substring>` to select benchmarks.
 
 extern crate alloc;
 
@@ -19,7 +17,7 @@ use concinnity_eas::{
     define_component_storage,
 };
 
-// A world matrix, the bulky per-entity datum the render prep walks.
+/// A world matrix, the bulky per-entity datum the render prep walks.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Transform {
     m: [f32; 16],
@@ -31,7 +29,7 @@ impl Transform {
     }
 }
 
-// The small renderable descriptor joined onto each transform.
+/// The small renderable descriptor joined onto each transform.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Renderer {
     mesh: u32,
@@ -39,6 +37,7 @@ pub struct Renderer {
 }
 
 #[derive(Clone, Copy, Default, Debug)]
+/// A bench component carrying a velocity vector.
 pub struct Motion {
     velocity: [f32; 4],
 }

@@ -50,8 +50,12 @@ default-members = [
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
 
+[workspace.lints.rust]
+unreachable_pub = "warn"
+missing_docs = "warn"
+
 [workspace.package]
-version = "0.18.46"
+version = "0.18.47"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

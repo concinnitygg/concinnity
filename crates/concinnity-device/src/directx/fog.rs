@@ -625,7 +625,7 @@ impl DxContext {
     // `RenderBackend` vtable; the FFI lib build sees no caller. Mirrors the
     // other bin-only runtime-mutation seams on this backend.
     #[allow(dead_code)]
-    pub fn update_fog_settings(
+    pub(crate) fn update_fog_settings(
         &mut self,
         settings: Option<crate::gfx::volumetric_fog::FogSettings>,
     ) {

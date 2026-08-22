@@ -1,9 +1,7 @@
-// src/gfx/lod_select.rs
-//
-// Runtime LOD selection: which baked index slice a draw uses at a given camera
-// distance, and the camera-to-object distance the pick is keyed on. Every
-// backend runs these per draw, per frame. The build-time decimator that bakes
-// the alternates these choose between is compute and lives above this crate.
+//! Runtime LOD selection: which baked index slice a draw uses at a given camera
+//! distance, and the camera-to-object distance the pick is keyed on. Every
+//! backend runs these per draw, per frame. The build-time decimator that bakes
+//! the alternates these choose between is compute and lives above this crate.
 
 use crate::gfx::render_types::{DrawObject, LodSlice, SkinnedDrawObject};
 use crate::math::sqrt;

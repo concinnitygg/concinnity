@@ -10,7 +10,7 @@ use crate::gfx::graphics_system::hot_reload_sources::*;
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
 #[derive(Default, Debug)]
-pub struct FogReloadResult {
+pub(crate) struct FogReloadResult {
     // True when the resolved `Option<FogSettings>` differed from what was
     // last pushed; the trait call fired and the dedupe state advanced.
     pub updated: bool,
@@ -108,7 +108,7 @@ pub(super) fn reload_volumetric_fog(
 // Per-reload tally for the procedural-mesh path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
 #[derive(Default, Debug)]
-pub struct ProceduralMeshReloadResult {
+pub(crate) struct ProceduralMeshReloadResult {
     // Procedural meshes whose args differed from the captured snapshot and
     // whose regenerated geometry was pushed to the backend (in-place
     // `update_mesh_geometry` or batched `rebuild_static_geometry`).
@@ -431,7 +431,7 @@ pub(super) fn reload_stories(
 // surfaced separately from the asset-payload / world / procedural-mesh
 // tallies so a single info line per asset class keeps the log readable.
 #[derive(Default, Debug)]
-pub struct ShaderStageReloadResult {
+pub(crate) struct ShaderStageReloadResult {
     // Shader stage sources that re-compiled successfully and contributed
     // to the backend pipeline rebuild. Counts every kind that the caller
     // re-read off disk, including stages whose source bytes were
@@ -473,7 +473,7 @@ pub(super) fn reload_shader_stages(
     shader_stages: &ShaderStageSourceMap,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> ShaderStageReloadResult {
-    use crate::assets::shader::ShaderKind;
+    use crate::assets::ShaderKind;
 
     let mut result = ShaderStageReloadResult::default();
     if shader_stages.is_empty() {

@@ -16,16 +16,16 @@ pub(crate) struct SubmitOutcome {
     pub result: StepResult,
     // The backend's stats for a drawn (or skipped) frame; `None` when the
     // step stopped before reaching the draw.
-    pub render_stats: Option<RenderStats>,
+    pub(crate) render_stats: Option<RenderStats>,
     // A device-memory failure occurred; the caller records it where the
     // streaming valve can observe it.
-    pub memory_pressure: bool,
+    pub(crate) memory_pressure: bool,
     // What the snapshot's op replay produced (failures to roll back,
     // memory pressure from an upload).
     pub replay: ReplayOutcome,
     // The stop was a device loss: the queue can never signal, so no caller
     // may wait_idle on the way out.
-    pub device_lost: bool,
+    pub(crate) device_lost: bool,
 }
 
 impl SubmitOutcome {

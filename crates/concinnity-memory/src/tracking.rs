@@ -17,12 +17,13 @@ use crate::counters::Counters;
 
 pub(crate) static COUNTERS: Counters = Counters::new();
 
-// A `GlobalAlloc` that counts allocations and forwards them to `A`.
+/// A `GlobalAlloc` that counts allocations and forwards them to `A`.
 pub struct TrackingAlloc<A> {
     inner: A,
 }
 
 impl<A> TrackingAlloc<A> {
+    /// Wrap `inner` so every allocation through it is counted.
     pub const fn new(inner: A) -> Self {
         Self { inner }
     }

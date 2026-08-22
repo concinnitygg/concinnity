@@ -22,9 +22,12 @@ use alloc::vec::Vec;
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum ShaderKind {
+    /// Vertex stage for a per-draw transform.
     #[default]
     Vertex,
+    /// Fragment stage.
     Fragment,
+    /// Vertex stage reading per-instance model matrices.
     #[serde(rename = "vertex_instanced", alias = "vertexinstanced")]
     VertexInstanced,
 }
@@ -216,14 +219,17 @@ impl Shader {
 /// tagged by kind. Written by the cook, decoded once by the renderer at load.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShaderPayload {
+    /// The compiled bytes of each stage, tagged by kind.
     pub stages: Vec<(ShaderKind, Vec<u8>)>,
 }
 
 impl ShaderPayload {
+    /// Serialize the payload for the blob.
     pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
         postcard::to_allocvec(self)
     }
 
+    /// Read a payload back out of the blob.
     pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
         postcard::from_bytes(bytes)
     }

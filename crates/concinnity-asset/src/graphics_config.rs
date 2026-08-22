@@ -15,7 +15,10 @@
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum ShadowUpdate {
+    /// Re-render every cascade every frame.
     EveryFrame,
+    /// Re-render the near cascades every frame and the distant ones on a
+    /// rotation.
     #[default]
     Hybrid,
 }

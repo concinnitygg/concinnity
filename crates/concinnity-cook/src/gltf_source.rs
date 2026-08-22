@@ -1,23 +1,22 @@
-// src/gltf_source.rs
-//
-// glTF container loading shared by every glTF consumer in the cook: parses a
-// `.glb` or text `.gltf` file and eagerly resolves every buffer -- the GLB
-// binary chunk, external `.bin` files, and base64 data URIs -- so downstream
-// readers never care which container the data arrived in. External URIs
-// resolve relative to the source file's own directory, per the glTF spec.
-//
-// Percent-encoding in URIs is decoded; scheme URIs (`http://...`), absolute
-// paths, and `..` traversal are rejected so a cook never reads outside the
-// source's directory tree.
+//! glTF container loading shared by every glTF consumer in the cook: parses a
+//! `.glb` or text `.gltf` file and eagerly resolves every buffer -- the GLB
+//! binary chunk, external `.bin` files, and base64 data URIs -- so downstream
+//! readers never care which container the data arrived in. External URIs
+//! resolve relative to the source file's own directory, per the glTF spec.
+//!
+//! Percent-encoding in URIs is decoded; scheme URIs (`http://...`), absolute
+//! paths, and `..` traversal are rejected so a cook never reads outside the
+//! source's directory tree.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-// A parsed glTF document with every buffer resolved to bytes. Buffers are
-// `Arc`-backed so a clone shares them; the editor hot-reload caches clone one
-// doc across many mesh / texture entries.
+/// A parsed glTF document with every buffer resolved to bytes. Buffers are
+/// `Arc`-backed so a clone shares them; the editor hot-reload caches clone one
+/// doc across many mesh / texture entries.
 #[derive(Clone, Debug)]
 pub struct GltfDoc {
+    /// The parsed glTF document.
     pub doc: gltf::Gltf,
     // Indexed by glTF buffer index. `None` when the buffer could not be
     // resolved (a GLB whose BIN chunk is absent); accessor reads then fail
@@ -30,7 +29,7 @@ pub struct GltfDoc {
 impl GltfDoc {
     // Parse a `.glb` or `.gltf` from disk, resolving the source path the same
     // way other file-backed assets do (see `crate::glb::resolve_source`).
-    pub fn parse_file(source: &str) -> Result<Self, String> {
+    pub(crate) fn parse_file(source: &str) -> Result<Self, String> {
         let path = crate::glb::resolve_source(source);
         let bytes =
             std::fs::read(&path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
@@ -41,8 +40,8 @@ impl GltfDoc {
         Self::from_slice(&bytes, base_dir, &path)
     }
 
-    // Parse from bytes already in memory. `base_dir` anchors external URIs;
-    // without one, only the GLB binary chunk and data URIs resolve.
+    /// Parse from bytes already in memory. `base_dir` anchors external URIs;
+    /// without one, only the GLB binary chunk and data URIs resolve.
     pub fn from_slice(
         bytes: &[u8],
         base_dir: Option<PathBuf>,
@@ -74,13 +73,13 @@ impl GltfDoc {
 
     // Bytes for one glTF buffer, or `None` when it did not resolve. Shaped for
     // the `gltf` crate's reader closures: `primitive.reader(|b| doc.buffer_bytes(b))`.
-    pub fn buffer_bytes(&self, buffer: gltf::Buffer<'_>) -> Option<&[u8]> {
+    pub(crate) fn buffer_bytes(&self, buffer: gltf::Buffer<'_>) -> Option<&[u8]> {
         self.buffers.get(buffer.index()).and_then(|b| b.as_deref())
     }
 
     // Read an external (non-buffer) URI, e.g. a glTF image file. Data URIs
     // decode inline; file URIs resolve against the source's directory.
-    pub fn external_bytes(&self, uri: &str) -> Result<Vec<u8>, String> {
+    pub(crate) fn external_bytes(&self, uri: &str) -> Result<Vec<u8>, String> {
         resolve_uri_bytes(uri, self.base_dir.as_deref())
     }
 
@@ -89,7 +88,10 @@ impl GltfDoc {
     // The bytes are still PNG / JPEG here; picking a decoder is the caller's
     // job. Errors name the image index but not the container, so callers add
     // their own source prefix.
-    pub fn image_bytes(&self, image_index: u32) -> Result<(Vec<u8>, Option<String>), String> {
+    pub(crate) fn image_bytes(
+        &self,
+        image_index: u32,
+    ) -> Result<(Vec<u8>, Option<String>), String> {
         let image = self
             .doc
             .document
@@ -151,7 +153,7 @@ fn mime_from_uri(uri: &str) -> Option<String> {
 // missing or fails to parse contributes nothing (the compile will surface the
 // real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
-pub fn referenced_files(source: &str) -> Vec<String> {
+pub(crate) fn referenced_files(source: &str) -> Vec<String> {
     use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};

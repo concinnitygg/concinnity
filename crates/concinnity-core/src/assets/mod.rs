@@ -1,14 +1,12 @@
-// src/assets/mod.rs
-//
-// Asset type definitions and the runtime components they map to. Most
-// components are pure data whose `Component` impl is generated from the
-// registry (see `cn_impl_components!` in `ecs::registry`); the modules kept
-// here define a runtime struct distinct from its authored args, an extension
-// trait, a build-time `SourceBacked` binding, or a helper the generated impl
-// can't express. Systems are not assets: every system is internal client code
-// (see the client's `World::build_internal_systems`), driven by the presence of
-// the components defined here. The client re-exports this module under the
-// historical `crate::assets::*` paths.
+//! Asset type definitions and the runtime components they map to. Most
+//! components are pure data whose `Component` impl is generated from the
+//! registry (see `cn_impl_components!` in `ecs::registry`); the modules kept
+//! here define a runtime struct distinct from its authored args, an extension
+//! trait, a build-time `SourceBacked` binding, or a helper the generated impl
+//! can't express. Systems are not assets: every system is internal client code
+//! (see the client's `World::build_internal_systems`), driven by the presence of
+//! the components defined here. The client re-exports this module under the
+//! historical `crate::assets::*` paths.
 
 // Component data types.
 mod anim_graph;
@@ -177,8 +175,8 @@ pub use frame_input::FrameInput;
 pub use gamepad_button::GamepadButton;
 pub use gamepad_map::{GamepadAction, GamepadMap};
 pub use geometry::{
-    GlassPanelGeometry, InstancedPropGeometry, PropGeometry, RectAreaLightGeometry,
-    SPOT_MAX_ANGLE_DEG, SpotLightGeometry,
+    GlassPanelGeometry, InstancedPropGeometry, RectAreaLightGeometry, SPOT_MAX_ANGLE_DEG,
+    SpotLightGeometry,
 };
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use input_key::Key;

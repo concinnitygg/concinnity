@@ -34,7 +34,7 @@ struct AppMeta {
     icon: Option<PathBuf>,
 }
 
-pub fn export(
+pub(crate) fn export(
     json_path: Option<&str>,
     name: Option<&str>,
     version: Option<&str>,

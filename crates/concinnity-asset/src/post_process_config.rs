@@ -168,10 +168,14 @@ pub struct PostProcessConfig {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum UpscaleQuality {
+    /// 4/9 of the output pixel count.
     #[default]
     Quality,
+    /// Roughly a third of the output pixel count.
     Balanced,
+    /// A quarter of the output pixel count.
     Performance,
+    /// A ninth of the output pixel count.
     UltraPerformance,
 }
 
@@ -198,10 +202,14 @@ impl UpscaleQuality {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum UpscalerBackend {
+    /// Pick the best backend the device offers.
     #[default]
     Auto,
+    /// AMD FidelityFX Super Resolution 3.
     Fsr3,
+    /// NVIDIA DLSS, through NGX.
     Dlss,
+    /// Intel XeSS.
     Xess,
 }
 
@@ -214,9 +222,12 @@ pub enum UpscalerBackend {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum AaMode {
+    /// No edge smoothing.
     Off,
+    /// Single-frame edge filter in the composite.
     #[default]
     Fxaa,
+    /// Temporal anti-aliasing: jittered projection plus a reprojected history.
     Taa,
 }
 
@@ -249,8 +260,10 @@ impl AaMode {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum IndirectLighting {
+    /// Image-based lighting only.
     #[default]
     Ibl,
+    /// Image-based lighting plus a screen-space bounce.
     Ssgi,
 }
 
@@ -265,9 +278,12 @@ pub enum IndirectLighting {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum SsgiResolution {
+    /// Gather at native resolution.
     Full,
+    /// Gather at half resolution per axis.
     #[default]
     Half,
+    /// Gather at quarter resolution per axis.
     Quarter,
 }
 
@@ -294,9 +310,12 @@ impl SsgiResolution {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum ReflectionBlurResolution {
+    /// Blur at native resolution.
     Full,
+    /// Blur at half resolution per axis.
     #[default]
     Half,
+    /// Blur at quarter resolution per axis.
     Quarter,
 }
 
@@ -312,11 +331,12 @@ impl ReflectionBlurResolution {
     }
 }
 
-// Default SSGI hemisphere-ray and ray-march-step counts for the authored
-// `ssgi_rays` / `ssgi_steps` fields. Defined here (the schema default) and
-// re-exported by `concinnity-core`' `gfx::ssgi` for its runtime clamp path, so
-// the authored default and the runtime code stay a single source of truth.
+/// Default SSGI hemisphere-ray and ray-march-step counts for the authored
+/// `ssgi_rays` / `ssgi_steps` fields. Defined here (the schema default) and
+/// re-exported by `concinnity-core`' `gfx::ssgi` for its runtime clamp path, so
+/// the authored default and the runtime code stay a single source of truth.
 pub const DEFAULT_SSGI_RAYS: u32 = 8;
+/// Default ray-march steps per SSGI ray. See [`DEFAULT_SSGI_RAYS`].
 pub const DEFAULT_SSGI_STEPS: u32 = 12;
 
 impl Default for PostProcessConfig {

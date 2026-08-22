@@ -1,12 +1,10 @@
-// src/decode/reader.rs
-//
-// Sequential bounds-checked reader over a byte buffer. Every accessor returns
-// `Result`, so a decoder written against it cannot index past the end of its
-// input no matter what lengths the input declares. Reading a fixed-width
-// integer goes through `array`, which yields an owned `[u8; N]` and removes
-// the `try_into().unwrap()` that hand-rolled cursors need.
+//! Sequential bounds-checked reader over a byte buffer. Every accessor returns
+//! `Result`, so a decoder written against it cannot index past the end of its
+//! input no matter what lengths the input declares. Reading a fixed-width
+//! integer goes through `array`, which yields an owned `[u8; N]` and removes
+//! the `try_into().unwrap()` that hand-rolled cursors need.
 
-// Reader over `bytes`, tracking a cursor and the payload name used in errors.
+/// Reader over `bytes`, tracking a cursor and the payload name used in errors.
 #[derive(Debug, Clone)]
 pub struct ByteReader<'a> {
     bytes: &'a [u8],
@@ -15,8 +13,8 @@ pub struct ByteReader<'a> {
 }
 
 impl<'a> ByteReader<'a> {
-    // A reader positioned at the start of `bytes`. `label` names the payload
-    // kind in every error this reader produces.
+    /// A reader positioned at the start of `bytes`. `label` names the payload
+    /// kind in every error this reader produces.
     pub fn new(bytes: &'a [u8], label: &'static str) -> Self {
         Self {
             bytes,
@@ -25,10 +23,10 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    // Open a tagged payload: prove it is long enough to hold a `header_bytes`
-    // header and that it opens with `magic`, then position the reader just
-    // past the magic. Lets a decoder report a short buffer once rather than
-    // once per header field.
+    /// Open a tagged payload: prove it is long enough to hold a `header_bytes`
+    /// header and that it opens with `magic`, then position the reader just
+    /// past the magic. Lets a decoder report a short buffer once rather than
+    /// once per header field.
     pub fn open_payload(
         bytes: &'a [u8],
         magic: u32,
@@ -53,26 +51,27 @@ impl<'a> ByteReader<'a> {
         Ok(r)
     }
 
-    // Current byte offset.
+    /// Current byte offset.
     pub fn position(&self) -> usize {
         self.pos
     }
 
-    // Bytes left between the cursor and the end of the buffer.
+    /// Bytes left between the cursor and the end of the buffer.
     pub fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.pos)
     }
 
+    /// Whether no bytes remain.
     pub fn is_empty(&self) -> bool {
         self.remaining() == 0
     }
 
-    // Total buffer length, including bytes already consumed.
+    /// Total buffer length, including bytes already consumed.
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
 
-    // Consume `n` bytes and return them, or report where the buffer ran out.
+    /// Consume `n` bytes and return them, or report where the buffer ran out.
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         let end = self.pos.checked_add(n).ok_or_else(|| {
             format!(
@@ -93,43 +92,49 @@ impl<'a> ByteReader<'a> {
         Ok(out)
     }
 
-    // Consume exactly `N` bytes as an owned array, ready for `from_le_bytes`.
+    /// Consume exactly `N` bytes as an owned array, ready for `from_le_bytes`.
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
         let mut out = [0u8; N];
         out.copy_from_slice(self.take(N)?);
         Ok(out)
     }
 
+    /// Read one byte.
     pub fn u8(&mut self) -> Result<u8, String> {
         Ok(u8::from_le_bytes(self.array::<1>()?))
     }
 
+    /// Read a little-endian `u16`.
     pub fn u16(&mut self) -> Result<u16, String> {
         Ok(u16::from_le_bytes(self.array::<2>()?))
     }
 
+    /// Read a little-endian `u32`.
     pub fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.array::<4>()?))
     }
 
+    /// Read a little-endian `u64`.
     pub fn u64(&mut self) -> Result<u64, String> {
         Ok(u64::from_le_bytes(self.array::<8>()?))
     }
 
+    /// Read a little-endian `i32`.
     pub fn i32(&mut self) -> Result<i32, String> {
         Ok(i32::from_le_bytes(self.array::<4>()?))
     }
 
+    /// Read a little-endian `f32`.
     pub fn f32(&mut self) -> Result<f32, String> {
         Ok(f32::from_le_bytes(self.array::<4>()?))
     }
 
-    // Advance past `n` bytes without returning them.
+    /// Advance past `n` bytes without returning them.
     pub fn skip(&mut self, n: usize) -> Result<(), String> {
         self.take(n).map(|_| ())
     }
 
-    // Move the cursor to an absolute offset, which must lie within the buffer.
+    /// Move the cursor to an absolute offset, which must lie within the buffer.
     pub fn seek(&mut self, pos: usize) -> Result<(), String> {
         if pos > self.bytes.len() {
             return Err(format!(
@@ -143,7 +148,7 @@ impl<'a> ByteReader<'a> {
         Ok(())
     }
 
-    // Whether the bytes at the cursor equal `magic`, without consuming them.
+    /// Whether the bytes at the cursor equal `magic`, without consuming them.
     pub fn peek(&self, magic: &[u8]) -> bool {
         self.pos
             .checked_add(magic.len())
@@ -152,7 +157,8 @@ impl<'a> ByteReader<'a> {
     }
 
     // Consume `magic`, or report that the buffer does not start with it.
-    pub fn expect_magic(&mut self, magic: &[u8]) -> Result<(), String> {
+    #[cfg(test)]
+    pub(crate) fn expect_magic(&mut self, magic: &[u8]) -> Result<(), String> {
         let found = self.take(magic.len())?;
         if found != magic {
             return Err(format!(
@@ -163,7 +169,7 @@ impl<'a> ByteReader<'a> {
         Ok(())
     }
 
-    // Everything from the cursor to the end, leaving the cursor in place.
+    /// Everything from the cursor to the end, leaving the cursor in place.
     pub fn remainder(&self) -> &'a [u8] {
         self.bytes.get(self.pos..).unwrap_or(&[])
     }

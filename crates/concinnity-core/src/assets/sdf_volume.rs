@@ -1,14 +1,12 @@
-// src/assets/sdf_volume.rs
-//
-// Runtime behavior for the SdfVolume asset. The authored schema (the
-// SdfVolume struct, its Default, `cone_ratio`, and `SDF_PARAMS_LEN`) lives in
-// concinnity-asset; this file keeps the `Component` impl, the blob-residency
-// helper the engine init uses, and the runtime step-count clamp bounds. The
-// JSON-args source selection, validation, and the bake-time clamp live in
-// concinnity-world (`source_args`, `check::sdf_volume`, `validate::sdf_volume`).
-// The schema type + `SDF_PARAMS_LEN` are re-exported so
-// `crate::assets::sdf_volume::*` paths (the render backends' uniform structs)
-// keep resolving.
+//! Runtime behavior for the SdfVolume asset. The authored schema (the
+//! SdfVolume struct, its Default, `cone_ratio`, and `SDF_PARAMS_LEN`) lives in
+//! concinnity-asset; this file keeps the `Component` impl, the blob-residency
+//! helper the engine init uses, and the runtime step-count clamp bounds. The
+//! JSON-args source selection, validation, and the bake-time clamp live in
+//! concinnity-world (`source_args`, `check::sdf_volume`, `validate::sdf_volume`).
+//! The schema type + `SDF_PARAMS_LEN` are re-exported so
+//! `crate::assets::sdf_volume::*` paths (the render backends' uniform structs)
+//! keep resolving.
 
 pub use concinnity_asset::{SDF_PARAMS_LEN, SdfVolume};
 

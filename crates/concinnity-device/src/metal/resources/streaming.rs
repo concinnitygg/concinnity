@@ -24,7 +24,7 @@ impl MtlContext {
     // becomes reusable. The chosen region was not drawn while the mesh was
     // non-resident, so no in-flight command buffer reads it -- the write is
     // race-free.
-    pub fn upload_mesh(
+    pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],
@@ -120,7 +120,7 @@ impl MtlContext {
     // has been drawn yet, so the space is allocatable immediately -- mirrors
     // `setup_chunk_streaming`'s seeding. From then on `upload_mesh` /
     // `evict_mesh` place and free streamed meshes within it.
-    pub fn seed_mesh_streaming(
+    pub(crate) fn seed_mesh_streaming(
         &mut self,
         vtx_offset: u64,
         vtx_bytes: u64,
@@ -144,7 +144,7 @@ impl MtlContext {
     // the mesh back, wherever the allocators then place it. Zeroing makes the
     // region carry no geometry, so a stray draw renders nothing rather than
     // stale triangles.
-    pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
             .draw
             .objects
@@ -193,7 +193,7 @@ impl MtlContext {
     // region; the per-LOD index counts must match init-time counts too, and
     // the per-LOD `switch_distance`s are re-stored so JSON-side tweaks to
     // `lod_distances` propagate without restart.
-    pub fn update_mesh_geometry(
+    pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],

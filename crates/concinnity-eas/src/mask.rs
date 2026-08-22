@@ -7,61 +7,71 @@
 // bitwise ops.
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+/// A component's dense id, its bit position in a [`ComponentMask`].
 pub struct ComponentId(u8);
 
 impl ComponentId {
-    // The largest id the 128-bit mask can hold.
+    /// The largest id the 128-bit mask can hold.
     pub const MAX: u8 = 127;
 
+    /// The id for a raw discriminant. Panics in debug past [`ComponentId::MAX`].
     pub fn new(id: u8) -> ComponentId {
         debug_assert!(id <= Self::MAX, "component id {id} exceeds {}", Self::MAX);
         ComponentId(id)
     }
 
+    /// The raw discriminant.
     pub fn get(self) -> u8 {
         self.0
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+/// A set of component ids, one bit each.
 pub struct ComponentMask(u128);
 
 impl ComponentMask {
+    /// The empty set.
     pub const EMPTY: ComponentMask = ComponentMask(0);
 
+    /// The set holding just `id`.
     pub fn with(id: ComponentId) -> ComponentMask {
         let mut mask = ComponentMask::EMPTY;
         mask.insert(id);
         mask
     }
 
+    /// Add `id` to the set.
     pub fn insert(&mut self, id: ComponentId) {
         self.0 |= 1u128 << id.0;
     }
 
+    /// Remove `id` from the set.
     pub fn remove(&mut self, id: ComponentId) {
         self.0 &= !(1u128 << id.0);
     }
 
+    /// Whether `id` is in the set.
     pub fn contains(self, id: ComponentId) -> bool {
         self.0 & (1u128 << id.0) != 0
     }
 
     // Whether this mask contains every id in `other` (i.e. is a superset).
-    pub fn contains_all(self, other: ComponentMask) -> bool {
+    pub(crate) fn contains_all(self, other: ComponentMask) -> bool {
         self.0 & other.0 == other.0
     }
 
     // Whether this mask shares no id with `other`.
-    pub fn is_disjoint(self, other: ComponentMask) -> bool {
+    pub(crate) fn is_disjoint(self, other: ComponentMask) -> bool {
         self.0 & other.0 == 0
     }
 
+    /// Whether the set is empty.
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    // The union of two masks.
+    /// The union of two masks.
     pub fn merged(self, other: ComponentMask) -> ComponentMask {
         ComponentMask(self.0 | other.0)
     }

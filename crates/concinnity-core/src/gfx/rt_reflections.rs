@@ -1,15 +1,13 @@
-// src/gfx/rt_reflections.rs
-//
-// Hardware ray-traced reflection configuration. Backend-agnostic resolve of the
-// authored `PostProcessConfig` fields into clamped settings, plus the per-frame
-// GPU uniform. The acceleration-structure build and the inline ray-trace itself
-// live in the backend (Metal); this module owns only the parameter math so it
-// can be unit-tested without a GPU.
-//
-// RT reflections replace SSR's screen-space resolve: they reuse the same
-// authored `ssr_intensity` / `ssr_max_distance` tunables (so a world toggling
-// from SSR to RT keeps the same look knobs) but trace a real ray against the
-// scene BVH, so reflected geometry that is off-screen still appears.
+//! Hardware ray-traced reflection configuration. Backend-agnostic resolve of the
+//! authored `PostProcessConfig` fields into clamped settings, plus the per-frame
+//! GPU uniform. The acceleration-structure build and the inline ray-trace itself
+//! live in the backend (Metal); this module owns only the parameter math so it
+//! can be unit-tested without a GPU.
+//!
+//! RT reflections replace SSR's screen-space resolve: they reuse the same
+//! authored `ssr_intensity` / `ssr_max_distance` tunables (so a world toggling
+//! from SSR to RT keeps the same look knobs) but trace a real ray against the
+//! scene BVH, so reflected geometry that is off-screen still appears.
 
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
@@ -27,39 +25,46 @@ const MIN_DISTANCE: f32 = 1.0;
 // without the per-step cost; still bounded so a stray value can't explode it.
 const MAX_DISTANCE: f32 = 1000.0;
 
-// Clamped RT-reflection tunables resolved from the authored asset fields. Held
-// by the backend and turned into a per-frame [`RtParams`] once the camera and
-// sun are known.
+/// Clamped RT-reflection tunables resolved from the authored asset fields. Held
+/// by the backend and turned into a per-frame [`RtParams`] once the camera and
+/// sun are known.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RtReflectionSettings {
-    // Reflection blend strength multiplier in `[0, 1]`.
+    /// Reflection blend strength multiplier in `[0, 1]`.
     pub intensity: f32,
-    // World-space distance the reflection ray travels before it misses.
+    /// World-space distance the reflection ray travels before it misses.
     pub max_distance: f32,
 }
 
-// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
-// `fov_y_radians` / `aspect` give the view-ray scale used to rebuild a
-// view-space position from the SSR pre-pass G-buffer. `inv_view_rot` is the
-// view-to-world rotation (the transpose of the view matrix's orthonormal 3x3)
-// and `cam_pos` the world camera position; together they form the
-// camera-to-world transform that lifts the reconstructed hit point + normal
-// into the BVH's world space. `sun_dir` is the world-space unit direction
-// toward the sun and `sun_color` its radiance; `prefilter_mip_count` is the IBL
-// cubemap mip count (0 = no IBL) for the miss fallback.
+/// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
+/// `fov_y_radians` / `aspect` give the view-ray scale used to rebuild a
+/// view-space position from the SSR pre-pass G-buffer. `inv_view_rot` is the
+/// view-to-world rotation (the transpose of the view matrix's orthonormal 3x3)
+/// and `cam_pos` the world camera position; together they form the
+/// camera-to-world transform that lifts the reconstructed hit point + normal
+/// into the BVH's world space. `sun_dir` is the world-space unit direction
+/// toward the sun and `sun_color` its radiance; `prefilter_mip_count` is the IBL
+/// cubemap mip count (0 = no IBL) for the miss fallback.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RtParamsInputs {
+    /// Vertical field of view in radians.
     pub fov_y_radians: f32,
+    /// Viewport aspect ratio, width over height.
     pub aspect: f32,
+    /// View-to-world rotation, column-major.
     pub inv_view_rot: [[f32; 4]; 4],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// World-space unit direction toward the sun.
     pub sun_dir: [f32; 3],
+    /// Sun radiance, linear RGB.
     pub sun_color: [f32; 3],
+    /// IBL cubemap mip count; 0 when there is no IBL fallback.
     pub prefilter_mip_count: f32,
 }
 
 impl RtReflectionSettings {
-    // Clamp the authored intensity / distance into a safe range.
+    /// Clamp the authored intensity / distance into a safe range.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, MAX_INTENSITY),
@@ -67,8 +72,8 @@ impl RtReflectionSettings {
         }
     }
 
-    // Build the per-frame GPU uniform from these settings, the active camera,
-    // and the sun.
+    /// Build the per-frame GPU uniform from these settings, the active camera,
+    /// and the sun.
     pub fn params(&self, inputs: RtParamsInputs) -> RtParams {
         let RtParamsInputs {
             fov_y_radians,

@@ -1,13 +1,12 @@
-// src/call_buffer.rs
-//
-// Assembly buffer for an overlay draw list: the calls built so far plus a
-// pool of spent vertex/index buffers. A frame's spent list is recycled back
-// in whole, so steady-state assembly reuses both the list and every call's
-// geometry allocations.
+//! Assembly buffer for an overlay draw list: the calls built so far plus a
+//! pool of spent vertex/index buffers. A frame's spent list is recycled back
+//! in whole, so steady-state assembly reuses both the list and every call's
+//! geometry allocations.
 
 use crate::render_types::{TextDrawCall, TextVertex};
 
 #[derive(Default)]
+/// An overlay draw list under assembly, with its recycled geometry pool.
 pub struct TextCallBuffer {
     /// Calls assembled so far, in draw order.
     pub calls: Vec<TextDrawCall>,

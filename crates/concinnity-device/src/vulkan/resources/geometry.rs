@@ -63,7 +63,7 @@ impl VkContext {
 
     // Upload a streamed mesh's geometry into the shared vertex and index
     // buffers, place it via the sub-allocators, and mark the draw resident.
-    pub fn upload_mesh(
+    pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],
@@ -157,7 +157,7 @@ impl VkContext {
     // `DxContext::update_mesh_geometry`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
     #[allow(dead_code)]
-    pub fn update_mesh_geometry(
+    pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],
@@ -267,7 +267,7 @@ impl VkContext {
 
     // Return a streamed mesh's geometry region to the sub-allocators and mark
     // the draw non-resident so it is skipped in every pass.
-    pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
             .draw
             .objects
@@ -301,7 +301,7 @@ impl VkContext {
     // the space is allocatable immediately -- mirrors `setup_chunk_streaming`'s
     // seeding. From then on `upload_mesh` / `evict_mesh` place and free streamed
     // meshes within it. Mirrors `DxContext::seed_mesh_streaming`.
-    pub fn seed_mesh_streaming(
+    pub(crate) fn seed_mesh_streaming(
         &mut self,
         vtx_offset: u64,
         vtx_bytes: u64,

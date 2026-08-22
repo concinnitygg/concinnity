@@ -1,23 +1,21 @@
-// src/font.rs
-//
-// Font asset compilation: resolves a `Font`'s arguments to TTF bytes (a file on
-// disk, or the bundled default face) and hands them to the shared rasteriser in
-// `concinnity-font`, which packs the glyphs into an SDF atlas payload.
+//! Font asset compilation: resolves a `Font`'s arguments to TTF bytes (a file on
+//! disk, or the bundled default face) and hands them to the shared rasteriser in
+//! `concinnity-font`, which packs the glyphs into an SDF atlas payload.
 
 use serde::Deserialize;
 
 use concinnity_core::assets::Font;
 
-/// Source filename of the bundled default face. Companion injection derives the
-/// auto-injected Font asset's name from it, so a generated default font is named
-/// exactly as `cn add` would name the same file.
-pub const BUILTIN_FONT_FILE: &str = concinnity_font::BUILTIN_FONT_FILE;
+// Source filename of the bundled default face. Companion injection derives the
+// auto-injected Font asset's name from it, so a generated default font is named
+// exactly as `cn add` would name the same file.
+pub(crate) const BUILTIN_FONT_FILE: &str = concinnity_font::BUILTIN_FONT_FILE;
 
 // Compile a Font asset's arguments into the binary blob payload format.
 //
 // When `path` is empty or absent the engine's bundled default font is used
 // instead of reading from disk, so no external file is required.
-pub fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let font: Font =
         Deserialize::deserialize(args).map_err(|e| format!("Font: invalid args: {}", e))?;
     let path = font.path.as_str();

@@ -45,11 +45,11 @@ use objc2_metal::{
 // timing to flow. The passes.rs `every_pass_id_round_trips_to_its_name` test
 // forces those edits at compile time, and `slot_pair` debug_asserts the index
 // at runtime, so a missed registration cannot silently report zero GPU time.
-pub use crate::gfx::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
+pub(super) use crate::gfx::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
 // Frames in flight on Apple Silicon. The sample buffer ring is sized to
 // this so frame N's resolve never overlaps frame N+1's GPU writes.
-pub const FRAMES_IN_FLIGHT: usize = 3;
+pub(super) const FRAMES_IN_FLIGHT: usize = 3;
 
 // `NSUInteger::MAX` sentinel for an unused sample slot inside a render-pass
 // or compute-pass `sampleBufferAttachments[0]`. Metal treats this as
@@ -58,7 +58,7 @@ const NO_SAMPLE: usize = usize::MAX;
 
 // One frame's worth of pass timestamps. The sample buffer lives on the GPU
 // (private storage); `resolve` reads it back into CPU-visible bytes.
-pub struct PassTimingResources {
+pub(super) struct PassTimingResources {
     buffers: [Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>; FRAMES_IN_FLIGHT],
     // Rotates 0..FRAMES_IN_FLIGHT each frame. The active index picks which
     // buffer the next `attach_*` call binds to.
@@ -76,7 +76,7 @@ impl PassTimingResources {
     // Build per-frame timestamp sample buffers. Returns `None` if the
     // device does not expose the timestamp counter set (older Apple GPUs
     // or an Intel Mac without the right driver path).
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Option<Self> {
+    pub(super) fn new(device: &ProtocolObject<dyn MTLDevice>) -> Option<Self> {
         // Look up the timestamp counter set among the device's reported sets.
         let sets: Retained<NSArray<ProtocolObject<dyn MTLCounterSet>>> = device.counterSets()?;
         // SAFETY: `MTLCommonCounterSetTimestamp` is a framework-owned static NSString that outlives
@@ -127,7 +127,7 @@ impl PassTimingResources {
     // Pick which sample buffer the next set of `attach_*` calls binds to.
     // Call at the top of each frame; the completion handler for the same
     // frame resolves the same buffer.
-    pub fn begin_frame(&mut self) -> usize {
+    pub(super) fn begin_frame(&mut self) -> usize {
         let slot = self.frame_slot;
         self.frame_slot = (self.frame_slot + 1) % FRAMES_IN_FLIGHT;
         // Reset the per-frame attached mask; the passes that run this frame set
@@ -139,7 +139,7 @@ impl PassTimingResources {
     // Bitmask of the passes attached since the last `begin_frame`. Captured
     // after the frame's passes are encoded and handed to the completion handler
     // so it can zero the stale slots of passes that did not run.
-    pub fn attached_mask(&self) -> u64 {
+    pub(super) fn attached_mask(&self) -> u64 {
         self.attached.load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -156,12 +156,15 @@ impl PassTimingResources {
     // `slot` is what [`begin_frame`] returned for that frame. Returns a
     // fresh `Retained` clone so the closure can outlive the borrow we
     // took on `self`.
-    pub fn buffer_for(&self, slot: usize) -> Retained<ProtocolObject<dyn MTLCounterSampleBuffer>> {
+    pub(super) fn buffer_for(
+        &self,
+        slot: usize,
+    ) -> Retained<ProtocolObject<dyn MTLCounterSampleBuffer>> {
         self.buffers[slot].clone()
     }
 
     // Attach a single-encoder render pass to its start + end slot pair.
-    pub fn attach_render(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
         // SAFETY: All Metal sample-buffer accessors are marked unsafe by
@@ -185,7 +188,7 @@ impl PassTimingResources {
     // Attach the FIRST encoder of a multi-encoder pass (e.g. shadow
     // cascade 0, bloom prefilter). Writes only the start sample; the end
     // sample is written by [`attach_render_last`].
-    pub fn attach_render_first(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render_first(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, _) = slot_pair(pass);
         // SAFETY: see `attach_render`.
@@ -202,7 +205,7 @@ impl PassTimingResources {
 
     // Attach the LAST encoder of a multi-encoder pass. Writes only the
     // end sample; the start was written by [`attach_render_first`].
-    pub fn attach_render_last(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render_last(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         let (_, end) = slot_pair(pass);
         // SAFETY: see `attach_render`.
         unsafe {
@@ -219,7 +222,7 @@ impl PassTimingResources {
     // Attach a single-encoder compute pass to its start + end slot pair.
     // Mirrors [`attach_render`] for `MTLComputePassDescriptor`.
     #[allow(dead_code)] // Wiring lands incrementally.
-    pub fn attach_compute(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+    pub(super) fn attach_compute(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
         // SAFETY: see `attach_render`.
@@ -259,7 +262,7 @@ fn slot_pair(pass: PassId) -> (usize, usize) {
 // case on Apple Silicon. A future calibration pass using
 // `MTLDevice::sampleTimestamps` could lift this assumption if it ever
 // proves wrong.
-pub fn resolve(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> [u32; PASS_COUNT] {
+pub(super) fn resolve(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> [u32; PASS_COUNT] {
     let range = NSRange::new(0, PASS_COUNT * 2);
     // SAFETY: `range` starts at 0 and the buffer was created with `PASS_COUNT * 2` sample slots, so
     // the range is in bounds; a driver that cannot resolve it returns None rather than faulting.
@@ -303,7 +306,7 @@ pub fn resolve(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> [u32; PAS
 // under-reports the true frame time. The pass timestamps all share one GPU
 // clock, so min-start to max-end across them is the real GPU-busy span.
 // Returns `None` when no pass wrote a valid timestamp pair.
-pub fn frame_span_us(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> Option<u32> {
+pub(super) fn frame_span_us(buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>) -> Option<u32> {
     let range = NSRange::new(0, PASS_COUNT * 2);
     // SAFETY: as in `resolve` -- `range` covers the buffer's own `PASS_COUNT * 2` slots.
     let data = unsafe { buffer.resolveCounterRange(range) }?;

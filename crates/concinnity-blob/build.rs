@@ -1,10 +1,10 @@
-// Derives the schema hash baked into every blob header: an FNV-1a hash over
-// the postcard-visible schema sources -- the asset schema crate, the divergent
-// runtime asset structs, the component registry (list order is the tag), and
-// the blob record shapes. Any change to those sources changes the hash, so a
-// stale blob fails the load check instead of mis-decoding, with no manually
-// maintained version. Over-sensitivity (a comment edit invalidates blobs) is
-// deliberate: it can only force a rebuild, never a mis-decode.
+//! Derives the schema hash baked into every blob header: an FNV-1a hash over
+//! the postcard-visible schema sources -- the asset schema crate, the divergent
+//! runtime asset structs, the component registry (list order is the tag), and
+//! the blob record shapes. Any change to those sources changes the hash, so a
+//! stale blob fails the load check instead of mis-decoding, with no manually
+//! maintained version. Over-sensitivity (a comment edit invalidates blobs) is
+//! deliberate: it can only force a rebuild, never a mis-decode.
 
 use std::path::PathBuf;
 

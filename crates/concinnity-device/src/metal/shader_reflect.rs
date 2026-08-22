@@ -39,25 +39,27 @@ use crate::metal::shader_layout::{EngineStage, ReflectedField, ReflectedStruct, 
 const STUB_FRAGMENT_SRC: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
     fragment float4 __reflect_stub_fragment() { return float4(0.0); }\n";
 
-// The outcome of reflecting a shader. A `Mismatch` is a real layout error that
-// fails the build; an `Infra` issue is a reflection problem the caller fails
-// open on.
+/// The outcome of reflecting a shader. A `Mismatch` is a real layout error that
+/// fails the build; an `Infra` issue is a reflection problem the caller fails
+/// open on.
 #[derive(Debug)]
 pub enum ShaderLayoutIssue {
+    /// The shader's layout disagrees with the engine struct.
     Mismatch(String),
+    /// Reflection could not run at all.
     Infra(String),
 }
 
-// True when a Metal device is available to reflect against. Lets a caller (and
-// its tests) skip reflection on headless CI without a device rather than fail.
+/// True when a Metal device is available to reflect against. Lets a caller (and
+/// its tests) skip reflection on headless CI without a device rather than fail.
 pub fn metal_device_available() -> bool {
     MTLCreateSystemDefaultDevice().is_some()
 }
 
-// Whether a user `.metal` source defines `entry`, by compiling it and reading
-// the library's function names. Lets the build reject a shader that is missing
-// an entry point its role requires, instead of failing when the pipeline is
-// built (which, for a scene-owned shader, is mid-session).
+/// Whether a user `.metal` source defines `entry`, by compiling it and reading
+/// the library's function names. Lets the build reject a shader that is missing
+/// an entry point its role requires, instead of failing when the pipeline is
+/// built (which, for a scene-owned shader, is mid-session).
 pub fn metal_source_defines(source: &str, entry: &str) -> Result<bool, ShaderLayoutIssue> {
     objc2::rc::autoreleasepool(|_| {
         let device = MTLCreateSystemDefaultDevice()
@@ -69,10 +71,10 @@ pub fn metal_source_defines(source: &str, entry: &str) -> Result<bool, ShaderLay
     })
 }
 
-// Reflect a compiled user `.metal` source and validate every engine-provided
-// buffer struct it binds. `kind` is the compile kind (`"vertex"` | `"fragment"`);
-// a `"vertex"` source may carry a main vertex shader, a shadow caster, or both,
-// disambiguated by entry-point name.
+/// Reflect a compiled user `.metal` source and validate every engine-provided
+/// buffer struct it binds. `kind` is the compile kind (`"vertex"` | `"fragment"`);
+/// a `"vertex"` source may carry a main vertex shader, a shadow caster, or both,
+/// disambiguated by entry-point name.
 pub fn validate_metal_shader_layout(source: &str, kind: &str) -> Result<(), ShaderLayoutIssue> {
     objc2::rc::autoreleasepool(|_| {
         let device = MTLCreateSystemDefaultDevice()

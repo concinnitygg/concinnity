@@ -1,8 +1,6 @@
-// src/text.rs
-//
-// Font atlas data and text draw-call assembly. No backend ownership; the
-// renderer uploads the atlas textures; this module only builds the quad
-// geometry from TextLabel components each frame.
+//! Font atlas data and text draw-call assembly. No backend ownership; the
+//! renderer uploads the atlas textures; this module only builds the quad
+//! geometry from TextLabel components each frame.
 
 use crate::assets::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
@@ -11,31 +9,33 @@ use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::OverlayTransform;
 use std::borrow::Cow;
 
-// Per-font data kept in memory after init() so step() can build text quads each frame.
+/// Per-font data kept in memory after init() so step() can build text quads each frame.
 pub struct LoadedFont {
-    // Index into the backend's text atlas texture array.
+    /// Index into the backend's text atlas texture array.
     pub atlas_slot: usize,
-    // Per-glyph metrics keyed by Unicode code point.
+    /// Per-glyph metrics keyed by Unicode code point.
     pub metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics>,
+    /// Atlas width in pixels.
     pub atlas_w: u32,
+    /// Atlas height in pixels.
     pub atlas_h: u32,
-    // Rasterisation height (px) used to position glyphs vertically.
+    /// Rasterisation height (px) used to position glyphs vertically.
     pub size_px: f32,
-    // Cap height (logical px): the bearing of an uppercase reference glyph, used
-    // to vertically center the visible text within its line box. The full em
-    // (`size_px`) is taller than the visible glyphs, so centering on the em alone
-    // leaves a gap above the caps; centering the cap band fixes that.
+    /// Cap height (logical px): the bearing of an uppercase reference glyph, used
+    /// to vertically center the visible text within its line box. The full em
+    /// (`size_px`) is taller than the visible glyphs, so centering on the em alone
+    /// leaves a gap above the caps; centering the cap band fixes that.
     pub cap_px: f32,
-    // Atlas supersample factor: glyph `atlas_w`/`atlas_h` are stored in atlas
-    // texels, which are this many times larger than the glyph's size in logical
-    // (layout) pixels. The on-screen quad divides by it so the text lays out at
-    // its requested size while the extra texels supersample the glyph.
+    /// Atlas supersample factor: glyph `atlas_w`/`atlas_h` are stored in atlas
+    /// texels, which are this many times larger than the glyph's size in logical
+    /// (layout) pixels. The on-screen quad divides by it so the text lays out at
+    /// its requested size while the extra texels supersample the glyph.
     pub supersample: f32,
 }
 
-// Cap height (logical px) for vertical centering: the bearing of an uppercase
-// reference glyph ('H'), falling back to the tallest uppercase glyph, then to a
-// fraction of the em when no metrics are available.
+/// Cap height (logical px) for vertical centering: the bearing of an uppercase
+/// reference glyph ('H'), falling back to the tallest uppercase glyph, then to a
+/// fraction of the em when no metrics are available.
 pub fn derive_cap_px(
     metrics: &std::collections::HashMap<u32, crate::build::font::GlyphMetrics>,
     size_px: f32,
@@ -269,13 +269,13 @@ fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) 
     (top_above, bot_below)
 }
 
-// Measure a label's background-box extent for layout: a box hugging the visible
-// glyphs grown by the label's padding on every side, plus one line height per
-// extra `\n`-split line. Mirrors the background-box math in `build_text_calls`.
-// `top_inset` is the gap from the box top down to the text origin (the label's
-// `y`), which `LayoutContainer` uses to place the box. Returns `None` for a
-// hidden label or one whose font isn't loaded, so a `LayoutContainer` drops it
-// and reserves no space.
+/// Measure a label's background-box extent for layout: a box hugging the visible
+/// glyphs grown by the label's padding on every side, plus one line height per
+/// extra `\n`-split line. Mirrors the background-box math in `build_text_calls`.
+/// `top_inset` is the gap from the box top down to the text origin (the label's
+/// `y`), which `LayoutContainer` uses to place the box. Returns `None` for a
+/// hidden label or one whose font isn't loaded, so a `LayoutContainer` drops it
+/// and reserves no space.
 pub fn measure_label_box(
     label: &TextLabel,
     loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
@@ -305,12 +305,12 @@ pub fn measure_label_box(
     })
 }
 
-// Build one TextDrawCall per TextLabel, laying out character quads using the
-// loaded font metrics. When `win_w` and `win_h` are both > 0.0, labels with
-// `centered = true` are repositioned to the centre of the viewport. `clips`
-// maps an element id to a reference-space clip band; a label found there has
-// its call scissored to that band (mapped to the window), so a scrollable
-// panel's off-band rows do not bleed over its chrome.
+/// Build one TextDrawCall per TextLabel, laying out character quads using the
+/// loaded font metrics. When `win_w` and `win_h` are both > 0.0, labels with
+/// `centered = true` are repositioned to the centre of the viewport. `clips`
+/// maps an element id to a reference-space clip band; a label found there has
+/// its call scissored to that band (mapped to the window), so a scrollable
+/// panel's off-band rows do not bleed over its chrome.
 pub fn build_text_calls(
     labels: &[TextLabel],
     loaded_fonts: &std::collections::HashMap<FontHandle, LoadedFont>,
@@ -324,9 +324,9 @@ pub fn build_text_calls(
     out.take()
 }
 
-// `build_text_calls`, appending onto an existing draw list so a caller
-// assembling a frame from several element groups reuses one buffer (and, in
-// steady state, the pooled geometry of the spent frame it recycled).
+/// `build_text_calls`, appending onto an existing draw list so a caller
+/// assembling a frame from several element groups reuses one buffer (and, in
+/// steady state, the pooled geometry of the spent frame it recycled).
 pub fn build_text_calls_into(
     out: &mut crate::call_buffer::TextCallBuffer,
     labels: &[TextLabel],
@@ -539,7 +539,7 @@ pub fn build_text_calls_into(
 
 // Map a reference-space clip band `[x, y, width, height]` to a window-space
 // rectangle through the overlay transform, so the backend can scissor to it.
-pub fn band_to_window(overlay: &OverlayTransform, band: [f32; 4]) -> [f32; 4] {
+pub(crate) fn band_to_window(overlay: &OverlayTransform, band: [f32; 4]) -> [f32; 4] {
     let (x0, y0) = overlay.forward(band[0], band[1]);
     let (x1, y1) = overlay.forward(band[0] + band[2], band[1] + band[3]);
     [x0, y0, x1 - x0, y1 - y0]

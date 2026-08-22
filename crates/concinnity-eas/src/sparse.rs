@@ -19,6 +19,9 @@ const PAGE: usize = 1024;
 // practice (it is the reserve high-water ceiling), so it is safe as "no row".
 const EMPTY: u32 = u32::MAX;
 
+/// A sparse-set column: a dense value array plus a paged entity-index
+/// lookup. Suits high-churn component types where most entities lack the
+/// component.
 pub struct SparseColumn<T> {
     dense: Vec<T>,
     dense_entities: Vec<Entity>,
@@ -38,20 +41,23 @@ impl<T> Default for SparseColumn<T> {
 }
 
 impl<T> SparseColumn<T> {
+    /// An empty column.
     pub fn new() -> SparseColumn<T> {
         SparseColumn::default()
     }
 
+    /// Rows currently stored.
     pub fn len(&self) -> usize {
         self.dense.len()
     }
 
+    /// Whether the column holds no rows.
     pub fn is_empty(&self) -> bool {
         self.dense.is_empty()
     }
 
-    // Insert or overwrite the value for `entity`. Returns the previous value if
-    // the entity already had one. Overwriting refreshes the stored generation.
+    /// Insert or overwrite the value for `entity`. Returns the previous value if
+    /// the entity already had one. Overwriting refreshes the stored generation.
     pub fn insert(&mut self, entity: Entity, value: T) -> Option<T> {
         let row = self.sparse_get(entity.index());
         if row != EMPTY {
@@ -66,9 +72,9 @@ impl<T> SparseColumn<T> {
         None
     }
 
-    // Remove and return the value for `entity`. The stored generation must
-    // match, so a stale handle removes nothing. Moves the last dense row into
-    // the hole and fixes its sparse slot.
+    /// Remove and return the value for `entity`. The stored generation must
+    /// match, so a stale handle removes nothing. Moves the last dense row into
+    /// the hole and fixes its sparse slot.
     pub fn remove(&mut self, entity: Entity) -> Option<T> {
         let row = self.sparse_get(entity.index());
         if row == EMPTY {
@@ -92,10 +98,12 @@ impl<T> SparseColumn<T> {
         value
     }
 
+    /// Whether `entity` has a row here.
     pub fn contains(&self, entity: Entity) -> bool {
         self.get(entity).is_some()
     }
 
+    /// Borrow `entity`'s value, if it has a row.
     pub fn get(&self, entity: Entity) -> Option<&T> {
         let row = self.sparse_get(entity.index());
         if row == EMPTY {
@@ -105,6 +113,7 @@ impl<T> SparseColumn<T> {
         (self.dense_entities[row] == entity).then(|| &self.dense[row])
     }
 
+    /// Mutably borrow `entity`'s value, if it has a row.
     pub fn get_mut(&mut self, entity: Entity) -> Option<&mut T> {
         let row = self.sparse_get(entity.index());
         if row == EMPTY {
@@ -118,10 +127,12 @@ impl<T> SparseColumn<T> {
         }
     }
 
+    /// The dense value array, in row order.
     pub fn values(&self) -> &[T] {
         &self.dense
     }
 
+    /// Every `(entity, value)` pair, in row order.
     pub fn iter_with_entities(&self) -> impl Iterator<Item = (Entity, &T)> {
         self.dense_entities.iter().copied().zip(self.dense.iter())
     }

@@ -1,14 +1,12 @@
-// src/ecs/asset_id.rs
-//
-// Build-time name -> dense id interner. Asset names declared in world.jsonl are
-// interned to an `AssetId` in declaration order; the blob and the runtime carry
-// only the integer, so every cross-reference lookup is an integer compare.
-//
-// This module owns the interner and installs it into the schema crate's
-// resolver seam (`concinnity_asset::set_name_resolver`) so a name-string
-// reference deserializes to a dense id during a build. At runtime references
-// are already integers, so the seam is never consulted. The identity types the
-// seam produces are re-exported from concinnity-core under the same path.
+//! Build-time name -> dense id interner. Asset names declared in world.jsonl are
+//! interned to an `AssetId` in declaration order; the blob and the runtime carry
+//! only the integer, so every cross-reference lookup is an integer compare.
+//!
+//! This module owns the interner and installs it into the schema crate's
+//! resolver seam (`concinnity_asset::set_name_resolver`) so a name-string
+//! reference deserializes to a dense id during a build. At runtime references
+//! are already integers, so the seam is never consulted. The identity types the
+//! seam produces are re-exported from concinnity-core under the same path.
 
 use std::cell::RefCell;
 use std::sync::Once;
@@ -24,11 +22,11 @@ thread_local! {
     static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
 }
 
-// Install the schema crate's resolver seam so a name-string reference
-// deserializes through this interner. The closure is non-capturing (the
-// interner is a thread-local static), so it coerces to the plain `fn` pointer
-// the seam holds; per-thread interner state stays isolated. Idempotent and cheap
-// after the first call.
+/// Install the schema crate's resolver seam so a name-string reference
+/// deserializes through this interner. The closure is non-capturing (the
+/// interner is a thread-local static), so it coerces to the plain `fn` pointer
+/// the seam holds; per-thread interner state stays isolated. Idempotent and cheap
+/// after the first call.
 pub fn ensure_name_resolver() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -36,33 +34,33 @@ pub fn ensure_name_resolver() {
     });
 }
 
-// Intern a name into the current thread's interner, returning its id. If the
-// name was already interned the existing id is returned (idempotent).
+/// Intern a name into the current thread's interner, returning its id. If the
+/// name was already interned the existing id is returned (idempotent).
 pub fn intern(name: &str) -> AssetId {
     ensure_name_resolver();
     AssetId(INTERNER.with(|i| i.borrow_mut().intern(name)))
 }
 
-// Clear the thread-local interner. Call once at the start of a build so ids
-// are dense and declaration-ordered for that build.
+/// Clear the thread-local interner. Call once at the start of a build so ids
+/// are dense and declaration-ordered for that build.
 pub fn reset_interner() {
     ensure_name_resolver();
     INTERNER.with(|i| *i.borrow_mut() = NameInterner::default());
 }
 
-// Resolve an already-interned name to its id without inserting: `None` for a
-// name this thread's interner has never seen, so per-frame lookups of unknown
-// names never grow the table. O(1) and allocation-free, unlike snapshotting
-// `name_table`.
+/// Resolve an already-interned name to its id without inserting: `None` for a
+/// name this thread's interner has never seen, so per-frame lookups of unknown
+/// names never grow the table. O(1) and allocation-free, unlike snapshotting
+/// `name_table`.
 pub fn lookup(name: &str) -> Option<AssetId> {
     ensure_name_resolver();
     INTERNER.with(|i| i.borrow().lookup(name).map(AssetId))
 }
 
-// The name `id` was interned under, or `None` when none was recorded for it --
-// an id past the table, or a slot a sparse `prime_name_table` left blank. O(1)
-// and one allocation, for a caller that wants one label rather than the whole
-// table.
+/// The name `id` was interned under, or `None` when none was recorded for it --
+/// an id past the table, or a slot a sparse `prime_name_table` left blank. O(1)
+/// and one allocation, for a caller that wants one label rather than the whole
+/// table.
 pub fn name_of(id: AssetId) -> Option<String> {
     ensure_name_resolver();
     INTERNER.with(|i| match i.borrow().name(id.0) {
@@ -71,27 +69,27 @@ pub fn name_of(id: AssetId) -> Option<String> {
     })
 }
 
-// Snapshot every interned name on the current thread, indexed by `AssetId`.
-// Because ids are assigned in world.jsonl declaration order, `table[id]` is
-// the declared name for that id. Used by the binary-only `crate::debug`
-// module to remap runtime `AssetId`s back to their declared names.
+/// Snapshot every interned name on the current thread, indexed by `AssetId`.
+/// Because ids are assigned in world.jsonl declaration order, `table[id]` is
+/// the declared name for that id. Used by the binary-only `crate::debug`
+/// module to remap runtime `AssetId`s back to their declared names.
 pub fn name_table() -> Vec<String> {
     INTERNER.with(|i| i.borrow().names().map(str::to_string).collect())
 }
 
-// Install a recorded (id, name) table into an EMPTY interner, so a process
-// that loads prebuilt blobs (the editor booting without an in-process cook)
-// resolves names to the ids the build baked. Ids may be sparse; unrecorded
-// slots hold an empty name, which no authored asset can carry. Returns false
-// (and changes nothing) when the interner already holds names -- an in-process
-// cook has primed it authoritatively.
+/// Install a recorded (id, name) table into an EMPTY interner, so a process
+/// that loads prebuilt blobs (the editor booting without an in-process cook)
+/// resolves names to the ids the build baked. Ids may be sparse; unrecorded
+/// slots hold an empty name, which no authored asset can carry. Returns false
+/// (and changes nothing) when the interner already holds names -- an in-process
+/// cook has primed it authoritatively.
 pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
     ensure_name_resolver();
     INTERNER.with(|i| i.borrow_mut().prime(pairs))
 }
 
-// Pre-intern a batch of names in order so identity ids are dense and follow
-// world.jsonl declaration order.
+/// Pre-intern a batch of names in order so identity ids are dense and follow
+/// world.jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
     ensure_name_resolver();
     INTERNER.with(|i| {

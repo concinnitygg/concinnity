@@ -651,7 +651,7 @@ impl DxContext {
     // Append a runtime decal. Writes the per-decal albedo SRV into the
     // reserved heap region; the encoder reads it next frame. Reuses
     // tombstoned slots from a prior `remove_decal` before growing the vec.
-    pub fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
+    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
         let state = self
             .decal
             .state
@@ -691,7 +691,7 @@ impl DxContext {
     // Tombstone a runtime decal slot. The id becomes invalid; the next
     // `add_decal` may reuse it. Returns an error when the id is out of
     // range or already tombstoned.
-    pub fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
         let slot = self
             .decal
             .records

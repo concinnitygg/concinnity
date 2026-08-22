@@ -1,16 +1,16 @@
-// Shrinkable seed VRAM: planning + buffer compaction for streamed mesh
-// geometry.
-//
-// Without this, `build_draw_list` bakes every streamed mesh into the shared
-// vertex/index buffers, so the buffers are sized for the *whole* streamed set
-// and streaming never shrinks GPU memory. The shrinkable-seed path instead
-// keeps only the resident geometry baked in and reserves a smaller `seed`
-// headroom for streamed meshes -- sized to the cap-many largest meshes the
-// residency cap permits. The streamer places meshes into the headroom on
-// upload and tolerates a transient `alloc` miss while freed regions await
-// their retire frame.
-//
-// This is pure policy + buffer math: no backend types, no I/O, no threads.
+//! Shrinkable seed VRAM: planning + buffer compaction for streamed mesh
+//! geometry.
+//!
+//! Without this, `build_draw_list` bakes every streamed mesh into the shared
+//! vertex/index buffers, so the buffers are sized for the *whole* streamed set
+//! and streaming never shrinks GPU memory. The shrinkable-seed path instead
+//! keeps only the resident geometry baked in and reserves a smaller `seed`
+//! headroom for streamed meshes -- sized to the cap-many largest meshes the
+//! residency cap permits. The streamer places meshes into the headroom on
+//! upload and tolerates a transient `alloc` miss while freed regions await
+//! their retire frame.
+//!
+//! This is pure policy + buffer math: no backend types, no I/O, no threads.
 
 use crate::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster};
@@ -18,37 +18,41 @@ use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster};
 const VERTEX_STRIDE: usize = core::mem::size_of::<Vertex>();
 const INDEX_STRIDE: usize = core::mem::size_of::<u32>();
 
-// The streaming headroom reserved in the shared vertex / index buffers, in
-// bytes. After init the renderer seeds the mesh sub-allocators with this one
-// block instead of the individual build-time regions, so the buffers shrink
-// from "every streamed mesh at once" to "the cap-many resident at once".
+/// The streaming headroom reserved in the shared vertex / index buffers, in
+/// bytes. After init the renderer seeds the mesh sub-allocators with this one
+/// block instead of the individual build-time regions, so the buffers shrink
+/// from "every streamed mesh at once" to "the cap-many resident at once".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeshSeedRegion {
+    /// Byte offset of the streaming block in the shared vertex buffer.
     pub vtx_offset: u64,
+    /// Byte size of the streaming block in the shared vertex buffer.
     pub vtx_bytes: u64,
+    /// Byte offset of the streaming block in the shared index buffer.
     pub idx_offset: u64,
+    /// Byte size of the streaming block in the shared index buffer.
     pub idx_bytes: u64,
 }
 
-// Decide the seed headroom (in bytes) for a streamed mesh set, or `None` when
-// no shrink is possible.
-//
-// `mesh_byte_sizes[i] = (vertex_bytes, index_bytes)` for streamed mesh `i`,
-// where `index_bytes` is the *u32* shared-buffer stride (per-mesh `u16`
-// indices are widened on upload). `cap` is `StreamingConfig::mesh_cap`.
-//
-// The seed is sized to hold the `residency` largest meshes at once, where
-// `residency = cap + margin` capped at the mesh count. The cap-many floor
-// guarantees the steady-state resident set (the planner keeps at most `cap`
-// resident) always fits, so a load can never *permanently* miss; the margin
-// absorbs the transient where an eviction's freed region still awaits its
-// retire frame while the replacement loads. Sizing each buffer by the
-// largest-`residency` of *that* buffer's per-mesh bytes is a safe independent
-// upper bound for each buffer.
-//
-// Returns `None` (the caller keeps the full set baked in, as before) when the
-// cap -- plus margin -- can already hold every streamed mesh, so there is no
-// VRAM to reclaim.
+/// Decide the seed headroom (in bytes) for a streamed mesh set, or `None` when
+/// no shrink is possible.
+///
+/// `mesh_byte_sizes[i] = (vertex_bytes, index_bytes)` for streamed mesh `i`,
+/// where `index_bytes` is the *u32* shared-buffer stride (per-mesh `u16`
+/// indices are widened on upload). `cap` is `StreamingConfig::mesh_cap`.
+///
+/// The seed is sized to hold the `residency` largest meshes at once, where
+/// `residency = cap + margin` capped at the mesh count. The cap-many floor
+/// guarantees the steady-state resident set (the planner keeps at most `cap`
+/// resident) always fits, so a load can never *permanently* miss; the margin
+/// absorbs the transient where an eviction's freed region still awaits its
+/// retire frame while the replacement loads. Sizing each buffer by the
+/// largest-`residency` of *that* buffer's per-mesh bytes is a safe independent
+/// upper bound for each buffer.
+///
+/// Returns `None` (the caller keeps the full set baked in, as before) when the
+/// cap -- plus margin -- can already hold every streamed mesh, so there is no
+/// VRAM to reclaim.
 pub fn plan_seed_bytes(mesh_byte_sizes: &[(u64, u64)], cap: usize) -> Option<(u64, u64)> {
     let n = mesh_byte_sizes.len();
     let cap = cap.max(1);
@@ -128,20 +132,20 @@ fn relocate_region(
     (new_vbase * VERTEX_STRIDE, new_i0_off, new_alt_offsets)
 }
 
-// Rewrite the shared vertex / index buffers so only resident geometry is
-// baked in, then append a zeroed seed headroom for streamed meshes.
-//
-// Every resident `DrawObject` / `InstancedCluster` offset (and LOD-alternate
-// offset) is rewritten to its new place, rebasing its absolute indices onto
-// the moved vertex region. Each streamed draw (`streamed[i] == true`) is
-// marked non-resident with placeholder offsets and its geometry is *not*
-// copied -- it lives in the streamer's payload source and is uploaded on
-// demand into the headroom.
-//
-// Run before backend init so the GPU buffers are created at the compacted
-// size and the RT acceleration structure (built over resident draws) sees the
-// final offsets. Returns the headroom region to seed into the mesh
-// sub-allocators.
+/// Rewrite the shared vertex / index buffers so only resident geometry is
+/// baked in, then append a zeroed seed headroom for streamed meshes.
+///
+/// Every resident `DrawObject` / `InstancedCluster` offset (and LOD-alternate
+/// offset) is rewritten to its new place, rebasing its absolute indices onto
+/// the moved vertex region. Each streamed draw (`streamed[i] == true`) is
+/// marked non-resident with placeholder offsets and its geometry is *not*
+/// copied -- it lives in the streamer's payload source and is uploaded on
+/// demand into the headroom.
+///
+/// Run before backend init so the GPU buffers are created at the compacted
+/// size and the RT acceleration structure (built over resident draws) sees the
+/// final offsets. Returns the headroom region to seed into the mesh
+/// sub-allocators.
 pub fn compact_for_streaming(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,

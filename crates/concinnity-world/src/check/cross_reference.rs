@@ -1,19 +1,17 @@
-// src/check/cross_reference.rs
-//
-// Cross-asset name reference validation. Runs on the fully expanded world and
-// checks that every named reference (Prop -> Mesh, Material -> Texture, etc.)
-// resolves to an asset of the right kind, and that Prop parent chains are
-// acyclic. Every problem found is collected: validation never stops at the
-// first error, so the caller can report them all in one pass.
-//
-// Flat single-target references are validated generically from the registry's
-// `refs:` metadata (`validate_registry_refs`), so declaring a ref field on a
-// registry entry IS enforcing it -- the same metadata drives the editor's Ref
-// pickers. Only the structured references a flat (field, target) pair cannot
-// express remain hand-written: each such asset implements `CrossReferenced` in
-// `asset_refs` (lists, the polymorphic mesh sources, nested fields,
-// required-ness) and `cross_refs_for` dispatches to it by type. A hand impl
-// must not re-check a registry-declared field, or the problem reports twice.
+//! Cross-asset name reference validation. Runs on the fully expanded world and
+//! checks that every named reference (Prop -> Mesh, Material -> Texture, etc.)
+//! resolves to an asset of the right kind, and that Prop parent chains are
+//! acyclic. Every problem found is collected: validation never stops at the
+//! first error, so the caller can report them all in one pass.
+//!
+//! Flat single-target references are validated generically from the registry's
+//! `refs:` metadata (`validate_registry_refs`), so declaring a ref field on a
+//! registry entry IS enforcing it -- the same metadata drives the editor's Ref
+//! pickers. Only the structured references a flat (field, target) pair cannot
+//! express remain hand-written: each such asset implements `CrossReferenced` in
+//! `asset_refs` (lists, the polymorphic mesh sources, nested fields,
+//! required-ness) and `cross_refs_for` dispatches to it by type. A hand impl
+//! must not re-check a registry-declared field, or the problem reports twice.
 
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
 use crate::world::WorldJsonlAsset;

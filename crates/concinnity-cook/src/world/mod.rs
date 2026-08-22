@@ -1,9 +1,9 @@
-// The build-time world surface: the expansion passes, preset loading, and the
-// build front-half orchestrator (prepare_world = load + expand + validate).
-// The authored world model itself -- world.jsonl I/O, `WorldJsonlAsset`,
-// $include resolution, and structural validation (`load_world`) -- lives in
-// concinnity-world and is re-exported here so cook code and downstream
-// consumers keep resolving `world::...` paths.
+/// The build-time world surface: the expansion passes, preset loading, and the
+/// build front-half orchestrator (prepare_world = load + expand + validate).
+/// The authored world model itself -- world.jsonl I/O, `WorldJsonlAsset`,
+/// $include resolution, and structural validation (`load_world`) -- lives in
+/// concinnity-world and is re-exported here so cook code and downstream
+/// consumers keep resolving `world::...` paths.
 pub mod preset;
 
 pub use concinnity_world::world::{
@@ -37,34 +37,32 @@ pub use provenance::Provenance;
 pub(crate) mod shadow;
 pub use shadow::merge_args;
 
-pub use expand::{
-    ExpandReport, GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world, expand_world_from_str,
-};
-
-// A world.jsonl that has been loaded, structurally validated, expanded, and
-// semantically checked: everything the compile stage needs, computed once.
+pub(crate) use expand::expand_world;
+pub use expand::{GeneratedAsset, InjectedAsset, ShadowedAsset, expand_world_from_str};
+/// A world.jsonl that has been loaded, structurally validated, expanded, and
+/// semantically checked: everything the compile stage needs, computed once.
 pub struct LoadedWorld {
-    // The same assets as typed entries, consumed by the build pipeline.
+    /// The same assets as typed entries, consumed by the build pipeline.
     pub assets: Vec<WorldJsonlAsset>,
-    // Assets added by the injection passes (companions, engine defaults),
-    // recorded in world-lock.json so the user can see and override them.
+    /// Assets added by the injection passes (companions, engine defaults),
+    /// recorded in world-lock.json so the user can see and override them.
     pub injected: Vec<InjectedAsset>,
-    // Assets a macro expansion produced, paired with the authored asset that
-    // produced them, so listings can group them by source.
+    /// Assets a macro expansion produced, paired with the authored asset that
+    /// produced them, so listings can group them by source.
     pub generated: Vec<GeneratedAsset>,
-    // Generated assets the world declares a patch of; the merged result is in
-    // `assets` and each record carries the pre-merge generated args.
+    /// Generated assets the world declares a patch of; the merged result is in
+    /// `assets` and each record carries the pre-merge generated args.
     pub shadowed: Vec<ShadowedAsset>,
-    // Names declared in the world file itself (pre-expansion), for
-    // provenance listings.
+    /// Names declared in the world file itself (pre-expansion), for
+    /// provenance listings.
     pub authored: Vec<String>,
 }
 
-// Run the read-only front half of the build pipeline: parse and structurally
-// validate the world (`load_world`), expand all build-time assets, then run
-// semantic validation (`crate::check::check_world`). Returns everything the
-// compile stage needs, computed exactly once. Errors from every stage are
-// collected, so the caller gets the full picture in a single pass.
+/// Run the read-only front half of the build pipeline: parse and structurally
+/// validate the world (`load_world`), expand all build-time assets, then run
+/// semantic validation (`crate::check::check_world`). Returns everything the
+/// compile stage needs, computed exactly once. Errors from every stage are
+/// collected, so the caller gets the full picture in a single pass.
 pub fn prepare_world(content: &str) -> Result<LoadedWorld, Vec<String>> {
     let mut expanded = load_world(content)?;
     let authored: Vec<String> = expanded

@@ -1,74 +1,79 @@
-// src/input.rs
-//
-// Backend-agnostic input snapshot returned by RenderBackend::take_input.
-// Each backend was previously carrying its own structurally-identical
-// InputState; this single type replaces those duplicates.
+//! Backend-agnostic input snapshot returned by RenderBackend::take_input.
+//! Each backend was previously carrying its own structurally-identical
+//! InputState; this single type replaces those duplicates.
 
-// Accumulated input state since the last poll. Drained and reset every
-// frame by GraphicsSystem and converted into a FrameInput component for
-// Camera3DSystem to consume.
+/// Accumulated input state since the last poll. Drained and reset every
+/// frame by GraphicsSystem and converted into a FrameInput component for
+/// Camera3DSystem to consume.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct RenderInput {
+    /// Forward movement key held.
     pub forward: bool,
+    /// Backward movement key held.
     pub backward: bool,
+    /// Left strafe key held.
     pub left: bool,
+    /// Right strafe key held.
     pub right: bool,
+    /// Sprint key held.
     pub sprint: bool,
-    // True for exactly one frame per interact-key press.
+    /// True for exactly one frame per interact-key press.
     pub interact: bool,
-    // True for exactly one frame per jump-key press.
+    /// True for exactly one frame per jump-key press.
     pub jump: bool,
-    // True while the Control key is held. A UI modifier (a story fast-forwards
-    // its dialogue while it is down); not gated by menu state, like `escape` and
-    // `captured_key`. Wired on Metal; DirectX / Vulkan set it from their key
-    // callbacks.
+    /// True while the Control key is held. A UI modifier (a story fast-forwards
+    /// its dialogue while it is down); not gated by menu state, like `escape` and
+    /// `captured_key`. Wired on Metal; DirectX / Vulkan set it from their key
+    /// callbacks.
     pub ctrl: bool,
-    // True while the Option/Alt key is held. A UI modifier (the editor's orbit
-    // drag); not gated by menu state, like `ctrl`. Wired on Metal; DirectX /
-    // Vulkan set it from their key callbacks.
+    /// True while the Option/Alt key is held. A UI modifier (the editor's orbit
+    /// drag); not gated by menu state, like `ctrl`. Wired on Metal; DirectX /
+    /// Vulkan set it from their key callbacks.
     pub alt: bool,
-    // True while the platform's command modifier is held: the Command key on
-    // macOS, where it is the idiomatic modifier for an application shortcut.
-    // Windows and Linux leave this false and keep Ctrl as their shortcut
-    // modifier, because the Super key there belongs to the desktop shell.
+    /// True while the platform's command modifier is held: the Command key on
+    /// macOS, where it is the idiomatic modifier for an application shortcut.
+    /// Windows and Linux leave this false and keep Ctrl as their shortcut
+    /// modifier, because the Super key there belongs to the desktop shell.
     pub cmd: bool,
-    // Accumulated mouse delta since the last take_input() call.
+    /// Accumulated mouse delta since the last take_input() call.
     pub mouse_dx: f32,
+    /// Accumulated vertical mouse delta since the last take_input().
     pub mouse_dy: f32,
-    // Accumulated vertical scroll-wheel delta since the last take_input().
-    // Only delivered while the cursor is free.
+    /// Accumulated vertical scroll-wheel delta since the last take_input().
+    /// Only delivered while the cursor is free.
     pub scroll_delta: f32,
-    // Absolute cursor position in window pixels (origin top-left).
-    // Only meaningful when the cursor is not captured.
+    /// Absolute cursor position in window pixels (origin top-left).
+    /// Only meaningful when the cursor is not captured.
     pub mouse_x: f32,
+    /// Absolute cursor y in window pixels, origin top-left.
     pub mouse_y: f32,
-    // True for exactly one frame when the left mouse button is pressed
-    // while the cursor is not captured.
+    /// True for exactly one frame when the left mouse button is pressed
+    /// while the cursor is not captured.
     pub left_click: bool,
-    // True while the left mouse button is held (cursor not captured). Persists
-    // across frames until release so a UI drag can track the cursor.
+    /// True while the left mouse button is held (cursor not captured). Persists
+    /// across frames until release so a UI drag can track the cursor.
     pub left_button_down: bool,
-    // True for exactly one frame when the right mouse button is pressed
-    // while the cursor is not captured. Wired on Metal; DirectX / Vulkan set
-    // it from their mouse callbacks.
+    /// True for exactly one frame when the right mouse button is pressed
+    /// while the cursor is not captured. Wired on Metal; DirectX / Vulkan set
+    /// it from their mouse callbacks.
     pub right_click: bool,
-    // True for exactly one frame when the HUD-toggle key is pressed (F1).
+    /// True for exactly one frame when the HUD-toggle key is pressed (F1).
     pub hud_toggle: bool,
-    // True for exactly one frame when Escape is pressed while the cursor is
-    // not captured. (In captured-cursor worlds Escape continues to release
-    // the cursor, as before, and this pulse stays false.)
+    /// True for exactly one frame when Escape is pressed while the cursor is
+    /// not captured. (In captured-cursor worlds Escape continues to release
+    /// the cursor, as before, and this pulse stays false.)
     pub escape: bool,
-    // The canonical key pressed this poll, for the settings-menu rebind
-    // capture, or `None`. A one-frame pulse, surfaced regardless of menu /
-    // capture state. Wired on Metal; DirectX / Vulkan set it from their key
-    // callbacks.
+    /// The canonical key pressed this poll, for the settings-menu rebind
+    /// capture, or `None`. A one-frame pulse, surfaced regardless of menu /
+    /// capture state. Wired on Metal; DirectX / Vulkan set it from their key
+    /// callbacks.
     pub captured_key: Option<crate::assets::Key>,
-    // The printable character produced by this poll's key press (with the OS's
-    // shift / dead-key / layout handling applied), for text-input fields, or
-    // `None`. A one-frame pulse like `captured_key`, ungated by menu / capture
-    // state. Editing keys (Backspace / Delete / arrows) are not here: those
-    // arrive via `captured_key`. Wired on Metal; DirectX / Vulkan set it from
-    // their WM_CHAR / char callback when built on Windows / Linux.
+    /// The printable character produced by this poll's key press (with the OS's
+    /// shift / dead-key / layout handling applied), for text-input fields, or
+    /// `None`. A one-frame pulse like `captured_key`, ungated by menu / capture
+    /// state. Editing keys (Backspace / Delete / arrows) are not here: those
+    /// arrive via `captured_key`. Wired on Metal; DirectX / Vulkan set it from
+    /// their WM_CHAR / char callback when built on Windows / Linux.
     pub typed_char: Option<char>,
 }
 
@@ -78,7 +83,9 @@ pub struct RenderInput {
 /// pipelined driver ships it across the thread boundary instead.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct InputPacket {
+    /// The raw sampled input state.
     pub raw: RenderInput,
+    /// Whether the cursor has left the window.
     pub cursor_outside_window: bool,
     /// Logical window size, for UI hit-testing and overlay layout.
     pub viewport: (f32, f32),
@@ -127,12 +134,12 @@ impl InputPacket {
 // WHEEL_SCROLL_SPEED (see ui.rs), so this is scroll-delta units per notch.
 // Consumed by DirectX (WM_MOUSEWHEEL) and Vulkan (GLFW Scroll); dead on a Metal
 // build, which feeds scrollingDeltaY raw.
-pub const WHEEL_NOTCH_SCROLL_UNITS: f32 = 20.0;
+pub(crate) const WHEEL_NOTCH_SCROLL_UNITS: f32 = 20.0;
 
-// Convert a signed wheel rotation in notches (positive = rotated away from the
-// user, i.e. scroll up) into an additive scroll_delta increment. Negated so a
-// positive scroll_delta scrolls a panel's content up, matching
-// FrameInput.scroll_delta's convention (see ui.rs and metal/input.rs).
+/// Convert a signed wheel rotation in notches (positive = rotated away from the
+/// user, i.e. scroll up) into an additive scroll_delta increment. Negated so a
+/// positive scroll_delta scrolls a panel's content up, matching
+/// FrameInput.scroll_delta's convention (see ui.rs and metal/input.rs).
 pub fn wheel_notches_to_scroll_delta(notches: f32) -> f32 {
     -notches * WHEEL_NOTCH_SCROLL_UNITS
 }

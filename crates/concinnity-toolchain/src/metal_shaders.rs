@@ -17,37 +17,44 @@ use std::process::Command;
 
 use concinnity_slang as slang;
 
-// One single-source shader library to precompile to a metallib: the `.slang`
-// file under the slang shader directory, the entry points linked into the
-// library, and the `#define`s that select its variant. `name` is the key the
-// renderer's lookup uses (distinct from `file` when one source yields several
-// variant libraries).
+/// One single-source shader library to precompile to a metallib: the `.slang`
+/// file under the slang shader directory, the entry points linked into the
+/// library, and the `#define`s that select its variant. `name` is the key the
+/// renderer's lookup uses (distinct from `file` when one source yields several
+/// variant libraries).
 pub struct SlangLibSpec {
+    /// Lookup key the renderer resolves this library by.
     pub name: &'static str,
+    /// The `.slang` file, relative to the shader directory.
     pub file: &'static str,
+    /// Entry points linked into the library.
     pub entries: &'static [&'static str],
+    /// `#define`s selecting this variant.
     pub defines: &'static [(&'static str, &'static str)],
 }
 
-// The single-source half of the precompile: where the `.slang` files live, the
-// shared declarations spliced into the ones carrying a marker, and one spec per
-// metallib variant. Grouped because they always travel together, and because
-// the splice table has to match the renderer's `slang_source::assemble` exactly
-// -- the two produce the same text or the content-addressed cache serves one
-// path's bytes to the other.
+/// The single-source half of the precompile: where the `.slang` files live, the
+/// shared declarations spliced into the ones carrying a marker, and one spec per
+/// metallib variant. Grouped because they always travel together, and because
+/// the splice table has to match the renderer's `slang_source::assemble` exactly
+/// -- the two produce the same text or the content-addressed cache serves one
+/// path's bytes to the other.
 pub struct SlangShaders<'a> {
+    /// Directory holding the `.slang` sources.
     pub dir: &'a Path,
+    /// Shared declarations spliced into sources carrying a marker.
     pub fragments: &'a [(&'a str, &'a str)],
+    /// One spec per metallib variant.
     pub specs: &'a [SlangLibSpec],
 }
 
-// Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
-// spec in `slang`, into OUT_DIR and generate `engine_metallibs.rs` there.
-// `fragments` pairs a source marker with the file under `shaders_dir` that
-// replaces it, matching the substitution the renderer applies when it compiles
-// the same shader from source. Panics if the Metal toolchain is present but a
-// shader fails to compile: a broken shader must fail the build, not surface at
-// renderer init.
+/// Precompile every eligible `.metal` under `shaders_dir`, plus every `.slang`
+/// spec in `slang`, into OUT_DIR and generate `engine_metallibs.rs` there.
+/// `fragments` pairs a source marker with the file under `shaders_dir` that
+/// replaces it, matching the substitution the renderer applies when it compiles
+/// the same shader from source. Panics if the Metal toolchain is present but a
+/// shader fails to compile: a broken shader must fail the build, not surface at
+/// renderer init.
 pub fn precompile_metal_shaders(
     shaders_dir: &Path,
     source_only: &[&str],

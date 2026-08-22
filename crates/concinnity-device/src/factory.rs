@@ -5,11 +5,11 @@
 // arm compiles. This is the single construction choke point - the client holds
 // only a `Box<dyn RenderBackend>` and never names a concrete backend context.
 
-// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
-// quality ceiling can influence the render targets / effect pipelines the backend
-// sizes at init. Each backend creates only the cheap handle it needs and
-// classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
-// device / swapchain), Vulkan a surface-free instance (destroyed immediately).
+/// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
+/// quality ceiling can influence the render targets / effect pipelines the backend
+/// sizes at init. Each backend creates only the cheap handle it needs and
+/// classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
+/// device / swapchain), Vulkan a surface-free instance (destroyed immediately).
 pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     #[cfg(backend_dx)]
     {
@@ -25,8 +25,8 @@ pub fn probe_gpu_profile() -> crate::gfx::backend::GpuProfile {
     }
 }
 
-// Route the assembled `BackendInit` to the backend selected at compile time.
-// Construction inputs are documented on `BackendInit` itself.
+/// Route the assembled `BackendInit` to the backend selected at compile time.
+/// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(
     init: crate::gfx::backend_init::BackendInit<'_>,
 ) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {

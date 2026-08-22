@@ -1,17 +1,15 @@
-// src/glb.rs
-//
-// glTF geometry / skeleton / animation import: turns a parsed glTF document
-// (binary `.glb` or text `.gltf`, see `crate::gltf_source`) into the engine's
-// inline mesh / skeleton / animation forms.
-//
-// glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
-// list requires parents before children. Joints are therefore topologically
-// reordered and a remap table rewrites both each joint's parent index and
-// every vertex's `JOINTS_0` binding into the new index space.
-//
-// This is the decode half of the glTF pipeline. The asset-level desugar
-// wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
-// `crate::gltf` and call into here.
+//! glTF geometry / skeleton / animation import: turns a parsed glTF document
+//! (binary `.glb` or text `.gltf`, see `crate::gltf_source`) into the engine's
+//! inline mesh / skeleton / animation forms.
+//!
+//! glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
+//! list requires parents before children. Joints are therefore topologically
+//! reordered and a remap table rewrites both each joint's parent index and
+//! every vertex's `JOINTS_0` binding into the new index space.
+//!
+//! This is the decode half of the glTF pipeline. The asset-level desugar
+//! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
+//! `crate::gltf` and call into here.
 
 use std::collections::HashMap;
 
@@ -22,20 +20,20 @@ use crate::gltf_source::GltfDoc;
 use crate::import::NEUTRAL_COLOR;
 
 // The inline `SkinnedMesh` fields produced from a glTF file.
-pub struct ImportedSkinnedMesh {
+pub(crate) struct ImportedSkinnedMesh {
     pub vertices: Vec<SkinnedVertexData>,
     pub indices: Vec<u16>,
     pub skeleton: Vec<JointDef>,
     // Morph-target names, one per target; empty when the mesh has none.
-    pub morph_target_names: Vec<String>,
+    pub(crate) morph_target_names: Vec<String>,
     // Dense target-major deltas: entry `t * vertices.len() + v`.
-    pub morph_deltas: Vec<crate::assets::MorphDelta>,
+    pub(crate) morph_deltas: Vec<crate::assets::MorphDelta>,
 }
 
 // Same as [`import_skinned_glb`] but takes a pre-parsed glTF document. The
 // asset hot-reload pass uses this directly so it can amortise the `.glb`
 // parse across every Mesh / SkinnedMesh entry that references the same file.
-pub fn import_skinned_from_doc(
+pub(crate) fn import_skinned_from_doc(
     doc: &GltfDoc,
     source: &str,
     skin_index: u32,
@@ -91,9 +89,9 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
         .collect()
 }
 
-// Parse a `.glb` or `.gltf` file from disk with every buffer resolved. Shared
-// by the skinned and static importers; the desugar pass uses this directly so
-// it can memoize one document across many primitive/material/image lookups.
+/// Parse a `.glb` or `.gltf` file from disk with every buffer resolved. Shared
+/// by the skinned and static importers; the desugar pass uses this directly so
+/// it can memoize one document across many primitive/material/image lookups.
 pub fn parse_glb(source: &str) -> Result<GltfDoc, String> {
     GltfDoc::parse_file(source)
 }
@@ -109,7 +107,7 @@ pub fn parse_glb(source: &str) -> Result<GltfDoc, String> {
 // Errors if the primitive's vertex count or any index exceeds Concinnity's
 // u16 index limit; `cn add` pre-splits oversized primitives at add time so
 // the desugar pass never encounters one.
-pub fn import_static_glb_primitive_from_doc(
+pub(crate) fn import_static_glb_primitive_from_doc(
     doc: &GltfDoc,
     source: &str,
     primitive_index: u32,
@@ -135,7 +133,7 @@ pub fn import_static_glb_primitive_from_doc(
 // `.glb`. The shared backbone of [`import_static_glb_primitive_from_doc`]
 // and the `cn add` splitting path; neither caller needs to repeat the
 // triangle-topology check or attribute reads.
-pub fn read_primitive_geometry(
+pub(crate) fn read_primitive_geometry(
     doc: &GltfDoc,
     source: &str,
     primitive_index: u32,
@@ -227,7 +225,7 @@ pub fn read_primitive_geometry(
 // Number of u16-safe chunks `split_into_u16_chunks` would produce, walking the
 // index stream only. The importer needs the count to name one Mesh per chunk;
 // materialising the chunks themselves just to call `.len()` clones every vertex.
-pub fn count_u16_chunks(indices: &[u32]) -> usize {
+pub(crate) fn count_u16_chunks(indices: &[u32]) -> usize {
     let limit: usize = u16::MAX as usize + 1;
     let mut chunks = 0usize;
     let mut cur_len = 0usize;
@@ -251,7 +249,7 @@ pub fn count_u16_chunks(indices: &[u32]) -> usize {
     chunks
 }
 
-pub fn split_into_u16_chunks(
+pub(crate) fn split_into_u16_chunks(
     vertices: &[VertexData],
     indices: &[u32],
 ) -> Vec<(Vec<VertexData>, Vec<u16>)> {
@@ -290,7 +288,7 @@ pub fn split_into_u16_chunks(
 // (the same resolution `ColorLut` and `EnvironmentMap` sources use) while a
 // path with a directory component is taken as-is, so a relative or absolute
 // path still works for local test worlds.
-pub fn resolve_source(source: &str) -> String {
+pub(crate) fn resolve_source(source: &str) -> String {
     let bare = std::path::Path::new(source)
         .parent()
         .map(|d| d.as_os_str().is_empty())
@@ -310,20 +308,20 @@ pub fn resolve_source(source: &str) -> String {
 // A skeleton reordered into parents-before-children order, plus the lookup
 // tables an animation importer needs to resolve a glTF channel target back
 // to a joint in this skeleton.
-pub struct ImportedSkeleton {
+pub(crate) struct ImportedSkeleton {
     pub joints: Vec<JointDef>,
     // `remap[skin_joint_index] = topologically-sorted index`.
     pub remap: Vec<usize>,
     // `node_to_joint[glTF_node_index] = skin_joint_index`. An animation
     // channel whose target node is missing from this map is targeting a
     // non-joint node and should be dropped.
-    pub node_to_joint: HashMap<usize, usize>,
+    pub(crate) node_to_joint: HashMap<usize, usize>,
 }
 
 // Build the engine's skeleton (joints in parents-before-children order) from
 // a glTF skin. Public so the animation importer can reuse the remap +
 // node-to-joint table without re-deriving them.
-pub fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
+pub(crate) fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
     let joint_nodes: Vec<gltf::Node<'_>> = skin.joints().collect();
     let n = joint_nodes.len();
     if n == 0 {
@@ -563,40 +561,45 @@ fn import_geometry(
 
 // glTF animation import
 
-// A single keyframe extracted from a glTF animation channel.
+/// A single keyframe extracted from a glTF animation channel.
 #[derive(Debug, Clone, Copy)]
 pub struct ImportedKeyframe {
+    /// Seconds since the world started.
     pub time: f32,
+    /// The joint's local pose at this key.
     pub pose: JointPose,
 }
 
-// Per-joint channel of an imported animation.
+/// Per-joint channel of an imported animation.
 #[derive(Debug, Clone)]
 pub struct ImportedAnimationTrack {
-    // Index in the engine's parents-before-children joint array.
+    /// Index in the engine's parents-before-children joint array.
     pub joint: usize,
+    /// Keyframes, in ascending time order.
     pub keys: Vec<ImportedKeyframe>,
 }
 
-// One morph-weight keyframe: per-target weights at one sample time.
+/// One morph-weight keyframe: per-target weights at one sample time.
 #[derive(Debug, Clone)]
 pub struct ImportedMorphKey {
+    /// Seconds since the world started.
     pub time: f32,
+    /// One weight per morph target, in target order.
     pub weights: Vec<f32>,
 }
 
-// One animation extracted from a glTF file.
+/// One animation extracted from a glTF file.
 #[derive(Debug, Clone)]
 pub struct ImportedAnimation {
-    // glTF-side name; empty if the source did not name the clip.
+    /// glTF-side name; empty if the source did not name the clip.
     pub name: String,
-    // Clip length in seconds: the largest sample time across all channels.
+    /// Clip length in seconds: the largest sample time across all channels.
     pub duration: f32,
-    // Joint-targeted channels, deduplicated and merged across translation /
-    // rotation / scale targets so each joint has at most one entry.
+    /// Joint-targeted channels, deduplicated and merged across translation /
+    /// rotation / scale targets so each joint has at most one entry.
     pub tracks: Vec<ImportedAnimationTrack>,
-    // Morph-target weight keys for the skinned mesh node; empty when the
-    // clip animates no morph targets.
+    /// Morph-target weight keys for the skinned mesh node; empty when the
+    /// clip animates no morph targets.
     pub morph_track: Vec<ImportedMorphKey>,
 }
 
@@ -604,7 +607,7 @@ pub struct ImportedAnimation {
 // The asset hot-reload pass uses this directly so a single reload pass can
 // amortise the `.glb` parse across every Animation entry that references
 // the same file.
-pub fn import_glb_animations_from_doc(
+pub(crate) fn import_glb_animations_from_doc(
     doc: &GltfDoc,
     source: &str,
     skin_index: u32,
@@ -622,12 +625,12 @@ pub fn import_glb_animations_from_doc(
         .collect())
 }
 
-// Resolve a `(animation_name, animation_index)` pair on a pre-parsed `.glb`,
-// returning the selected clip. `animation_name` takes precedence: when
-// non-empty, looks up the matching clip by name; otherwise falls back to
-// `animation_index`. Used by the asset hot-reload pass to mirror the
-// desugar pass's selection logic exactly so a reload picks the same clip
-// the build chose at compile time.
+/// Resolve a `(animation_name, animation_index)` pair on a pre-parsed `.glb`,
+/// returning the selected clip. `animation_name` takes precedence: when
+/// non-empty, looks up the matching clip by name; otherwise falls back to
+/// `animation_index`. Used by the asset hot-reload pass to mirror the
+/// desugar pass's selection logic exactly so a reload picks the same clip
+/// the build chose at compile time.
 pub fn import_glb_animation_from_doc(
     doc: &GltfDoc,
     source: &str,
@@ -674,13 +677,13 @@ pub fn import_glb_animation_from_doc(
 // character's body and hair typically differ only by node.
 // A glTF node carrying both a mesh and a skin, with both already resolved so
 // callers never re-derive them from the node.
-pub struct SkinnedNode<'a> {
+pub(crate) struct SkinnedNode<'a> {
     pub index: usize,
     pub mesh: gltf::Mesh<'a>,
     pub skin: gltf::Skin<'a>,
 }
 
-pub fn skinned_node<'a>(
+pub(crate) fn skinned_node<'a>(
     doc: &'a GltfDoc,
     source: &str,
     skin_index: u32,

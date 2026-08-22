@@ -1,13 +1,13 @@
-// src/gfx/pick.rs
-//
-// Pure picking math: a world-space ray through a window pixel, and a
-// ray-vs-AABB intersection test. Consumed by the editor's viewport picking;
-// nothing here touches a backend or the ECS.
+//! Pure picking math: a world-space ray through a window pixel, and a
+//! ray-vs-AABB intersection test. Consumed by the editor's viewport picking;
+//! nothing here touches a backend or the ECS.
 
 /// A world-space ray: `origin` plus a normalized direction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PickRay {
+    /// World-space ray origin.
     pub origin: [f32; 3],
+    /// Unit-length ray direction.
     pub dir: [f32; 3],
 }
 
@@ -65,8 +65,11 @@ pub fn screen_ray(
 /// normal of the geometry inside the box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AabbFace {
+    /// Ray parameter at the hit, in `dir` units from `origin`.
     pub t: f32,
+    /// Which axis the hit face is perpendicular to: 0 = X, 1 = Y, 2 = Z.
     pub axis: usize,
+    /// Which side of that axis was hit: -1 or +1.
     pub sign: f32,
 }
 

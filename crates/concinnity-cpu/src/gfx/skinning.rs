@@ -1,8 +1,6 @@
-// src/gfx/skinning.rs
-//
-// Pose blending: combining several sampled poses into one set of local joint
-// matrices. The skeleton, clip, and transform types these operate on live in
-// concinnity-core and are re-exported here under their historical paths.
+//! Pose blending: combining several sampled poses into one set of local joint
+//! matrices. The skeleton, clip, and transform types these operate on live in
+//! concinnity-core and are re-exported here under their historical paths.
 
 pub use concinnity_core::gfx::pose_scratch::PoseScratch;
 pub use concinnity_core::gfx::skeleton::{
@@ -13,14 +11,14 @@ pub use concinnity_core::gfx::transform::{
     trs_matrix,
 };
 
-/// Blend `other` into `acc` in place by weight `f`, clamped to `[0, 1]`:
-/// `f = 0` leaves `acc` unchanged, `f = 1` replaces it with `other`. Each
-/// joint pair is interpolated in TRS space (see `blend_matrices`), the same
-/// interpolation a single clip uses between keyframes, so a blended pose is
-/// continuous with a clip's own sampling. Arrays of unequal length blend the
-/// common prefix and keep the longer array's tail unchanged (growing `acc`
-/// from `other` when `other` is longer).
-pub fn blend_locals_in_place(acc: &mut Vec<Mat4>, other: &[Mat4], f: f32) {
+// Blend `other` into `acc` in place by weight `f`, clamped to `[0, 1]`:
+// `f = 0` leaves `acc` unchanged, `f = 1` replaces it with `other`. Each
+// joint pair is interpolated in TRS space (see `blend_matrices`), the same
+// interpolation a single clip uses between keyframes, so a blended pose is
+// continuous with a clip's own sampling. Arrays of unequal length blend the
+// common prefix and keep the longer array's tail unchanged (growing `acc`
+// from `other` when `other` is longer).
+pub(crate) fn blend_locals_in_place(acc: &mut Vec<Mat4>, other: &[Mat4], f: f32) {
     let n = acc.len().min(other.len());
     for (a, b) in acc[..n].iter_mut().zip(&other[..n]) {
         *a = blend_matrices(*a, *b, f);

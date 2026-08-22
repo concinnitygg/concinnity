@@ -1,10 +1,10 @@
-// What a named reference does when no resolver seam is installed.
-//
-// The seams are process-global and install-once, so this has to be its own test
-// binary: any unit test that installs a stand-in would make the unset case
-// unreachable. A real build always installs the resolvers before deserializing,
-// so the behaviour pinned here is what an out-of-engine tool reading authoring
-// JSON sees.
+//! What a named reference does when no resolver seam is installed.
+//!
+//! The seams are process-global and install-once, so this has to be its own test
+//! binary: any unit test that installs a stand-in would make the unset case
+//! unreachable. A real build always installs the resolvers before deserializing,
+//! so the behaviour pinned here is what an out-of-engine tool reading authoring
+//! JSON sees.
 
 use concinnity_asset::{
     AssetId, AssetRef, AudioClipHandle, FontHandle, MaterialHandle, MeshHandle, ShaderHandle,

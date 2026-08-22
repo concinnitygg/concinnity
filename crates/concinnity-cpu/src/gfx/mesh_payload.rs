@@ -1,31 +1,29 @@
-// src/gfx/mesh_payload.rs
-//
-// Canonical vertex type and the binary serialisation format shared between
-// the build step (build_mesh.rs writes) and GraphicsSystem (reads).
-//
-// The layout asserts below stay hand-written. A vertex payload reaches a shader
-// through a vertex descriptor or a raw pointer, never as a declared buffer
-// block, so slangc's reflection reports it as an attribute index with no byte
-// offset -- the reflection-driven check in concinnity-device's `shader_layout`
-// has nothing to compare against here.
-//
-// Format (little-endian):
-//   u32  vertex_count
-//   vertex_count * 56 bytes   float3 pos + float3 normal + float3 tangent + float3 color + float2 uv (14 x f32)
-//   u32  index_count                              // LOD0 indices
-//   index_count  * 2 bytes    u16 indices
-//   optional LOD trailer
-//   4 bytes                   ascii "LODS" magic (absent for legacy / single-LOD payloads)
-//   u32  alt_count            // number of additional LODs beyond LOD0
-//   alt_count × {
-//     f32  switch_distance    // camera-distance threshold (LOD i+1 applies at d >= switch_distance)
-//     u32  index_count
-//     index_count * 2 bytes   u16 indices
-//   }
-//
-// `deserialise` reads only the LOD0 indices and ignores any trailer, so old
-// readers keep working unchanged. `deserialise_with_lods` reads the trailer
-// when present and returns the additional LODs alongside LOD0.
+//! Canonical vertex type and the binary serialisation format shared between
+//! the build step (build_mesh.rs writes) and GraphicsSystem (reads).
+//!
+//! The layout asserts below stay hand-written. A vertex payload reaches a shader
+//! through a vertex descriptor or a raw pointer, never as a declared buffer
+//! block, so slangc's reflection reports it as an attribute index with no byte
+//! offset -- the reflection-driven check in concinnity-device's `shader_layout`
+//! has nothing to compare against here.
+//!
+//! Format (little-endian):
+//!   u32  vertex_count
+//!   vertex_count * 56 bytes   float3 pos + float3 normal + float3 tangent + float3 color + float2 uv (14 x f32)
+//!   u32  index_count                              // LOD0 indices
+//!   index_count  * 2 bytes    u16 indices
+//!   optional LOD trailer
+//!   4 bytes                   ascii "LODS" magic (absent for legacy / single-LOD payloads)
+//!   u32  alt_count            // number of additional LODs beyond LOD0
+//!   alt_count × {
+//!     f32  switch_distance    // camera-distance threshold (LOD i+1 applies at d >= switch_distance)
+//!     u32  index_count
+//!     index_count * 2 bytes   u16 indices
+//!   }
+//!
+//! `deserialise` reads only the LOD0 indices and ignores any trailer, so old
+//! readers keep working unchanged. `deserialise_with_lods` reads the trailer
+//! when present and returns the additional LODs alongside LOD0.
 
 use crate::decode::{ByteReader, checked_product};
 
@@ -52,21 +50,23 @@ fn read_indices(cur: &mut ByteReader<'_>, n: usize, what: &str) -> Result<Vec<u1
     Ok(block.chunks_exact(2).map(|c| chunk_u16(c, 0)).collect())
 }
 
-// Vertex layout shared by all mesh producers and both GPU backends.
-// Repr(C) so it can be cast directly to GPU buffer memory.
+/// Vertex layout shared by all mesh producers and both GPU backends.
+/// Repr(C) so it can be cast directly to GPU buffer memory.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct Vertex {
+    /// Object-space position.
     pub pos: [f32; 3],
-    // Object-space surface normal, normalised. Transformed to world space in
-    // the vertex shader. Used for diffuse lighting in the fragment shader.
+    /// Object-space surface normal, normalised. Transformed to world space in
+    /// the vertex shader. Used for diffuse lighting in the fragment shader.
     pub normal: [f32; 3],
-    // Object-space tangent vector (U direction of the normal map). Transformed
-    // to world space in the vertex shader. Used to build the TBN matrix for
-    // tangent-space normal mapping.
+    /// Object-space tangent vector (U direction of the normal map). Transformed
+    /// to world space in the vertex shader. Used to build the TBN matrix for
+    /// tangent-space normal mapping.
     pub tangent: [f32; 3],
+    /// Linear RGB colour.
     pub color: [f32; 3],
-    // Texture coordinates in [0, 1] space.  (0,0) is top-left.
+    /// Texture coordinates in [0, 1] space.  (0,0) is top-left.
     pub uv: [f32; 2],
 }
 
@@ -83,19 +83,24 @@ type DeserialisedStatic = (Vec<Vertex>, Vec<u16>, LodAlternates);
 // Deserialised skinned mesh: vertices, indices, and the bind-pose skeleton.
 type DeserialisedSkinned = (Vec<SkinnedVertex>, Vec<u16>, Vec<PayloadJoint>);
 
-// A fully deserialised skinned payload, including the optional morph and
-// LOD blocks (empty when the payload carries none).
+/// A fully deserialised skinned payload, including the optional morph and
+/// LOD blocks (empty when the payload carries none).
 #[derive(Clone, Debug, Default)]
 pub struct SkinnedPayload {
+    /// Skinned vertices.
     pub vertices: Vec<SkinnedVertex>,
+    /// Triangle indices into `vertices`.
     pub indices: Vec<u16>,
+    /// The bind-pose skeleton, parents before children.
     pub joints: Vec<PayloadJoint>,
+    /// Morph-target block; empty when the mesh has no morphs.
     pub morphs: PayloadMorphs,
+    /// LOD slices past LOD0; empty when the mesh declares one level.
     pub lods: LodAlternates,
 }
 
-// Serialise vertex and index slices into the packed binary payload format.
-// Each vertex tuple is (pos, normal, tangent, color, uv).
+/// Serialise vertex and index slices into the packed binary payload format.
+/// Each vertex tuple is (pos, normal, tangent, color, uv).
 pub fn serialise(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + vertices.len() * 56 + 4 + indices.len() * 2);
     buf.extend_from_slice(&(vertices.len() as u32).to_le_bytes());
@@ -121,11 +126,11 @@ pub fn serialise(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
 // `deserialise` keeps working without changes.
 const LODS_MAGIC: &[u8; 4] = b"LODS";
 
-// Serialise a multi-LOD mesh payload. `indices` is LOD0; `lod_alternates`
-// is the list of additional LODs (LOD1..N), each paired with the
-// camera-distance threshold that triggers a switch to it. When
-// `lod_alternates` is empty this is byte-identical to the single-LOD
-// `serialise` output, so the build can call this unconditionally.
+/// Serialise a multi-LOD mesh payload. `indices` is LOD0; `lod_alternates`
+/// is the list of additional LODs (LOD1..N), each paired with the
+/// camera-distance threshold that triggers a switch to it. When
+/// `lod_alternates` is empty this is byte-identical to the single-LOD
+/// `serialise` output, so the build can call this unconditionally.
 pub fn serialise_with_lods(
     vertices: &[VertTuple],
     indices: &[u16],
@@ -155,19 +160,22 @@ pub fn serialise_with_lods(
 // the render path is unaffected and legacy payloads keep loading unchanged.
 const HFLD_MAGIC: &[u8; 4] = b"HFLD";
 
-// A baked heightfield collider grid: `rows` x `cols` world-space heights in
-// row-major order (row index increases along +Z, column index along +X),
-// matching the vertex order the heightfield mesh generator emits.
+/// A baked heightfield collider grid: `rows` x `cols` world-space heights in
+/// row-major order (row index increases along +Z, column index along +X),
+/// matching the vertex order the heightfield mesh generator emits.
 pub struct HeightfieldGrid {
+    /// Grid rows, increasing along +Z.
     pub rows: usize,
+    /// Grid columns, increasing along +X.
     pub cols: usize,
+    /// World-space heights, row-major.
     pub heights: Vec<f32>,
 }
 
-// Serialise a baked-heightfield collider trailer: `"HFLD"` magic, `u32 rows`,
-// `u32 cols`, then `rows * cols` little-endian f32 heights in row-major order.
-// Appended to a heightfield ProceduralMesh payload after the optional LOD
-// trailer.
+/// Serialise a baked-heightfield collider trailer: `"HFLD"` magic, `u32 rows`,
+/// `u32 cols`, then `rows * cols` little-endian f32 heights in row-major order.
+/// Appended to a heightfield ProceduralMesh payload after the optional LOD
+/// trailer.
 pub fn serialise_heightfield_trailer(rows: usize, cols: usize, heights: &[f32]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + 4 + 4 + heights.len() * 4);
     buf.extend_from_slice(HFLD_MAGIC);
@@ -179,11 +187,11 @@ pub fn serialise_heightfield_trailer(rows: usize, cols: usize, heights: &[f32]) 
     buf
 }
 
-// Decode the baked-heightfield trailer from a static mesh payload, if present.
-// The trailer rides at the very end, so this walks past the vertex, LOD0
-// index, and optional LOD blocks positionally before reading the `"HFLD"`
-// block. Returns `Ok(None)` for any payload without the trailer (i.e. every
-// non-heightfield mesh) so callers can treat absence as "no baked collider".
+/// Decode the baked-heightfield trailer from a static mesh payload, if present.
+/// The trailer rides at the very end, so this walks past the vertex, LOD0
+/// index, and optional LOD blocks positionally before reading the `"HFLD"`
+/// block. Returns `Ok(None)` for any payload without the trailer (i.e. every
+/// non-heightfield mesh) so callers can treat absence as "no baked collider".
 pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, String> {
     let mut cur = ByteReader::new(bytes, "mesh payload");
 
@@ -224,25 +232,30 @@ pub fn deserialise_heightfield(bytes: &[u8]) -> Result<Option<HeightfieldGrid>, 
     }))
 }
 
-// Vertex layout for skeletally animated meshes. A superset of `Vertex`: the
-// same 56-byte static attributes plus four joint indices and four blend
-// weights. `repr(C)`, 80 bytes, so it casts directly to a GPU buffer.
-//
-// The vertex shader skins `pos` / `normal` / `tangent` by blending up to four
-// joint matrices: `sum(weights[k] * joint[joints[k]] * v)`. Weights that sum
-// to less than 1 leave the remainder un-skinned; the build step normalises
-// them so this never happens for authored meshes.
+/// Vertex layout for skeletally animated meshes. A superset of `Vertex`: the
+/// same 56-byte static attributes plus four joint indices and four blend
+/// weights. `repr(C)`, 80 bytes, so it casts directly to a GPU buffer.
+///
+/// The vertex shader skins `pos` / `normal` / `tangent` by blending up to four
+/// joint matrices: `sum(weights[k] * joint[joints[k]] * v)`. Weights that sum
+/// to less than 1 leave the remainder un-skinned; the build step normalises
+/// them so this never happens for authored meshes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SkinnedVertex {
+    /// Object-space position.
     pub pos: [f32; 3],
+    /// Unit-length normal.
     pub normal: [f32; 3],
+    /// Object-space tangent, the normal map's U direction.
     pub tangent: [f32; 3],
+    /// Linear RGB colour.
     pub color: [f32; 3],
+    /// Texture coordinates.
     pub uv: [f32; 2],
-    // Indices into the skeleton's joint array, one per blend weight.
+    /// Indices into the skeleton's joint array, one per blend weight.
     pub joints: [u16; 4],
-    // Blend weights, parallel to `joints`. Normalised at build time.
+    /// Blend weights, parallel to `joints`. Normalised at build time.
     pub weights: [f32; 4],
 }
 
@@ -254,47 +267,58 @@ const SKINNED_MAGIC: &[u8; 4] = b"SKMV";
 // Magic for the optional morph-target block after the joint block.
 const MORPH_MAGIC: &[u8; 4] = b"MRPH";
 
-// One morph-target vertex delta as the GPU consumes it: position and normal
-// offsets added to the bind pose before skinning, scaled by the target's
-// weight. Plain tightly packed floats; the shader-side struct uses packed
-// types so the 24-byte stride matches.
+/// One morph-target vertex delta as the GPU consumes it: position and normal
+/// offsets added to the bind pose before skinning, scaled by the target's
+/// weight. Plain tightly packed floats; the shader-side struct uses packed
+/// types so the 24-byte stride matches.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct MorphDelta {
+    /// World-space position.
     pub position: [f32; 3],
+    /// Unit-length normal.
     pub normal: [f32; 3],
 }
 
-// Morph-target block of a skinned payload: target names plus dense
-// target-major deltas (`deltas[t * vertex_count + v]`).
+/// Morph-target block of a skinned payload: target names plus dense
+/// target-major deltas (`deltas[t * vertex_count + v]`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PayloadMorphs {
+    /// Morph-target names, in target order.
     pub names: Vec<String>,
+    /// Dense target-major deltas, `deltas[t * vertex_count + v]`.
     pub deltas: Vec<MorphDelta>,
 }
 
 impl PayloadMorphs {
+    /// Whether the mesh declares no morph targets.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
 
+    /// Morph targets on the mesh.
     pub fn target_count(&self) -> usize {
         self.names.len()
     }
 }
 
-// One joint of a skinned mesh's bind-pose skeleton, as stored in the
-// compiled payload. Mirrors `assets::skinned_mesh::JointDef` but lives in
-// `gfx` so the payload format stays self-contained: the build/runtime
-// boundaries convert between the two. Parents must appear before their
-// children, so the runtime can walk the array once when building the
-// `Skeleton`.
+/// One joint of a skinned mesh's bind-pose skeleton, as stored in the
+/// compiled payload. Mirrors `assets::skinned_mesh::JointDef` but lives in
+/// `gfx` so the payload format stays self-contained: the build/runtime
+/// boundaries convert between the two. Parents must appear before their
+/// children, so the runtime can walk the array once when building the
+/// `Skeleton`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PayloadJoint {
+    /// The joint's authored name.
     pub name: String,
+    /// Index of the parent joint, or -1 for a root.
     pub parent: i32,
+    /// Bind-pose local translation.
     pub translation: [f32; 3],
+    /// YXZ Euler rotation in degrees.
     pub rotation_deg: [f32; 3],
+    /// Per-axis scale.
     pub scale: [f32; 3],
 }
 
@@ -316,7 +340,7 @@ pub struct PayloadJoint {
 // the on-wire format is identical to the legacy single-LOD payload when
 // no alternates are present.
 #[cfg(test)]
-pub fn serialise_skinned(
+pub(crate) fn serialise_skinned(
     vertices: &[SkinnedVertex],
     indices: &[u16],
     joints: &[PayloadJoint],
@@ -324,13 +348,13 @@ pub fn serialise_skinned(
     serialise_skinned_with_lods(vertices, indices, joints, &PayloadMorphs::default(), &[])
 }
 
-// Serialise a multi-LOD skinned mesh. Two optional blocks ride after the
-// joint block, each announced by a magic: `"MRPH"` (`u32 target_count`, per
-// target `u32 name_byte_len` + name UTF-8 bytes, then
-// `target_count * vertex_count * 24` bytes of dense f32 deltas) and `"LODS"`
-// (`u32 alt_count`, then per alternate `f32 switch_distance`,
-// `u32 index_count`, `index_count * 2` bytes of u16 indices). Empty morphs
-// and alternates match the legacy single-LOD payload byte-for-byte.
+/// Serialise a multi-LOD skinned mesh. Two optional blocks ride after the
+/// joint block, each announced by a magic: `"MRPH"` (`u32 target_count`, per
+/// target `u32 name_byte_len` + name UTF-8 bytes, then
+/// `target_count * vertex_count * 24` bytes of dense f32 deltas) and `"LODS"`
+/// (`u32 alt_count`, then per alternate `f32 switch_distance`,
+/// `u32 index_count`, `index_count * 2` bytes of u16 indices). Empty morphs
+/// and alternates match the legacy single-LOD payload byte-for-byte.
 pub fn serialise_skinned_with_lods(
     vertices: &[SkinnedVertex],
     indices: &[u16],
@@ -406,19 +430,19 @@ pub fn serialise_skinned_with_lods(
     buf
 }
 
-// Deserialise a packed skinned-mesh payload produced by `serialise_skinned`.
-// The returned skeleton lives in the payload; the args JSON no longer needs
-// to carry it. The optional LOD trailer is parsed and discarded; callers
-// who need LOD alternates should use [`deserialise_skinned_with_lods`].
+/// Deserialise a packed skinned-mesh payload produced by `serialise_skinned`.
+/// The returned skeleton lives in the payload; the args JSON no longer needs
+/// to carry it. The optional LOD trailer is parsed and discarded; callers
+/// who need LOD alternates should use [`deserialise_skinned_with_lods`].
 pub fn deserialise_skinned(bytes: &[u8]) -> Result<DeserialisedSkinned, String> {
     let p = deserialise_skinned_with_lods(bytes)?;
     Ok((p.vertices, p.indices, p.joints))
 }
 
-// Deserialise a packed skinned-mesh payload, also returning any optional
-// LOD trailer. Mirrors [`deserialise_with_lods`] for static meshes:
-// legacy single-LOD payloads have no trailer and produce an empty
-// alternates vec.
+/// Deserialise a packed skinned-mesh payload, also returning any optional
+/// LOD trailer. Mirrors [`deserialise_with_lods`] for static meshes:
+/// legacy single-LOD payloads have no trailer and produce an empty
+/// alternates vec.
 pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, String> {
     if bytes.len() < 8 || &bytes[0..4] != SKINNED_MAGIC {
         return Err("skinned mesh payload missing SKMV magic header".to_string());
@@ -506,12 +530,12 @@ pub fn deserialise_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
     })
 }
 
-// Deserialise a packed payload, also returning any optional LOD trailer.
-// Legacy single-LOD payloads have no trailer and produce an empty
-// alternates vec; multi-LOD payloads parse the `"LODS"` block after the
-// LOD0 indices and return one entry per additional level. The order is
-// preserved: `alternates[i]` is LOD `i + 1` and applies at camera
-// distance ≥ `alternates[i].0`.
+/// Deserialise a packed payload, also returning any optional LOD trailer.
+/// Legacy single-LOD payloads have no trailer and produce an empty
+/// alternates vec; multi-LOD payloads parse the `"LODS"` block after the
+/// LOD0 indices and return one entry per additional level. The order is
+/// preserved: `alternates[i]` is LOD `i + 1` and applies at camera
+/// distance ≥ `alternates[i].0`.
 pub fn deserialise_with_lods(bytes: &[u8]) -> Result<DeserialisedStatic, String> {
     let mut cur = ByteReader::new(bytes, "mesh payload");
 
@@ -583,8 +607,8 @@ fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, 
         })
         .collect())
 }
-// Deserialise a packed payload back into typed vertex and index vecs (static),
-// ignoring any LOD trailer.
+/// Deserialise a packed payload back into typed vertex and index vecs (static),
+/// ignoring any LOD trailer.
 #[cfg(test)]
 pub fn deserialise(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
     let (vertices, indices, _) = deserialise_with_lods(bytes)?;

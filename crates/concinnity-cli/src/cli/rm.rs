@@ -3,7 +3,7 @@
 use concinnity_cook::world::find_world_jsonl;
 use concinnity_editor::rm_at_path;
 
-pub fn rm(name: &str) -> std::io::Result<()> {
+pub(crate) fn rm(name: &str) -> std::io::Result<()> {
     let world_path = find_world_jsonl(None)?;
     rm_at_path(&world_path, name)
 }

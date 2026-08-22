@@ -1,9 +1,9 @@
-// The authored world model: world.jsonl I/O (`WorldJsonlAsset`,
-// parse/write/patch_world_jsonl, find_world_jsonl, the path consts), $include
-// resolution, and structural validation (`load_world`). The build front half
-// that sits on top of this -- expansion passes, injection, and `prepare_world`
-// -- lives in concinnity-cook; the shipped runtime plays compiled blobs and
-// never sees any of this.
+//! The authored world model: world.jsonl I/O (`WorldJsonlAsset`,
+//! parse/write/patch_world_jsonl, find_world_jsonl, the path consts), $include
+//! resolution, and structural validation (`load_world`). The build front half
+//! that sits on top of this -- expansion passes, injection, and `prepare_world`
+//! -- lives in concinnity-cook; the shipped runtime plays compiled blobs and
+//! never sees any of this.
 mod find;
 mod io;
 
@@ -17,9 +17,9 @@ use crate::ecs::AssetOrigin;
 use crate::registry::ComponentType;
 use crate::resource_type::ResourceAssetType;
 
-// Asset name derived from a file path: the file stem with dots replaced by
-// underscores. Companion injection and `cn add` share this so a generated asset
-// is named exactly as if the user had added the same file.
+/// Asset name derived from a file path: the file stem with dots replaced by
+/// underscores. Companion injection and `cn add` share this so a generated asset
+/// is named exactly as if the user had added the same file.
 pub fn asset_name_from_path(path: &str) -> String {
     std::path::Path::new(path)
         .file_stem()
@@ -28,12 +28,12 @@ pub fn asset_name_from_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-// Resolve $include directives in a flat asset list.
-//
-// An entry of the form `{"$include": "path/to/file"}` is replaced inline by
-// the entries from that file. The included file may be a JSON array or a
-// single JSON object. Includes are resolved relative to cwd. The result is
-// always a flat list with no $include entries remaining.
+/// Resolve $include directives in a flat asset list.
+///
+/// An entry of the form `{"$include": "path/to/file"}` is replaced inline by
+/// the entries from that file. The included file may be a JSON array or a
+/// single JSON object. Includes are resolved relative to cwd. The result is
+/// always a flat list with no $include entries remaining.
 pub fn resolve_includes(assets: Vec<serde_json::Value>) -> std::io::Result<Vec<serde_json::Value>> {
     let mut out = Vec::with_capacity(assets.len());
     for entry in assets {
@@ -83,17 +83,17 @@ pub fn resolve_includes(assets: Vec<serde_json::Value>) -> std::io::Result<Vec<s
     Ok(out)
 }
 
-// Parse a world.jsonl string, resolve $include directives, and run structural
-// validation. On success returns the raw (pre-expansion) asset list; on failure
-// returns every structural error found, not just the first, so an upstream
-// caller (e.g. the infra agentic loop) gets all feedback in a single pass.
-//
-// Structural validation covers what must hold before a world can be expanded
-// or built: each entry has a string `name` and `type`, the type is registered,
-// the type is not RuntimeOnly (those are pushed by a system at runtime and
-// cannot be authored), and names are unique. Semantic validation of the
-// expanded world (cross-references, per-asset args) is a separate stage; see
-// crate::check.
+/// Parse a world.jsonl string, resolve $include directives, and run structural
+/// validation. On success returns the raw (pre-expansion) asset list; on failure
+/// returns every structural error found, not just the first, so an upstream
+/// caller (e.g. the infra agentic loop) gets all feedback in a single pass.
+///
+/// Structural validation covers what must hold before a world can be expanded
+/// or built: each entry has a string `name` and `type`, the type is registered,
+/// the type is not RuntimeOnly (those are pushed by a system at runtime and
+/// cannot be authored), and names are unique. Semantic validation of the
+/// expanded world (cross-references, per-asset args) is a separate stage; see
+/// crate::check.
 pub fn load_world(content: &str) -> Result<Vec<serde_json::Value>, Vec<String>> {
     let parsed = parse_world_jsonl(content).map_err(|e| vec![format!("syntax error: {e}")])?;
     let raw = resolve_includes(parsed).map_err(|e| vec![e.to_string()])?;

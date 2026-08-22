@@ -1,24 +1,22 @@
-// src/app/sysmem.rs
-//
-// Host-memory queries used to compute the process memory budget (see
-// `app::budget`) and to report live usage. Two values, each best-effort: the
-// machine's total physical RAM (the budget is a fraction of it) and this
-// process's resident set size (what it is actually using now).
-//
-// Deliberately a small hand-rolled platform shim rather than a dependency like
-// `sysinfo`: the engine needs exactly these two numbers, and both are a single
-// syscall per platform. Every query returns `None` when the platform call is
-// unavailable or fails, and the callers degrade gracefully (the budget falls
-// back to the hard ceiling; a usage readout shows "unknown").
+//! Host-memory queries used to compute the process memory budget (see
+//! `app::budget`) and to report live usage. Two values, each best-effort: the
+//! machine's total physical RAM (the budget is a fraction of it) and this
+//! process's resident set size (what it is actually using now).
+//!
+//! Deliberately a small hand-rolled platform shim rather than a dependency like
+//! `sysinfo`: the engine needs exactly these two numbers, and both are a single
+//! syscall per platform. Every query returns `None` when the platform call is
+//! unavailable or fails, and the callers degrade gracefully (the budget falls
+//! back to the hard ceiling; a usage readout shows "unknown").
 
 // Total physical RAM installed on the machine, in bytes. `None` if the platform
 // query is unsupported or fails.
-pub fn total_physical_bytes() -> Option<u64> {
+pub(crate) fn total_physical_bytes() -> Option<u64> {
     imp::total_physical_bytes()
 }
 
-// Resident set size of the current process, in bytes: the physical memory it
-// currently occupies. `None` if the platform query is unsupported or fails.
+/// Resident set size of the current process, in bytes: the physical memory it
+/// currently occupies. `None` if the platform query is unsupported or fails.
 pub fn process_resident_bytes() -> Option<u64> {
     imp::process_resident_bytes()
 }

@@ -60,7 +60,7 @@ impl PropBodies {
     // write-back and reaping. An entity with BodyDynamics simulates freely on
     // the prop layer; anything else is an immovable obstacle on the world
     // layer. An authored collider layer name overrides either default.
-    pub fn add(
+    pub(crate) fn add(
         &mut self,
         layers: &LayerTable,
         world: &mut PhysicsWorld,
@@ -113,7 +113,7 @@ impl PropBodies {
     // would keep simulating - and colliding with live bodies - invisibly.
     // Returns `held` remapped onto the compacted list (None when the carried
     // prop was one of the reaped).
-    pub fn reap(
+    pub(crate) fn reap(
         &mut self,
         world: &mut PhysicsWorld,
         held: Option<usize>,
@@ -144,34 +144,34 @@ impl PropBodies {
 
     // The entity owning `handle`, or None when the body is not a prop's (the
     // terrain, a character capsule, a joint's world anchor).
-    pub fn entity_of(&self, handle: BodyHandle) -> Option<Entity> {
+    pub(crate) fn entity_of(&self, handle: BodyHandle) -> Option<Entity> {
         self.by_handle.get(&handle).copied()
     }
 
     // Whether the entity already owns a body, so the per-tick spawn scan can
     // skip it.
-    pub fn is_tracked(&self, entity: Entity) -> bool {
+    pub(crate) fn is_tracked(&self, entity: Entity) -> bool {
         self.tracked.contains(&entity)
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.bodies.len()
     }
 
-    pub fn dynamic_count(&self) -> usize {
+    pub(crate) fn dynamic_count(&self) -> usize {
         self.bodies.iter().filter(|p| p.dynamic).count()
     }
 
-    pub fn get(&self, index: usize) -> Option<&PropPhysics> {
+    pub(crate) fn get(&self, index: usize) -> Option<&PropPhysics> {
         self.bodies.get(index)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &PropPhysics> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &PropPhysics> {
         self.bodies.iter()
     }
 
     // Record every dynamic prop's freshly simulated pose for the render blend.
-    pub fn record_tick_poses(&mut self, world: &PhysicsWorld) {
+    pub(crate) fn record_tick_poses(&mut self, world: &PhysicsWorld) {
         for prop in self.bodies.iter_mut().filter(|p| p.dynamic) {
             let (pos, rot) = world.body_pose_quat(prop.handle);
             prop.pose.push(pos, rot);
@@ -180,7 +180,7 @@ impl PropBodies {
 
     // Blend each dynamic prop's tick poses by the frame's alpha, decomposing
     // the rotation to Euler degrees once here at the write boundary.
-    pub fn sample_poses(&mut self, alpha: f32) -> &[(Entity, [f32; 3], [f32; 3])] {
+    pub(crate) fn sample_poses(&mut self, alpha: f32) -> &[(Entity, [f32; 3], [f32; 3])] {
         let Self {
             bodies, sampled, ..
         } = self;

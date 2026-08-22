@@ -1,9 +1,9 @@
-// The blob WRITE side (build output): pack compiled payloads + the def table
-// into .cnb files and emit world-lock.json. The byte format itself -- the
-// header, the record schema, and the `encode_cnb` image builder -- is owned by
-// the I/O-free concinnity-blob crate; this file owns the packing POLICY
-// (payload distribution across overflow blobs, the size ceiling), the lock, and
-// the writes themselves.
+//! The blob WRITE side (build output): pack compiled payloads + the def table
+//! into .cnb files and emit world-lock.json. The byte format itself -- the
+//! header, the record schema, and the `encode_cnb` image builder -- is owned by
+//! the I/O-free concinnity-blob crate; this file owns the packing POLICY
+//! (payload distribution across overflow blobs, the size ceiling), the lock, and
+//! the writes themselves.
 
 use std::fs;
 
@@ -23,125 +23,152 @@ pub use concinnity_store::blob::{
 
 use serde::{Deserialize, Serialize};
 
-// The build record written beside the blobs. Provenance metadata, not part of
-// the .cnb format, so it lives here rather than in concinnity-blob.
+/// The build record written beside the blobs. Provenance metadata, not part of
+/// the .cnb format, so it lives here rather than in concinnity-blob.
 pub const LOCK_PATH: &str = "world-lock.json";
 
-// Per-blob entry in the lock file
+/// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobEntry {
+    /// The blob file's path, relative to the build output.
     pub path: String,
+    /// sha-256 of the blob file.
     pub checksum: String,
+    /// Bytes the blob's payload section occupies.
     pub payload_bytes: u64,
 }
 
-// The resolved build record written alongside the binary blobs
-// Human-readable; owned by the build, not the user
+/// The resolved build record written alongside the binary blobs
+/// Human-readable; owned by the build, not the user
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlobLock {
-    // Engine version the blob was built with; injected defaults come from the
-    // engine, so their content can change across versions.
+    /// Engine version the blob was built with; injected defaults come from the
+    /// engine, so their content can change across versions.
     pub engine_version: String,
+    /// When the build ran, as an RFC 3339 timestamp.
     pub built_at: String,
+    /// One entry per blob file written.
     pub blobs: Vec<BlobEntry>,
+    /// One entry per asset compiled into the def table.
     pub assets: Vec<LockedAsset>,
-    // Assets compiled into the blob's resource stream (addressed by a per-kind
-    // handle) rather than the component def table.
+    /// Assets compiled into the blob's resource stream (addressed by a per-kind
+    /// handle) rather than the component def table.
     #[serde(default)]
     pub resources: Vec<LockedResource>,
-    // Assets the build added that have no world.jsonl line (companions and
-    // engine defaults). Each entry carries its full args so it can be copied
-    // into world.jsonl verbatim as an override.
+    /// Assets the build added that have no world.jsonl line (companions and
+    /// engine defaults). Each entry carries its full args so it can be copied
+    /// into world.jsonl verbatim as an override.
     pub injected: Vec<LockedInjection>,
-    // Generated assets the world declares its own copy of. The copy won and the
-    // generated entry was dropped, so the source file no longer drives these;
-    // recorded to make that override visible rather than silent.
+    /// Generated assets the world declares its own copy of. The copy won and the
+    /// generated entry was dropped, so the source file no longer drives these;
+    /// recorded to make that override visible rather than silent.
     #[serde(default)]
     pub shadowed: Vec<LockedShadow>,
 }
 
-// One asset as recorded in the lock file
+/// One asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockedAsset {
+    /// The asset's declared name.
     pub name: String,
-    // The dense interned id the build assigned this name. Lets a process that
-    // loads the prebuilt blobs (the editor booting without an in-process cook)
-    // rebuild the name table exactly as the build interned it.
+    /// The dense interned id the build assigned this name. Lets a process that
+    /// loads the prebuilt blobs (the editor booting without an in-process cook)
+    /// rebuild the name table exactly as the build interned it.
     #[serde(default)]
     pub id: Option<u32>,
+    /// The asset's registry type name.
     pub kind: String,
+    /// The component type's registry tag.
     pub discriminant: u8,
-    // sha-256 of the asset's serialized args_bytes
+    /// sha-256 of the asset's serialized args_bytes
     pub args_hash: String,
-    // which blob holds this asset's payload, if any
+    /// which blob holds this asset's payload, if any
     pub payload_blob: Option<u32>,
 }
 
-// One injected asset as recorded in the lock file
+/// One injected asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockedInjection {
+    /// The injected asset's name.
     pub name: String,
     #[serde(rename = "type")]
+    /// The asset's registry type name.
     pub asset_type: String,
+    /// The args the injection supplied.
     pub args: serde_json::Value,
+    /// Which expander injected it.
     pub injected_by: String,
 }
 
-// One generated asset the world overrides with its own copy. Carries no args:
-// the copy that won is the world.jsonl line of the same name.
+/// One generated asset the world overrides with its own copy. Carries no args:
+/// the copy that won is the world.jsonl line of the same name.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockedShadow {
+    /// The shadowed asset's name.
     pub name: String,
     #[serde(rename = "type")]
+    /// The asset's registry type name.
     pub asset_type: String,
+    /// Which expander generated the copy the world overrode.
     pub generated_by: String,
 }
 
-// One resource-stream asset as recorded in the lock file. Resource assets have
-// left the component def table, so they are recorded with their per-kind handle
-// instead of a component discriminant. `payload_blob` is None for a data
-// resource (bytes ride inline in the record).
+/// One resource-stream asset as recorded in the lock file. Resource assets have
+/// left the component def table, so they are recorded with their per-kind handle
+/// instead of a component discriminant. `payload_blob` is None for a data
+/// resource (bytes ride inline in the record).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LockedResource {
+    /// The resource's declared name.
     pub name: String,
-    // The dense interned id the build assigned this name (the same id space
-    // as `LockedAsset.id`; `handle` is the per-kind index).
+    /// The dense interned id the build assigned this name (the same id space
+    /// as `LockedAsset.id`; `handle` is the per-kind index).
     #[serde(default)]
     pub id: Option<u32>,
+    /// The resource kind's name.
     pub kind: String,
+    /// The resource's dense per-kind handle.
     pub handle: u32,
-    // sha-256 of the asset's authored args JSON
+    /// sha-256 of the asset's authored args JSON
     pub args_hash: String,
-    // which blob holds this resource's payload, if any
+    /// which blob holds this resource's payload, if any
     pub payload_blob: Option<u32>,
-    // Dev source info mirrored from the build's hot-reload catalogues, so a
-    // blob boot can reconstruct them without the asset's args (a SceneImport
-    // product has none the boot can see). Present for every Texture / Mesh
-    // resource; an empty `source` means nothing to watch.
+    /// Dev source info mirrored from the build's hot-reload catalogues, so a
+    /// blob boot can reconstruct them without the asset's args (a SceneImport
+    /// product has none the boot can see). Present for every Texture / Mesh
+    /// resource; an empty `source` means nothing to watch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_source: Option<LockedTextureSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The mesh's re-import inputs, for a mesh resource.
     pub mesh_source: Option<LockedMeshSource>,
 }
 
-// A texture resource's watchable file source as recorded in the lock file.
+/// A texture resource's watchable file source as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LockedTextureSource {
+    /// Authored source path; empty when there is nothing to watch.
     pub source: String,
+    /// Index of the image within the source document.
     pub image_index: u32,
 }
 
-// A mesh resource's re-import inputs as recorded in the lock file.
+/// A mesh resource's re-import inputs as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LockedMeshSource {
+    /// Authored source path; empty when there is nothing to watch.
     pub source: String,
+    /// Index of the primitive within the source document.
     pub primitive_index: u32,
+    /// How many LODs the mesh declares, including LOD0.
     pub lod_levels: u32,
+    /// Camera distance at which each LOD past 0 takes over.
     pub lod_distances: Vec<f32>,
 }
 
-// The result of a build pack: the blobs written and the path of each
+/// The result of a build pack: the blobs written and the path of each
 pub struct PackResult {
+    /// Path of each blob file written.
     pub blob_paths: Vec<String>,
 }
 
@@ -156,7 +183,7 @@ fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()>
 // Pack the metadata (component defs + resource records) and their payloads into
 // one or more blobs. The full metadata rides in blob 0; overflow blobs carry an
 // empty metadata section and pure payload bytes.
-pub fn write_blobs(
+pub(crate) fn write_blobs(
     defs: &[BlobAssetDef],
     resources: &[ResourceRecord],
     scene_groups: &[concinnity_blob::SceneGroup],
@@ -206,10 +233,10 @@ pub fn write_blobs(
 }
 
 // Size at which the packer rolls over to a fresh blob.
-pub const DEFAULT_MAX_BLOB_BYTES: u64 = 1 << 30;
+pub(crate) const DEFAULT_MAX_BLOB_BYTES: u64 = 1 << 30;
 
 // PayloadPacker (build step)
-pub struct PayloadPacker {
+pub(crate) struct PayloadPacker {
     max_blob_bytes: u64,
     blobs: Vec<Vec<u8>>,
     current_blob: u32,
@@ -219,7 +246,7 @@ pub struct PayloadPacker {
 }
 
 impl PayloadPacker {
-    pub fn new(max_blob_bytes: u64) -> Self {
+    pub(crate) fn new(max_blob_bytes: u64) -> Self {
         Self {
             max_blob_bytes,
             blobs: vec![Vec::new()],
@@ -233,11 +260,11 @@ impl PayloadPacker {
     // holds no earlier content and is never blob 0 (whose payload section is
     // read eagerly at startup), so the group's payloads are contiguous and
     // separately loadable. A group with no pushes produces no blob.
-    pub fn start_group(&mut self) {
+    pub(crate) fn start_group(&mut self) {
         self.pending_group = true;
     }
 
-    pub fn push(&mut self, data: &[u8]) -> PayloadLocator {
+    pub(crate) fn push(&mut self, data: &[u8]) -> PayloadLocator {
         let len = data.len() as u64;
 
         let group_roll = self.pending_group && (self.current_offset > 0 || self.current_blob == 0);
@@ -260,13 +287,13 @@ impl PayloadPacker {
         }
     }
 
-    pub fn finish(self) -> Vec<Vec<u8>> {
+    pub(crate) fn finish(self) -> Vec<Vec<u8>> {
         self.blobs
     }
 }
 
 // Lock file
-pub fn write_lock(
+pub(crate) fn write_lock(
     named_defs: &[(&str, &BlobAssetDef)],
     resources: &[LockedResource],
     injected: &[crate::world::InjectedAsset],

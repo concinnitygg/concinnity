@@ -20,7 +20,7 @@ use crate::win32::window::{
     do_set_window_mode, do_set_window_size, frame_tick, take_input_snapshot,
 };
 
-pub struct Win32Window {
+pub(crate) struct Win32Window {
     win_state: Box<WindowState>,
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is fullscreen and restored on exit / drop; reconciled once per
@@ -33,7 +33,7 @@ impl Win32Window {
     // non-default creation mode is applied immediately after. (The engine
     // currently creates Windowed here and applies the world / persisted mode
     // through GraphicsSystem's init, the same flow as DirectX.)
-    pub fn new(
+    pub(crate) fn new(
         title: &str,
         width: u32,
         height: u32,
@@ -55,12 +55,12 @@ impl Win32Window {
     // Drain the message pump, refresh the cursor window-exit / confinement
     // state, and reconcile the fullscreen display mode. Returns true when the
     // window was closed. Called once per frame by `VkContext::window_closed`.
-    pub fn poll(&mut self) -> bool {
+    pub(crate) fn poll(&mut self) -> bool {
         frame_tick(&mut self.win_state, &mut self.fullscreen_display)
     }
 
     // Snapshot of the accumulated input since the last call.
-    pub fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> RenderInput {
         take_input_snapshot(&mut self.win_state)
     }
 
@@ -68,27 +68,27 @@ impl Win32Window {
     // freshly spawned window may not be focused, and grabbing before the user
     // interacts is jarring. The first content click captures (the same flow
     // as DirectX and as GLFW's focus-gated engage on Linux).
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         self.win_state.recapture_on_click = true;
     }
 
     // Symmetric with `capture_cursor`; reached only through
     // `set_camera_capture` today, kept so the cursor API stays complete.
     #[allow(dead_code)]
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         do_release_cursor(&mut self.win_state);
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the helper.
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         do_set_ui_cursor_hidden(&mut self.win_state, hidden);
     }
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.win_state.menu_mode = on;
     }
 
@@ -96,7 +96,7 @@ impl Win32Window {
     // menu is open. Unlike the startup `capture_cursor` (which arms
     // click-to-capture), closing the menu recaptures immediately so the
     // camera resumes without an extra click.
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         if capture == self.win_state.cursor_captured {
             return;
         }
@@ -111,33 +111,33 @@ impl Win32Window {
     // Whether the real cursor has left the window so the renderer should stop
     // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
     // `poll`; false while captured or in fullscreen (which confines instead).
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.win_state.cursor_outside_window
     }
 
     // Replace the runtime movement key map; takes effect on the next message.
-    pub fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.win_state.key.set_keymap(keymap);
     }
 
-    pub fn set_window_mode(&mut self, mode: WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         do_set_window_mode(&mut self.win_state, mode);
     }
 
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         do_set_window_size(&mut self.win_state, width, height);
     }
 
     // The display modes of the window's monitor, feeding the Resolution
     // settings row (the caller dedups + sorts). Enumerated live, unlike the
     // GLFW window's creation-time cache (no &mut constraint here).
-    pub fn display_modes(&self) -> Vec<DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
         display_mode::enumerate(self.win_state.hwnd)
     }
 
     // The mode the window's monitor is currently running (what the Resolution
     // row shows before the user ever picks one).
-    pub fn current_display_mode(&self) -> Option<DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         display_mode::current(self.win_state.hwnd)
     }
 
@@ -145,27 +145,27 @@ impl Win32Window {
     // per-frame reconcile in `poll` (which also restores the desktop mode on
     // leaving fullscreen), so a choice made in any window mode takes effect
     // when fullscreen is (or becomes) active.
-    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
         self.fullscreen_display.set_desired(mode);
     }
 
     // The swapchain-facing surface size in pixels (the client area, tracked
     // via WM_SIZE). Named for parity with the GLFW window's
     // `framebuffer_size`; on Windows client pixels are framebuffer pixels.
-    pub fn framebuffer_size(&self) -> (i32, i32) {
+    pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
         (self.win_state.width, self.win_state.height)
     }
 
     // The overlay coordinate space. Windows reports WM_MOUSEMOVE in the same
     // client pixels the swapchain is sized to, so logical units are framebuffer
     // pixels here and this equals `framebuffer_size`.
-    pub fn logical_size(&self) -> (f32, f32) {
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
         (self.win_state.width as f32, self.win_state.height as f32)
     }
 
     // Create the presentation surface for this window via
     // VK_KHR_win32_surface.
-    pub fn create_surface(
+    pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,
         instance: &ash::Instance,
@@ -185,7 +185,7 @@ impl Win32Window {
     }
 
     // Vulkan instance extensions required for surface creation on Windows.
-    pub fn required_instance_extensions(&self) -> Vec<String> {
+    pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::khr::win32_surface::NAME]
             .into_iter()
             .map(|n| n.to_str().unwrap_or_default().to_string())

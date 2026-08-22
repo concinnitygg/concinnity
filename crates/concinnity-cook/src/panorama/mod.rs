@@ -14,9 +14,9 @@
 mod detect;
 mod equirect;
 
-pub use detect::{PanoramaSphere, detect};
-pub use equirect::load_equirect;
-
+pub use detect::PanoramaSphere;
+pub use detect::detect;
+pub(crate) use equirect::load_equirect;
 // Panorama / ordinary-scene `.glb` bytes for tests in sibling modules that
 // need one of each without rebuilding the container by hand.
 #[cfg(test)]
@@ -42,10 +42,10 @@ pub fn file_is_panorama_sphere(source: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Decode the panorama image embedded in the `.glb` / `.gltf` at `source` into
-/// a linear-light equirectangular image. Errors when the file is not a
-/// panorama sphere, naming the criterion it missed.
-pub fn load_panorama_file(source: &str) -> Result<crate::hdr::HdrImage, String> {
+// Decode the panorama image embedded in the `.glb` / `.gltf` at `source` into
+// a linear-light equirectangular image. Errors when the file is not a
+// panorama sphere, naming the criterion it missed.
+pub(crate) fn load_panorama_file(source: &str) -> Result<crate::hdr::HdrImage, String> {
     let doc = GltfDoc::parse_file(source)?;
     let panorama = detect(&doc).map_err(|e| format!("'{}': {}", source, e))?;
     load_equirect(&doc, source, panorama.image_index)

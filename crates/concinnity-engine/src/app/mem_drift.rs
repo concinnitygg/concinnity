@@ -43,22 +43,23 @@ const SETTLE_STREAK: u32 = 4;
 // busy baseline still beats no drift at all.
 const SETTLE_DEADLINE_SAMPLES: u32 = 240;
 
-// Which terms moved, once both are read against the budget.
+/// Which terms moved, once both are read against the budget.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum DriftVerdict {
-    // Neither term has moved against the budget.
+    /// Neither term has moved against the budget.
     #[default]
     Settled,
-    // The tracked heap grew: the engine is holding more than it was.
+    /// The tracked heap grew: the engine is holding more than it was.
     Heap,
-    // The resident set grew and the tracked heap did not, so the growth is
-    // memory Rust never allocated.
+    /// The resident set grew and the tracked heap did not, so the growth is
+    /// memory Rust never allocated.
     OutsideHeap,
-    // Both terms grew.
+    /// Both terms grew.
     Both,
 }
 
 impl DriftVerdict {
+    /// How a readout names the verdict.
     pub fn label(self) -> &'static str {
         match self {
             DriftVerdict::Settled => "settled",
@@ -69,18 +70,19 @@ impl DriftVerdict {
     }
 }
 
-// Process memory movement since the session settled. Growth is signed: a term
-// that shrank reads negative.
+/// Process memory movement since the session settled. Growth is signed: a term
+/// that shrank reads negative.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MemoryDrift {
-    // Bytes the tracked heap has moved since the baseline.
+    /// Bytes the tracked heap has moved since the baseline.
     pub heap_growth_bytes: i64,
-    // Bytes of resident-set movement the tracked heap does not account for.
+    /// Bytes of resident-set movement the tracked heap does not account for.
     pub outside_heap_growth_bytes: i64,
-    // Seconds the movement is measured over, so a growth figure has a rate
-    // behind it: 400 MB over three hours and over three minutes are different
-    // problems.
+    /// Seconds the movement is measured over, so a growth figure has a rate
+    /// behind it: 400 MB over three hours and over three minutes are different
+    /// problems.
     pub window_secs: u64,
+    /// Which term (if any) is still growing.
     pub verdict: DriftVerdict,
 }
 
@@ -96,7 +98,7 @@ struct Baseline {
 // nothing until the session settles, because a drift measured from a startup
 // figure is noise wearing a number's clothes.
 #[derive(Debug, Default)]
-pub struct DriftTracker {
+pub(crate) struct DriftTracker {
     baseline: Option<Baseline>,
     // Previous RSS, for the settle test that runs before a baseline exists.
     last_rss: Option<u64>,
@@ -112,7 +114,7 @@ pub struct DriftTracker {
 
 impl DriftTracker {
     // Fold one sample in, returning the drift once a baseline exists.
-    pub fn sample(
+    pub(crate) fn sample(
         &mut self,
         rss_bytes: u64,
         heap_live_bytes: u64,

@@ -33,7 +33,7 @@ use super::texture::{self, *};
 impl VkContext {
     // Construct a fresh context, acquiring its own OS window + Vulkan
     // instance / device / surface / swapchain.
-    pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 

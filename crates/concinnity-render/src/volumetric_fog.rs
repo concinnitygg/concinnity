@@ -1,8 +1,6 @@
-// src/volumetric_fog.rs
-//
-// Backend-agnostic resolution of the authored `VolumetricFog` asset into a
-// clamped settings struct plus the per-frame `FogParams` uniform the Metal
-// fog fragment shader consumes. Pure CPU; unit-testable without a GPU.
+//! Backend-agnostic resolution of the authored `VolumetricFog` asset into a
+//! clamped settings struct plus the per-frame `FogParams` uniform the Metal
+//! fog fragment shader consumes. Pure CPU; unit-testable without a GPU.
 
 use crate::render_types::FogParams;
 
@@ -27,23 +25,30 @@ const MIN_DISTANCE: f32 = 1.0;
 // cannot poison the reciprocal the shader uses to convert screen to NDC.
 const MIN_VIEWPORT: f32 = 1.0;
 
-// Resolved and clamped fog tunables, threaded into the backend at init.
-// `None` from `FogSettings::resolve_optional` means the world declared no
-// `VolumetricFog`: the renderer then skips the fog pass entirely.
+/// Resolved and clamped fog tunables, threaded into the backend at init.
+/// `None` from `FogSettings::resolve_optional` means the world declared no
+/// `VolumetricFog`: the renderer then skips the fog pass entirely.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FogSettings {
+    /// Linear RGB colour.
     pub color: [f32; 3],
+    /// Fog density at the height reference.
     pub density: f32,
+    /// How fast density falls off with height.
     pub height_falloff: f32,
+    /// World height at which density equals `density`.
     pub height_reference: f32,
+    /// Furthest world distance the march travels.
     pub max_distance: f32,
+    /// Henyey-Greenstein anisotropy in `(-1, 1)`; 0 is isotropic.
     pub phase_g: f32,
+    /// Ambient radiance added to the in-scattered term.
     pub ambient: f32,
 }
 
 impl FogSettings {
-    // Clamp the authored fields into a safe range. Mirrors `VolumetricFog::from_args`;
-    // those clamps are the asset-side floor; this is the gfx-side ceiling.
+    /// Clamp the authored fields into a safe range. Mirrors `VolumetricFog::from_args`;
+    /// those clamps are the asset-side floor; this is the gfx-side ceiling.
     pub fn resolve(
         color: [f32; 3],
         density: f32,
@@ -72,12 +77,12 @@ impl FogSettings {
         }
     }
 
-    // Build the per-frame GPU uniform from these settings and the active
-    // camera. `inv_vp` is the inverse view-projection used to reconstruct
-    // world positions from depth; `cam_pos` is the camera origin; `sun_dir`
-    // and `sun_color` are the first directional light's direction (toward
-    // the light) and `intensity * colour`. `viewport` is the HDR resolve
-    // target's pixel dimensions.
+    /// Build the per-frame GPU uniform from these settings and the active
+    /// camera. `inv_vp` is the inverse view-projection used to reconstruct
+    /// world positions from depth; `cam_pos` is the camera origin; `sun_dir`
+    /// and `sun_color` are the first directional light's direction (toward
+    /// the light) and `intensity * colour`. `viewport` is the HDR resolve
+    /// target's pixel dimensions.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn params(
         &self,

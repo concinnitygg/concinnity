@@ -944,7 +944,7 @@ impl DxContext {
     // that never declared an emitter pays zero pipeline cost until the
     // first add. Reuses tombstoned slots from a prior `remove_emitter`
     // before growing the vec.
-    pub fn add_emitter(&mut self, record: ParticleEmitterRecord) -> Result<usize, String> {
+    pub(crate) fn add_emitter(&mut self, record: ParticleEmitterRecord) -> Result<usize, String> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
                 &self.alloc,
@@ -999,7 +999,7 @@ impl DxContext {
     // the D3D12 driver keeps them alive until any in-flight command list
     // that referenced them completes, so this is safe to call mid-frame
     // between encode passes.
-    pub fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
         let rec_slot = self
             .particle
             .records

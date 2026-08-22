@@ -1,24 +1,22 @@
-// src/gfx/settings.rs
-//
-// The ordered option labels for every user-facing cycle setting, shared by the
-// client renderer and the build pipeline. The client's settings drain reads a
-// key's labels to display + persist the chosen value; the cook reads the label
-// count to decide whether a settings row expands into a `<`/`>` stepper (two
-// options) or a click-to-open dropdown (more than two). Keeping the labels here
-// (not duplicated per crate) means the two never drift on a setting's option
-// count. How a chosen option is applied stays in the client, keyed by the same
-// string.
+//! The ordered option labels for every user-facing cycle setting, shared by the
+//! client renderer and the build pipeline. The client's settings drain reads a
+//! key's labels to display + persist the chosen value; the cook reads the label
+//! count to decide whether a settings row expands into a `<`/`>` stepper (two
+//! options) or a click-to-open dropdown (more than two). Keeping the labels here
+//! (not duplicated per crate) means the two never drift on a setting's option
+//! count. How a chosen option is applied stays in the client, keyed by the same
+//! string.
 
 // Ordered option labels for `vsync`: index 0 is off, index 1 is on.
-pub const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];
-// Shared Off/On labels for the boolean quality toggles. Index 0 is off, 1 on,
-// so `bool as usize` indexes directly.
+pub(crate) const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];
+/// Shared Off/On labels for the boolean quality toggles. Index 0 is off, 1 on,
+/// so `bool as usize` indexes directly.
 pub const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];
 
-// The quality-feature toggle keys (Video "Quality" group). Each gates a render
-// pass whose GPU resources are built at init, so a change rebuilds those
-// resources (live on Metal; persisted + applied at the next launch elsewhere).
-// The client maps each key to the `PostProcessConfig` field it flips.
+/// The quality-feature toggle keys (Video "Quality" group). Each gates a render
+/// pass whose GPU resources are built at init, so a change rebuilds those
+/// resources (live on Metal; persisted + applied at the next launch elsewhere).
+/// The client maps each key to the `PostProcessConfig` field it flips.
 pub const QUALITY_TOGGLE_KEYS: [&str; 5] = [
     "ssao",
     "ssr",
@@ -27,82 +25,82 @@ pub const QUALITY_TOGGLE_KEYS: [&str; 5] = [
     "auto_exposure",
 ];
 
-// Whether `key` is one of the boolean quality toggles.
+/// Whether `key` is one of the boolean quality toggles.
 pub fn is_quality_toggle(key: &str) -> bool {
     QUALITY_TOGGLE_KEYS.contains(&key)
 }
 
-// Window mode options, in cycle order.
+/// Window mode options, in cycle order.
 pub const WINDOW_MODE_OPTIONS: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 // Render-scale (upscaling quality) options, in cycle order.
-pub const RENDER_SCALE_OPTIONS: [&str; 4] = ["Quality", "Balanced", "Performance", "Ultra"];
-// Upscaler-backend options, in cycle order matching the UpscalerBackend enum
-// (Auto / FSR3 / DLSS / XeSS). DirectX / Vulkan only (Metal uses MetalFX).
+pub(crate) const RENDER_SCALE_OPTIONS: [&str; 4] = ["Quality", "Balanced", "Performance", "Ultra"];
+/// Upscaler-backend options, in cycle order matching the UpscalerBackend enum
+/// (Auto / FSR3 / DLSS / XeSS). DirectX / Vulkan only (Metal uses MetalFX).
 pub const UPSCALE_BACKEND_OPTIONS: [&str; 4] = ["Auto", "FSR 3", "DLSS", "XeSS"];
 
 // Frame-rate cap options (Video Display group), in cycle order. "Unlimited" is
 // no cap; the rest are target FPS. The client pairs these with the numeric caps.
-pub const FPS_CAP_OPTIONS: [&str; 6] = ["Unlimited", "30", "60", "120", "144", "240"];
+pub(crate) const FPS_CAP_OPTIONS: [&str; 6] = ["Unlimited", "30", "60", "120", "144", "240"];
 
-// SSGI gather sub-quality dropdowns, in cycle order. Resolution is finest-first
-// (Full/Half/Quarter), matching the enum.
+/// SSGI gather sub-quality dropdowns, in cycle order. Resolution is finest-first
+/// (Full/Half/Quarter), matching the enum.
 pub const SSGI_RESOLUTION_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
-pub const SSGI_RAYS_OPTIONS: [&str; 4] = ["4", "8", "16", "32"];
-pub const SSGI_STEPS_OPTIONS: [&str; 4] = ["8", "12", "24", "48"];
-// Reflection blur resolution options, finest-first (matches the enum).
+pub(crate) const SSGI_RAYS_OPTIONS: [&str; 4] = ["4", "8", "16", "32"];
+pub(crate) const SSGI_STEPS_OPTIONS: [&str; 4] = ["8", "12", "24", "48"];
+/// Reflection blur resolution options, finest-first (matches the enum).
 pub const REFLECTION_BLUR_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
 
-// Anti-aliasing mode options, in cycle order matching the AaMode enum: Off,
-// FXAA (cheap composite edge filter), TAA (temporal accumulation). Ascending
-// cost, so the index doubles as the aggressiveness rank the preset clamps.
+/// Anti-aliasing mode options, in cycle order matching the AaMode enum: Off,
+/// FXAA (cheap composite edge filter), TAA (temporal accumulation). Ascending
+/// cost, so the index doubles as the aggressiveness rank the preset clamps.
 pub const AA_MODE_OPTIONS: [&str; 3] = ["Off", "FXAA", "TAA"];
 
 // Shadow-map cascade resolution options (texels), in cycle order. "Off"
 // disables shadows; the rest are the per-cascade texel dimensions.
-pub const SHADOW_RESOLUTION_OPTIONS: [&str; 4] = ["Off", "1024", "2048", "4096"];
-// Shadow re-render cadence options, best (most expensive) first.
+pub(crate) const SHADOW_RESOLUTION_OPTIONS: [&str; 4] = ["Off", "1024", "2048", "4096"];
+/// Shadow re-render cadence options, best (most expensive) first.
 pub const SHADOW_UPDATE_OPTIONS: [&str; 2] = ["Every Frame", "Hybrid"];
 // Shadow-distance options (world units the cascades cover), in cycle order.
-pub const SHADOW_DISTANCE_OPTIONS: [&str; 4] = ["40 m", "80 m", "160 m", "320 m"];
+pub(crate) const SHADOW_DISTANCE_OPTIONS: [&str; 4] = ["40 m", "80 m", "160 m", "320 m"];
 // Shadow cascade-count options, in cycle order.
-pub const SHADOW_CASCADES_OPTIONS: [&str; 3] = ["2", "3", "4"];
+pub(crate) const SHADOW_CASCADES_OPTIONS: [&str; 3] = ["2", "3", "4"];
 // Anisotropic-filtering degree options for the scene sampler, in cycle order.
 // "Off" is 1x (plain trilinear); the rest are the max anisotropy degree.
-pub const ANISOTROPY_OPTIONS: [&str; 5] = ["Off", "2x", "4x", "8x", "16x"];
-// Frame-buffering (ring-buffer depth / frames-in-flight) options, in cycle
-// order. Lower is less latency, higher is smoother pacing.
+pub(crate) const ANISOTROPY_OPTIONS: [&str; 5] = ["Off", "2x", "4x", "8x", "16x"];
+/// Frame-buffering (ring-buffer depth / frames-in-flight) options, in cycle
+/// order. Lower is less latency, higher is smoother pacing.
 pub const FRAME_BUFFERING_OPTIONS: [&str; 3] = ["1", "2", "3"];
 // Texture-quality options, in cycle order (drive the streaming pool cap + the
 // per-frame upload budget on the client).
-pub const TEXTURE_QUALITY_OPTIONS: [&str; 4] = ["Low", "Medium", "High", "Ultra"];
+pub(crate) const TEXTURE_QUALITY_OPTIONS: [&str; 4] = ["Low", "Medium", "High", "Ultra"];
 
-// Master "Graphics Quality" preset options, in cycle order. The labels mirror
-// `QualityPreset::ALL`'s order (locked by a client test); the `Auto` row is
-// relabeled with its resolved tier by the client, which this static table
-// cannot express.
+/// Master "Graphics Quality" preset options, in cycle order. The labels mirror
+/// `QualityPreset::ALL`'s order (locked by a client test); the `Auto` row is
+/// relabeled with its resolved tier by the client, which this static table
+/// cannot express.
 pub const GRAPHICS_QUALITY_OPTIONS: [&str; 6] =
     ["Auto", "Low", "Medium", "High", "Ultra", "Custom"];
 
 // Volume options shared by the master and per-bus volume rows, in cycle
 // order. The client maps each to a linear gain.
-pub const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
+pub(crate) const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
 
 // Settings whose option list is enumerated from the hardware at runtime, so
 // this static registry cannot hold their labels. Each still renders as a
 // click-to-open dropdown row; the client seeds the floating list from the
 // enumerated values. `resolution` lists the display modes (width x height at
 // refresh rate) the current display supports.
-pub const DYNAMIC_DROPDOWN_KEYS: [&str; 1] = ["resolution"];
+pub(crate) const DYNAMIC_DROPDOWN_KEYS: [&str; 1] = ["resolution"];
 
-// Whether `key`'s options are enumerated at runtime (a dropdown row with no
-// static label table; `options` returns `None` for it).
+/// Whether `key`'s options are enumerated at runtime (a dropdown row with no
+/// static label table; `options` returns `None` for it).
 pub fn is_dynamic_dropdown(key: &str) -> bool {
     DYNAMIC_DROPDOWN_KEYS.contains(&key)
 }
 
-// The option labels for a known setting key, or `None` if the key is unknown
-// (a slider or rebind key, or a typo). A key with more than two labels renders
-// as a dropdown; two labels render as a `<`/`>` stepper.
+/// The option labels for a known setting key, or `None` if the key is unknown
+/// (a slider or rebind key, or a typo). A key with more than two labels renders
+/// as a dropdown; two labels render as a `<`/`>` stepper.
 pub fn options(key: &str) -> Option<&'static [&'static str]> {
     match key {
         "graphics_quality" => Some(&GRAPHICS_QUALITY_OPTIONS),

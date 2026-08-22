@@ -1,15 +1,13 @@
-// concinnity-bench/src/lib.rs
-//
-// The harness behind the workspace's `cargo bench` targets. It times a body
-// over calibrated iteration counts, then re-runs it between snapshots of the
-// engine's own memory instruments: the tracked heap for allocation counts and
-// live-byte deltas, and the tagged ledger for host/device bytes. No external
-// bench framework, so every number comes from accounting the engine ships with.
-//
-// A benchmark body is the measured unit; `items` says how many units of work
-// one call performs (entities scanned, lookups made) so the report can state
-// per-item costs. Bodies must be deterministic and self-contained: whatever a
-// body builds it should also tear down, or the heap column will show the drift.
+//! The harness behind the workspace's `cargo bench` targets. It times a body
+//! over calibrated iteration counts, then re-runs it between snapshots of the
+//! engine's own memory instruments: the tracked heap for allocation counts and
+//! live-byte deltas, and the tagged ledger for host/device bytes. No external
+//! bench framework, so every number comes from accounting the engine ships with.
+//!
+//! A benchmark body is the measured unit; `items` says how many units of work
+//! one call performs (entities scanned, lookups made) so the report can state
+//! per-item costs. Bodies must be deterministic and self-contained: whatever a
+//! body builds it should also tear down, or the heap column will show the drift.
 
 use std::time::Instant;
 
@@ -33,6 +31,7 @@ const TIME_BUDGET_NS: u128 = 3_000_000_000;
 pub struct Rng(u64);
 
 impl Rng {
+    /// A generator seeded with `seed`; zero is replaced by a fixed constant.
     pub fn new(seed: u64) -> Rng {
         // Xorshift has a zero fixed point; substitute a fixed odd constant.
         Rng(if seed == 0 {
@@ -42,6 +41,7 @@ impl Rng {
         })
     }
 
+    /// The next 64-bit value.
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
@@ -51,10 +51,12 @@ impl Rng {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
+    /// A value in `0..n`.
     pub fn below(&mut self, n: usize) -> usize {
         (self.next_u64() % n as u64) as usize
     }
 
+    /// Shuffle `items` in place.
     pub fn shuffle<T>(&mut self, items: &mut [T]) {
         for i in (1..items.len()).rev() {
             let j = self.below(i + 1);
@@ -66,14 +68,23 @@ impl Rng {
 /// One finished measurement: per-iteration timing percentiles plus the heap
 /// and ledger traffic one iteration causes.
 pub struct Record {
+    /// The benchmark's name.
     pub name: String,
+    /// Items processed per iteration.
     pub items: u64,
+    /// Iterations timed.
     pub iters: u64,
+    /// Median per-iteration time in nanoseconds.
     pub median_ns: f64,
+    /// 95th-percentile per-iteration time in nanoseconds.
     pub p95_ns: f64,
+    /// Allocations per iteration.
     pub allocs_per_iter: f64,
+    /// Frees per iteration.
     pub frees_per_iter: f64,
+    /// Heap bytes allocated per iteration.
     pub heap_bytes_per_iter: f64,
+    /// Device bytes reported per iteration.
     pub device_bytes_per_iter: f64,
 }
 

@@ -1,18 +1,16 @@
-// build.rs
-//
-// The device-backend crate (rlib). Three jobs, all delegated to the shared
-// concinnity-toolchain build helper:
-//
-// 1. Resolve the rendering backend once and expose it as a single cfg the crate
-//    gates on (backend_metal / backend_dx / backend_vk).
-//
-// 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
-//    This crate produces only an rlib (consumed by the client) plus its own test
-//    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
-//    to whichever package owns the final artifact): BinaryTargets::None.
-//
-// 3. Derive the hash of the shader-compile sources that `shader_cache` folds
-//    into every artifact key (see `emit_shader_compile_source_hash`).
+//! The device-backend crate (rlib). Three jobs, all delegated to the shared
+//! concinnity-toolchain build helper:
+//!
+//! 1. Resolve the rendering backend once and expose it as a single cfg the crate
+//!    gates on (backend_metal / backend_dx / backend_vk).
+//!
+//! 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
+//!    This crate produces only an rlib (consumed by the client) plus its own test
+//!    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
+//!    to whichever package owns the final artifact): BinaryTargets::None.
+//!
+//! 3. Derive the hash of the shader-compile sources that `shader_cache` folds
+//!    into every artifact key (see `emit_shader_compile_source_hash`).
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{

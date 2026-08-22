@@ -29,6 +29,7 @@ use crate::tag::{MemTag, Realm};
 // the engine stores.
 const ARENA_ALIGN: usize = 64;
 
+/// A bump allocator over one fixed reservation, reset as a whole.
 pub struct Arena {
     ptr: NonNull<u8>,
     cap: usize,
@@ -48,15 +49,15 @@ pub struct Arena {
 // lint is right about the general case and wrong about this one.
 #[allow(clippy::mut_from_ref)]
 impl Arena {
-    // Reserve `bytes` up front. The buffer is taken from the global allocator
-    // once and held until the arena drops; nothing here allocates again.
+    /// Reserve `bytes` up front. The buffer is taken from the global allocator
+    /// once and held until the arena drops; nothing here allocates again.
     pub fn with_capacity(bytes: usize) -> Self {
         Self::new(bytes, None)
     }
 
-    // As `with_capacity`, reporting the reservation under `tag` in host memory
-    // for as long as the arena lives. An arena's whole cost is its reservation,
-    // so it can account for itself rather than making its owner do it.
+    /// As `with_capacity`, reporting the reservation under `tag` in host memory
+    /// for as long as the arena lives. An arena's whole cost is its reservation,
+    /// so it can account for itself rather than making its owner do it.
     pub fn tagged(bytes: usize, tag: MemTag) -> Self {
         crate::ledger().add(tag, Realm::Host, bytes as u64);
         Self::new(bytes, Some(tag))
@@ -89,45 +90,49 @@ impl Arena {
         }
     }
 
+    /// The reservation size in bytes.
     pub fn capacity(&self) -> usize {
         self.cap
     }
 
+    /// Bytes handed out since the last reset.
     pub fn used(&self) -> usize {
         self.used.get()
     }
 
+    /// Bytes still available before the next request is declined.
     pub fn remaining(&self) -> usize {
         self.cap - self.used.get()
     }
 
-    // The most this arena has held between resets: what to size it from.
+    /// The most this arena has held between resets: what to size it from.
     pub fn peak(&self) -> usize {
         self.peak.get()
     }
 
-    // Requests declined since the last `clear_overflows`. Non-zero means
-    // callers fell back to the heap and the reserve wants raising.
+    /// Requests declined since the last `clear_overflows`. Non-zero means
+    /// callers fell back to the heap and the reserve wants raising.
     pub fn overflows(&self) -> u32 {
         self.overflows.get()
     }
 
+    /// Reset the overflow counter.
     pub fn clear_overflows(&self) {
         self.overflows.set(0);
     }
 
-    // Give back everything handed out. Taking `&mut self` is the safety
-    // argument: no allocation from this arena can still be borrowed.
-    //
-    // Deliberately leaves `peak` and `overflows` alone: both describe the worst
-    // frame so far, which is what sizes the reserve, and a per-frame reset would
-    // erase exactly the evidence they exist to carry.
+    /// Give back everything handed out. Taking `&mut self` is the safety
+    /// argument: no allocation from this arena can still be borrowed.
+    ///
+    /// Deliberately leaves `peak` and `overflows` alone: both describe the worst
+    /// frame so far, which is what sizes the reserve, and a per-frame reset would
+    /// erase exactly the evidence they exist to carry.
     pub fn reset(&mut self) {
         self.used.set(0);
     }
 
-    // Move `value` into the arena. `None` when the arena is full, which is the
-    // caller's cue to fall back to the heap rather than a failure.
+    /// Move `value` into the arena. `None` when the arena is full, which is the
+    /// caller's cue to fall back to the heap rather than a failure.
     pub fn alloc<T: Copy>(&self, value: T) -> Option<&mut T> {
         let ptr = self.bump(size_of::<T>(), align_of::<T>())?.cast::<T>();
         // SAFETY: `bump` returned a region of `size_of::<T>()` bytes aligned for
@@ -140,7 +145,7 @@ impl Arena {
         }
     }
 
-    // A slice of `len` copies of `value`.
+    /// A slice of `len` copies of `value`.
     pub fn alloc_slice<T: Copy>(&self, len: usize, value: T) -> Option<&mut [T]> {
         let slice = self.uninit_slice::<T>(len)?;
         for slot in slice.iter_mut() {
@@ -151,7 +156,8 @@ impl Arena {
     }
 
     // A copy of `src` in the arena.
-    pub fn alloc_slice_copy<T: Copy>(&self, src: &[T]) -> Option<&mut [T]> {
+    #[cfg(test)]
+    pub(crate) fn alloc_slice_copy<T: Copy>(&self, src: &[T]) -> Option<&mut [T]> {
         let slice = self.uninit_slice::<T>(src.len())?;
         for (slot, value) in slice.iter_mut().zip(src) {
             slot.write(*value);
@@ -161,8 +167,8 @@ impl Arena {
         Some(unsafe { assume_init_mut(slice) })
     }
 
-    // An empty vector holding `capacity` elements' worth of arena. Pushing past
-    // that capacity does not grow -- the caller reserves the bound it knows.
+    /// An empty vector holding `capacity` elements' worth of arena. Pushing past
+    /// that capacity does not grow -- the caller reserves the bound it knows.
     pub fn vec<T: Copy>(&self, capacity: usize) -> Option<ArenaVec<'_, T>> {
         Some(ArenaVec {
             buf: self.uninit_slice::<T>(capacity)?,
@@ -233,32 +239,35 @@ impl Drop for Arena {
 // threads bumping the same cursor.
 unsafe impl Send for Arena {}
 
-// A vector over a reservation in an arena: pushes cost a write, and the whole
-// thing disappears when the arena resets.
+/// A vector over a reservation in an arena: pushes cost a write, and the whole
+/// thing disappears when the arena resets.
 pub struct ArenaVec<'a, T: Copy> {
     buf: &'a mut [MaybeUninit<T>],
     len: usize,
 }
 
 impl<T: Copy> ArenaVec<'_, T> {
+    /// Elements appended so far.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether nothing has been appended.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// The fixed reservation, in elements.
     pub fn capacity(&self) -> usize {
         self.buf.len()
     }
 
-    pub fn is_full(&self) -> bool {
+    pub(crate) fn is_full(&self) -> bool {
         self.len == self.buf.len()
     }
 
-    // Append `value`, reporting whether it fit. The reservation is fixed, so a
-    // `false` means the caller reserved less than it pushed.
+    /// Append `value`, reporting whether it fit. The reservation is fixed, so a
+    /// `false` means the caller reserved less than it pushed.
     #[must_use]
     pub fn push(&mut self, value: T) -> bool {
         if self.is_full() {
@@ -269,8 +278,8 @@ impl<T: Copy> ArenaVec<'_, T> {
         true
     }
 
-    // Append until the iterator ends or the reservation fills, returning how
-    // many were appended.
+    /// Append until the iterator ends or the reservation fills, returning how
+    /// many were appended.
     pub fn extend(&mut self, values: impl IntoIterator<Item = T>) -> usize {
         let before = self.len;
         for value in values {
@@ -281,15 +290,18 @@ impl<T: Copy> ArenaVec<'_, T> {
         self.len - before
     }
 
+    /// Drop every appended element, keeping the reservation.
     pub fn clear(&mut self) {
         self.len = 0;
     }
 
+    /// The appended elements.
     pub fn as_slice(&self) -> &[T] {
         // SAFETY: the first `len` elements were written by `push`.
         unsafe { assume_init_ref(&self.buf[..self.len]) }
     }
 
+    /// The appended elements, mutably.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         // SAFETY: the first `len` elements were written by `push`.
         unsafe { assume_init_mut(&mut self.buf[..self.len]) }

@@ -9,8 +9,8 @@ use core::fmt;
 
 use rapier3d::prelude::SharedShape;
 
-// A character's collision capsule, cached next to the dimensions it was built
-// from.
+/// A character's collision capsule, cached next to the dimensions it was built
+/// from.
 #[derive(Clone)]
 pub struct CharacterShape {
     // Cylinder half-height, excluding the hemisphere caps.
@@ -20,8 +20,8 @@ pub struct CharacterShape {
 }
 
 impl CharacterShape {
-    // Build the capsule for a cylinder of `2 * half_height` capped by
-    // hemispheres of `radius`.
+    /// Build the capsule for a cylinder of `2 * half_height` capped by
+    /// hemispheres of `radius`.
     pub fn capsule(half_height: f32, radius: f32) -> Self {
         Self {
             half_height,
@@ -30,8 +30,8 @@ impl CharacterShape {
         }
     }
 
-    // Adopt new dimensions, rebuilding the capsule only when they differ from
-    // the cached one's.
+    /// Adopt new dimensions, rebuilding the capsule only when they differ from
+    /// the cached one's.
     pub fn resize(&mut self, half_height: f32, radius: f32) {
         if self.half_height == half_height && self.radius == radius {
             return;

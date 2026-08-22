@@ -98,7 +98,7 @@ pub(crate) struct AppKitWindowParts {
     pub title_bar: bool,
     pub pump_events: bool,
     pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+    pub(crate) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
 }
 
 // The window-side handles a live world reload transplants onto the rebuilt
@@ -109,7 +109,7 @@ pub(crate) struct WindowHandles {
     pub window: Option<Retained<NSWindow>>,
     pub pump_events: bool,
     pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+    pub(crate) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
 }
 
 impl AppKitWindow {

@@ -25,19 +25,28 @@ use crate::ecs::{Component, PayloadLocator, TextureHandle};
 /// ```
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Room {
+    /// Assigned by the loader; not authored.
     pub asset_id: AssetId,
+    /// Half the room's width in world units.
     pub half_width: f32,
+    /// Half the room's depth in world units.
     pub half_depth: f32,
+    /// Floor-to-ceiling height in world units.
     pub ceiling_height: f32,
+    /// Texture applied to every surface unless a surface overrides it.
     pub texture: Option<TextureHandle>,
+    /// Texture for the four walls.
     pub wall_texture: Option<TextureHandle>,
+    /// Texture for the floor.
     pub floor_texture: Option<TextureHandle>,
+    /// Texture for the ceiling.
     pub ceiling_texture: Option<TextureHandle>,
+    /// The generated geometry's place in the blob, injected at load.
     pub locator: Option<PayloadLocator>,
 }
 
 impl Room {
-    // Returns the first set texture reference across all texture fields.
+    /// Returns the first set texture reference across all texture fields.
     pub fn effective_texture(&self) -> Option<TextureHandle> {
         [
             self.texture,
@@ -52,9 +61,9 @@ impl Room {
 }
 
 impl Room {
-    // Translate the authored args into the runtime room: resolve the `size`
-    // shorthand into half extents. Run by cook at build time (the baked blob
-    // record carries the result).
+    /// Translate the authored args into the runtime room: resolve the `size`
+    /// shorthand into half extents. Run by cook at build time (the baked blob
+    /// record carries the result).
     pub fn bake(args: RoomArgs) -> Self {
         let (half_width, half_depth, ceiling_height) = if let Some([w, d, h]) = args.size {
             (w / 2.0, d / 2.0, h)

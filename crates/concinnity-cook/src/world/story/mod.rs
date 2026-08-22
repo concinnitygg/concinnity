@@ -25,10 +25,10 @@ use emit::emit_story;
 use image::probe_image_dims;
 use parse::parse_story;
 
-// Validate Markdown story source without expanding it: the same parse +
-// graph-validation pass `expand_stories` runs, minus asset emission. Lets an
-// authoring front end (the editor's Story panel) reject a broken story before
-// writing it to disk.
+/// Validate Markdown story source without expanding it: the same parse +
+/// graph-validation pass `expand_stories` runs, minus asset emission. Lets an
+/// authoring front end (the editor's Story panel) reject a broken story before
+/// writing it to disk.
 pub fn validate_story_source(src: &str) -> Result<(), String> {
     parse_story(src).map(|_| ())
 }

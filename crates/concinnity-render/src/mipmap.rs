@@ -1,34 +1,35 @@
-// src/mipmap.rs
-//
-// Backend-agnostic mip-chain generation for streamed RGBA8 textures. Each
-// backend's texture upload calls `generate_mip_chain` and uploads every level,
-// so albedo and normal maps minify through a proper trilinear chain instead of
-// aliasing from a single mip-0 sample at a distance.
-//
-// Levels are produced by a 2x2 box filter in stored (RGBA8) space, halving each
-// axis with floor division so every level's dimensions match the GPU mip
-// convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
-// the image's allocated mip levels on all three backends.
+//! Backend-agnostic mip-chain generation for streamed RGBA8 textures. Each
+//! backend's texture upload calls `generate_mip_chain` and uploads every level,
+//! so albedo and normal maps minify through a proper trilinear chain instead of
+//! aliasing from a single mip-0 sample at a distance.
+//!
+//! Levels are produced by a 2x2 box filter in stored (RGBA8) space, halving each
+//! axis with floor division so every level's dimensions match the GPU mip
+//! convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
+//! the image's allocated mip levels on all three backends.
 
-// One level of a mip chain: dimensions plus tightly packed RGBA8 pixels
-// (`width * height * 4` bytes, no row padding).
+/// One level of a mip chain: dimensions plus tightly packed RGBA8 pixels
+/// (`width * height * 4` bytes, no row padding).
 pub struct MipLevel {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Row-major pixels of this level.
     pub pixels: Vec<u8>,
 }
 
 // Number of mip levels for a `width` x `height` texture: the full chain down to
 // 1x1, i.e. floor(log2(max(w, h))) + 1.
-pub fn mip_level_count(width: u32, height: u32) -> u32 {
+pub(crate) fn mip_level_count(width: u32, height: u32) -> u32 {
     let max_dim = width.max(height).max(1);
     32 - max_dim.leading_zeros()
 }
 
-// Build the full mip chain for a `width` x `height` RGBA8 image. Level 0 is the
-// input copied verbatim; each subsequent level halves both axes (floored, min 1)
-// and box-filters the level above it. `rgba8` must hold at least
-// `width * height * 4` bytes (the backend uploads validate this before calling).
+/// Build the full mip chain for a `width` x `height` RGBA8 image. Level 0 is the
+/// input copied verbatim; each subsequent level halves both axes (floored, min 1)
+/// and box-filters the level above it. `rgba8` must hold at least
+/// `width * height * 4` bytes (the backend uploads validate this before calling).
 pub fn generate_mip_chain(width: u32, height: u32, rgba8: &[u8]) -> Vec<MipLevel> {
     let count = mip_level_count(width, height);
     let base_len = width as usize * height as usize * 4;

@@ -1,17 +1,15 @@
-// examples/bistro/main.rs
-//
-// Standalone host for the Amazon Lumberyard Bistro showcase. On first run it
-// fetches the Bistro asset pack into examples/bistro/assets/ (~833 MB), then
-// compiles the world in `world.rs` in memory and plays it through the runtime
-// renderer. Subsequent runs find the assets already present and skip the fetch.
-//
-// The fetch is a runtime preflight, not a build step: `cargo build` never
-// touches the network, and the download happens once, the first time someone
-// runs the example.
-//
-// The renderer is heavy here (2.8M triangles, ray-traced reflections, SSGI).
-// Run in release for full frame rate:
-// `cargo run --example bistro --release`.
+//! Standalone host for the Amazon Lumberyard Bistro showcase. On first run it
+//! fetches the Bistro asset pack into examples/bistro/assets/ (~833 MB), then
+//! compiles the world in `world.rs` in memory and plays it through the runtime
+//! renderer. Subsequent runs find the assets already present and skip the fetch.
+//!
+//! The fetch is a runtime preflight, not a build step: `cargo build` never
+//! touches the network, and the download happens once, the first time someone
+//! runs the example.
+//!
+//! The renderer is heavy here (2.8M triangles, ray-traced reflections, SSGI).
+//! Run in release for full frame rate:
+//! `cargo run --example bistro --release`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,10 +27,11 @@ concinnity::install_global_allocator!();
 // already-downloaded archive to skip the download entirely.
 const BISTRO_URL: &str = "https://developer.nvidia.com/bistro";
 
-// Files that must exist for the pack to count as present. Both ship inside the
-// same archive, and `world.rs` names the same paths as its asset sources, so
-// the content and this preflight cannot drift apart.
+/// Files that must exist for the pack to count as present. Both ship inside the
+/// same archive, and `world.rs` names the same paths as its asset sources, so
+/// the content and this preflight cannot drift apart.
 pub const FBX_REL: &str = "assets/Bistro_v5_2/BistroExterior.fbx";
+/// Path to the pack's HDR environment map, relative to the world.
 pub const HDR_REL: &str = "assets/Bistro_v5_2/san_giuseppe_bridge_4k.hdr";
 
 fn main() -> io::Result<()> {

@@ -1,20 +1,18 @@
-// src/parallel_ctx.rs
-//
-// Generic Send/Sync shim for parallel per-pass command recording, shared by all
-// three backend executors (`{metal,directx,vulkan}/graph_exec.rs`). Each backend
-// fans its non-composite render-graph passes onto worker threads; every worker
-// records into its own command buffer/list and reaches the immutable subset of
-// the backend context it needs through a `ParallelCtxRef`.
-//
-// The backend context types are not Send/Sync in Rust's type system: they hold
-// COM smart pointers, objc2 protocol objects, RefCells, and the like. The
-// graphics APIs nonetheless permit shared, read-only access to device-derived
-// resources from many threads. A backend adopts that claim for its own context
-// type with a single `unsafe impl ParallelEncodeCtx`, where it documents the
-// audit of every interior-mutable field reachable during encode. The Send/Sync
-// impls on `ParallelCtxRef` below are then keyed off that marker, so the unsafe
-// reasoning lives in one auditable place per backend instead of being repeated
-// on three structurally identical wrapper types.
+//! Generic Send/Sync shim for parallel per-pass command recording, shared by all
+//! three backend executors (`{metal,directx,vulkan}/graph_exec.rs`). Each backend
+//! fans its non-composite render-graph passes onto worker threads; every worker
+//! records into its own command buffer/list and reaches the immutable subset of
+//! the backend context it needs through a `ParallelCtxRef`.
+//!
+//! The backend context types are not Send/Sync in Rust's type system: they hold
+//! COM smart pointers, objc2 protocol objects, RefCells, and the like. The
+//! graphics APIs nonetheless permit shared, read-only access to device-derived
+//! resources from many threads. A backend adopts that claim for its own context
+//! type with a single `unsafe impl ParallelEncodeCtx`, where it documents the
+//! audit of every interior-mutable field reachable during encode. The Send/Sync
+//! impls on `ParallelCtxRef` below are then keyed off that marker, so the unsafe
+//! reasoning lives in one auditable place per backend instead of being repeated
+//! on three structurally identical wrapper types.
 
 /// Marker for a backend context that may be shared, read-only, across the
 /// parallel-encode worker fan-out.
@@ -29,23 +27,25 @@
 /// `*/parallel_encoder.rs`).
 pub unsafe trait ParallelEncodeCtx {}
 
-// A handle to a `&'a T` borrow that is Send + Sync when `T: ParallelEncodeCtx`.
-// Worker closures use it to reach the immutable subset of the backend context
-// they need while recording commands into their own command buffer/list.
-//
-// The borrow is held directly, so its lifetime is enforced by the type. The
-// wrapper is only used inside each backend's parallel-encoder fan-out in
-// `graph_exec.rs`, which joins all workers before the outer borrow returns. The
-// Send/Sync claim rests entirely on the `T: ParallelEncodeCtx` marker.
+/// A handle to a `&'a T` borrow that is Send + Sync when `T: ParallelEncodeCtx`.
+/// Worker closures use it to reach the immutable subset of the backend context
+/// they need while recording commands into their own command buffer/list.
+///
+/// The borrow is held directly, so its lifetime is enforced by the type. The
+/// wrapper is only used inside each backend's parallel-encoder fan-out in
+/// `graph_exec.rs`, which joins all workers before the outer borrow returns. The
+/// Send/Sync claim rests entirely on the `T: ParallelEncodeCtx` marker.
 pub struct ParallelCtxRef<'a, T> {
     inner: &'a T,
 }
 
 impl<'a, T> ParallelCtxRef<'a, T> {
+    /// Wrap `ctx` so worker threads can share it.
     pub fn new(ctx: &'a T) -> Self {
         Self { inner: ctx }
     }
 
+    /// Borrow the wrapped context.
     pub fn as_ctx(&self) -> &T {
         self.inner
     }

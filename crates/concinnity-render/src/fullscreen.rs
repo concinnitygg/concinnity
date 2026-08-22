@@ -1,39 +1,37 @@
-// src/fullscreen.rs
-//
-// Backend-agnostic fullscreen-pass encoder seam, the first pilot of a hardware
-// abstraction layer over the three render backends. The bloom
-// prefilter -> downsample -> upsample chain is structurally identical on every
-// backend, so its orchestration lives here once and each backend implements
-// `BloomEncoder` to bind + draw one sub-pass in its own command stream.
-//
-// Two associated types absorb the only real divergence, so the trait names no
-// backend types: `Rec` hides the per-backend command recorder, and `Args`
-// carries the per-invocation binding context (DirectX passes the scene-colour
-// SRV its prefilter samples; Vulkan threads the frame-in-flight index that
-// selects its per-frame framebuffers + descriptor sets). Everything else each
-// impl reads from `&self`, consistent with the read-only parallel-encode
-// contract.
-//
-// Implemented by DirectX + Vulkan. Metal keeps its hand-rolled `encode_bloom`,
-// already factored through its own `fullscreen_pass`, so this seam is unused
-// (dead code) on a Metal build.
+//! Backend-agnostic fullscreen-pass encoder seam, the first pilot of a hardware
+//! abstraction layer over the three render backends. The bloom
+//! prefilter -> downsample -> upsample chain is structurally identical on every
+//! backend, so its orchestration lives here once and each backend implements
+//! `BloomEncoder` to bind + draw one sub-pass in its own command stream.
+//!
+//! Two associated types absorb the only real divergence, so the trait names no
+//! backend types: `Rec` hides the per-backend command recorder, and `Args`
+//! carries the per-invocation binding context (DirectX passes the scene-colour
+//! SRV its prefilter samples; Vulkan threads the frame-in-flight index that
+//! selects its per-frame framebuffers + descriptor sets). Everything else each
+//! impl reads from `&self`, consistent with the read-only parallel-encode
+//! contract.
+//!
+//! Implemented by DirectX + Vulkan. Metal keeps its hand-rolled `encode_bloom`,
+//! already factored through its own `fullscreen_pass`, so this seam is unused
+//! (dead code) on a Metal build.
 
 use crate::render_types::TextDrawCall;
 
-// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
-// units, already mapped through the overlay transform by
-// `gfx::text::band_to_window`) into an integer scissor rect `(x, y, w, h)` in
-// attachment pixels, clamped to the attachment's bounds. Returns `None` when the
-// clamped rectangle is empty (a row scrolled fully out of its band), so the
-// caller skips the draw entirely.
-//
-// `ui` is the overlay's logical size (see `RenderBackend::logical_size`) and
-// `attach` the pixel size of the target the text pass writes. The two are equal
-// wherever a window's logical units are pixels (Windows, unscaled X11), leaving
-// a pure clamp; on a hi-DPI surface (macOS retina, scaled Wayland) the
-// attachment is larger by the backing scale and the rect scales up with it. A
-// zero logical dimension (minimised / mid-resize) falls back to a 1.0 scale
-// rather than dividing by zero.
+/// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
+/// units, already mapped through the overlay transform by
+/// `gfx::text::band_to_window`) into an integer scissor rect `(x, y, w, h)` in
+/// attachment pixels, clamped to the attachment's bounds. Returns `None` when the
+/// clamped rectangle is empty (a row scrolled fully out of its band), so the
+/// caller skips the draw entirely.
+///
+/// `ui` is the overlay's logical size (see `RenderBackend::logical_size`) and
+/// `attach` the pixel size of the target the text pass writes. The two are equal
+/// wherever a window's logical units are pixels (Windows, unscaled X11), leaving
+/// a pure clamp; on a hi-DPI surface (macOS retina, scaled Wayland) the
+/// attachment is larger by the backing scale and the rect scales up with it. A
+/// zero logical dimension (minimised / mid-resize) falls back to a 1.0 scale
+/// rather than dividing by zero.
 pub fn clip_rect_to_scissor(
     clip: [f32; 4],
     ui: (f32, f32),
@@ -53,20 +51,20 @@ pub fn clip_rect_to_scissor(
     Some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-// Round `offset` up to the next multiple of `align` (a power of two).
+/// Round `offset` up to the next multiple of `align` (a power of two).
 pub fn align_up(offset: u64, align: u64) -> u64 {
     (offset + align - 1) & !(align - 1)
 }
 
-// Total bytes a frame's text geometry occupies in a backend's per-frame upload
-// buffer, once each label's vertex and index blocks start on an `align`-byte
-// boundary. Every sub-allocation aligns its start up and a prior aligned start
-// plus an aligned size stays aligned, so this sum is an exact upper bound on the
-// buffer cursor after all of a frame's blocks are appended: a slot reserved to
-// it can never overflow mid-frame.
-//
-// `align` is per backend: the alignment its buffer bindings require of a
-// sub-range's offset.
+/// Total bytes a frame's text geometry occupies in a backend's per-frame upload
+/// buffer, once each label's vertex and index blocks start on an `align`-byte
+/// boundary. Every sub-allocation aligns its start up and a prior aligned start
+/// plus an aligned size stays aligned, so this sum is an exact upper bound on the
+/// buffer cursor after all of a frame's blocks are appended: a slot reserved to
+/// it can never overflow mid-frame.
+///
+/// `align` is per backend: the alignment its buffer bindings require of a
+/// sub-range's offset.
 pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
     text_calls
         .iter()
@@ -78,27 +76,28 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
         .sum()
 }
 
+/// Per-backend hooks the shared bloom driver encodes through.
 pub trait BloomEncoder {
-    // Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
+    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
-    // Per-invocation binding context (DX scene-colour SRV handle, VK frame index).
+    /// Per-invocation binding context (DX scene-colour SRV handle, VK frame index).
     type Args;
 
-    // Number of bloom mips; zero means bloom is off and the driver no-ops.
+    /// Number of bloom mips; zero means bloom is off and the driver no-ops.
     fn bloom_mip_count(&self) -> usize;
-    // One-time per-encode preamble (DX root signature / heap / IA state; VK no-op).
+    /// One-time per-encode preamble (DX root signature / heap / IA state; VK no-op).
     fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args);
-    // Prefilter: scene colour -> mip 0 (soft-knee threshold + Karis average).
+    /// Prefilter: scene colour -> mip 0 (soft-knee threshold + Karis average).
     fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args);
-    // Downsample: mip `dst - 1` -> mip `dst`.
+    /// Downsample: mip `dst - 1` -> mip `dst`.
     fn bloom_downsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize);
-    // Upsample: mip `dst + 1` -> mip `dst`, additively blended.
+    /// Upsample: mip `dst + 1` -> mip `dst`, additively blended.
     fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize);
 }
 
-// The bloom chain orchestration, previously hand-duplicated in each backend's
-// `encode_bloom`. On return, mip 0 holds the accumulated glow the composite pass
-// samples.
+/// The bloom chain orchestration, previously hand-duplicated in each backend's
+/// `encode_bloom`. On return, mip 0 holds the accumulated glow the composite pass
+/// samples.
 pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args) {
     let n = enc.bloom_mip_count();
     if n == 0 {
@@ -117,59 +116,59 @@ pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args)
     }
 }
 
-// The composite pass: tonemap (+ optional LUT grade) the post-stack scene onto
-// the swapchain image, then layer the text overlay on top in the same pass. Its
-// begin -> composite-draw -> text-loop -> end shape is identical on every
-// backend; the swapchain target lifecycle, the descriptor binding, and the
-// text-geometry uploads stay backend-specific behind the trait. `Args`
-// carries the per-frame binding context each backend needs (DX: the swapchain
-// back-buffer + its RTV, the scene SRV, the window size, the frame slot; VK: the
-// acquired image index + the frame slot).
-//
-// Every backend uploads a frame's text geometry into one persistent buffer per
-// frame-in-flight slot, reserved up front with [`text_upload_bytes`] and
-// appended to per call, and binds sub-ranges of it: no GPU buffer is created
-// per label per frame anywhere. DX and VK append inside `text_draw`; Metal
-// (which drives its own composite loop rather than this trait) writes the whole
-// frame's geometry into its slot before the render graph runs.
+/// The composite pass: tonemap (+ optional LUT grade) the post-stack scene onto
+/// the swapchain image, then layer the text overlay on top in the same pass. Its
+/// begin -> composite-draw -> text-loop -> end shape is identical on every
+/// backend; the swapchain target lifecycle, the descriptor binding, and the
+/// text-geometry uploads stay backend-specific behind the trait. `Args`
+/// carries the per-frame binding context each backend needs (DX: the swapchain
+/// back-buffer + its RTV, the scene SRV, the window size, the frame slot; VK: the
+/// acquired image index + the frame slot).
+///
+/// Every backend uploads a frame's text geometry into one persistent buffer per
+/// frame-in-flight slot, reserved up front with [`text_upload_bytes`] and
+/// appended to per call, and binds sub-ranges of it: no GPU buffer is created
+/// per label per frame anywhere. DX and VK append inside `text_draw`; Metal
+/// (which drives its own composite loop rather than this trait) writes the whole
+/// frame's geometry into its slot before the render graph runs.
 pub trait CompositeEncoder {
-    // Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
+    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
-    // Per-invocation binding context (see the trait doc).
+    /// Per-invocation binding context (see the trait doc).
     type Args;
 
-    // Begin the pass: target the swapchain image (DX transitions it to
-    // RENDER_TARGET + binds the RTV; VK begins the composite render pass) and set
-    // the full-window viewport / scissor.
+    /// Begin the pass: target the swapchain image (DX transitions it to
+    /// RENDER_TARGET + binds the RTV; VK begins the composite render pass) and set
+    /// the full-window viewport / scissor.
     fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args);
-    // The fullscreen tonemap draw: bind the composite pipeline + its inputs
-    // (scene, bloom, LUT) + push constants, draw the fullscreen triangle.
+    /// The fullscreen tonemap draw: bind the composite pipeline + its inputs
+    /// (scene, bloom, LUT) + push constants, draw the fullscreen triangle.
     fn composite_draw(&self, rec: &Self::Rec, args: &Self::Args);
-    // Bind the text pipeline + any one-time text state. Returns false when text
-    // is inert (no pipeline or no atlases), so the driver skips the call loop.
+    /// Bind the text pipeline + any one-time text state. Returns false when text
+    /// is inert (no pipeline or no atlases), so the driver skips the call loop.
     fn begin_text(&self, rec: &Self::Rec, args: &Self::Args) -> bool;
-    // Encode one text draw call: append its vertex/index geometry to this frame
-    // slot's persistent upload buffer, bind the atlas plus the two sub-ranges,
-    // and draw.
+    /// Encode one text draw call: append its vertex/index geometry to this frame
+    /// slot's persistent upload buffer, bind the atlas plus the two sub-ranges,
+    /// and draw.
     fn text_draw(
         &self,
         rec: &Self::Rec,
         args: &Self::Args,
         call: &TextDrawCall,
     ) -> Result<(), String>;
-    // End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
-    // render pass.
+    /// End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
+    /// render pass.
     fn end_composite(&self, rec: &Self::Rec, args: &Self::Args);
 }
 
-// The composite + text orchestration, previously hand-duplicated in each
-// backend's `encode_composite_and_text`. An error mid-text propagates without
-// closing the pass, matching the prior DX/VK behaviour (the frame fails either
-// way: the target is just left mis-stated). This is unused on Metal, where a
-// render encoder must be `endEncoding`-ed before the command buffer commits:
-// skipping `end_composite` on a text error would crash at commit, so Metal's
-// `encode_composite_and_text` ends the encoder on any `?` with a `ScopedEncoder`
-// RAII guard instead.
+/// The composite + text orchestration, previously hand-duplicated in each
+/// backend's `encode_composite_and_text`. An error mid-text propagates without
+/// closing the pass, matching the prior DX/VK behaviour (the frame fails either
+/// way: the target is just left mis-stated). This is unused on Metal, where a
+/// render encoder must be `endEncoding`-ed before the command buffer commits:
+/// skipping `end_composite` on a text error would crash at commit, so Metal's
+/// `encode_composite_and_text` ends the encoder on any `?` with a `ScopedEncoder`
+/// RAII guard instead.
 pub fn encode_composite_chain<E: CompositeEncoder>(
     enc: &E,
     rec: &E::Rec,
@@ -187,43 +186,43 @@ pub fn encode_composite_chain<E: CompositeEncoder>(
     Ok(())
 }
 
-// A single-draw fullscreen post pass (SSR resolve, TAA resolve, ...): target a
-// render target, bind a pipeline + inputs, draw one fullscreen triangle, restore.
-// Unlike the bloom + composite chains (whose drivers hold a mip / text loop), a
-// fullscreen pass has no loop, so the driver is a fixed begin -> draw -> end. The
-// value is the shared per-backend lifecycle factored behind begin/end (DX: the
-// PSR<->RENDER_TARGET barrier bracket + render-target bind; VK: the render-pass
-// bracket), reused across every such pass instead of re-pasted per pass.
-//
-// The inert-pass guard lives at each backend's call site: it resolves the pass's
-// resources (returning early if a required one is absent) BEFORE constructing the
-// encoder, so the driver always runs all three steps over a fully-resolved pass
-// and can never leave a render pass / barrier half-open. There is no `Args`: each
-// backend's encoder is a small struct holding the already-resolved references +
-// per-call scalars, so the trait names no backend types (like `BloomEncoder`).
-//
-// Implemented by DirectX + Vulkan. Metal keeps its own `fullscreen_pass` helper,
-// which already factors this begin/draw/end skeleton, so this seam is unused
-// (dead code) on a Metal build.
+/// A single-draw fullscreen post pass (SSR resolve, TAA resolve, ...): target a
+/// render target, bind a pipeline + inputs, draw one fullscreen triangle, restore.
+/// Unlike the bloom + composite chains (whose drivers hold a mip / text loop), a
+/// fullscreen pass has no loop, so the driver is a fixed begin -> draw -> end. The
+/// value is the shared per-backend lifecycle factored behind begin/end (DX: the
+/// PSR<->RENDER_TARGET barrier bracket + render-target bind; VK: the render-pass
+/// bracket), reused across every such pass instead of re-pasted per pass.
+///
+/// The inert-pass guard lives at each backend's call site: it resolves the pass's
+/// resources (returning early if a required one is absent) BEFORE constructing the
+/// encoder, so the driver always runs all three steps over a fully-resolved pass
+/// and can never leave a render pass / barrier half-open. There is no `Args`: each
+/// backend's encoder is a small struct holding the already-resolved references +
+/// per-call scalars, so the trait names no backend types (like `BloomEncoder`).
+///
+/// Implemented by DirectX + Vulkan. Metal keeps its own `fullscreen_pass` helper,
+/// which already factors this begin/draw/end skeleton, so this seam is unused
+/// (dead code) on a Metal build.
 pub trait FullscreenPass {
-    // Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
+    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
     type Rec;
 
-    // Begin: bind the target render target + set the full-resolution viewport /
-    // scissor. DX transitions the target PIXEL_SHADER_RESOURCE -> RENDER_TARGET,
-    // binds its RTV + the SRV heap; VK begins the pass's render pass.
+    /// Begin: bind the target render target + set the full-resolution viewport /
+    /// scissor. DX transitions the target PIXEL_SHADER_RESOURCE -> RENDER_TARGET,
+    /// binds its RTV + the SRV heap; VK begins the pass's render pass.
     fn begin(&self, rec: &Self::Rec);
-    // Bind the pipeline + inputs + per-frame params and draw the fullscreen
-    // triangle (3 vertices; the vertex shader builds the triangle from the id).
+    /// Bind the pipeline + inputs + per-frame params and draw the fullscreen
+    /// triangle (3 vertices; the vertex shader builds the triangle from the id).
     fn draw(&self, rec: &Self::Rec);
-    // End: DX transitions the target back to PIXEL_SHADER_RESOURCE; VK ends the
-    // render pass.
+    /// End: DX transitions the target back to PIXEL_SHADER_RESOURCE; VK ends the
+    /// render pass.
     fn end(&self, rec: &Self::Rec);
 }
 
-// The fullscreen-pass orchestration. Trivial by design (a single draw), but kept
-// as a driver so every fullscreen post pass shares one begin -> draw -> end
-// contract across backends, matching `encode_bloom_chain` / `encode_composite_chain`.
+/// The fullscreen-pass orchestration. Trivial by design (a single draw), but kept
+/// as a driver so every fullscreen post pass shares one begin -> draw -> end
+/// contract across backends, matching `encode_bloom_chain` / `encode_composite_chain`.
 pub fn encode_fullscreen<E: FullscreenPass>(enc: &E, rec: &E::Rec) {
     enc.begin(rec);
     enc.draw(rec);

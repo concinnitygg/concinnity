@@ -20,6 +20,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 const FIRST_GEN: NonZeroU32 = NonZeroU32::MIN;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+/// A live entity handle: a slot index plus the generation that slot
+/// carried when the handle was minted.
 pub struct Entity {
     index: u32,
     generation: NonZeroU32,
@@ -30,23 +32,25 @@ impl Entity {
         Entity { index, generation }
     }
 
+    /// The entity's slot index.
     pub fn index(self) -> u32 {
         self.index
     }
 
+    /// The generation the slot carried when this handle was minted.
     pub fn generation(self) -> u32 {
         self.generation.get()
     }
 
-    // Pack into a single u64 (index in the high half, generation in the low
-    // half). Stable representation for an FFI / scripting boundary.
+    /// Pack into a single u64 (index in the high half, generation in the low
+    /// half). Stable representation for an FFI / scripting boundary.
     pub fn to_bits(self) -> u64 {
         ((self.index as u64) << 32) | self.generation.get() as u64
     }
 
-    // Inverse of `to_bits`. Returns `None` when the generation half is zero,
-    // which no live handle ever has, so a zeroed or truncated value is rejected
-    // instead of forged into a valid-looking entity.
+    /// Inverse of `to_bits`. Returns `None` when the generation half is zero,
+    /// which no live handle ever has, so a zeroed or truncated value is rejected
+    /// instead of forged into a valid-looking entity.
     pub fn from_bits(bits: u64) -> Option<Entity> {
         let generation = NonZeroU32::new(bits as u32)?;
         Some(Entity {
@@ -55,10 +59,10 @@ impl Entity {
         })
     }
 
-    // A handle the allocator never hands out (the top index is unreachable in
-    // practice). For a runtime-only component that has to name an Entity field
-    // but is never built from serialized args -- its real value is inserted at
-    // runtime, so this placeholder is never observed by any system.
+    /// A handle the allocator never hands out (the top index is unreachable in
+    /// practice). For a runtime-only component that has to name an Entity field
+    /// but is never built from serialized args -- its real value is inserted at
+    /// runtime, so this placeholder is never observed by any system.
     pub fn dangling() -> Entity {
         Entity {
             index: u32::MAX,
@@ -74,6 +78,8 @@ struct EntityMeta {
 }
 
 #[derive(Debug, Default)]
+/// The entity allocator: slot generations, the free list, and the
+/// reservation counter.
 pub struct Entities {
     meta: Vec<EntityMeta>,
     // Recycled indices, available to `alloc`. Reservation never recycles.
@@ -85,13 +91,14 @@ pub struct Entities {
 }
 
 impl Entities {
+    /// An allocator with no slots.
     pub fn new() -> Entities {
         Entities::default()
     }
 
-    // Allocate an entity, recycling a freed slot when one is available. The
-    // recycled slot keeps the generation it was bumped to at despawn, so old
-    // handles to it stay invalid.
+    /// Allocate an entity, recycling a freed slot when one is available. The
+    /// recycled slot keeps the generation it was bumped to at despawn, so old
+    /// handles to it stay invalid.
     pub fn alloc(&mut self) -> Entity {
         if let Some(index) = self.free.pop() {
             let meta = &mut self.meta[index as usize];
@@ -110,17 +117,17 @@ impl Entities {
         Entity::new(index, meta.generation)
     }
 
-    // Reserve a fresh entity id without taking `&mut self`. Lock-free, so it is
-    // safe to call from worker threads while recording commands. Reserved ids
-    // are always fresh (never recycled) and carry the first generation; call
-    // `flush` under `&mut self` before looking them up.
+    /// Reserve a fresh entity id without taking `&mut self`. Lock-free, so it is
+    /// safe to call from worker threads while recording commands. Reserved ids
+    /// are always fresh (never recycled) and carry the first generation; call
+    /// `flush` under `&mut self` before looking them up.
     pub fn reserve(&self) -> Entity {
         let index = self.next_fresh.fetch_add(1, Ordering::Relaxed);
         Entity::new(index, FIRST_GEN)
     }
 
-    // Materialize any reserved-but-unmaterialized ids into the metadata table,
-    // marking them alive. Idempotent.
+    /// Materialize any reserved-but-unmaterialized ids into the metadata table,
+    /// marking them alive. Idempotent.
     pub fn flush(&mut self) {
         let high = *self.next_fresh.get_mut();
         if high == 0 {
@@ -129,9 +136,9 @@ impl Entities {
         self.grow_to(high - 1);
     }
 
-    // Despawn an entity. Validates the generation, so a stale or already-dead
-    // handle is a no-op returning `false`. Bumps the slot's generation and
-    // frees the index for reuse.
+    /// Despawn an entity. Validates the generation, so a stale or already-dead
+    /// handle is a no-op returning `false`. Bumps the slot's generation and
+    /// frees the index for reuse.
     pub fn despawn(&mut self, entity: Entity) -> bool {
         self.flush();
         let Some(meta) = self.meta.get_mut(entity.index as usize) else {
@@ -146,8 +153,8 @@ impl Entities {
         true
     }
 
-    // Whether the handle refers to a currently-live entity. Reflects only
-    // materialized state; reserved ids appear after `flush`.
+    /// Whether the handle refers to a currently-live entity. Reflects only
+    /// materialized state; reserved ids appear after `flush`.
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.meta
             .get(entity.index as usize)
@@ -156,7 +163,8 @@ impl Entities {
 
     // Number of metadata slots ever allocated (live plus recycled). Not the
     // live count.
-    pub fn total_slots(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn total_slots(&self) -> usize {
         self.meta.len()
     }
 

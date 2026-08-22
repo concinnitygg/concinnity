@@ -11,10 +11,10 @@ use crate::gfx::skinning::{
 
 use super::{CompiledGraph, CompiledState, GraphCursor};
 
-// Sample the cursor's blended pose into `scratch.locals`. `clip_at` maps a
-// member's clip index to the actual clip (the caller owns clip storage). The
-// remaining scratch buffers hold the fade's outgoing pose and the per-member
-// samples, so a warm scratch samples without allocating.
+/// Sample the cursor's blended pose into `scratch.locals`. `clip_at` maps a
+/// member's clip index to the actual clip (the caller owns clip storage). The
+/// remaining scratch buffers hold the fade's outgoing pose and the per-member
+/// samples, so a warm scratch samples without allocating.
 pub fn sample_graph_pose_into<'a>(
     graph: &CompiledGraph,
     cursor: &GraphCursor,

@@ -8,7 +8,7 @@
 use super::{ArgValue, AssetSpec};
 use serde_json::{Map, Number, Value};
 
-// One `ArgValue` as a `serde_json::Value`.
+/// One `ArgValue` as a `serde_json::Value`.
 pub fn arg_value_to_json(v: &ArgValue) -> Value {
     match v {
         ArgValue::Null => Value::Null,
@@ -23,14 +23,14 @@ pub fn arg_value_to_json(v: &ArgValue) -> Value {
     }
 }
 
-// A spec's `args` object as a `serde_json::Value` (what a component deserializes
-// from).
+/// A spec's `args` object as a `serde_json::Value` (what a component deserializes
+/// from).
 pub fn spec_args(spec: &AssetSpec) -> Value {
     Value::Object(object_map(&spec.fields))
 }
 
-// A spec as a full world-line value: `{"name", "type", "args"}`, the shape
-// `parse_world_jsonl` yields and the cook pipeline validates.
+/// A spec as a full world-line value: `{"name", "type", "args"}`, the shape
+/// `parse_world_jsonl` yields and the cook pipeline validates.
 pub fn spec_to_value(spec: &AssetSpec) -> Value {
     let mut obj = Map::new();
     obj.insert("name".to_string(), Value::String(spec.name.clone()));

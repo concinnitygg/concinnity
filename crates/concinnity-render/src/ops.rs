@@ -1,11 +1,9 @@
-// src/ops.rs
-//
-// Recorded backend effects: simulation systems queue their GPU mutations as
-// ops instead of calling the backend directly, and the submit path replays
-// them in record order before the frame's draw. Ordering across systems is
-// preserved by the single queue, so the GPU-visible result matches the old
-// direct calls exactly. Ops own their payloads, so a queue can cross a thread
-// boundary with the snapshot that carries it.
+//! Recorded backend effects: simulation systems queue their GPU mutations as
+//! ops instead of calling the backend directly, and the submit path replays
+//! them in record order before the frame's draw. Ordering across systems is
+//! preserved by the single queue, so the GPU-visible result matches the old
+//! direct calls exactly. Ops own their payloads, so a queue can cross a thread
+//! boundary with the snapshot that carries it.
 
 use crate::backend::RenderBackend;
 use concinnity_core::gfx::chunk_coord::ChunkCoord;
@@ -18,14 +16,21 @@ type BackendOp = Box<dyn FnOnce(&mut dyn RenderBackend, &mut ReplayOutcome) + Se
 pub enum OpFailure {
     /// A streamed-mesh upload was refused (transient region exhaustion); the
     /// streamer rolls the mesh back to unloaded and retries later.
-    MeshUpload { stream_id: usize },
+    MeshUpload {
+        /// The streamed mesh that failed to upload.
+        stream_id: usize,
+    },
     /// A chunk-mesh add failed; the chunk's tracking and draw slot roll back.
-    ChunkAdd { coord: ChunkCoord },
+    ChunkAdd {
+        /// The chunk whose mesh add failed.
+        coord: ChunkCoord,
+    },
 }
 
 /// What one queue replay produced, for the simulation side.
 #[derive(Debug, Default)]
 pub struct ReplayOutcome {
+    /// Failures the simulation side must roll back.
     pub failures: Vec<OpFailure>,
     /// An op hit device-memory exhaustion; feeds the streaming valve.
     pub memory_pressure: bool,
@@ -61,10 +66,12 @@ impl RenderOps {
         self.ops.push(Box::new(op));
     }
 
+    /// Whether nothing has been recorded.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
 
+    /// Ops recorded so far.
     pub fn len(&self) -> usize {
         self.ops.len()
     }
@@ -84,6 +91,7 @@ impl RenderOps {
         outcome
     }
 
+    /// Drop every recorded op, keeping the buffer's capacity.
     pub fn clear(&mut self) {
         self.ops.clear();
     }

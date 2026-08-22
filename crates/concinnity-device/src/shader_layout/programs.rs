@@ -36,9 +36,9 @@ pub(super) enum Target {
 }
 
 impl Target {
-    pub const ALL: [Target; 3] = [Target::Metal, Target::Vulkan, Target::DirectX];
+    pub(super) const ALL: [Target; 3] = [Target::Metal, Target::Vulkan, Target::DirectX];
 
-    pub fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Target::Metal => "metal",
             Target::Vulkan => "vulkan",

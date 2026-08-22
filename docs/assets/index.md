@@ -137,3 +137,4 @@
 - [VarDecl](VarDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
 - [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to [`MAX_WATER_WAVES`] of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` metres per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).
+- [WindowMode](WindowMode.md) - How the application window is presented.

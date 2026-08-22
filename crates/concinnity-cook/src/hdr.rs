@@ -19,13 +19,13 @@
 
 use concinnity_cpu::decode::{ByteReader, checked_product};
 
-pub const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
-pub const CUBE_FORMAT_RGBA32F: u32 = 0;
-pub const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
+pub(crate) const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
+pub(crate) const CUBE_FORMAT_RGBA32F: u32 = 0;
+pub(crate) const CUBE_PAYLOAD_HEADER_BYTES: usize = 16;
 
-// Deserialise a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
-// The byte slice returned is borrowed from the input; callers can reinterpret
-// it as `&[f32]` after a length check.
+/// Deserialise a cubemap payload back into (face_size, RGBA32F bytes for 6 faces).
+/// The byte slice returned is borrowed from the input; callers can reinterpret
+/// it as `&[f32]` after a length check.
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let mut r = ByteReader::open_payload(
         bytes,
@@ -67,7 +67,7 @@ pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
 }
 
 // Read a Radiance `.hdr` file off disk and decode it to a linear-light image.
-pub fn load_file(path: &str) -> Result<HdrImage, String> {
+pub(crate) fn load_file(path: &str) -> Result<HdrImage, String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)
         .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
@@ -81,7 +81,7 @@ pub fn load_file(path: &str) -> Result<HdrImage, String> {
 
 // Linear-light HDR image. Pixels are row-major top-down RGB triples.
 #[derive(Debug)]
-pub struct HdrImage {
+pub(crate) struct HdrImage {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<[f32; 3]>,
@@ -89,7 +89,7 @@ pub struct HdrImage {
 
 // Decode a Radiance .hdr blob. Supports both the run-length-encoded
 // scanline format and the older raw 4-byte-per-pixel layout.
-pub fn decode_hdr(bytes: &[u8]) -> Result<HdrImage, String> {
+pub(crate) fn decode_hdr(bytes: &[u8]) -> Result<HdrImage, String> {
     // Header: ASCII lines terminated by `\n`, ending with an empty line and
     // then a resolution line of the form `-Y <h> +X <w>` (or sign variants).
     let mut cursor = 0usize;
@@ -282,7 +282,7 @@ fn rgbe_to_float(r: u8, g: u8, b: u8, e: u8) -> [f32; 3] {
 // Resample an equirectangular HDR image into six square cube faces of
 // `face_size` pixels. Output is RGBA32F (alpha = 1.0) row-major top-down,
 // matching the Metal / Vulkan / DX cube convention.
-pub fn equirect_to_cube(hdr: &HdrImage, face_size: u32) -> [Vec<f32>; 6] {
+pub(crate) fn equirect_to_cube(hdr: &HdrImage, face_size: u32) -> [Vec<f32>; 6] {
     let f = face_size as usize;
     let mut faces: [Vec<f32>; 6] = std::array::from_fn(|_| vec![0.0; f * f * 4]);
     for (face, face_buf) in faces.iter_mut().enumerate() {

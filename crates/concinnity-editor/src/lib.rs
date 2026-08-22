@@ -1,22 +1,18 @@
-// concinnity-editor: the dev tooling library.
-//
-// Holds the world authoring / in-memory build code (add / rm / check / build),
-// the in-engine editor HUD, the localhost debug server, and the interpreted
-// (`cn debug`) run loop.
+//! concinnity-editor: the dev tooling library.
+//!
+//! Holds the world authoring / in-memory build code (add / rm / check / build),
+//! the in-engine editor HUD, the localhost debug server, and the interpreted
+//! (`cn debug`) run loop.
 
 // Bridge: re-export the runtime/core modules the authoring, editor, and debug
 // code names under crate::* so their `crate::<module>` import paths resolve.
 // world.jsonl I/O lives in the compiler (concinnity-cook), not core.
-#[allow(unused_imports)]
 pub(crate) use concinnity_cook::world;
-#[allow(unused_imports)]
-pub(crate) use concinnity_core::result;
-#[allow(unused_imports)]
-pub(crate) use concinnity_cpu::{build, geometry};
-#[allow(unused_imports)]
-pub(crate) use concinnity_engine::{app, assets, blob, config, ecs, gfx, jobs, resource};
+pub(crate) use concinnity_engine::{app, assets, blob, ecs, gfx, jobs, resource};
 
-// Authoring / in-memory build, shared with the FFI embedding surface.
+// Authoring / in-memory build. Its exports below are the surface the
+// out-of-tree Swift app's FFI crate embeds; the `cn` binary uses only part of
+// it, so some entry points have no in-workspace caller.
 mod authoring;
 
 // The in-engine editor HUD, the localhost debug server, the interpreted run

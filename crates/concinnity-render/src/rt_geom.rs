@@ -1,12 +1,10 @@
-// src/rt_geom.rs
-//
-// GPU-free builders for the ray-tracing geometry table plus the dynamic-update
-// mode ladder, shared by the backends that hardware-ray-trace reflections. Each
-// backend fills its own `RtGeomEntry` table from the participating draw set;
-// the per-entry packing (index slice, resolved shared-pool texture indices,
-// material, model matrix) is identical across backends and lives here. The
-// per-backend TLAS instance transform (`MTLPackedFloat4x3` / `VkTransformMatrixKHR`
-// / DXR `[f32; 12]`) is a real hardware type and stays in each backend.
+//! GPU-free builders for the ray-tracing geometry table plus the dynamic-update
+//! mode ladder, shared by the backends that hardware-ray-trace reflections. Each
+//! backend fills its own `RtGeomEntry` table from the participating draw set;
+//! the per-entry packing (index slice, resolved shared-pool texture indices,
+//! material, model matrix) is identical across backends and lives here. The
+//! per-backend TLAS instance transform (`MTLPackedFloat4x3` / `VkTransformMatrixKHR`
+//! / DXR `[f32; 12]`) is a real hardware type and stays in each backend.
 
 use crate::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject, albedo_pool_index,
@@ -18,44 +16,44 @@ use crate::render_types::{
 // skinned index buffers instead of the static u32 ones. Bit 31 is free (bindless
 // pool indices never approach 2^31); matches the flag in each backend's RT-hit
 // shader.
-pub const RT_SKINNED_FLAG: u32 = 0x8000_0000;
+pub(crate) const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 
-// Bytes to allocate for the shared u16 skinned index buffer holding
-// `index_count` indices. The ray-traced hit path addresses that buffer as packed
-// u32 words (two indices each), so an allocation sized to an odd index count
-// leaves the final word's upper half past the end and the load that fetches the
-// last index straddles the allocation. Every backend needs the same rounding:
-// Metal rejects the binding outright, Vulkan's storage-buffer range may return
-// zero for a straddling load under robust access, and DirectX's root SRV is
-// unbounded and simply reads whatever follows. Never zero: no backend accepts a
-// zero-length buffer.
+/// Bytes to allocate for the shared u16 skinned index buffer holding
+/// `index_count` indices. The ray-traced hit path addresses that buffer as packed
+/// u32 words (two indices each), so an allocation sized to an odd index count
+/// leaves the final word's upper half past the end and the load that fetches the
+/// last index straddles the allocation. Every backend needs the same rounding:
+/// Metal rejects the binding outright, Vulkan's storage-buffer range may return
+/// zero for a straddling load under robust access, and DirectX's root SRV is
+/// unbounded and simply reads whatever follows. Never zero: no backend accepts a
+/// zero-length buffer.
 pub fn skinned_index_buffer_bytes(index_count: usize) -> usize {
     (index_count * std::mem::size_of::<u16>())
         .next_multiple_of(4)
         .max(4)
 }
 
-// How the scene acceleration structure is kept current when props move. Selected
-// once at init from `CN_RT_DYNAMIC`; unset gives `Auto`, the shipping behaviour.
+/// How the scene acceleration structure is kept current when props move. Selected
+/// once at init from `CN_RT_DYNAMIC`; unset gives `Auto`, the shipping behaviour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RtDynamicMode {
-    // Build once, never update. Forces a static BVH even if props move: the
-    // pre-dynamic behaviour, kept as a fast path / diagnostic (`off`).
+    /// Build once, never update. Forces a static BVH even if props move: the
+    /// pre-dynamic behaviour, kept as a fast path / diagnostic (`off`).
     Off,
-    // Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
-    // the frames a participating transform actually changed. Static scenes never
-    // rebuild, so they pay only a cheap per-frame matrix compare.
+    /// Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
+    /// the frames a participating transform actually changed. Static scenes never
+    /// rebuild, so they pay only a cheap per-frame matrix compare.
     Auto,
-    // Force a full BVH rebuild every frame, dirty or not. Diagnostic (`rebuild`);
-    // the most expensive path.
+    /// Force a full BVH rebuild every frame, dirty or not. Diagnostic (`rebuild`);
+    /// the most expensive path.
     Rebuild,
-    // Force a fresh TLAS + table rebuild every frame, dirty or not. Diagnostic
-    // (`tlas`); the same GPU work `Auto` does, minus the dirty gate.
+    /// Force a fresh TLAS + table rebuild every frame, dirty or not. Diagnostic
+    /// (`tlas`); the same GPU work `Auto` does, minus the dirty gate.
     Tlas,
 }
 
 impl RtDynamicMode {
-    // Parse the mode from `CN_RT_DYNAMIC`. Unset / unrecognised -> `Auto`.
+    /// Parse the mode from `CN_RT_DYNAMIC`. Unset / unrecognised -> `Auto`.
     pub fn from_env() -> Self {
         match std::env::var("CN_RT_DYNAMIC").as_deref() {
             Ok("off") => Self::Off,
@@ -65,7 +63,7 @@ impl RtDynamicMode {
         }
     }
 
-    // Whether this mode updates the BVH after the initial build at all.
+    /// Whether this mode updates the BVH after the initial build at all.
     pub fn is_dynamic(self) -> bool {
         self != Self::Off
     }
@@ -78,14 +76,18 @@ impl RtDynamicMode {
 // has none), resolved through the shared `render_types` helpers and matching the
 // bindless main pass. `texture_count` is the real-texture count (the flat-normal
 // fallback sits at `texture_count`).
-pub fn pool_indices(texture_slot: usize, normal_map_slot: usize, texture_count: u32) -> (u32, u32) {
+pub(crate) fn pool_indices(
+    texture_slot: usize,
+    normal_map_slot: usize,
+    texture_count: u32,
+) -> (u32, u32) {
     (
         albedo_pool_index(texture_slot, texture_count),
         normal_pool_index(normal_map_slot, texture_count),
     )
 }
 
-// Build the geometry-table entry for one static draw object.
+/// Build the geometry-table entry for one static draw object.
 pub fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
@@ -104,9 +106,9 @@ pub fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
     }
 }
 
-// Build the geometry-table entry for one instance of an instanced cluster: the
-// cluster's shared mesh slice + material, with this instance's transform. Cluster
-// geometry uses base_vertex 0 (its indices are already absolute).
+/// Build the geometry-table entry for one instance of an instanced cluster: the
+/// cluster's shared mesh slice + material, with this instance's transform. Cluster
+/// geometry uses base_vertex 0 (its indices are already absolute).
 pub fn cluster_geom_entry(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
@@ -129,13 +131,13 @@ pub fn cluster_geom_entry(
     }
 }
 
-// Build the geometry-table entry for one skinned object. The skinned BLAS is
-// baked from the posed (model-space) deformed buffer with absolute u16 indices,
-// so `base_vertex` is 0 and the model matrix brings the hit to world space. The
-// skinned flag is OR'd into `normal_index` so the trace fetches from the
-// deformed / u16 buffers. Albedo / normal resolve through the shared pool by the
-// object's `texture_slot` / `normal_map_slot`, so skinned hits shade textured
-// like static ones (the flag bit lives above any valid pool index).
+/// Build the geometry-table entry for one skinned object. The skinned BLAS is
+/// baked from the posed (model-space) deformed buffer with absolute u16 indices,
+/// so `base_vertex` is 0 and the model matrix brings the hit to world space. The
+/// skinned flag is OR'd into `normal_index` so the trace fetches from the
+/// deformed / u16 buffers. Albedo / normal resolve through the shared pool by the
+/// object's `texture_slot` / `normal_map_slot`, so skinned hits shade textured
+/// like static ones (the flag bit lives above any valid pool index).
 pub fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
@@ -154,8 +156,8 @@ pub fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeom
     }
 }
 
-// True when any participating object's current model matrix differs from the one
-// baked into the live TLAS. Pure (no GPU) so the dirty gate is unit-testable.
+/// True when any participating object's current model matrix differs from the one
+/// baked into the live TLAS. Pure (no GPU) so the dirty gate is unit-testable.
 pub fn models_dirty(cached: &[[[f32; 4]; 4]], current: &[[[f32; 4]; 4]]) -> bool {
     cached.len() != current.len() || cached.iter().zip(current).any(|(a, b)| a != b)
 }

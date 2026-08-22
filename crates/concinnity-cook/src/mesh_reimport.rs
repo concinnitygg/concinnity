@@ -1,11 +1,9 @@
-// src/mesh_reimport.rs
-//
-// Asset hot-reload (`cn debug`) decode helpers: re-import a file-backed Mesh /
-// SkinnedMesh from a pre-parsed glTF document into the runtime Vertex /
-// SkinnedVertex form, mirroring the build pipeline so a hot-reloaded mesh is
-// byte-identical to a fresh `cn build`. The runtime crate links no image / glTF
-// decoders, so these live here in the build crate; the editor's debug server
-// drives them.
+//! Asset hot-reload (`cn debug`) decode helpers: re-import a file-backed Mesh /
+//! SkinnedMesh from a pre-parsed glTF document into the runtime Vertex /
+//! SkinnedVertex form, mirroring the build pipeline so a hot-reloaded mesh is
+//! byte-identical to a fresh `cn build`. The runtime crate links no image / glTF
+//! decoders, so these live here in the build crate; the editor's debug server
+//! drives them.
 
 use crate::geometry::{
     compile_mesh_payload, compile_skinned_mesh_payload_with_lods, payload_joints_to_defs,
@@ -22,22 +20,22 @@ type SkinnedImport = (
     Vec<concinnity_core::assets::JointDef>,
 );
 
-// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
-// same way the build pipeline does at compile time, returning the runtime
-// `Vertex` / index form with normals + tangents + optional LOD alternates baked
-// in. Used by the asset hot-reload path (`cn debug` only); production reads the
-// compiled payload from a blob locator and goes through
-// `deserialise_with_lods` instead.
-//
-// The caller is responsible for parsing the `.glb` (via [`crate::glb::parse_glb`])
-// so a single reload pass can amortise the parse across every `Mesh` that
-// references the same file: `ABeautifulGame` alone fans 35+ Mesh assets out of
-// one `.glb`.
-//
-// `primitive_index` selects which primitive (flattened across glTF meshes) to
-// import; `lod_levels` and `lod_distances` mirror the asset declaration so the
-// reload produces a byte-identical payload to the build pass. The third
-// component of the result is empty for `lod_levels <= 1`.
+/// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
+/// same way the build pipeline does at compile time, returning the runtime
+/// `Vertex` / index form with normals + tangents + optional LOD alternates baked
+/// in. Used by the asset hot-reload path (`cn debug` only); production reads the
+/// compiled payload from a blob locator and goes through
+/// `deserialise_with_lods` instead.
+///
+/// The caller is responsible for parsing the `.glb` (via [`crate::glb::parse_glb`])
+/// so a single reload pass can amortise the parse across every `Mesh` that
+/// references the same file: `ABeautifulGame` alone fans 35+ Mesh assets out of
+/// one `.glb`.
+///
+/// `primitive_index` selects which primitive (flattened across glTF meshes) to
+/// import; `lod_levels` and `lod_distances` mirror the asset declaration so the
+/// reload produces a byte-identical payload to the build pass. The third
+/// component of the result is empty for `lod_levels <= 1`.
 pub fn decode_mesh_from_parsed_glb(
     doc: &crate::gltf_source::GltfDoc,
     source: &str,
@@ -68,18 +66,18 @@ pub fn decode_mesh_from_parsed_glb(
     deserialise_with_lods(&payload)
 }
 
-// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document the same
-// way the build pipeline does at compile time, returning the runtime
-// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
-// bind-pose skeleton. Used by the asset hot-reload path (`cn debug` only);
-// production reads the compiled payload from a blob locator and goes through
-// `deserialise_skinned` instead.
-//
-// The caller is responsible for parsing the `.glb` (via [`crate::glb::parse_glb`])
-// so a single reload pass can amortise the parse across every `Mesh` /
-// `SkinnedMesh` that references the same file. The skeleton is returned in the
-// same `JointDef` form the `SkinnedMesh` asset args carry; the reload helper
-// checks it against the init-time joint count before pushing to the GPU.
+/// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document the same
+/// way the build pipeline does at compile time, returning the runtime
+/// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
+/// bind-pose skeleton. Used by the asset hot-reload path (`cn debug` only);
+/// production reads the compiled payload from a blob locator and goes through
+/// `deserialise_skinned` instead.
+///
+/// The caller is responsible for parsing the `.glb` (via [`crate::glb::parse_glb`])
+/// so a single reload pass can amortise the parse across every `Mesh` /
+/// `SkinnedMesh` that references the same file. The skeleton is returned in the
+/// same `JointDef` form the `SkinnedMesh` asset args carry; the reload helper
+/// checks it against the init-time joint count before pushing to the GPU.
 pub fn decode_skinned_from_parsed_glb(
     doc: &crate::gltf_source::GltfDoc,
     source: &str,

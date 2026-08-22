@@ -1,29 +1,27 @@
-// src/streaming.rs
-//
-// Asset-streaming policy core.
-//
-// Pure decision logic: given each streamable item's priority score (camera
-// distance), a per-frame load budget, and a cap on how many items may be
-// resident at once, this decides *which* items to load and *which* to evict.
-// It performs no I/O, spawns no threads, and touches no backend.
-//
-// This module is deliberately written against `core` + `alloc` constructs
-// only (`Vec`, primitives, slices) so it can move into a future `no_std`
-// client runtime unchanged. The `std`-side half -- the background fetch
-// thread, the channels, and the GPU upload -- lives in concinnity-engine's
-// `app::texture_stream`. Keep that boundary: no `std::`-only types
-// (threads, files, `HashMap`, `Instant`, ...) belong in this file.
+//! Asset-streaming policy core.
+//!
+//! Pure decision logic: given each streamable item's priority score (camera
+//! distance), a per-frame load budget, and a cap on how many items may be
+//! resident at once, this decides *which* items to load and *which* to evict.
+//! It performs no I/O, spawns no threads, and touches no backend.
+//!
+//! This module is deliberately written against `core` + `alloc` constructs
+//! only (`Vec`, primitives, slices) so it can move into a future `no_std`
+//! client runtime unchanged. The `std`-side half -- the background fetch
+//! thread, the channels, and the GPU upload -- lives in concinnity-engine's
+//! `app::texture_stream`. Keep that boundary: no `std::`-only types
+//! (threads, files, `HashMap`, `Instant`, ...) belong in this file.
 
 use concinnity_memory::{Arena, MemTag};
 
-// Residency state of a single streamable item.
+/// Residency state of a single streamable item.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StreamState {
-    // Not on the GPU; eligible to be loaded.
+    /// Not on the GPU; eligible to be loaded.
     Unloaded,
-    // A background load has been dispatched but has not completed.
+    /// A background load has been dispatched but has not completed.
     Pending,
-    // On the GPU and ready to sample.
+    /// On the GPU and ready to sample.
     Resident,
 }
 
@@ -47,23 +45,23 @@ struct Item {
     blocked: bool,
 }
 
-// The load / evict decisions produced by one [`StreamPlanner::plan`] call.
+/// The load / evict decisions produced by one [`StreamPlanner::plan`] call.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct StreamPlan {
-    // Item ids whose background load should be dispatched this frame.
+    /// Item ids whose background load should be dispatched this frame.
     pub to_load: Vec<usize>,
-    // Item ids that should be evicted from the GPU this frame.
+    /// Item ids that should be evicted from the GPU this frame.
     pub to_evict: Vec<usize>,
 }
 
-// Decides what to stream in and out of a fixed-size residency pool.
-//
-// The planner owns only residency *bookkeeping*: it never reads or writes a
-// GPU resource. Each frame the driver updates scores, calls [`plan`], and
-// reports completed loads back via [`mark_resident`].
-//
-// [`plan`]: StreamPlanner::plan
-// [`mark_resident`]: StreamPlanner::mark_resident
+/// Decides what to stream in and out of a fixed-size residency pool.
+///
+/// The planner owns only residency *bookkeeping*: it never reads or writes a
+/// GPU resource. Each frame the driver updates scores, calls [`plan`], and
+/// reports completed loads back via [`mark_resident`].
+///
+/// [`plan`]: StreamPlanner::plan
+/// [`mark_resident`]: StreamPlanner::mark_resident
 pub struct StreamPlanner {
     items: Vec<Item>,
     // Max number of loads `plan` will dispatch in a single call.
@@ -88,10 +86,10 @@ fn scratch_bytes(count: usize) -> usize {
 }
 
 impl StreamPlanner {
-    // Create a planner tracking `count` items, all initially `Unloaded`.
-    //
-    // `load_budget` and `resident_cap` are both clamped to at least 1 so a
-    // zero from a misconfigured asset cannot wedge streaming permanently.
+    /// Create a planner tracking `count` items, all initially `Unloaded`.
+    ///
+    /// `load_budget` and `resident_cap` are both clamped to at least 1 so a
+    /// zero from a misconfigured asset cannot wedge streaming permanently.
     pub fn new(count: usize, load_budget: usize, resident_cap: usize) -> Self {
         Self {
             items: vec![
@@ -111,56 +109,56 @@ impl StreamPlanner {
         }
     }
 
-    // Set (or clear with `None`) the total resident-byte budget. `None` keeps
-    // the count-only policy; `Some(b)` additionally evicts to hold resident
-    // bytes at or under `b`. Off by default so worlds that never set it behave
-    // exactly as the count-only planner.
+    /// Set (or clear with `None`) the total resident-byte budget. `None` keeps
+    /// the count-only policy; `Some(b)` additionally evicts to hold resident
+    /// bytes at or under `b`. Off by default so worlds that never set it behave
+    /// exactly as the count-only planner.
     pub fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.byte_budget = budget;
     }
 
-    // The active resident-byte budget, or `None` when byte accounting is off
-    // (the count-only policy). For diagnostics.
+    /// The active resident-byte budget, or `None` when byte accounting is off
+    /// (the count-only policy). For diagnostics.
     pub fn byte_budget(&self) -> Option<u64> {
         self.byte_budget
     }
 
-    // Number of tracked items.
+    /// Number of tracked items.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    // Whether the planner tracks no items.
+    /// Whether the planner tracks no items.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
-    // Residency state of item `id`, or `None` if `id` is out of range.
+    /// Residency state of item `id`, or `None` if `id` is out of range.
     pub fn state(&self, id: usize) -> Option<StreamState> {
         self.items.get(id).map(|i| i.state)
     }
 
-    // Set item `id`'s priority score (lower = loaded sooner / evicted later).
-    // Out-of-range ids are ignored.
+    /// Set item `id`'s priority score (lower = loaded sooner / evicted later).
+    /// Out-of-range ids are ignored.
     pub fn set_score(&mut self, id: usize, score: f32) {
         if let Some(item) = self.items.get_mut(id) {
             item.score = score;
         }
     }
 
-    // Record that item `id` was referenced on `frame`. Refreshes the LRU
-    // tiebreak used when evicting equally-scored resident items.
+    /// Record that item `id` was referenced on `frame`. Refreshes the LRU
+    /// tiebreak used when evicting equally-scored resident items.
     pub fn touch(&mut self, id: usize, frame: u64) {
         if let Some(item) = self.items.get_mut(id) {
             item.last_touch = frame;
         }
     }
 
-    // Report that a dispatched load for item `id` has completed and the
-    // resource is now on the GPU, occupying `bytes` of GPU memory. The driver
-    // knows the exact resident size at completion (decoded pixel bytes, or
-    // vertex + index buffer bytes); `bytes` may be 0 when the size is unknown
-    // or nothing was actually uploaded (e.g. a failed fetch left a placeholder).
+    /// Report that a dispatched load for item `id` has completed and the
+    /// resource is now on the GPU, occupying `bytes` of GPU memory. The driver
+    /// knows the exact resident size at completion (decoded pixel bytes, or
+    /// vertex + index buffer bytes); `bytes` may be 0 when the size is unknown
+    /// or nothing was actually uploaded (e.g. a failed fetch left a placeholder).
     pub fn mark_resident(&mut self, id: usize, frame: u64, bytes: u64) {
         if let Some(item) = self.items.get_mut(id) {
             item.state = StreamState::Resident;
@@ -169,27 +167,27 @@ impl StreamPlanner {
         }
     }
 
-    // Block or unblock item `id`. A blocked item is never scheduled to load;
-    // if resident it is evicted by the next [`plan`](Self::plan) call.
-    // Out-of-range ids are ignored.
+    /// Block or unblock item `id`. A blocked item is never scheduled to load;
+    /// if resident it is evicted by the next [`plan`](Self::plan) call.
+    /// Out-of-range ids are ignored.
     pub fn set_blocked(&mut self, id: usize, blocked: bool) {
         if let Some(item) = self.items.get_mut(id) {
             item.blocked = blocked;
         }
     }
 
-    // Force item `id` back to `Unloaded` (e.g. after a failed load that
-    // should be retried). Out-of-range ids are ignored. The item's last-known
-    // byte weight is retained as the estimate for a future re-load; it no
-    // longer counts toward `resident_bytes` while Unloaded.
+    /// Force item `id` back to `Unloaded` (e.g. after a failed load that
+    /// should be retried). Out-of-range ids are ignored. The item's last-known
+    /// byte weight is retained as the estimate for a future re-load; it no
+    /// longer counts toward `resident_bytes` while Unloaded.
     pub fn mark_unloaded(&mut self, id: usize) {
         if let Some(item) = self.items.get_mut(id) {
             item.state = StreamState::Unloaded;
         }
     }
 
-    // Total bytes of all currently Resident items, for diagnostics and the
-    // byte-budget policy. Pending and Unloaded items are excluded.
+    /// Total bytes of all currently Resident items, for diagnostics and the
+    /// byte-budget policy. Pending and Unloaded items are excluded.
     pub fn resident_bytes(&self) -> u64 {
         self.items
             .iter()
@@ -198,7 +196,7 @@ impl StreamPlanner {
             .sum()
     }
 
-    // `(resident, pending, unloaded)` item counts, for diagnostics.
+    /// `(resident, pending, unloaded)` item counts, for diagnostics.
     pub fn counts(&self) -> (usize, usize, usize) {
         let mut resident = 0;
         let mut pending = 0;
@@ -213,21 +211,21 @@ impl StreamPlanner {
         (resident, pending, unloaded)
     }
 
-    // Decide which items to load and evict this frame.
-    //
-    // `Unloaded` items are considered best-score-first. While the pool has
-    // spare capacity -- under both the count cap and (when set) the byte budget
-    // -- they are simply scheduled to load. Once the pool is full a candidate
-    // can still load by evicting worst-scored residents, but only ones strictly
-    // farther than the candidate, so equal-priority items never churn. A large
-    // candidate may evict several small residents to fit under the byte budget.
-    // At most `load_budget` loads are scheduled per call.
-    //
-    // With no byte budget set this reduces exactly to the count-only policy.
-    //
-    // This method mutates planner state: scheduled items become `Pending` and
-    // evicted items become `Unloaded`, so a later `plan` call in the same
-    // frame (or the next frame) will not re-pick them.
+    /// Decide which items to load and evict this frame.
+    ///
+    /// `Unloaded` items are considered best-score-first. While the pool has
+    /// spare capacity -- under both the count cap and (when set) the byte budget
+    /// -- they are simply scheduled to load. Once the pool is full a candidate
+    /// can still load by evicting worst-scored residents, but only ones strictly
+    /// farther than the candidate, so equal-priority items never churn. A large
+    /// candidate may evict several small residents to fit under the byte budget.
+    /// At most `load_budget` loads are scheduled per call.
+    ///
+    /// With no byte budget set this reduces exactly to the count-only policy.
+    ///
+    /// This method mutates planner state: scheduled items become `Pending` and
+    /// evicted items become `Unloaded`, so a later `plan` call in the same
+    /// frame (or the next frame) will not re-pick them.
     pub fn plan(&mut self) -> StreamPlan {
         let mut plan = StreamPlan::default();
 

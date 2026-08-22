@@ -1,18 +1,16 @@
-// tests/cli.rs
-//
-// End-to-end tests that drive the built `concinnity` binary through the paths
-// that never touch the renderer: `--help`, a missing subcommand, the `cn debug`
-// client commands pointed at a dead server, and every authoring subcommand
-// (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
-// `init` / `new`). They exercise `fn main()` and the command dispatch (which the
-// in-crate unit tests cannot, since those never run the binary), plus the
-// world-discovery wrappers in `cli/`, whose fallbacks read process-global path
-// anchors that a unit test in the shared test binary could not redirect without
-// racing its neighbours. Under `cargo llvm-cov` the profile data the spawned
-// binary writes on exit is merged, so this coverage counts.
-//
-// Only the non-engine paths are driven here; `cn run` and a bare `cn debug`
-// stand up a renderer + window and are verified by screenshot probes instead.
+//! End-to-end tests that drive the built `concinnity` binary through the paths
+//! that never touch the renderer: `--help`, a missing subcommand, the `cn debug`
+//! client commands pointed at a dead server, and every authoring subcommand
+//! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
+//! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
+//! in-crate unit tests cannot, since those never run the binary), plus the
+//! world-discovery wrappers in `cli/`, whose fallbacks read process-global path
+//! anchors that a unit test in the shared test binary could not redirect without
+//! racing its neighbours. Under `cargo llvm-cov` the profile data the spawned
+//! binary writes on exit is merged, so this coverage counts.
+//!
+//! Only the non-engine paths are driven here; `cn run` and a bare `cn debug`
+//! stand up a renderer + window and are verified by screenshot probes instead.
 
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};

@@ -15,7 +15,7 @@ pub(crate) struct PointInterp {
 }
 
 impl PointInterp {
-    pub fn new(point: [f32; 3]) -> Self {
+    pub(crate) fn new(point: [f32; 3]) -> Self {
         Self {
             prev: point,
             curr: point,
@@ -23,23 +23,23 @@ impl PointInterp {
     }
 
     // The authoritative simulated position (the latest tick's).
-    pub fn current(&self) -> [f32; 3] {
+    pub(crate) fn current(&self) -> [f32; 3] {
         self.curr
     }
 
     // Record a tick's result: the old current becomes the blend origin.
-    pub fn push(&mut self, point: [f32; 3]) {
+    pub(crate) fn push(&mut self, point: [f32; 3]) {
         self.prev = self.curr;
         self.curr = point;
     }
 
     // Adopt an externally written position with no blend across the jump.
-    pub fn snap(&mut self, point: [f32; 3]) {
+    pub(crate) fn snap(&mut self, point: [f32; 3]) {
         self.prev = point;
         self.curr = point;
     }
 
-    pub fn sample(&self, alpha: f32) -> [f32; 3] {
+    pub(crate) fn sample(&self, alpha: f32) -> [f32; 3] {
         lerp3(self.prev, self.curr, alpha)
     }
 }
@@ -52,19 +52,19 @@ pub(crate) struct PoseInterp {
 }
 
 impl PoseInterp {
-    pub fn new(position: [f32; 3], rotation: [f32; 4]) -> Self {
+    pub(crate) fn new(position: [f32; 3], rotation: [f32; 4]) -> Self {
         Self {
             prev: (position, rotation),
             curr: (position, rotation),
         }
     }
 
-    pub fn push(&mut self, position: [f32; 3], rotation: [f32; 4]) {
+    pub(crate) fn push(&mut self, position: [f32; 3], rotation: [f32; 4]) {
         self.prev = self.curr;
         self.curr = (position, rotation);
     }
 
-    pub fn sample(&self, alpha: f32) -> ([f32; 3], [f32; 4]) {
+    pub(crate) fn sample(&self, alpha: f32) -> ([f32; 3], [f32; 4]) {
         (
             lerp3(self.prev.0, self.curr.0, alpha),
             slerp(self.prev.1, self.curr.1, alpha),

@@ -1,15 +1,15 @@
-// Resource handle assignment.
-//
-// A resource (mesh, texture, material, ...) is addressed at runtime by a dense
-// per-kind handle. Today the renderer assigns those indices itself at init (it
-// drains the component column and enumerates it) and resolves every `AssetId`
-// reference to one by scanning. This module moves the assignment to build time:
-// cook walks the world's assets, gives each resource the next handle in its
-// kind's `0..N` space (declaration order), and records `AssetId -> handle` so a
-// later pass can resolve a reference to a handle without a runtime scan.
-//
-// This is the additive first step of the resource-table migration; nothing
-// consumes the map yet.
+//! Resource handle assignment.
+//!
+//! A resource (mesh, texture, material, ...) is addressed at runtime by a dense
+//! per-kind handle. Today the renderer assigns those indices itself at init (it
+//! drains the component column and enumerates it) and resolves every `AssetId`
+//! reference to one by scanning. This module moves the assignment to build time:
+//! cook walks the world's assets, gives each resource the next handle in its
+//! kind's `0..N` space (declaration order), and records `AssetId -> handle` so a
+//! later pass can resolve a reference to a handle without a runtime scan.
+//!
+//! This is the additive first step of the resource-table migration; nothing
+//! consumes the map yet.
 
 use serde::Deserialize;
 
@@ -31,7 +31,7 @@ pub use concinnity_world::resource_type::{
 // Compile dispatch for resource assets, as an extension trait: the vocabulary
 // enum lives in concinnity-world (which links no compilers), so the per-type
 // compile arms attach here in cook, where the compilers live.
-pub trait ResourceAssetCompile {
+pub(crate) trait ResourceAssetCompile {
     // Compile this resource's payload from its authored args. Bypasses the
     // `BuildAsset` trait (which requires `Component`, a thing a resource no
     // longer is) and calls the concrete compiler directly.
@@ -204,7 +204,7 @@ fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec
 
 // Per-kind handles assigned to each resource asset, keyed by its identity.
 #[derive(Debug, Default, Clone)]
-pub struct ResourceHandles {
+pub(crate) struct ResourceHandles {
     // Next unused handle per kind (the count assigned so far).
     next: HashMap<ResourceKind, u32>,
     // The handle each resource asset received.
@@ -220,7 +220,7 @@ pub struct ResourceHandles {
 impl ResourceHandles {
     // Give one resource the next handle in its kind's space and record it.
     // Declaration order in, dense `0..N` out.
-    pub fn assign(&mut self, kind: ResourceKind, id: AssetId) -> u32 {
+    pub(crate) fn assign(&mut self, kind: ResourceKind, id: AssetId) -> u32 {
         let next = self.next.entry(kind).or_insert(0);
         let handle = *next;
         *next += 1;
@@ -229,19 +229,20 @@ impl ResourceHandles {
     }
 
     // The handle a resource received, if it was assigned one.
-    pub fn get(&self, kind: ResourceKind, id: AssetId) -> Option<u32> {
+    pub(crate) fn get(&self, kind: ResourceKind, id: AssetId) -> Option<u32> {
         self.map.get(&(kind, id)).copied()
     }
 
     // How many handles a kind has assigned (its table length).
-    pub fn count(&self, kind: ResourceKind) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn count(&self, kind: ResourceKind) -> u32 {
         self.next.get(&kind).copied().unwrap_or(0)
     }
 
     // Assign handles across a world's resources, in the order given. The caller
     // has already classified each asset (via `asset_resource_kind`) and passes
     // only the resources; each kind counts independently from zero.
-    pub fn from_assets(assets: impl IntoIterator<Item = (AssetId, ResourceKind)>) -> Self {
+    pub(crate) fn from_assets(assets: impl IntoIterator<Item = (AssetId, ResourceKind)>) -> Self {
         let mut handles = Self::default();
         for (id, kind) in assets {
             handles.assign(kind, id);
@@ -250,7 +251,7 @@ impl ResourceHandles {
     }
 
     // Give one Shader the next handle in the shader space and record it.
-    pub fn assign_shader(&mut self, id: AssetId) -> u32 {
+    pub(crate) fn assign_shader(&mut self, id: AssetId) -> u32 {
         let handle = self.shader_next;
         self.shader_next += 1;
         self.shader_map.insert(id, handle);
@@ -258,12 +259,13 @@ impl ResourceHandles {
     }
 
     // The handle a Shader received, if it was assigned one.
-    pub fn shader(&self, id: AssetId) -> Option<u32> {
+    pub(crate) fn shader(&self, id: AssetId) -> Option<u32> {
         self.shader_map.get(&id).copied()
     }
 
     // How many shader handles were assigned.
-    pub fn shader_count(&self) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn shader_count(&self) -> u32 {
         self.shader_next
     }
 }
@@ -273,7 +275,7 @@ impl ResourceHandles {
 // emitted from, so a shader's handle equals the position the runtime
 // encounters it when draining the Shader column. Call alongside
 // `assign_mesh_source_handles`, before installing the map.
-pub fn assign_shader_handles(
+pub(crate) fn assign_shader_handles(
     handles: &mut ResourceHandles,
     assets: &[crate::world::WorldJsonlAsset],
 ) {
@@ -293,7 +295,7 @@ pub fn assign_shader_handles(
 // runtime assigns while decoding geometry. Call over the same expanded +
 // injected `assets` list the blob is emitted from, after the per-kind generic
 // pass and before installing the map.
-pub fn assign_mesh_source_handles(
+pub(crate) fn assign_mesh_source_handles(
     handles: &mut ResourceHandles,
     assets: &[crate::world::WorldJsonlAsset],
 ) {
@@ -326,7 +328,7 @@ thread_local! {
 // shared build interner, then looks up that resource's handle for its kind. An
 // unknown name yields `None`, letting the deserializer fall back or fail as its
 // context requires. Idempotent and cheap after the first call.
-pub fn ensure_resource_handle_resolvers() {
+pub(crate) fn ensure_resource_handle_resolvers() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         crate::ecs::set_texture_handle_resolver(|name| {
@@ -363,14 +365,14 @@ pub fn ensure_resource_handle_resolvers() {
 // Install this build's handle map so resource references resolve to handles
 // during the component reserialize pass. Call after `from_assets` over the
 // expanded + injected world, before reserializing any component.
-pub fn install_resource_handles(handles: ResourceHandles) {
+pub(crate) fn install_resource_handles(handles: ResourceHandles) {
     ensure_resource_handle_resolvers();
     RESOURCE_HANDLES.with(|h| *h.borrow_mut() = handles);
 }
 
 // Clear the thread-local handle map. Call at the start of a build so a prior
 // build's map cannot leak into this one (mirrors `reset_interner`).
-pub fn reset_resource_handles() {
+pub(crate) fn reset_resource_handles() {
     ensure_resource_handle_resolvers();
     RESOURCE_HANDLES.with(|h| *h.borrow_mut() = ResourceHandles::default());
 }

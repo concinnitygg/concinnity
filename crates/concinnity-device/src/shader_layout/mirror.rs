@@ -29,15 +29,15 @@ pub(super) struct RustField {
 // six-float prefix of the nine-float post block. Those bytes must lie beyond
 // every field the shader does declare.
 pub(super) struct Lane {
-    pub rust: Vec<RustField>,
+    pub(crate) rust: Vec<RustField>,
     pub shader: Vec<&'static str>,
 }
 
 // One `#[repr(C)]` struct and the shader struct it must match.
 pub(super) struct Mirror {
-    pub rust_name: &'static str,
-    pub rust_size: usize,
-    pub shader_name: &'static str,
+    pub(crate) rust_name: &'static str,
+    pub(crate) rust_size: usize,
+    pub(crate) shader_name: &'static str,
     pub lanes: Vec<Lane>,
 }
 

@@ -115,7 +115,7 @@ struct Cli {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DebugArgs {
+pub(crate) struct DebugArgs {
     /// Query or drive a running `cn debug` server instead of starting one
     // When present, `cn debug` acts as a client: it connects to an already
     // running server's localhost WebSocket. When absent, `cn debug` starts the
@@ -132,26 +132,26 @@ pub struct DebugArgs {
     #[arg(long)]
     pub server: Option<String>,
 
-    /// Account ID for asset fetching authentication
+    // Account ID for asset fetching authentication
     // Defaults to the value in the client config.
     #[arg(long)]
-    pub user: Option<String>,
+    pub(crate) user: Option<String>,
 
-    /// Port for the localhost runtime debug server (default 8777)
+    // Port for the localhost runtime debug server (default 8777)
     #[arg(long)]
-    pub debug_port: Option<u16>,
+    pub(crate) debug_port: Option<u16>,
 
-    /// Enable graphics API validation, overriding the build profile
+    // Enable graphics API validation, overriding the build profile
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
-    pub validation: Option<bool>,
+    pub(crate) validation: Option<bool>,
 }
 
 // Client-side `cn debug` subcommands. Each connects to a running server's
 // localhost WebSocket, sends one request, and prints the reply; the transport
 // lives in `debug::client` (re-exported from `debug::wire`).
 #[derive(Subcommand, Debug)]
-pub enum DebugClientCommand {
+pub(crate) enum DebugClientCommand {
     /// Send one raw JSON command and print the reply
     #[command(name = "send")]
     Send(DebugSendArgs),
@@ -170,7 +170,7 @@ pub enum DebugClientCommand {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DebugSendArgs {
+pub(crate) struct DebugSendArgs {
     /// Raw JSON object including its own "cmd" field
     // e.g. '{"cmd":"state"}' or '{"cmd":"emitter-remove","id":0}'
     pub json: String,
@@ -181,15 +181,15 @@ pub struct DebugSendArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DebugSmokeArgs {
+pub(crate) struct DebugSmokeArgs {
     /// Seconds to wait for the render loop to start
     // The first build bakes a 4K HDRI and is slow, hence the generous default.
     #[arg(long, default_value_t = 240)]
     pub wait: u64,
 
-    /// Stop the client after probing so no window is left running
+    // Stop the client after probing so no window is left running
     #[arg(long)]
-    pub shutdown: bool,
+    pub(crate) shutdown: bool,
 
     /// Debug server port
     #[arg(long, default_value_t = 8777)]
@@ -197,7 +197,7 @@ pub struct DebugSmokeArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DebugScreenshotArgs {
+pub(crate) struct DebugScreenshotArgs {
     /// Output PNG path (resolved to absolute)
     pub path: String,
 
@@ -209,7 +209,7 @@ pub struct DebugScreenshotArgs {
 // The argv face of the library's `WatchTarget`: the value-enum derive lives
 // here so concinnity-editor carries no clap dependency.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub enum WatchTargetArg {
+pub(crate) enum WatchTargetArg {
     Camera,
     State,
     Streaming,
@@ -228,14 +228,14 @@ impl From<WatchTargetArg> for WatchTarget {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DebugWatchArgs {
+pub(crate) struct DebugWatchArgs {
     /// Which read-only snapshot to poll
     #[arg(value_enum, default_value = "camera")]
     pub target: WatchTargetArg,
 
-    /// Milliseconds between polls
+    // Milliseconds between polls
     #[arg(long, default_value_t = 500)]
-    pub interval: u64,
+    pub(crate) interval: u64,
 
     /// Debug server port
     #[arg(long, default_value_t = 8777)]
@@ -243,26 +243,26 @@ pub struct DebugWatchArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct EditorArgs {
+pub(crate) struct EditorArgs {
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 
-    /// Start the localhost debug server on this port alongside the editor
+    // Start the localhost debug server on this port alongside the editor
     // Absent leaves the editor without a WebSocket channel; present makes an
     // editor session inspectable/drivable (e.g. `cn debug smoke`, `screenshot`).
     #[arg(long)]
-    pub debug_port: Option<u16>,
+    pub(crate) debug_port: Option<u16>,
 
-    /// Enable graphics API validation, overriding the build profile
+    // Enable graphics API validation, overriding the build profile
     // Omitting the flag defers to the build profile. See `RunArgs::validation`.
     #[arg(long)]
-    pub validation: Option<bool>,
+    pub(crate) validation: Option<bool>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct RunArgs {
-    /// Enable graphics API validation, overriding the build profile
+pub(crate) struct RunArgs {
+    // Enable graphics API validation, overriding the build profile
     // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
     // layer (the process re-execs once with `MTL_DEBUG_LAYER` set, since Metal
     // cannot toggle it from inside a running process). Omitting the flag defers
@@ -271,29 +271,29 @@ pub struct RunArgs {
     // shader validation is not enabled by this flag; set `MTL_SHADER_VALIDATION=1`
     // in the environment for that.
     #[arg(long)]
-    pub validation: Option<bool>,
+    pub(crate) validation: Option<bool>,
 
-    /// Step simulation and rendering serially on one thread instead of
-    /// pipelining them (A/B comparison, escape hatch)
+    // Step simulation and rendering serially on one thread instead of
+    // pipelining them (A/B comparison, escape hatch)
     #[arg(long)]
-    pub serial: bool,
+    pub(crate) serial: bool,
 
-    /// Keep every system's internal work on the sim thread instead of the
-    /// job pool (determinism oracle, escape hatch)
+    // Keep every system's internal work on the sim thread instead of the
+    // job pool (determinism oracle, escape hatch)
     #[arg(long)]
-    pub serial_schedule: bool,
+    pub(crate) serial_schedule: bool,
 
     /// Capture the last presented frame to this PNG when the run stops
     #[arg(long)]
     pub screenshot: Option<String>,
 
-    /// Stop after this many frames (overrides GraphicsConfig.max_frames)
+    // Stop after this many frames (overrides GraphicsConfig.max_frames)
     #[arg(long)]
-    pub frames: Option<u64>,
+    pub(crate) frames: Option<u64>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct AddArgs {
+pub(crate) struct AddArgs {
     /// Path to an asset file or type name
     pub target: String,
 
@@ -302,28 +302,28 @@ pub struct AddArgs {
     #[arg(short, long)]
     pub name: Option<String>,
 
-    /// Named scaffold preset used when bootstrapping a new world
+    // Named scaffold preset used when bootstrapping a new world
     // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
     // the base scaffold). Ignored when scaffolding doesn't fire.
     #[arg(short = 't', long)]
-    pub template: Option<String>,
+    pub(crate) template: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct RmArgs {
+pub(crate) struct RmArgs {
     /// The `name` field of the asset to remove
     pub name: String,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct TestArgs {
+pub(crate) struct TestArgs {
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct ListArgs {
+pub(crate) struct ListArgs {
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
@@ -342,7 +342,7 @@ pub struct ListArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct ExplainArgs {
+pub(crate) struct ExplainArgs {
     /// The `name` field of the asset to print
     pub name: String,
 
@@ -352,27 +352,27 @@ pub struct ExplainArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub struct DocsArgs {
+pub(crate) struct DocsArgs {
     /// Engine repository root to read sources from and write pages into
     #[arg(long, default_value = ".")]
     pub root: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct NewArgs {
+pub(crate) struct NewArgs {
     /// Directory to create the project in
     pub path: String,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct BuildArgs {
+pub(crate) struct BuildArgs {
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct ExportArgs {
+pub(crate) struct ExportArgs {
     /// Path to a world JSONL file (default: discover from .concinnity/worlds/)
     #[arg(short = 'f', long)]
     pub file: Option<String>,
@@ -381,9 +381,9 @@ pub struct ExportArgs {
     #[arg(short = 'n', long)]
     pub name: Option<String>,
 
-    /// Override the application version
+    // Override the application version
     #[arg(long)]
-    pub version: Option<String>,
+    pub(crate) version: Option<String>,
 
     /// Target platform
     #[arg(long)]
@@ -393,13 +393,13 @@ pub struct ExportArgs {
     #[arg(long, default_value = "dist")]
     pub out: String,
 
-    /// Output format: zip (default) or dir
+    // Output format: zip (default) or dir
     #[arg(long, default_value = "zip")]
-    pub format: String,
+    pub(crate) format: String,
 
-    /// Also produce a .dmg wrapping the .app (macOS-only)
+    // Also produce a .dmg wrapping the .app (macOS-only)
     #[arg(long)]
-    pub dmg: bool,
+    pub(crate) dmg: bool,
 }
 
 // When a render command requests graphics validation on macOS, relaunch the
@@ -456,7 +456,7 @@ fn reexec_with_metal_validation(cli: &Cli) {
 #[cfg(not(target_os = "macos"))]
 fn reexec_with_metal_validation(_cli: &Cli) {}
 
-pub fn run() -> std::io::Result<()> {
+pub(crate) fn run() -> std::io::Result<()> {
     let cli = Cli::parse();
 
     // Must run before any thread spawns or the Metal framework initialises.

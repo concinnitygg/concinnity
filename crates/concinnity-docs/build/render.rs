@@ -18,7 +18,7 @@ use std::collections::HashMap;
 // string values; `Named`/`NamedEnum` carry a documented type's name, which is
 // also its relative `Name.md` link target.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FieldType {
+pub(crate) enum FieldType {
     Bool,
     Float,
     Integer,
@@ -45,7 +45,7 @@ pub enum FieldType {
 }
 
 // A single documented field of an asset or value type.
-pub struct FieldEntry {
+pub(crate) struct FieldEntry {
     pub key: String,
     pub ty: FieldType,
     // True for `Option<T>` fields.
@@ -57,14 +57,14 @@ pub struct FieldEntry {
 }
 
 // One value of a documented enum: its serialized string and its own doc line.
-pub struct EnumValue {
+pub(crate) struct EnumValue {
     pub value: String,
     pub doc: String,
 }
 
 // In-page-safe slug for a type name (lowercase, alphanumerics and hyphens).
 // Used to resolve hand-written `](#slug)` cross-references back to a type name.
-pub fn slug(name: &str) -> String {
+pub(crate) fn slug(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect::<String>()
@@ -111,7 +111,7 @@ fn elem_plural(t: &FieldType) -> String {
 
 // The capitalised, sentence-leading phrase for a field type, e.g. `A string`,
 // `An array of 4 floats`, `A [PropCollider](PropCollider.md) object`.
-pub fn type_phrase(t: &FieldType) -> String {
+pub(crate) fn type_phrase(t: &FieldType) -> String {
     match t {
         FieldType::Bool => "A boolean".to_string(),
         FieldType::Float => "A float".to_string(),
@@ -156,7 +156,7 @@ fn doc_states_optional(doc_lower: &str) -> bool {
 
 // Render one field as a markdown bullet: type phrase, the field's own doc, and
 // a default/optional clause unless the doc already states it.
-pub fn render_field_bullet(f: &FieldEntry) -> String {
+pub(crate) fn render_field_bullet(f: &FieldEntry) -> String {
     let mut s = format!("- `{}`: {}.", f.key, type_phrase(&f.ty));
     let doc = f.doc.trim();
     if !doc.is_empty() {
@@ -181,7 +181,7 @@ pub fn render_field_bullet(f: &FieldEntry) -> String {
 
 // Render the `## Parameters` section for a set of fields, or an empty string
 // when the type has no documented fields.
-pub fn render_parameters(fields: &[FieldEntry]) -> String {
+pub(crate) fn render_parameters(fields: &[FieldEntry]) -> String {
     if fields.is_empty() {
         return String::new();
     }
@@ -195,7 +195,7 @@ pub fn render_parameters(fields: &[FieldEntry]) -> String {
 
 // Render the `## Values` section for a documented enum, one bullet per
 // serialized value with its own doc line. Empty when the enum has no values.
-pub fn render_values(values: &[EnumValue]) -> String {
+pub(crate) fn render_values(values: &[EnumValue]) -> String {
     if values.is_empty() {
         return String::new();
     }
@@ -222,7 +222,7 @@ pub fn render_values(values: &[EnumValue]) -> String {
 //   - an idiomatic rustdoc shortcut link `[Type]` (no target), where `Type` is
 //     a documented name.
 // Anything that does not resolve to a documented type is left untouched.
-pub fn rewrite_doc_links(doc: &str, name_for_slug: &HashMap<String, String>) -> String {
+pub(crate) fn rewrite_doc_links(doc: &str, name_for_slug: &HashMap<String, String>) -> String {
     let names: std::collections::HashSet<&str> =
         name_for_slug.values().map(String::as_str).collect();
     rewrite_shortcut_links(&rewrite_anchor_links(doc, name_for_slug), &names)

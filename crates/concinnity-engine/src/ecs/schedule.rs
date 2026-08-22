@@ -1,32 +1,31 @@
-// src/ecs/schedule.rs
-//
-// Gate builders for the system table (`define_systems!` in `registry`). Each
-// gate inspects the world's content and returns the constructed system when
-// its gating components are present, or `None` to leave it out of the
-// schedule. `World::build_internal_systems` and `World::system_manifest` both
-// run these same gates, so what the manifest reports and what `start()`
-// builds cannot drift.
-//
-// Gates construct their system, so every system constructor must stay cheap
-// and side-effect-free: the manifest probe discards the value, and anything
-// heavy (device acquisition, payload reads) belongs in `System::init`.
+//! Gate builders for the system table (`define_systems!` in `registry`). Each
+//! gate inspects the world's content and returns the constructed system when
+//! its gating components are present, or `None` to leave it out of the
+//! schedule. `World::build_internal_systems` and `World::system_manifest` both
+//! run these same gates, so what the manifest reports and what `start()`
+//! builds cannot drift.
+//!
+//! Gates construct their system, so every system constructor must stay cheap
+//! and side-effect-free: the manifest probe discards the value, and anything
+//! heavy (device acquisition, payload reads) belongs in `System::init`.
 
 use crate::ecs::{SystemAsset, World};
 
-// One row of the system table: the schedule entry `define_systems!` generates
-// per system. Table order is run order.
+/// One row of the system table: the schedule entry `define_systems!` generates
+/// per system. Table order is run order.
 pub struct SystemEntry {
-    // The `SystemAsset` variant name; the system's stable display name.
+    /// The `SystemAsset` variant name; the system's stable display name.
     pub name: &'static str,
-    // Human-readable gate condition, for docs and CLI reporting.
+    /// Human-readable gate condition, for docs and CLI reporting.
     pub present_when: &'static str,
-    // Constructs the system from world content when its gate holds.
+    /// Constructs the system from world content when its gate holds.
     pub gate: fn(&World) -> Option<SystemAsset>,
-    // Systems (by variant name) that must run earlier in the tick than this
-    // one, and systems this one must precede. Validated against table order
-    // at schedule build: the table stays the one execution order, and an edge
-    // that contradicts it is a startup panic, not a silent reorder.
+    /// Systems (by variant name) that must run earlier in the tick than this
+    /// one, and systems this one must precede. Validated against table order
+    /// at schedule build: the table stays the one execution order, and an edge
+    /// that contradicts it is a startup panic, not a silent reorder.
     pub after: &'static [&'static str],
+    /// Systems this one must run before.
     pub before: &'static [&'static str],
 }
 

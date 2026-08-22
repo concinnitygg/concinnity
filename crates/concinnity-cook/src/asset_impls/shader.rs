@@ -11,7 +11,7 @@ use concinnity_world::source_args::resolve_source_from_args;
 // `.concinnity/assets/<raw>`. A path with a directory component is used
 // verbatim. Mirrors the resolution `compile_payload` applies; built-in shaders
 // short-circuit upstream and never reach this.
-pub fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
+pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
         if let Some(path) = concinnity_store::source::find_in_assets(raw) {

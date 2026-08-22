@@ -1,15 +1,13 @@
-// src/thumbnail.rs
-//
-// Baked asset thumbnails: small PNG previews of a compiled world's visual
-// resources (textures, materials, meshes, environment maps), rendered on the
-// CPU from the compiled payloads and written content-addressed to the
-// thumbnails directory. Runs in the disk-build tail (write_build_outputs), so
-// the editor's per-edit preview rebuilds never pay for it; content addressing
-// makes a re-bake of unchanged content a file-existence check.
-//
-// Layout: `<thumbnails dir>/<sha256>.png` plus an `index.json` written each
-// bake mapping asset name -> key, so a browser can resolve a name without
-// recomputing hashes.
+//! Baked asset thumbnails: small PNG previews of a compiled world's visual
+//! resources (textures, materials, meshes, environment maps), rendered on the
+//! CPU from the compiled payloads and written content-addressed to the
+//! thumbnails directory. Runs in the disk-build tail (write_build_outputs), so
+//! the editor's per-edit preview rebuilds never pay for it; content addressing
+//! makes a re-bake of unchanged content a file-existence check.
+//!
+//! Layout: `<thumbnails dir>/<sha256>.png` plus an `index.json` written each
+//! bake mapping asset name -> key, so a browser can resolve a name without
+//! recomputing hashes.
 
 use crate::pipeline::PipelineResult;
 use concinnity_blob::ResourceKind;
@@ -33,7 +31,7 @@ const THUMB_SIZE: u32 = 128;
 const MESH_COLOR: [f32; 3] = [0.72, 0.72, 0.75];
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct ThumbReport {
+pub(crate) struct ThumbReport {
     pub baked: usize,
     pub reused: usize,
     // Resources with no bakeable preview (unsupported compressed format,
@@ -42,12 +40,15 @@ pub struct ThumbReport {
 }
 
 // Bake into the project's thumbnails directory.
-pub fn bake_thumbnails(result: &PipelineResult) -> std::io::Result<ThumbReport> {
+pub(crate) fn bake_thumbnails(result: &PipelineResult) -> std::io::Result<ThumbReport> {
     bake_thumbnails_in(&concinnity_store::paths::thumbnails_dir(), result)
 }
 
 // Bake into `dir` (tests point this at a scratch directory).
-pub fn bake_thumbnails_in(dir: &Path, result: &PipelineResult) -> std::io::Result<ThumbReport> {
+pub(crate) fn bake_thumbnails_in(
+    dir: &Path,
+    result: &PipelineResult,
+) -> std::io::Result<ThumbReport> {
     std::fs::create_dir_all(dir)?;
     let mut report = ThumbReport::default();
     let mut index: Vec<(String, String)> = Vec::new();

@@ -18,7 +18,7 @@ const MAX_TICKS_PER_FRAME: u32 = 5;
 // Accumulates wall-clock time into fixed simulation ticks. One per `App`,
 // advanced once per world step.
 #[derive(Debug, Default)]
-pub struct SimClock {
+pub(crate) struct SimClock {
     last: Option<Instant>,
     accumulator: f32,
 }
@@ -27,7 +27,7 @@ impl SimClock {
     // The tick budget for a frame starting at `now`. `paused` holds the clock:
     // no time accumulates and no ticks are emitted, but the remainder (and so
     // the alpha) is kept, so the frozen frame keeps rendering the same blend.
-    pub fn advance(&mut self, now: Instant, paused: bool) -> SimTiming {
+    pub(crate) fn advance(&mut self, now: Instant, paused: bool) -> SimTiming {
         let elapsed = self
             .last
             .map(|t| now.duration_since(t).as_secs_f32())

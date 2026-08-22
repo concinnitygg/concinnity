@@ -12,7 +12,7 @@ const DEFAULT_ALPHA_CUTOFF: f32 = 0.5;
 // 0, so any other set names UVs that were never imported.
 pub(super) struct MappedMaterial {
     pub args: Map<String, Value>,
-    pub extra_uv_sets: Vec<u32>,
+    pub(crate) extra_uv_sets: Vec<u32>,
 }
 
 // Bind one texture reference to a Material field, naming the Texture entry the

@@ -17,7 +17,7 @@
 // collapsed state hides this row, or `None` for a row that is always shown
 // (chrome-in-stack, e.g. a group header).
 #[derive(Debug, Clone, Copy)]
-pub struct RowSpec {
+pub(super) struct RowSpec {
     pub height: f32,
     pub group: Option<usize>,
 }
@@ -26,7 +26,7 @@ pub struct RowSpec {
 // row's build-time (all-expanded, unscrolled) position, so a client adds it to
 // the element's authored y. A hidden row's `dy` is unspecified.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RowPlacement {
+pub(super) struct RowPlacement {
     pub dy: f32,
     pub visible: bool,
 }
@@ -34,22 +34,22 @@ pub struct RowPlacement {
 // The scalar solution for one panel; the per-row placements land in the
 // caller's buffer (see `solve_into`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Solved {
+pub(super) struct Solved {
     // Total height of the visible stack (sum of shown row heights).
-    pub content_height: f32,
+    pub(crate) content_height: f32,
     // The scroll offset after clamping to `[0, max_scroll]`.
     pub scroll: f32,
     // Scrollbar thumb size as a fraction of the track, in `(0, 1]`. 1.0 means
     // the content fits and no scrolling is possible (the bar can be hidden).
-    pub thumb_frac: f32,
+    pub(crate) thumb_frac: f32,
     // Scrollbar thumb top as a fraction of the track, in `[0, 1 - thumb_frac]`.
-    pub thumb_offset_frac: f32,
+    pub(crate) thumb_offset_frac: f32,
 }
 
 impl Solved {
     // Whether the content overflows the band (i.e. scrolling does anything and
     // the scrollbar is meaningful).
-    pub fn scrollable(&self) -> bool {
+    pub(super) fn scrollable(&self) -> bool {
         self.thumb_frac < 1.0
     }
 }
@@ -60,7 +60,7 @@ impl Solved {
 // positions implied by the running sum of heights. `collapsed[g]` hides every
 // row whose `group == Some(g)`. `band_height` is the visible window; `scroll`
 // is the requested offset (clamped here).
-pub fn solve_into(
+pub(super) fn solve_into(
     rows: &[RowSpec],
     collapsed: &[bool],
     band_height: f32,

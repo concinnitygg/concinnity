@@ -1,14 +1,12 @@
-// src/gfx/skeleton.rs
-//
-// The skeletal-animation vocabulary: a joint hierarchy with its bind pose, the
-// keyframe tracks a clip animates it with, and the sampling that turns a clip
-// time into one local matrix per joint.
-//
-// Rotations are stored as YXZ Euler degrees (matching `Prop.rotation_deg`).
-// Between keyframes, translation and scale interpolate linearly while rotation
-// is converted to a quaternion and slerped (shortest-arc, constant angular
-// velocity), so multi-axis joint rotation follows the correct path rather than
-// the skewed one a component-wise Euler lerp would take.
+//! The skeletal-animation vocabulary: a joint hierarchy with its bind pose, the
+//! keyframe tracks a clip animates it with, and the sampling that turns a clip
+//! time into one local matrix per joint.
+//!
+//! Rotations are stored as YXZ Euler degrees (matching `Prop.rotation_deg`).
+//! Between keyframes, translation and scale interpolate linearly while rotation
+//! is converted to a quaternion and slerped (shortest-arc, constant angular
+//! velocity), so multi-axis joint rotation follows the correct path rather than
+//! the skewed one a component-wise Euler lerp would take.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -26,8 +24,11 @@ use crate::math::rem_euclid;
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct JointPose {
+    /// Local translation.
     pub translation: [f32; 3],
+    /// Local YXZ Euler rotation in degrees.
     pub rotation_deg: [f32; 3],
+    /// Per-axis local scale.
     pub scale: [f32; 3],
 }
 
@@ -133,14 +134,17 @@ impl Skeleton {
         }
     }
 
+    /// Number of joints.
     pub fn len(&self) -> usize {
         self.joints.len()
     }
 
+    /// Whether the skeleton has no joints.
     pub fn is_empty(&self) -> bool {
         self.joints.is_empty()
     }
 
+    /// The joints, in index order.
     pub fn joints(&self) -> &[Joint] {
         &self.joints
     }
@@ -213,14 +217,18 @@ impl Skeleton {
 /// A single keyframe: a joint pose sampled at a point in time.
 #[derive(Debug, Clone, Copy)]
 pub struct Keyframe {
+    /// Seconds from the clip start.
     pub time: f32,
+    /// The joint's local pose at `time`.
     pub pose: JointPose,
 }
 
 /// An animation channel for one joint: a time-ordered list of keyframes.
 #[derive(Debug, Clone)]
 pub struct JointTrack {
+    /// Index of the joint this track drives.
     pub joint: usize,
+    /// Keyframes, in ascending time order.
     pub keys: Vec<Keyframe>,
 }
 
@@ -259,6 +267,7 @@ pub struct AnimationClip {
     pub duration: f32,
     /// When true, sampling past `duration` wraps; otherwise it holds the end.
     pub looping: bool,
+    /// One track per animated joint.
     pub tracks: Vec<JointTrack>,
     /// Morph-target weight keys in time order: (time, one weight per target).
     /// Empty for clips that animate no morph targets.

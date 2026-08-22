@@ -1,15 +1,13 @@
-// src/lib.rs
-//
-// The runtime crate. Holds the world loop, the ECS, the GraphicsSystem renderer
-// driver, audio, and physics. The GPU-free render-prep lives in
-// concinnity-render and the hardware backends (Metal/DirectX/Vulkan/Win32) in
-// concinnity-device; this crate drives them through a `Box<dyn RenderBackend>`
-// from `concinnity_device::init_backend` and never names a concrete backend.
-// Depends on concinnity-core/cpu/render/device (no concinnity-cook, no image
-// decoders). The editor crate (concinnity-editor) drives this crate's App /
-// renderer through the public API widened here; the modules the editor reaches
-// into are `pub` so it can name their paths, but individual internals stay
-// `pub(crate)` unless the editor specifically needs them.
+//! The runtime crate. Holds the world loop, the ECS, the GraphicsSystem renderer
+//! driver, audio, and physics. The GPU-free render-prep lives in
+//! concinnity-render and the hardware backends (Metal/DirectX/Vulkan/Win32) in
+//! concinnity-device; this crate drives them through a `Box<dyn RenderBackend>`
+//! from `concinnity_device::init_backend` and never names a concrete backend.
+//! Depends on concinnity-core/cpu/render/device (no concinnity-cook, no image
+//! decoders). The editor crate (concinnity-editor) drives this crate's App /
+//! renderer through the public API widened here; the modules the editor reaches
+//! into are `pub` so it can name their paths, but individual internals stay
+//! `pub(crate)` unless the editor specifically needs them.
 pub mod assets;
 pub mod blob;
 pub mod ecs;
@@ -26,6 +24,10 @@ mod bench;
 pub(crate) use concinnity_core::result;
 pub(crate) use concinnity_cpu::{build, geometry};
 
+// The access-declaration mask builders, reached crate-wide as
+// `crate::component_mask!` / `crate::resource_mask!`.
+pub(crate) use ecs::access_ids::{component_mask, resource_mask};
+
 pub mod app;
 // Flat entry point for a shipped player: run a compiled world from a state dir.
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
@@ -35,7 +37,7 @@ pub use app::run::run_from;
 // and drive it with `App::run` / `App::run_with`. Exported flat so the
 // `concinnity` facade crate re-exports these under its own root.
 pub use app::run::{PipelineMode, RunOptions, init_logging};
-pub use app::state::{App, AppStatus};
+pub use app::state::App;
 // Redirect runtime-writable state (`saves/` + `settings`) before `run_from`
 // when the content dir is read-only. Exported beside `run_from` so the runtime
 // bin's entire entry API lives on this crate.
@@ -49,15 +51,15 @@ pub use concinnity_device::precompile::{
     Report as ShaderPrecompileReport, precompile_builtin_shaders,
 };
 pub(crate) mod cbor_file;
-pub mod config;
-pub mod shutdown;
-// Crash reporting: panic hook, native fault capture, local report files.
-// `pub` so the binaries install the hooks and the editor composes the
-// recent-log ring layer into its tracing subscriber.
+pub(crate) mod config;
+/// Crash reporting: panic hook, native fault capture, local report files.
+/// `pub` so the binaries install the hooks and the editor composes the
+/// recent-log ring layer into its tracing subscriber.
 pub mod crash;
-// The standalone startup-error window. `pub` so a host binary can report a
-// fatal startup failure through it before any world exists.
-pub mod error_screen;
+pub mod shutdown;
+// The standalone startup-error window, shown when a fatal startup failure
+// happens before any world exists.
+pub(crate) mod error_screen;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;
@@ -69,9 +71,9 @@ pub(crate) mod behavior;
 // historical crate::jobs path. `pub` so the editor's hot-reload decoder keeps
 // reaching it through `concinnity_engine::jobs`.
 pub use concinnity_render::jobs;
-// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
-// stream). `pub` so the editor's in-memory build path can construct the tables it
-// inserts into the world, mirroring the shipped-runtime loader.
+/// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
+/// stream). `pub` so the editor's in-memory build path can construct the tables it
+/// inserts into the world, mirroring the shipped-runtime loader.
 pub mod resource;
 // Runtime entity churn (Lifetime/Spawner ticks + spawn/despawn/reparent
 // drains), scheduled immediately before GraphicsSystem.

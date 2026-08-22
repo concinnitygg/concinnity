@@ -1,11 +1,11 @@
-// concinnity-runtime: the shipped app player.
-//
-// A minimal standalone binary that plays a world's pre-compiled blobs.
-//
-// The state root (holding `data/`, plus the `saves/` and `settings` the app
-// writes at runtime) is anchored to the executable, not the launch working
-// directory, so the app finds its data whether it is double-clicked, launched
-// from a shell, or run from inside a macOS `.app` bundle.
+//! concinnity-runtime: the shipped app player.
+//!
+//! A minimal standalone binary that plays a world's pre-compiled blobs.
+//!
+//! The state root (holding `data/`, plus the `saves/` and `settings` the app
+//! writes at runtime) is anchored to the executable, not the launch working
+//! directory, so the app finds its data whether it is double-clicked, launched
+//! from a shell, or run from inside a macOS `.app` bundle.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

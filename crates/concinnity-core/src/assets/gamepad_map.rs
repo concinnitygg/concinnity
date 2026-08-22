@@ -8,8 +8,11 @@ use crate::assets::GamepadButton;
 /// Escape on the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GamepadAction {
+    /// Hold to move faster.
     Sprint,
+    /// Jump.
     Jump,
+    /// Interact with the entity under the cursor.
     Interact,
 }
 

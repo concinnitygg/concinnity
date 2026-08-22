@@ -1,13 +1,13 @@
-// `BuildAsset` is the build-time counterpart to `Component`. Components whose
-// `PAYLOAD = AssetPayload::Compiled` implement this trait to turn their args
-// into a binary payload (mesh vertices, shader bytecode, decoded image, etc.).
-// The build pipeline calls `<T as BuildAsset>::compile_payload` for each
-// declared asset and packs the resulting bytes into a blob.
-//
-// `BuildCtx` is the build-time context handed to each impl. It lives here
-// because it is build-only: the runtime never compiles a payload. `Platform`
-// and the `SourceBacked` trait stay in concinnity-core, since the engine reads
-// a Shader stage's current-platform source at runtime.
+//! `BuildAsset` is the build-time counterpart to `Component`. Components whose
+//! `PAYLOAD = AssetPayload::Compiled` implement this trait to turn their args
+//! into a binary payload (mesh vertices, shader bytecode, decoded image, etc.).
+//! The build pipeline calls `<T as BuildAsset>::compile_payload` for each
+//! declared asset and packs the resulting bytes into a blob.
+//!
+//! `BuildCtx` is the build-time context handed to each impl. It lives here
+//! because it is build-only: the runtime never compiles a payload. `Platform`
+//! and the `SourceBacked` trait stay in concinnity-core, since the engine reads
+//! a Shader stage's current-platform source at runtime.
 
 use crate::ecs::Component;
 use crate::world::WorldJsonlAsset;
@@ -27,22 +27,22 @@ use crate::world::WorldJsonlAsset;
 // list omits is not hashed at all, and a stale payload replays silently. Cover
 // each `Only` impl with a test asserting the set it reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceFiles {
+pub(crate) enum SourceFiles {
     Extra(Vec<String>),
     Only(Vec<String>),
 }
 
 // Build-time context handed to each `BuildAsset` impl.
-pub struct BuildCtx<'a> {
+pub(crate) struct BuildCtx<'a> {
     // The asset's declared name (used in error messages and as a key for
     // build-time intermediates such as compiled shader filenames).
     pub name: &'a str,
     // Optional directory of user-supplied artifacts (e.g. account-uploaded
     // shader source files) consulted when resolving bare filenames.
-    pub artifacts_dir: Option<&'a str>,
+    pub(crate) artifacts_dir: Option<&'a str>,
     // All sibling assets declared in the same world. Used by types like
     // `VoxelChunk` that need to resolve cross-asset references (palette).
-    pub all_assets: &'a [WorldJsonlAsset],
+    pub(crate) all_assets: &'a [WorldJsonlAsset],
 }
 
 // A component that compiles to a binary payload at build time.
@@ -50,7 +50,7 @@ pub struct BuildCtx<'a> {
 // Only types whose `Component::PAYLOAD` is `AssetPayload::Compiled` should
 // implement this. The build pipeline dispatches via a match on
 // `ComponentType` in [`crate::pipeline`].
-pub trait BuildAsset: Component {
+pub(crate) trait BuildAsset: Component {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
 
     // True when identical source bytes compile to a different payload per
@@ -89,15 +89,15 @@ pub trait BuildAsset: Component {
 // reads, plus whether the compile target affects the output. Paired so the
 // dispatch that builds one builds the other, keeping a new platform-dependent
 // asset from silently inheriting `TARGET_DEPENDENT = false`.
-pub struct CacheInputs {
+pub(crate) struct CacheInputs {
     pub sources: SourceFiles,
-    pub target_dependent: bool,
+    pub(crate) target_dependent: bool,
 }
 
 impl CacheInputs {
     // Inputs for an asset whose compile is platform-independent and whose
     // source paths the cache's generic args walk resolves on its own.
-    pub fn extra(paths: Vec<String>) -> Self {
+    pub(crate) fn extra(paths: Vec<String>) -> Self {
         Self {
             sources: SourceFiles::Extra(paths),
             target_dependent: false,

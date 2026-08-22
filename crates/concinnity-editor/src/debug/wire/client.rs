@@ -1,24 +1,22 @@
-// src/debug/wire/client.rs
-//
-// The client half of the runtime debug protocol: a thin localhost WebSocket
-// client the `concinnity debug <subcommand>` commands drive to talk to a
-// running `cn debug` server (see `super::server` for the other end).
-//
-// One TCP connection per request: the server answers each request on its own
-// thread and the requests are tiny, so a fresh connection per command is
-// simpler and more robust than holding a persistent socket. Every connect and
-// read is bounded by a timeout, so a gone or wedged server surfaces a clear
-// error instead of hanging. The socket-free helpers these commands use
-// (payload validation, reply inspection, the watch-target enum) live in
-// `super::super::protocol`, where they are unit-tested directly.
-//
-// Subcommands:
-//   send <json>        send one raw JSON command (with its own "cmd" field)
-//                      and print the reply; the escape hatch for any command
-//                      the typed helpers below do not cover
-//   smoke              headless render-loop liveness check (see `smoke`)
-//   screenshot <path>  capture the last presented frame to a PNG
-//   watch <target>     poll a read-only snapshot and print it until Ctrl-C
+//! The client half of the runtime debug protocol: a thin localhost WebSocket
+//! client the `concinnity debug <subcommand>` commands drive to talk to a
+//! running `cn debug` server (see `super::server` for the other end).
+//!
+//! One TCP connection per request: the server answers each request on its own
+//! thread and the requests are tiny, so a fresh connection per command is
+//! simpler and more robust than holding a persistent socket. Every connect and
+//! read is bounded by a timeout, so a gone or wedged server surfaces a clear
+//! error instead of hanging. The socket-free helpers these commands use
+//! (payload validation, reply inspection, the watch-target enum) live in
+//! `super::super::protocol`, where they are unit-tested directly.
+//!
+//! Subcommands:
+//!   send `<json>`      send one raw JSON command (with its own "cmd" field)
+//!                      and print the reply; the escape hatch for any command
+//!                      the typed helpers below do not cover
+//!   smoke              headless render-loop liveness check (see `smoke`)
+//!   screenshot `<path>`  capture the last presented frame to a PNG
+//!   watch `<target>`     poll a read-only snapshot and print it until Ctrl-C
 
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Arc;
@@ -136,9 +134,9 @@ fn fail_transport(msg: &str) -> ! {
     std::process::exit(EXIT_TRANSPORT);
 }
 
-// `concinnity debug send <json>`: send one raw JSON command and print the
-// reply. Exits 0 only when the server answered `"ok": true`, so it composes in
-// shell `&&` chains; a rejected command exits 1 and a transport failure exits 3.
+/// `concinnity debug send <json>`: send one raw JSON command and print the
+/// reply. Exits 0 only when the server answered `"ok": true`, so it composes in
+/// shell `&&` chains; a rejected command exits 1 and a transport failure exits 3.
 pub fn send(port: u16, json: &str) -> std::io::Result<()> {
     let payload = match validate_payload(json) {
         Ok(p) => p,
@@ -156,9 +154,9 @@ pub fn send(port: u16, json: &str) -> std::io::Result<()> {
     }
 }
 
-// `concinnity debug screenshot <path>`: capture the last presented frame to a
-// PNG. Resolves `path` to an absolute path so the file lands where the caller
-// expects regardless of the engine's working directory. Exits 0 only on success.
+/// `concinnity debug screenshot <path>`: capture the last presented frame to a
+/// PNG. Resolves `path` to an absolute path so the file lands where the caller
+/// expects regardless of the engine's working directory. Exits 0 only on success.
 pub fn screenshot(port: u16, path: &str) -> std::io::Result<()> {
     let abs = std::path::absolute(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
     let abs = abs.to_string_lossy().to_string();
@@ -204,14 +202,14 @@ fn wait_for_render_loop(port: u16, wait_secs: u64) -> Result<Value, String> {
     }
 }
 
-// `concinnity debug smoke`: headless render-loop liveness check. Waits for the
-// render loop to start, samples the frame counter twice, and asserts it
-// advanced. Prints a structured PASS/FAIL line. Exit codes: 0 pass, 1 loop
-// stalled, 2 loop never started, 3 transport failure. With `shutdown` it then
-// stops the client so no window is left running.
-//
-// This is the check to run when verifying a render change without watching the
-// GUI window or scraping logs.
+/// `concinnity debug smoke`: headless render-loop liveness check. Waits for the
+/// render loop to start, samples the frame counter twice, and asserts it
+/// advanced. Prints a structured PASS/FAIL line. Exit codes: 0 pass, 1 loop
+/// stalled, 2 loop never started, 3 transport failure. With `shutdown` it then
+/// stops the client so no window is left running.
+///
+/// This is the check to run when verifying a render change without watching the
+/// GUI window or scraping logs.
 pub fn smoke(port: u16, wait_secs: u64, shutdown: bool) -> std::io::Result<()> {
     println!("[smoke] waiting for render loop on ws://127.0.0.1:{port} (up to {wait_secs}s)...");
     let st0 = match wait_for_render_loop(port, wait_secs) {
@@ -278,10 +276,10 @@ fn sleep_interruptible(total_ms: u64, running: &AtomicBool) {
     }
 }
 
-// `concinnity debug watch <target>`: poll a read-only snapshot every
-// `interval_ms` and print each reply until Ctrl-C. A connection failure on the
-// very first poll is fatal (exit 3) -- there is nothing to watch; later
-// failures are printed and retried, so a server restart mid-session recovers.
+/// `concinnity debug watch <target>`: poll a read-only snapshot every
+/// `interval_ms` and print each reply until Ctrl-C. A connection failure on the
+/// very first poll is fatal (exit 3) -- there is nothing to watch; later
+/// failures are printed and retried, so a server restart mid-session recovers.
 pub fn watch(port: u16, target: WatchTarget, interval_ms: u64) -> std::io::Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let flag = Arc::clone(&running);

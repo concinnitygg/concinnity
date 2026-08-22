@@ -8,5 +8,5 @@ used; `Ssgi` layers a screen-space global-illumination bounce on top.
 
 ## Values
 
-- `ibl`
-- `ssgi`
+- `ibl`: Image-based lighting only.
+- `ssgi`: Image-based lighting plus a screen-space bounce.

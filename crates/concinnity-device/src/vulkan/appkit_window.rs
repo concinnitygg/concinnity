@@ -26,7 +26,7 @@ use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::input::RenderInput;
 use crate::gfx::keymap::KeyMap;
 
-pub struct AppKitVkWindow {
+pub(crate) struct AppKitVkWindow {
     win: AppKitWindow,
     // The presentation layer `vkCreateMetalSurfaceEXT` was handed. Retained so
     // it outlives the surface, and re-sized by `framebuffer_size`.
@@ -37,7 +37,7 @@ pub struct AppKitVkWindow {
 unsafe impl Send for AppKitVkWindow {}
 
 impl AppKitVkWindow {
-    pub fn new(
+    pub(crate) fn new(
         title: &str,
         width: u32,
         height: u32,
@@ -103,7 +103,7 @@ impl AppKitVkWindow {
     }
 
     // Drain pending AppKit events; true when the window should close.
-    pub fn poll(&mut self) -> bool {
+    pub(crate) fn poll(&mut self) -> bool {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             self.win.pump_ns_events(mtm);
         }
@@ -113,55 +113,55 @@ impl AppKitVkWindow {
         self.win.closed()
     }
 
-    pub fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> RenderInput {
         self.win.take_input()
     }
 
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         self.win.capture_cursor();
     }
 
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         self.win.release_cursor();
     }
 
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         self.win.set_ui_cursor_hidden(hidden);
     }
 
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.win.set_menu_mode(on);
     }
 
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         self.win.set_camera_capture(capture);
     }
 
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.win.cursor_outside_window()
     }
 
-    pub fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.win.set_keymap(keymap);
     }
 
-    pub fn set_window_mode(&mut self, mode: WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         self.win.set_window_mode(mode);
     }
 
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         self.win.set_window_size(width, height);
     }
 
-    pub fn display_modes(&self) -> Vec<DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
         self.win.display_modes()
     }
 
-    pub fn current_display_mode(&self) -> Option<DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         self.win.current_display_mode()
     }
 
-    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
         self.win.set_display_mode(mode);
     }
 
@@ -169,20 +169,20 @@ impl AppKitVkWindow {
     // Also the point at which the layer's drawable size is refreshed, so a
     // resize reaches MoltenVK's reported surface capabilities before the
     // swapchain is rebuilt from them.
-    pub fn framebuffer_size(&self) -> (i32, i32) {
+    pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
         self.sync_drawable_size()
     }
 
     // The overlay coordinate space: the view's size in points, larger than
     // `framebuffer_size` by the backing scale on a retina display. Comes from
     // the shared AppKit layer, which reports the cursor in the same units.
-    pub fn logical_size(&self) -> (f32, f32) {
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
         self.win.logical_size()
     }
 
     // Create the presentation surface from the hosted CAMetalLayer.
     // `_entry` keeps the signature shared with the GLFW / Win32 windows.
-    pub fn create_surface(
+    pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,
         instance: &ash::Instance,
@@ -197,7 +197,7 @@ impl AppKitVkWindow {
     }
 
     // Vulkan instance extensions required for surface creation on macOS.
-    pub fn required_instance_extensions(&self) -> Vec<String> {
+    pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::ext::metal_surface::NAME]
             .into_iter()
             .map(|n| n.to_str().unwrap_or_default().to_string())

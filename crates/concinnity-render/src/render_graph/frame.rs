@@ -48,200 +48,201 @@ use super::{
     PixelFormat, TextureDesc, TextureHandle, TextureSize, TextureUsage, full_mip_levels,
 };
 
-// Per-frame inputs that gate conditional passes. Built by `draw_frame`
-// from the live `MtlContext` state and consumed by `build_frame_graph`
-// so the conditional-inclusion decisions made here match what the
-// executor will dispatch.
+/// Per-frame inputs that gate conditional passes. Built by `draw_frame`
+/// from the live `MtlContext` state and consumed by `build_frame_graph`
+/// so the conditional-inclusion decisions made here match what the
+/// executor will dispatch.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FrameGraphInputs {
-    // `true` when a `ShadowStage` is in the world (i.e. the backend's
-    // shadow pipeline + cascade uniforms are live). Skips the Shadow
-    // pass when false rather than relying on the encoder's early
-    // return, so the compiled graph reflects what actually runs.
+    /// `true` when a `ShadowStage` is in the world (i.e. the backend's
+    /// shadow pipeline + cascade uniforms are live). Skips the Shadow
+    /// pass when false rather than relying on the encoder's early
+    /// return, so the compiled graph reflects what actually runs.
     pub shadow_enabled: bool,
-    // Per-cascade slice dimensions of the shadow-map array texture.
-    // Carried so the imported `shadow_map` resource carries its real
-    // shape for aliasing; ignored by the executor.
+    /// Per-cascade slice dimensions of the shadow-map array texture.
+    /// Carried so the imported `shadow_map` resource carries its real
+    /// shape for aliasing; ignored by the executor.
     pub shadow_map_size: u32,
-    // Pixel dimensions of the HDR off-screen targets the Main pass
-    // writes (and the post stack consumes). Carried for aliasing;
-    // ignored by the executor.
+    /// Pixel dimensions of the HDR off-screen targets the Main pass
+    /// writes (and the post stack consumes). Carried for aliasing;
+    /// ignored by the executor.
     pub hdr_width: u32,
+    /// HDR target height in pixels.
     pub hdr_height: u32,
-    // MSAA sample count of the HDR colour + depth attachments, typically
-    // 4. The resolve target is single-sample regardless.
+    /// MSAA sample count of the HDR colour + depth attachments, typically
+    /// 4. The resolve target is single-sample regardless.
     pub hdr_sample_count: u32,
-    // `true` when GPU-driven cull is going to run this frame, i.e. the
-    // bindless static path is configured AND there is geometry to cull
-    // AND the per-frame `object_buffer` / `draw_args` buffers built. The
-    // graph adds the Cull compute pass and the Main read-edge from
-    // `draw_args` only when this is on; otherwise Main draws via the
-    // legacy per-draw path with no graph dependency on the cull output.
+    /// `true` when GPU-driven cull is going to run this frame, i.e. the
+    /// bindless static path is configured AND there is geometry to cull
+    /// AND the per-frame `object_buffer` / `draw_args` buffers built. The
+    /// graph adds the Cull compute pass and the Main read-edge from
+    /// `draw_args` only when this is on; otherwise Main draws via the
+    /// legacy per-draw path with no graph dependency on the cull output.
     pub bindless_cull_enabled: bool,
-    // `true` when the auto-exposure compute pipelines are built (i.e.
-    // the world declared `PostProcessConfig.auto_exposure`). The graph
-    // appends an `AutoExposure` compute pass that reads the Main pass's
-    // `hdr_resolve_v1` (pre-decoration) and writes the histogram +
-    // readback buffer. The compile pass's WAR step pins AutoExposure
-    // before the first hdr_resolve post-Main writer (Decals or Fog or
-    // ParticlesDraw) so AutoExposure samples the un-decorated scene.
+    /// `true` when the auto-exposure compute pipelines are built (i.e.
+    /// the world declared `PostProcessConfig.auto_exposure`). The graph
+    /// appends an `AutoExposure` compute pass that reads the Main pass's
+    /// `hdr_resolve_v1` (pre-decoration) and writes the histogram +
+    /// readback buffer. The compile pass's WAR step pins AutoExposure
+    /// before the first hdr_resolve post-Main writer (Decals or Fog or
+    /// ParticlesDraw) so AutoExposure samples the un-decorated scene.
     pub auto_exposure_enabled: bool,
-    // `true` when `PostProcessConfig.bloom_intensity > 0.0`. The graph
-    // adds a `Bloom` pass that thresholds / downsamples / upsamples the
-    // post-TAA scene into the bloom mip chain; Composite reads the
-    // bloom output so the toposort orders Bloom before Composite.
+    /// `true` when `PostProcessConfig.bloom_intensity > 0.0`. The graph
+    /// adds a `Bloom` pass that thresholds / downsamples / upsamples the
+    /// post-TAA scene into the bloom mip chain; Composite reads the
+    /// bloom output so the toposort orders Bloom before Composite.
     pub bloom_enabled: bool,
-    // `true` when TAA is on (the velocity pre-pass only runs as part of
-    // the TAA stack). The graph adds a `Velocity` render pass that
-    // writes the per-pixel motion-vector buffer TaaResolve consumes;
-    // TaaResolve declares the read so Velocity → TaaResolve is explicit.
+    /// `true` when TAA is on (the velocity pre-pass only runs as part of
+    /// the TAA stack). The graph adds a `Velocity` render pass that
+    /// writes the per-pixel motion-vector buffer TaaResolve consumes;
+    /// TaaResolve declares the read so Velocity → TaaResolve is explicit.
     pub velocity_enabled: bool,
-    // `true` when TAA is on. The graph adds a `TaaResolve` render pass
-    // that reads the pre-TAA scene (SSR resolve output or hdr_resolve)
-    // and writes the imported `scene_color` Bloom + Composite consume.
+    /// `true` when TAA is on. The graph adds a `TaaResolve` render pass
+    /// that reads the pre-TAA scene (SSR resolve output or hdr_resolve)
+    /// and writes the imported `scene_color` Bloom + Composite consume.
     pub taa_enabled: bool,
-    // `true` when SSR is on. The graph adds an `SsrResolve` render pass
-    // that reads the post-decoration `hdr_resolve` and writes the
-    // imported `scene_pre_taa` texture, which only exists when this or
-    // `rt_reflections_enabled` is set. When TAA is also on, TaaResolve
-    // reads the post-SsrResolve version; with TAA off, Bloom +
-    // Composite read that version directly.
+    /// `true` when SSR is on. The graph adds an `SsrResolve` render pass
+    /// that reads the post-decoration `hdr_resolve` and writes the
+    /// imported `scene_pre_taa` texture, which only exists when this or
+    /// `rt_reflections_enabled` is set. When TAA is also on, TaaResolve
+    /// reads the post-SsrResolve version; with TAA off, Bloom +
+    /// Composite read that version directly.
     pub ssr_enabled: bool,
-    // `true` when the particle system is going to run this frame:
-    // `particle_pipelines` built AND at least one live emitter. The
-    // graph adds a `ParticlesDraw` render pass that blend-writes
-    // `hdr_resolve`. The bundled ParticlesSim compute sub-pass runs
-    // inside the same `encode_particles` call so it keeps its per-pass
-    // timing slot without needing its own graph node.
+    /// `true` when the particle system is going to run this frame:
+    /// `particle_pipelines` built AND at least one live emitter. The
+    /// graph adds a `ParticlesDraw` render pass that blend-writes
+    /// `hdr_resolve`. The bundled ParticlesSim compute sub-pass runs
+    /// inside the same `encode_particles` call so it keeps its per-pass
+    /// timing slot without needing its own graph node.
     pub particles_enabled: bool,
-    // `true` when a `VolumetricFog` is in the world. The graph adds a
-    // `Fog` render pass between Decals and ParticlesDraw on the
-    // hdr_resolve RMW chain.
+    /// `true` when a `VolumetricFog` is in the world. The graph adds a
+    /// `Fog` render pass between Decals and ParticlesDraw on the
+    /// hdr_resolve RMW chain.
     pub fog_enabled: bool,
-    // `true` when at least one `Decal` is in the world AND the decal
-    // pipeline is built. The graph adds a `Decals` render pass at the
-    // head of the hdr_resolve post-Main RMW chain.
+    /// `true` when at least one `Decal` is in the world AND the decal
+    /// pipeline is built. The graph adds a `Decals` render pass at the
+    /// head of the hdr_resolve post-Main RMW chain.
     pub decals_enabled: bool,
-    // `true` when the SSR pre-pass should run; matches
-    // `self.ssr_settings.is_some()`. The graph adds an `SsrPrepass`
-    // render pass that writes the imported `ssr_gbuffer` texture;
-    // SsaoBlur reads it when SSAO is also on (G-buffer sharing).
+    /// `true` when the SSR pre-pass should run; matches
+    /// `self.ssr_settings.is_some()`. The graph adds an `SsrPrepass`
+    /// render pass that writes the imported `ssr_gbuffer` texture;
+    /// SsaoBlur reads it when SSAO is also on (G-buffer sharing).
     pub ssr_prepass_enabled: bool,
-    // `true` when SSAO should run; matches
-    // `self.ssao_settings.is_some()`. The graph adds an `SsaoBlur`
-    // render pass that dispatches the bundled `encode_ssao` (which
-    // internally encodes SsaoPrepass + SsaoKernel + SsaoBlur). SsaoBlur
-    // writes `ao_output`; Main reads it. SsaoPrepass + SsaoKernel
-    // stay as timing-only PassIds (same pattern as ParticlesSim).
+    /// `true` when SSAO should run; matches
+    /// `self.ssao_settings.is_some()`. The graph adds an `SsaoBlur`
+    /// render pass that dispatches the bundled `encode_ssao` (which
+    /// internally encodes SsaoPrepass + SsaoKernel + SsaoBlur). SsaoBlur
+    /// writes `ao_output`; Main reads it. SsaoPrepass + SsaoKernel
+    /// stay as timing-only PassIds (same pattern as ParticlesSim).
     pub ssao_enabled: bool,
-    // `true` when temporal upscaling is on (e.g. MetalFX on Metal). The
-    // graph adds an `Upscale` pass between the post-SSR scene and the
-    // Bloom + Composite stack that reads `scene_pre_taa` + `velocity`
-    // and writes the imported `scene_color` at output resolution. When
-    // this is on, `TaaResolve` is *not* added: the upscaler does
-    // temporal accumulation itself, so adding TAA on top would
-    // double-temporal. `velocity_enabled` should still be on (the
-    // scaler consumes motion vectors); the engine layer is responsible
-    // for keeping the two flags in sync.
+    /// `true` when temporal upscaling is on (e.g. MetalFX on Metal). The
+    /// graph adds an `Upscale` pass between the post-SSR scene and the
+    /// Bloom + Composite stack that reads `scene_pre_taa` + `velocity`
+    /// and writes the imported `scene_color` at output resolution. When
+    /// this is on, `TaaResolve` is *not* added: the upscaler does
+    /// temporal accumulation itself, so adding TAA on top would
+    /// double-temporal. `velocity_enabled` should still be on (the
+    /// scaler consumes motion vectors); the engine layer is responsible
+    /// for keeping the two flags in sync.
     pub upscale_enabled: bool,
-    // `true` when at least one transparent / translucent draw is in the
-    // world (water, glass, ...). The graph adds a `Transparent` render
-    // pass after `SsrResolve` and before `TaaResolve` / `Upscale` that
-    // reads the latest scene-pre-taa colour + main depth and
-    // alpha-blends translucent geometry back-to-front into the same
-    // target. The pass aggregates N draws, each owns its own
-    // pipeline + descriptor set, the executor receives the sorted list
-    // at encode time.
+    /// `true` when at least one transparent / translucent draw is in the
+    /// world (water, glass, ...). The graph adds a `Transparent` render
+    /// pass after `SsrResolve` and before `TaaResolve` / `Upscale` that
+    /// reads the latest scene-pre-taa colour + main depth and
+    /// alpha-blends translucent geometry back-to-front into the same
+    /// target. The pass aggregates N draws, each owns its own
+    /// pipeline + descriptor set, the executor receives the sorted list
+    /// at encode time.
     pub transparent_enabled: bool,
-    // `true` when a system submitted world-space lines this frame AND the
-    // backend's line pipeline is live. The graph adds a `Lines` render pass at
-    // the tail of the hdr_resolve RMW chain: it blend-writes the scene colour
-    // and samples the resolved scene depth so a line behind geometry is
-    // occluded by it. A frame with no lines omits the node entirely.
+    /// `true` when a system submitted world-space lines this frame AND the
+    /// backend's line pipeline is live. The graph adds a `Lines` render pass at
+    /// the tail of the hdr_resolve RMW chain: it blend-writes the scene colour
+    /// and samples the resolved scene depth so a line behind geometry is
+    /// occluded by it. A frame with no lines omits the node entirely.
     pub lines_enabled: bool,
-    // `true` when at least one visible `SdfVolume` is in the world AND
-    // the backend's raymarch pipeline is live. The graph adds a
-    // `Raymarch` render pass between `AutoExposure` and `Decals` on the
-    // hdr_resolve RMW chain: it reads the head of the chain (so
-    // AutoExposure samples the pre-raymarch scene) and writes the next
-    // version that Decals then bumps further. The pass also RMWs the
-    // main depth attachment so subsequent passes see raymarched
-    // surfaces' depth, and that read-modify-write is declared, which is
-    // what makes the post-Raymarch depth version the one every later
-    // decoration pass samples.
+    /// `true` when at least one visible `SdfVolume` is in the world AND
+    /// the backend's raymarch pipeline is live. The graph adds a
+    /// `Raymarch` render pass between `AutoExposure` and `Decals` on the
+    /// hdr_resolve RMW chain: it reads the head of the chain (so
+    /// AutoExposure samples the pre-raymarch scene) and writes the next
+    /// version that Decals then bumps further. The pass also RMWs the
+    /// main depth attachment so subsequent passes see raymarched
+    /// surfaces' depth, and that read-modify-write is declared, which is
+    /// what makes the post-Raymarch depth version the one every later
+    /// decoration pass samples.
     pub raymarch_enabled: bool,
-    // `true` when two-pass Hi-Z occlusion culling is requested
-    // (`PostProcessConfig.occlusion_two_pass`) AND the bindless GPU-cull
-    // path is active this frame. Only meaningful alongside
-    // `bindless_cull_enabled`; the builder ANDs the two so a world that
-    // asks for two-pass without a bindless shader simply gets the
-    // single-pass path. When on, the graph inserts `HizBuild` → `Cull2`
-    // → `Main2` between `Main` and the post-decoration chain: `HizBuild`
-    // rebuilds the Hi-Z pyramid from phase-1 depth, `Cull2` re-tests the
-    // objects phase-1 cull marked occluded, and `Main2` redraws the
-    // disoccluded survivors. `Main2`'s hdr_resolve write becomes the head
-    // of the post chain so AutoExposure / Decals / Fog / SSR see the
-    // combined two-pass result. Metal only today; the other backends keep
-    // this false.
+    /// `true` when two-pass Hi-Z occlusion culling is requested
+    /// (`PostProcessConfig.occlusion_two_pass`) AND the bindless GPU-cull
+    /// path is active this frame. Only meaningful alongside
+    /// `bindless_cull_enabled`; the builder ANDs the two so a world that
+    /// asks for two-pass without a bindless shader simply gets the
+    /// single-pass path. When on, the graph inserts `HizBuild` → `Cull2`
+    /// → `Main2` between `Main` and the post-decoration chain: `HizBuild`
+    /// rebuilds the Hi-Z pyramid from phase-1 depth, `Cull2` re-tests the
+    /// objects phase-1 cull marked occluded, and `Main2` redraws the
+    /// disoccluded survivors. `Main2`'s hdr_resolve write becomes the head
+    /// of the post chain so AutoExposure / Decals / Fog / SSR see the
+    /// combined two-pass result. Metal only today; the other backends keep
+    /// this false.
     pub two_pass_occlusion_enabled: bool,
-    // `true` when screen-space global illumination is on
-    // (`PostProcessConfig.indirect_lighting == "ssgi"`); matches
-    // `self.ssgi_settings.is_some()`. The graph inserts an `Ssgi` render pass
-    // on the hdr_resolve RMW chain right after `Raymarch` and before `Decals`:
-    // it reads the head of the chain (the lit scene, its bounce-radiance
-    // source) and writes the next version with the gathered indirect term
-    // additively composited in. SSGI reuses the SSR pre-pass G-buffer for
-    // normals + depth, so `ssr_prepass_enabled` is forced on whenever this is
-    // set. Metal only today; the other backends keep this false.
+    /// `true` when screen-space global illumination is on
+    /// (`PostProcessConfig.indirect_lighting == "ssgi"`); matches
+    /// `self.ssgi_settings.is_some()`. The graph inserts an `Ssgi` render pass
+    /// on the hdr_resolve RMW chain right after `Raymarch` and before `Decals`:
+    /// it reads the head of the chain (the lit scene, its bounce-radiance
+    /// source) and writes the next version with the gathered indirect term
+    /// additively composited in. SSGI reuses the SSR pre-pass G-buffer for
+    /// normals + depth, so `ssr_prepass_enabled` is forced on whenever this is
+    /// set. Metal only today; the other backends keep this false.
     pub ssgi_enabled: bool,
-    // `true` when hardware ray-traced reflections are live (RT requested + GPU
-    // supports it + the scene acceleration structure built); matches
-    // `self.rt_accel.is_some()`. The graph adds an `RtReflections` render pass
-    // in the *same slot* as `SsrResolve` (reads the post-decoration
-    // `hdr_resolve`, writes `scene_pre_taa`). RT *takes precedence* over SSR: a
-    // world may enable both, and where this is set the builder inserts
-    // `RtReflections` and omits `SsrResolve`, so at most one of them is in the
-    // graph. Like SSGI it reuses the SSR depth + normal + roughness pre-pass,
-    // so `ssr_prepass_enabled` is forced on whenever this is set. Metal only
-    // today; the other backends keep this false.
+    /// `true` when hardware ray-traced reflections are live (RT requested + GPU
+    /// supports it + the scene acceleration structure built); matches
+    /// `self.rt_accel.is_some()`. The graph adds an `RtReflections` render pass
+    /// in the *same slot* as `SsrResolve` (reads the post-decoration
+    /// `hdr_resolve`, writes `scene_pre_taa`). RT *takes precedence* over SSR: a
+    /// world may enable both, and where this is set the builder inserts
+    /// `RtReflections` and omits `SsrResolve`, so at most one of them is in the
+    /// graph. Like SSGI it reuses the SSR depth + normal + roughness pre-pass,
+    /// so `ssr_prepass_enabled` is forced on whenever this is set. Metal only
+    /// today; the other backends keep this false.
     pub rt_reflections_enabled: bool,
-    // `true` to collapse the SSR / SSAO / velocity geometry pre-passes into a
-    // single `GBufferPrepass` node that writes view-space normal+depth,
-    // roughness, and motion in one traversal: every consumer reads that one
-    // output. When set, the builder emits `GBufferPrepass` (gated on any of
-    // `ssr_prepass_enabled || ssao_enabled || velocity_enabled`) instead of the
-    // separate `SsrPrepass` + `Velocity` nodes. Metal only today; the other
-    // backends keep this false and emit their separate prepasses.
+    /// `true` to collapse the SSR / SSAO / velocity geometry pre-passes into a
+    /// single `GBufferPrepass` node that writes view-space normal+depth,
+    /// roughness, and motion in one traversal: every consumer reads that one
+    /// output. When set, the builder emits `GBufferPrepass` (gated on any of
+    /// `ssr_prepass_enabled || ssao_enabled || velocity_enabled`) instead of the
+    /// separate `SsrPrepass` + `Velocity` nodes. Metal only today; the other
+    /// backends keep this false and emit their separate prepasses.
     pub unified_gbuffer_prepass: bool,
-    // `true` when an opaque full-screen menu backdrop covers the scene, so
-    // nothing the world passes produce is visible. The builder masks every
-    // gated world pass off and collapses the graph to `Main -> Composite`
-    // (Composite still presents the menu overlay). The backend pairs this with
-    // an empty visible set so the surviving Main pass is a bare clear; the
-    // opaque overlay then covers it.
+    /// `true` when an opaque full-screen menu backdrop covers the scene, so
+    /// nothing the world passes produce is visible. The builder masks every
+    /// gated world pass off and collapses the graph to `Main -> Composite`
+    /// (Composite still presents the menu overlay). The backend pairs this with
+    /// an empty visible set so the surviving Main pass is a bare clear; the
+    /// opaque overlay then covers it.
     pub world_hidden: bool,
-    // `true` when the scene has local lights to cluster. The graph adds a
-    // `LightCull` compute pass before Main that bins the lights into per-cluster
-    // lists Main reads (RAW edge). Metal only today; the other backends keep this
-    // false and iterate the local lights directly.
+    /// `true` when the scene has local lights to cluster. The graph adds a
+    /// `LightCull` compute pass before Main that bins the lights into per-cluster
+    /// lists Main reads (RAW edge). Metal only today; the other backends keep this
+    /// false and iterate the local lights directly.
     pub clustered_lighting_enabled: bool,
-    // `true` when the composite samples the SSAO output directly (the
-    // occlusion view mode). Declares a Composite read of `ao_output`, so the
-    // pool-aliased transient stays live to the end of the frame instead of
-    // dying after Main. No effect while `ssao_enabled` is false.
+    /// `true` when the composite samples the SSAO output directly (the
+    /// occlusion view mode). Declares a Composite read of `ao_output`, so the
+    /// pool-aliased transient stays live to the end of the frame instead of
+    /// dying after Main. No effect while `ssao_enabled` is false.
     pub composite_reads_ao: bool,
-    // Number of spot shadow map slices to render, i.e. how many spot lights cast
-    // shadows. Zero skips the SpotShadow pass and its imported array entirely.
+    /// Number of spot shadow map slices to render, i.e. how many spot lights cast
+    /// shadows. Zero skips the SpotShadow pass and its imported array entirely.
     pub shadowed_spot_count: u32,
-    // Per-slice edge of the spot shadow map array, so the imported resource
-    // carries its real dimensions.
+    /// Per-slice edge of the spot shadow map array, so the imported resource
+    /// carries its real dimensions.
     pub spot_shadow_slice_size: u32,
-    // `true` when the GPU-cull path built a Hi-Z pyramid, so the frame ends by
-    // reducing its final depth into that pyramid for the next frame's phase-1
-    // cull. The graph adds a terminal `HizFinal` compute pass reading the last
-    // depth version and writing the pyramid, plus a `Cull` read of the pyramid
-    // the previous frame left there, which is what orders this frame's cull
-    // ahead of the rebuild that overwrites it.
+    /// `true` when the GPU-cull path built a Hi-Z pyramid, so the frame ends by
+    /// reducing its final depth into that pyramid for the next frame's phase-1
+    /// cull. The graph adds a terminal `HizFinal` compute pass reading the last
+    /// depth version and writing the pyramid, plus a `Cull` read of the pyramid
+    /// the previous frame left there, which is what orders this frame's cull
+    /// ahead of the rebuild that overwrites it.
     pub hiz_build_enabled: bool,
 }
 
@@ -250,7 +251,7 @@ impl FrameGraphInputs {
     // caller can flip individual flags on, e.g. to plan a worst-case graph for
     // transient-memory allocation (where the allocation must cover every
     // per-frame graph, not just the current frame's active passes).
-    pub fn all_off() -> Self {
+    pub(crate) fn all_off() -> Self {
         FrameGraphInputs {
             shadow_enabled: false,
             shadow_map_size: 2048,
@@ -336,8 +337,8 @@ struct GBufferHandles {
     depth: TextureHandle,
 }
 
-// Compile the frame graph for `inputs`: the pass list above, gated down to the
-// passes this frame actually runs.
+/// Compile the frame graph for `inputs`: the pass list above, gated down to the
+/// passes this frame actually runs.
 pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
     // When an opaque menu backdrop hides the scene, every world pass is wasted:
     // nothing it produces is visible. Force every gated world pass off so the
@@ -894,14 +895,16 @@ fn froxel_volume_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     )
 }
 
-// X/Y/Z dimensions of the volumetric-fog froxel volume. Sized to keep the
-// per-frame compute cost modest (~230 k threads per dispatch) while
-// preserving enough screen-space detail for shaft-of-light shadowing.
-// Backends that implement the froxel path read these constants directly;
-// the values also ride in `FogFroxelParams.froxel_dims` so shaders can map
-// between absolute indices and normalised volume UVs without recompiling.
+/// X/Y/Z dimensions of the volumetric-fog froxel volume. Sized to keep the
+/// per-frame compute cost modest (~230 k threads per dispatch) while
+/// preserving enough screen-space detail for shaft-of-light shadowing.
+/// Backends that implement the froxel path read these constants directly;
+/// the values also ride in `FogFroxelParams.froxel_dims` so shaders can map
+/// between absolute indices and normalised volume UVs without recompiling.
 pub const FOG_FROXEL_X: u32 = 80;
+/// Fog froxels down the screen. See [`FOG_FROXEL_X`].
 pub const FOG_FROXEL_Y: u32 = 45;
+/// Fog froxel depth slices. See [`FOG_FROXEL_X`].
 pub const FOG_FROXEL_Z: u32 = 64;
 
 fn shadow_map_desc(size: u32) -> TextureDesc {

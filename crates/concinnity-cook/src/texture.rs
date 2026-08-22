@@ -1,24 +1,22 @@
-// src/texture.rs
-//
-// Compiles a Texture component's args into the binary payload that
-// GraphicsSystem reads at runtime, and decodes file-backed texture sources
-// (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
-// build pipeline and the `cn debug` asset hot-reload path.
-//
-// Payload format (little-endian):
-//   u32  width
-//   u32  height
-//   width * height * 4 bytes   RGBA, one byte per channel, row-major
-//
-// File-backed textures are decoded by extension: PNG and JPEG files on disk,
-// or an image embedded in a `.glb`. Procedural generators produce pixel data
-// directly and require no file I/O.
-//
-// Adding a new procedural generator
-// 1. Add a branch to the match in compile_texture_payload().
-// 2. Write a private generate_* function that returns (u32, u32, Vec<u8>)
-//    for (width, height, RGBA pixels).
-// 3. No other files need to change.
+//! Compiles a Texture component's args into the binary payload that
+//! GraphicsSystem reads at runtime, and decodes file-backed texture sources
+//! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
+//! build pipeline and the `cn debug` asset hot-reload path.
+//!
+//! Payload format (little-endian):
+//!   u32  width
+//!   u32  height
+//!   width * height * 4 bytes   RGBA, one byte per channel, row-major
+//!
+//! File-backed textures are decoded by extension: PNG and JPEG files on disk,
+//! or an image embedded in a `.glb`. Procedural generators produce pixel data
+//! directly and require no file I/O.
+//!
+//! Adding a new procedural generator
+//! 1. Add a branch to the match in compile_texture_payload().
+//! 2. Write a private generate_* function that returns (u32, u32, `Vec<u8>`)
+//!    for (width, height, RGBA pixels).
+//! 3. No other files need to change.
 
 // The pre-compiled payload `deserialise` / `serialise` and the resolution-cap
 // `downscale_rgba` stay in concinnity-cpu (no image-decode deps); the file ->
@@ -32,7 +30,7 @@ use concinnity_cpu::build::texture::{
 };
 
 // Validate the texture generator name in args without generating pixel data.
-pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String> {
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
     match generator {
         "checker" | "brick" | "concrete" | "grass" | "sky" | "wood" | "tile" | "metal"
@@ -42,7 +40,7 @@ pub fn validate_texture_generator(args: &serde_json::Value) -> Result<(), String
 }
 
 // Compile a Texture component's JSON args into the tagged texture payload.
-pub fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_texture_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let tex: Texture =
         Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {}", e))?;
 
@@ -153,11 +151,11 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 // Turns a PNG / JPEG / DDS / TGA file on disk, or an image embedded in a
 // `.glb`, into (width, height, RGBA8 pixels).
 
-// Decode a file-backed texture source into (width, height, RGBA pixels).
-// Dispatches on the lower-cased extension: an image embedded in a `.glb`, a
-// `.jpg` / `.jpeg`, a `.dds`, a `.ktx2`, a `.tga`, or a PNG (the default).
-// The single dispatch behind both the compiled payload and a re-decode of an
-// edited file, so a texture that builds also reloads.
+/// Decode a file-backed texture source into (width, height, RGBA pixels).
+/// Dispatches on the lower-cased extension: an image embedded in a `.glb`, a
+/// `.jpg` / `.jpeg`, a `.dds`, a `.ktx2`, a `.tga`, or a PNG (the default).
+/// The single dispatch behind both the compiled payload and a re-decode of an
+/// edited file, so a texture that builds also reloads.
 pub fn decode_source(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let lower = source.to_lowercase();
     if lower.ends_with(".glb") || lower.ends_with(".gltf") {
@@ -384,11 +382,11 @@ fn load_gltf_image(source: &str, image_index: u32) -> Result<(u32, u32, Vec<u8>)
     decode_glb_image_from_doc(&doc, source, image_index)
 }
 
-// Pulled out of [`load_glb_image`] so the caller can amortise `parse_glb`
-// across every texture / mesh / skinned mesh that shares a `.glb` in a
-// single asset hot-reload pass: the worker thread keeps a
-// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
-// instead of re-parsing the file 43+ times.
+/// Pulled out of `load_glb_image` so the caller can amortise `parse_glb`
+/// across every texture / mesh / skinned mesh that shares a `.glb` in a
+/// single asset hot-reload pass: the worker thread keeps a
+/// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
+/// instead of re-parsing the file 43+ times.
 pub fn decode_glb_image_from_doc(
     doc: &crate::gltf_source::GltfDoc,
     source: &str,

@@ -40,9 +40,9 @@ pub struct Spawner {
 }
 
 impl Spawner {
-    // Translate the authored args into the runtime spawner: clamp the timing
-    // knobs and zero the runtime counters. Run by cook at build time (the
-    // baked blob record carries the result).
+    /// Translate the authored args into the runtime spawner: clamp the timing
+    /// knobs and zero the runtime counters. Run by cook at build time (the
+    /// baked blob record carries the result).
     pub fn bake(args: SpawnerArgs) -> Self {
         Self {
             template: args.template,

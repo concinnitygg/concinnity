@@ -1,9 +1,7 @@
-// src/feedback.rs
-//
-// The render half's per-frame report back to the simulation: the sampled
-// window input, the frame's render stats, what the snapshot's op replay
-// produced, and the consumed snapshot returned for buffer reuse. The
-// counterpart of `RenderSnapshot` on the pipelined driver's return channel.
+//! The render half's per-frame report back to the simulation: the sampled
+//! window input, the frame's render stats, what the snapshot's op replay
+//! produced, and the consumed snapshot returned for buffer reuse. The
+//! counterpart of `RenderSnapshot` on the pipelined driver's return channel.
 
 use crate::input::InputPacket;
 use crate::ops::ReplayOutcome;

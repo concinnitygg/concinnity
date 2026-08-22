@@ -9,7 +9,7 @@ use concinnity_cook::world::find_world_jsonl;
 //
 // If `server` and `user` are both provided, any source files missing from
 // .concinnity/assets/ are fetched from the server before compiling.
-pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn build(json_path: Option<&str>) -> std::io::Result<()> {
     let resolved;
     let json_path = match json_path {
         Some(p) if std::path::Path::new(p).exists() => p,

@@ -23,9 +23,9 @@
 //   matrix entry = the 4 non-trivial entries of Minv, normalised so Minv[1][1] = 1
 //   magnitude entry = (directional albedo, Fresnel weight) for the Schlick split
 
-// Edge of the square lookup table. 64 matches the resolution the parameterisation
-// was chosen for: finer buys little once `sqrt(1 - cos)` has spread the grazing
-// angles out, and the fit cost grows with the square.
+/// Edge of the square lookup table. 64 matches the resolution the parameterisation
+/// was chosen for: finer buys little once `sqrt(1 - cos)` has spread the grazing
+/// angles out, and the fit cost grows with the square.
 pub const LTC_LUT_SIZE: usize = 64;
 
 // Number of stratified samples per axis when estimating the fit error. The error
@@ -45,7 +45,7 @@ type Vec3 = [f32; 3];
 // A fitted span of the table: the packed inverse transforms and the matching
 // (directional albedo, Fresnel weight) pairs, in the same order. Used for both a
 // single roughness row and the assembled table.
-pub type LtcTable = (Vec<[f32; 4]>, Vec<[f32; 2]>);
+pub(crate) type LtcTable = (Vec<[f32; 4]>, Vec<[f32; 2]>);
 
 // Row-major 3x3: `m[row][col]`.
 #[derive(Clone, Copy, Debug)]
@@ -491,7 +491,7 @@ fn packed_inverse(ltc: &Ltc) -> [f32; 4] {
 // y = sqrt(1 - cos(theta_view)). Each row walks outward from normal incidence
 // warm-started from the previous cell, which is what makes the simplex converge
 // in a small number of iterations; a cold start per cell would need far more.
-pub fn fit_table(size: usize) -> LtcTable {
+pub(crate) fn fit_table(size: usize) -> LtcTable {
     use rayon::prelude::*;
 
     // One roughness row per task. Rows are independent because the warm start

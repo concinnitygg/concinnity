@@ -1,29 +1,29 @@
-// Planar reflection math: mirror a camera across a world plane and oblique-clip
-// the projection so geometry behind the plane never leaks into the reflection.
-//
-// Backend-agnostic and pure (mirrors gfx/reflection_probe.rs). A reflective flat
-// surface (water, a mirror floor) renders the scene a second time from the
-// camera reflected across its plane; the reflective surface then samples that
-// render projectively. This module produces the matrices that pass needs.
-//
-// Conventions match metal/math.rs: column-major storage `m[col][row]`, a
-// right-handed view looking down -z, and a perspective projection mapping depth
-// to [0, 1] (Metal / D3D clip space). A plane is `[nx, ny, nz, d]` with `n`
-// unit-length, satisfying `n . p + d = 0` for points on it; `n . p + d > 0` is
-// the side the normal points toward.
+//! Planar reflection math: mirror a camera across a world plane and oblique-clip
+//! the projection so geometry behind the plane never leaks into the reflection.
+//!
+//! Backend-agnostic and pure (mirrors gfx/reflection_probe.rs). A reflective flat
+//! surface (water, a mirror floor) renders the scene a second time from the
+//! camera reflected across its plane; the reflective surface then samples that
+//! render projectively. This module produces the matrices that pass needs.
+//!
+//! Conventions match metal/math.rs: column-major storage `m[col][row]`, a
+//! right-handed view looking down -z, and a perspective projection mapping depth
+//! to [0, 1] (Metal / D3D clip space). A plane is `[nx, ny, nz, d]` with `n`
+//! unit-length, satisfying `n . p + d = 0` for points on it; `n . p + d > 0` is
+//! the side the normal points toward.
 
 type Mat4 = [[f32; 4]; 4];
 type Vec4 = [f32; 4];
 
-// The engine-wide capacity ceiling for distinct reflection planes (water surfaces
-// + glass panes combined). Each plane is a full render-resolution MSAA scene
-// re-render, so this bounds the per-frame planar cost and the reserved mirror
-// target VRAM; reflectors past the active budget fall back to the box-projected
-// probe cube. This is the CAPACITY every backend sizes its mirror targets / ICB
-// slots / resolve SRVs against, so the three `planar::MAX_PLANAR_PLANES` alias it
-// and stay in lockstep by construction. The per-frame budget passed to
-// `assign_planar_slots` can be lower (scaled down under a quality preset / GPU
-// tier) but never higher.
+/// The engine-wide capacity ceiling for distinct reflection planes: water
+/// surfaces and glass panes combined. Each plane is a full render-resolution MSAA scene
+/// re-render, so this bounds the per-frame planar cost and the reserved mirror
+/// target VRAM; reflectors past the active budget fall back to the box-projected
+/// probe cube. This is the CAPACITY every backend sizes its mirror targets / ICB
+/// slots / resolve SRVs against, so the three `planar::MAX_PLANAR_PLANES` alias it
+/// and stay in lockstep by construction. The per-frame budget passed to
+/// `assign_planar_slots` can be lower (scaled down under a quality preset / GPU
+/// tier) but never higher.
 pub const MAX_PLANAR_PLANES: usize = 4;
 
 fn mul(a: Mat4, b: Mat4) -> Mat4 {
@@ -135,7 +135,7 @@ fn inverse(m: Mat4) -> Mat4 {
 
 // Normalise a plane so its normal is unit length (scaling d to match). A zero
 // normal is returned unchanged (degenerate, callers guard separately).
-pub fn normalize_plane(plane: Vec4) -> Vec4 {
+pub(crate) fn normalize_plane(plane: Vec4) -> Vec4 {
     let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
     if len < 1e-12 {
         return plane;
@@ -151,7 +151,7 @@ pub fn normalize_plane(plane: Vec4) -> Vec4 {
 
 // Householder reflection of world points across `plane` (unit normal). A point
 // p maps to p - 2 (n.p + d) n; this 4x4 applies that to homogeneous points.
-pub fn reflection_matrix(plane: Vec4) -> Mat4 {
+pub(crate) fn reflection_matrix(plane: Vec4) -> Mat4 {
     let [nx, ny, nz, d] = plane;
     [
         [1.0 - 2.0 * nx * nx, -2.0 * ny * nx, -2.0 * nz * nx, 0.0],
@@ -162,7 +162,7 @@ pub fn reflection_matrix(plane: Vec4) -> Mat4 {
 }
 
 // Reflect a single world point across the plane (the reflected camera eye).
-pub fn reflect_point(p: [f32; 3], plane: Vec4) -> [f32; 3] {
+pub(crate) fn reflect_point(p: [f32; 3], plane: Vec4) -> [f32; 3] {
     let dist = plane[0] * p[0] + plane[1] * p[1] + plane[2] * p[2] + plane[3];
     [
         p[0] - 2.0 * dist * plane[0],
@@ -173,13 +173,13 @@ pub fn reflect_point(p: [f32; 3], plane: Vec4) -> [f32; 3] {
 
 // The reflected view matrix: reflect a world point across the plane, then apply
 // the camera view. Equivalent to rendering the scene from the mirrored camera.
-pub fn reflected_view(view: Mat4, plane: Vec4) -> Mat4 {
+pub(crate) fn reflected_view(view: Mat4, plane: Vec4) -> Mat4 {
     mul(view, reflection_matrix(plane))
 }
 
 // Transform a world-space plane into a view space. Planes transform by the
 // inverse-transpose of the world->view matrix: plane_view = (V^-1)^T . plane.
-pub fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
+pub(crate) fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
     mat_vec(transpose(inverse(view)), plane_world)
 }
 
@@ -195,7 +195,7 @@ pub fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
 // requiring it to land on the far plane (ndc.z = 1, i.e. z_row.q = w_row.q = -q.z)
 // gives alpha = -q.z / (C . q). For this projection q has the closed form below
 // (q.z = -1), so alpha = 1 / (C . q).
-pub fn oblique_projection(proj: Mat4, clip_plane: Vec4) -> Mat4 {
+pub(crate) fn oblique_projection(proj: Mat4, clip_plane: Vec4) -> Mat4 {
     let xs = proj[0][0];
     let ys = proj[1][1];
     let zs = proj[2][2]; // z-row's z component
@@ -235,12 +235,12 @@ pub fn oblique_projection(proj: Mat4, clip_plane: Vec4) -> Mat4 {
     out
 }
 
-// Flip a plane so its normal points toward `point` (the kept side faces the
-// camera). The reflection matrix is sign-invariant, but the oblique near-plane
-// clip is not: it keeps the +n side, so the normal must face the viewer or the
-// mirror render clips the wrong half. A no-op when `point` already lies on the
-// +n side, which is the horizontal-water-above-camera case, so water renders
-// identically with or without this orientation.
+/// Flip a plane so its normal points toward `point` (the kept side faces the
+/// camera). The reflection matrix is sign-invariant, but the oblique near-plane
+/// clip is not: it keeps the +n side, so the normal must face the viewer or the
+/// mirror render clips the wrong half. A no-op when `point` already lies on the
+/// +n side, which is the horizontal-water-above-camera case, so water renders
+/// identically with or without this orientation.
 pub fn orient_plane_toward(plane: Vec4, point: [f32; 3]) -> Vec4 {
     let signed = plane[0] * point[0] + plane[1] * point[1] + plane[2] * point[2] + plane[3];
     if signed < 0.0 {
@@ -250,23 +250,25 @@ pub fn orient_plane_toward(plane: Vec4, point: [f32; 3]) -> Vec4 {
     }
 }
 
-// The result of grouping a list of reflection planes into a bounded number of
-// distinct slots: `slots[i]` is the slot a plane maps to (`None` when the budget
-// is exhausted by earlier distinct planes, i.e. it falls back to the probe cube),
-// and `representatives` is the deduplicated plane per slot (`representatives.len()`
-// is the number of mirror renders the frame needs).
+/// The result of grouping a list of reflection planes into a bounded number of
+/// distinct slots: `slots[i]` is the slot a plane maps to (`None` when the budget
+/// is exhausted by earlier distinct planes, i.e. it falls back to the probe cube),
+/// and `representatives` is the deduplicated plane per slot (`representatives.len()`
+/// is the number of mirror renders the frame needs).
 pub struct PlanarAssignment {
+    /// Per-reflector plane slot, `None` when the reflector fell back to a probe.
     pub slots: Vec<Option<usize>>,
+    /// One representative plane per assigned slot.
     pub representatives: Vec<Vec4>,
 }
 
-// Group near-coplanar reflection planes so each distinct plane renders one mirror
-// pass, capped at `max_slots`. Planes are matched sign-invariantly (a plane and
-// its flip are the same surface): two planes share a slot when their unit normals
-// are near-parallel and their offset along the normal matches. A plane coplanar
-// with an already-assigned slot always reuses it (even past the budget); only a
-// NEW distinct plane beyond `max_slots` overflows to `None`. Input order sets slot
-// priority, so callers list higher-priority planes (e.g. water) first.
+/// Group near-coplanar reflection planes so each distinct plane renders one mirror
+/// pass, capped at `max_slots`. Planes are matched sign-invariantly (a plane and
+/// its flip are the same surface): two planes share a slot when their unit normals
+/// are near-parallel and their offset along the normal matches. A plane coplanar
+/// with an already-assigned slot always reuses it (even past the budget); only a
+/// NEW distinct plane beyond `max_slots` overflows to `None`. Input order sets slot
+/// priority, so callers list higher-priority planes (e.g. water) first.
 pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignment {
     // ~2.6 degrees of normal divergence and 0.1 world units of offset still count
     // as the same plane: tight enough to keep separate walls distinct, loose
@@ -315,20 +317,20 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
     }
 }
 
-// The matrices a planar reflection pass needs for one mirror plane.
+/// The matrices a planar reflection pass needs for one mirror plane.
 pub struct PlanarMatrices {
-    // Reflected view matrix (world -> mirrored view).
+    /// Reflected view matrix (world -> mirrored view).
     pub view: Mat4,
-    // Reflected view-projection with oblique near-plane clipping applied.
+    /// Reflected view-projection with oblique near-plane clipping applied.
     pub view_proj: Mat4,
-    // The camera eye reflected across the plane (LOD / view-direction anchor).
+    /// The camera eye reflected across the plane (LOD / view-direction anchor).
     pub eye: [f32; 3],
 }
 
-// Build the mirror view + oblique-clipped view-projection + reflected eye for a
-// camera (`view` / `proj` / `cam_pos`) reflecting across `plane_world`. The clip
-// plane is nudged a hair below the surface (`clip_bias`, world units along the
-// normal) so fragments exactly on the surface are not clipped by precision.
+/// Build the mirror view + oblique-clipped view-projection + reflected eye for a
+/// camera (`view` / `proj` / `cam_pos`) reflecting across `plane_world`. The clip
+/// plane is nudged a hair below the surface (`clip_bias`, world units along the
+/// normal) so fragments exactly on the surface are not clipped by precision.
 pub fn planar_matrices(
     view: Mat4,
     proj: Mat4,
@@ -350,14 +352,14 @@ pub fn planar_matrices(
     }
 }
 
-// Resolve the CPU visible set for a planar mirror render: BVH-cull the cullable
-// draw objects against the reflected-camera frustum, then append the always-draw
-// fallback (skybox, rooms) so it appears in the reflection too. Mirrors the main
-// camera's visible-set resolution but against the reflected frustum, so geometry
-// visible only in the reflection (behind or beside the main camera, outside its
-// frustum) is captured instead of reusing the main camera's set. `eye` is the
-// reflected camera position, consulted only for the leaves' distance-based cull.
-// `out` is cleared then refilled, so a caller can reuse one buffer across planes.
+/// Resolve the CPU visible set for a planar mirror render: BVH-cull the cullable
+/// draw objects against the reflected-camera frustum, then append the always-draw
+/// fallback (skybox, rooms) so it appears in the reflection too. Mirrors the main
+/// camera's visible-set resolution but against the reflected frustum, so geometry
+/// visible only in the reflection (behind or beside the main camera, outside its
+/// frustum) is captured instead of reusing the main camera's set. `eye` is the
+/// reflected camera position, consulted only for the leaves' distance-based cull.
+/// `out` is cleared then refilled, so a caller can reuse one buffer across planes.
 pub fn reflected_visible_set(
     bvh: &crate::bvh::Bvh,
     reflected_frustum: &crate::frustum::Frustum,

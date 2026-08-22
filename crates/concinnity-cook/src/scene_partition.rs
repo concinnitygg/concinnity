@@ -10,13 +10,13 @@ use std::collections::HashMap;
 // Where an asset's payload packs: the global set loaded with the world, or one
 // scene's group. Derived, never authored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Owner {
+pub(crate) enum Owner {
     Global,
     // Index into `ScenePartition::scenes`.
     Scene(usize),
 }
 
-pub struct ScenePartition {
+pub(crate) struct ScenePartition {
     // Scene asset names in declaration order.
     pub scenes: Vec<String>,
     // Asset name -> derived owner. Assets referenced by nothing are Global.
@@ -24,7 +24,7 @@ pub struct ScenePartition {
 }
 
 impl ScenePartition {
-    pub fn owner(&self, asset_name: &str) -> Owner {
+    pub(crate) fn owner(&self, asset_name: &str) -> Owner {
         self.owner_of
             .get(asset_name)
             .copied()
@@ -59,7 +59,7 @@ fn is_reference_target(type_norm: &str) -> bool {
         )
 }
 
-pub fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
+pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
     let norm = |t: &str| t.to_lowercase().replace('_', "");
 
     let scenes: Vec<String> = assets

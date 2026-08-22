@@ -38,49 +38,56 @@ pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
     v.get("name").and_then(|n| n.as_str()).unwrap_or("")
 }
 
-// One asset added to the world by an injection pass rather than authored or
-// macro-expanded. Recorded in world-lock.json so the user can see every
-// default and copy its entry into world.jsonl as an override.
+/// One asset added to the world by an injection pass rather than authored or
+/// macro-expanded. Recorded in world-lock.json so the user can see every
+/// default and copy its entry into world.jsonl as an override.
 #[derive(Debug, Clone)]
 pub struct InjectedAsset {
+    /// The injected asset's name.
     pub name: String,
+    /// The asset's registry type name.
     pub asset_type: String,
+    /// The args the injection supplied.
     pub args: serde_json::Value,
-    // The injection pass (an EngineDefaults flag name, "companion", or
-    // "default_font"), so listings can say where a default came from.
+    /// The injection pass (an EngineDefaults flag name, "companion", or
+    /// "default_font"), so listings can say where a default came from.
     pub injected_by: &'static str,
 }
 
-// One asset a macro expansion produced from an authored entry, recorded so
-// listings can group generated assets by what produced them and offer to copy
-// one into world.jsonl as an override.
+/// One asset a macro expansion produced from an authored entry, recorded so
+/// listings can group generated assets by what produced them and offer to copy
+/// one into world.jsonl as an override.
 #[derive(Debug, Clone)]
 pub struct GeneratedAsset {
+    /// The generated asset's name.
     pub name: String,
+    /// The asset's registry type name.
     pub asset_type: String,
-    // The authored asset that generated it (a SceneImport's name).
+    /// The authored asset that generated it (a SceneImport's name).
     pub generated_by: String,
 }
 
-// One generated asset the world declares itself: the authored entry is a
-// sparse patch merged over the generated args (see `shadow::merge_args`), so a
-// line in world.jsonl overrides exactly the fields it names and tracks the
-// expansion for the rest. Recorded so listings can show the override for what
-// it is rather than leaving the generated asset unaccounted for.
+/// One generated asset the world declares itself: the authored entry is a
+/// sparse patch merged over the generated args (see `shadow::merge_args`), so a
+/// line in world.jsonl overrides exactly the fields it names and tracks the
+/// expansion for the rest. Recorded so listings can show the override for what
+/// it is rather than leaving the generated asset unaccounted for.
 #[derive(Debug, Clone)]
 pub struct ShadowedAsset {
+    /// The shadowed asset's name.
     pub name: String,
+    /// The asset's registry type name.
     pub asset_type: String,
-    // The authored asset whose expansion it patches.
+    /// The authored asset whose expansion it patches.
     pub generated_by: String,
-    // The args the expansion produced before the authored patch was merged:
-    // the template baseline a per-field override is measured against.
+    /// The args the expansion produced before the authored patch was merged:
+    /// the template baseline a per-field override is measured against.
     pub args: serde_json::Value,
 }
 
 // What the expansion passes added, generated, and skipped during one run.
 #[derive(Debug, Default)]
-pub struct ExpandReport {
+pub(crate) struct ExpandReport {
     pub injected: Vec<InjectedAsset>,
     pub generated: Vec<GeneratedAsset>,
     pub shadowed: Vec<ShadowedAsset>,
@@ -135,7 +142,7 @@ impl ExpandReport {
 // Run all expansion passes in order. Mutates the asset list in place and
 // reports what the injection passes added. Returns an error only when a hard
 // failure occurs (e.g. prefab cycle or missing prefab reference).
-pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
+pub(crate) fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
     let mut report = ExpandReport::default();
     // The assets the world declares itself, snapshotted before any pass runs:
     // a generated entry landing on one of these names is the user's patch of
@@ -202,10 +209,10 @@ pub fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport,
     Ok(report)
 }
 
-// Load and structurally validate a world.jsonl string, then run all
-// expansion passes. Returns the fully expanded asset list. Does not run
-// semantic validation; see `crate::world::prepare_world` for the full
-// build-pipeline front half.
+/// Load and structurally validate a world.jsonl string, then run all
+/// expansion passes. Returns the fully expanded asset list. Does not run
+/// semantic validation; see `crate::world::prepare_world` for the full
+/// build-pipeline front half.
 pub fn expand_world_from_str(content: &str) -> std::io::Result<Vec<serde_json::Value>> {
     let mut assets = load_world(content)
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;

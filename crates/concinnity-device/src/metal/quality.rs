@@ -32,7 +32,7 @@ impl MtlContext {
     // (no swapchain rebuild on Metal), so a redundant call is cheap. Backend
     // specific: Vulkan reaches the same end by rebuilding the swapchain with a
     // different present mode, so this does not live on the shared window layer.
-    pub fn set_vsync(&mut self, on: bool) {
+    pub(crate) fn set_vsync(&mut self, on: bool) {
         super::init::set_display_sync(&self.window.view, on);
     }
 
@@ -42,7 +42,10 @@ impl MtlContext {
     // rebuild. Auto-exposure, when on, overwrites `exposure` each frame from
     // the adapted EV, so a static exposure change is only visible with
     // auto-exposure off.
-    pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
+    pub(crate) fn update_post_process(
+        &mut self,
+        params: crate::gfx::render_types::PostProcessParams,
+    ) {
         self.post_process = params;
     }
 
@@ -51,7 +54,7 @@ impl MtlContext {
     // change takes effect on the next draw with no allocation. It is not
     // re-derived per frame (unlike auto-exposure's `exposure`), so the value
     // stands until changed again.
-    pub fn set_ambient_intensity(&mut self, value: f32) {
+    pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         self.light_uniforms.ambient_intensity = value;
     }
 
@@ -59,14 +62,14 @@ impl MtlContext {
     // `shadow.update` at the start of each shadow pass, so a change takes effect
     // on the next draw. Every cascade is already primed, so switching policy never
     // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
-    pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
         self.shadow.update = update;
     }
 
     // Set the live shadow distance (world units). The per-frame cascade-split
     // computation reads `shadow.distance` each draw, so a change takes effect on
     // the next frame with no allocation (it sizes no GPU resource).
-    pub fn set_shadow_distance(&mut self, distance: u32) {
+    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
         self.shadow.distance = distance;
     }
 
@@ -74,7 +77,7 @@ impl MtlContext {
     // read `shadow.cascades` each draw; only the first `count` of the four slots
     // are rendered + sampled, so a change takes effect on the next frame with no
     // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub fn set_shadow_cascades(&mut self, count: u32) {
+    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
         self.shadow.cascades = count;
     }
 
@@ -88,7 +91,7 @@ impl MtlContext {
     // wholesale; SSGI keeps its gather resolution / ray / step counts (those size
     // the gather target or ride `apply_quality_settings`), so only its scalar
     // intensity / distance are updated.
-    pub fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
             *cur = live;
         }

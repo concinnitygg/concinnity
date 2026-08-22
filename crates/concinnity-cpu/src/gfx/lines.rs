@@ -1,14 +1,12 @@
-// src/gfx/lines.rs
-//
-// The CPU expansion that turns a world-space `Line` into the camera-facing
-// ribbon the line pass rasterises.
-//
-// A hardware line primitive cannot carry a pixel width portably, so each segment
-// expands into a quad whose corners are offset perpendicular to the line and
-// perpendicular to the eye vector, scaled by the world-per-pixel size at that
-// corner's depth. Both edges of the ribbon are straight world-space lines, so
-// they project to straight screen-space lines separated by exactly the
-// requested pixel width along the whole run, however far the far end reaches.
+//! The CPU expansion that turns a world-space `Line` into the camera-facing
+//! ribbon the line pass rasterises.
+//!
+//! A hardware line primitive cannot carry a pixel width portably, so each segment
+//! expands into a quad whose corners are offset perpendicular to the line and
+//! perpendicular to the eye vector, scaled by the world-per-pixel size at that
+//! corner's depth. Both edges of the ribbon are straight world-space lines, so
+//! they project to straight screen-space lines separated by exactly the
+//! requested pixel width along the whole run, however far the far end reaches.
 
 use crate::geometry::vec3::{cross, dot, lerp as lerp3, sub};
 
@@ -19,16 +17,21 @@ pub use concinnity_core::gfx::lines::Line;
 // Vertices emitted per expanded segment: two triangles, unindexed.
 const VERTS_PER_SEGMENT: usize = 6;
 
-// The camera the expansion projects against. `view` is the world-to-view matrix
-// the frame renders with (column-major, `view[col][row]`) and `cam_pos` its
-// world-space position: in a camera-relative world both are the rebased pair,
-// so callers must express their lines in that same space.
+/// The camera the expansion projects against. `view` is the world-to-view matrix
+/// the frame renders with (column-major, `view[col][row]`) and `cam_pos` its
+/// world-space position: in a camera-relative world both are the rebased pair,
+/// so callers must express their lines in that same space.
 #[derive(Copy, Clone, Debug)]
 pub struct LineCamera {
+    /// View matrix, column-major.
     pub view: [[f32; 4]; 4],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// Vertical field of view in radians.
     pub fov_y_radians: f32,
+    /// Render-target size in pixels.
     pub viewport: [f32; 2],
+    /// Near clip distance in world units.
     pub near: f32,
 }
 
@@ -119,18 +122,18 @@ fn clip_to_near(line: &Line, cam: &LineCamera) -> Option<Clipped> {
     }
 }
 
-// Expand `lines` into the ribbon triangles the line pass draws. Segments
-// wholly behind the near plane, degenerate segments, and fully transparent
-// segments contribute nothing, so an empty result means the pass can be
-// skipped entirely.
+/// Expand `lines` into the ribbon triangles the line pass draws. Segments
+/// wholly behind the near plane, degenerate segments, and fully transparent
+/// segments contribute nothing, so an empty result means the pass can be
+/// skipped entirely.
 pub fn build_vertices(lines: &[Line], cam: &LineCamera) -> Vec<LineVertex> {
     let mut out = Vec::new();
     build_vertices_into(lines.iter().copied(), cam, &mut out);
     out
 }
 
-// `build_vertices`, writing into `out` (cleared first) so a per-frame caller
-// reuses its buffer.
+/// `build_vertices`, writing into `out` (cleared first) so a per-frame caller
+/// reuses its buffer.
 pub fn build_vertices_into(
     lines: impl Iterator<Item = Line>,
     cam: &LineCamera,

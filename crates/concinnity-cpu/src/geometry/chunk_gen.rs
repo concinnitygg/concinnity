@@ -15,28 +15,28 @@
 
 use concinnity_core::gfx::chunk_coord::ChunkCoord;
 
-// One palette entry for the chunk mesher: solidity plus per-face atlas UVs.
-//
-// The public, `geometry`-external counterpart of the private
-// `voxel::PaletteSlot`. The streaming subsystem resolves a `VoxelWorld`'s
-// `BlockType` palette into a `Vec<ChunkBlockType>` and hands it to
-// [`super::build_chunk_mesh`].
+/// One palette entry for the chunk mesher: solidity plus per-face atlas UVs.
+///
+/// The public, `geometry`-external counterpart of the private
+/// `voxel::PaletteSlot`. The streaming subsystem resolves a `VoxelWorld`'s
+/// `BlockType` palette into a `Vec<ChunkBlockType>` and hands it to
+/// [`super::build_chunk_mesh`].
 #[derive(Clone, Copy, Debug)]
 pub struct ChunkBlockType {
-    // When false the block is air -- emits no geometry, occludes nothing.
+    /// When false the block is air -- emits no geometry, occludes nothing.
     pub solid: bool,
-    // Atlas UV rect `[u_min, v_min, u_max, v_max]` for the +Y face.
+    /// Atlas UV rect `[u_min, v_min, u_max, v_max]` for the +Y face.
     pub uv_top: [f32; 4],
-    // Atlas UV rect for the -Y face.
+    /// Atlas UV rect for the -Y face.
     pub uv_bottom: [f32; 4],
-    // Atlas UV rect for the four side faces.
+    /// Atlas UV rect for the four side faces.
     pub uv_side: [f32; 4],
 }
 
-// Deterministic terrain generator for one `VoxelWorld`.
-//
-// Constructed once from the world's seed and chunk dimensions; `generate`
-// produces the block array for any chunk on demand.
+/// Deterministic terrain generator for one `VoxelWorld`.
+///
+/// Constructed once from the world's seed and chunk dimensions; `generate`
+/// produces the block array for any chunk on demand.
 pub struct ChunkGenerator {
     seed: u64,
     chunk_blocks: [u32; 3],
@@ -52,12 +52,12 @@ pub struct ChunkGenerator {
 const OCTAVES: [(i32, f32); 3] = [(64, 1.0), (32, 0.5), (16, 0.25)];
 
 impl ChunkGenerator {
-    // A generator for a world with the given `seed`, chunk dimensions, and
-    // palette length.
-    //
-    // By the `VoxelWorld` palette convention index 0 is air, 1 the surface
-    // block, and 2 (when the palette has it) the subsurface block; a
-    // shorter palette falls back to index 1 for subsurface.
+    /// A generator for a world with the given `seed`, chunk dimensions, and
+    /// palette length.
+    ///
+    /// By the `VoxelWorld` palette convention index 0 is air, 1 the surface
+    /// block, and 2 (when the palette has it) the subsurface block; a
+    /// shorter palette falls back to index 1 for subsurface.
     pub fn new(seed: u64, chunk_blocks: [u32; 3], palette_len: u32) -> Self {
         let surface_idx = if palette_len > 1 { 1 } else { 0 };
         let subsurface_idx = if palette_len > 2 { 2 } else { surface_idx };
@@ -73,11 +73,11 @@ impl ChunkGenerator {
         }
     }
 
-    // Generate the dense block array for chunk `coord`.
-    //
-    // The result has length `dx*dy*dz` with the layout
-    // `index = x + y*dx + z*dx*dy`, exactly what the voxel mesher expects.
-    // A column is solid up to its noise-derived surface height and air above.
+    /// Generate the dense block array for chunk `coord`.
+    ///
+    /// The result has length `dx*dy*dz` with the layout
+    /// `index = x + y*dx + z*dx*dy`, exactly what the voxel mesher expects.
+    /// A column is solid up to its noise-derived surface height and air above.
     pub fn generate(&self, coord: ChunkCoord) -> Vec<u32> {
         let [dx, dy, dz] = [
             self.chunk_blocks[0] as usize,
@@ -110,21 +110,21 @@ impl ChunkGenerator {
         blocks
     }
 
-    // Surface block height (topmost solid block index) of the column at world
-    // block coordinate `(wx, wz)`, clamped to `[0, chunk_height-1]`.
-    //
-    // Public so the distant-chunk impostor mesher can sample the terrain
-    // surface on a coarse grid without paying for a full dense block array.
-    // Because it keys on world coordinates (like [`generate`](Self::generate)),
-    // two impostor chunks sample identical heights along their shared edge, so
-    // their coarse surfaces meet watertight.
+    /// Surface block height (topmost solid block index) of the column at world
+    /// block coordinate `(wx, wz)`, clamped to `[0, chunk_height-1]`.
+    ///
+    /// Public so the distant-chunk impostor mesher can sample the terrain
+    /// surface on a coarse grid without paying for a full dense block array.
+    /// Because it keys on world coordinates (like [`generate`](Self::generate)),
+    /// two impostor chunks sample identical heights along their shared edge, so
+    /// their coarse surfaces meet watertight.
     pub fn surface_height_world(&self, wx: i32, wz: i32) -> i32 {
         self.surface_height(wx, wz, self.chunk_blocks[1] as i32)
     }
 
-    // Palette index of the surface (topmost) block: `1` when the palette has
-    // a dedicated surface block, else `0`. The impostor mesher uses it to pick
-    // the surface block's atlas UVs so impostors texture like the full chunks.
+    /// Palette index of the surface (topmost) block: `1` when the palette has
+    /// a dedicated surface block, else `0`. The impostor mesher uses it to pick
+    /// the surface block's atlas UVs so impostors texture like the full chunks.
     pub fn surface_palette_index(&self) -> u32 {
         self.surface_idx
     }

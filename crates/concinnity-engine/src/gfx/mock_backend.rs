@@ -25,7 +25,7 @@ use crate::gfx::scene_flow::SceneControl;
 pub(crate) struct TestHooks {
     pub settings: crate::config::Settings,
     pub gpu_profile: GpuProfile,
-    pub backend_factory: BackendFactory,
+    pub(crate) backend_factory: BackendFactory,
 }
 
 pub(crate) type BackendFactory =
@@ -35,29 +35,29 @@ pub(crate) type BackendFactory =
 // factory before the mock backend is handed back. `draw_objects` is moved out
 // wholesale so tests can inspect offsets, texture slots, and bounds.
 pub(crate) struct InitSnapshot {
-    pub window_width: u32,
-    pub window_height: u32,
-    pub window_title: String,
+    pub(crate) window_width: u32,
+    pub(crate) window_height: u32,
+    pub(crate) window_title: String,
     pub clear_color: [f32; 4],
-    pub frames_in_flight: usize,
+    pub(crate) frames_in_flight: usize,
     pub vsync: bool,
     pub vertex_count: usize,
     pub index_count: usize,
-    pub draw_objects: Vec<DrawObject>,
-    pub instanced_cluster_count: usize,
-    pub n_skinned: usize,
+    pub(crate) draw_objects: Vec<DrawObject>,
+    pub(crate) instanced_cluster_count: usize,
+    pub(crate) n_skinned: usize,
     pub texture_count: usize,
-    pub text_atlas_count: usize,
+    pub(crate) text_atlas_count: usize,
     pub shadows: ShadowParams,
-    pub anisotropy: u32,
-    pub scene_required: bool,
+    pub(crate) anisotropy: u32,
+    pub(crate) scene_required: bool,
     pub fog: bool,
-    pub taa_enabled: bool,
-    pub ssao_on: bool,
+    pub(crate) taa_enabled: bool,
+    pub(crate) ssao_on: bool,
     // Per shader bucket, the compiled (vertex, fragment) byte counts. A bucket
     // of (0, 0) is a world that declared no Shader for it, which every backend
     // reads as "use the engine's own main-pass program".
-    pub shader_stage_lens: Vec<(usize, usize)>,
+    pub(crate) shader_stage_lens: Vec<(usize, usize)>,
 }
 
 // One recorded backend call with the parameters tests assert on.
@@ -144,15 +144,15 @@ pub(crate) struct MockState {
     // Returned by the next window_closed() poll.
     pub window_closed: bool,
     // When set, draw_frame returns this error instead of Ok.
-    pub fail_draw: Option<RenderError>,
+    pub(crate) fail_draw: Option<RenderError>,
     // When set, reload_world returns this error instead of Ok (exercising the
     // hot-swap failure path where GraphicsSystem marks itself failed).
-    pub fail_reload: Option<String>,
+    pub(crate) fail_reload: Option<String>,
     // Snapshot the next take_input() returns, then reset to default
     // (matching a real backend's drain-on-poll semantics).
-    pub next_input: RenderInput,
+    pub(crate) next_input: RenderInput,
     // Reported logical viewport size.
-    pub logical_size: (f32, f32),
+    pub(crate) logical_size: (f32, f32),
     // Capabilities reported to init, which uses them to gray out the settings
     // rows the device cannot honour. Set before `init_graphics` to stand in for
     // a device missing a feature.

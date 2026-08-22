@@ -8,83 +8,101 @@ use alloc::vec::Vec;
 use concinnity_asset::{AssetId, PayloadLocator};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// One component record in the blob's def stream.
 pub struct BlobAssetDef {
-    // The asset's interned identity. `None` for unnamed runtime-only assets.
-    // Injected into the component at load time via `Component::inject_name`.
+    /// The asset's interned identity. `None` for unnamed runtime-only assets.
+    /// Injected into the component at load time via `Component::inject_name`.
     pub name: Option<AssetId>,
+    /// The record's asset kind. Always [`AssetKind::Component`].
     pub kind: AssetKind,
+    /// The component type's registry tag.
     pub discriminant: u8,
-    // The serialized runtime component (cook already ran the asset -> component
-    // translation), loaded via `Component::from_baked`. Every record is baked;
-    // the transitional authored-args record kind is retired.
+    /// The serialized runtime component (cook already ran the asset -> component
+    /// translation), loaded via `Component::from_baked`. Every record is baked;
+    /// the transitional authored-args record kind is retired.
     #[serde(with = "serde_bytes")]
     pub args_bytes: Vec<u8>,
+    /// Where the component's compiled payload lives, when it has one.
     pub payload: Option<PayloadLocator>,
 }
 
-// The blob carries only components: every system is internal client code,
-// constructed at runtime from world content, never serialized. This kind is
-// kept as the single discriminator the blob format records per asset.
+/// The blob carries only components: every system is internal client code,
+/// constructed at runtime from world content, never serialized. This kind is
+/// kept as the single discriminator the blob format records per asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetKind {
+    /// A runtime component.
     Component,
 }
 
-// The kinds of resource the runtime keeps in per-kind tables, one dense handle
-// space per kind. The `#[repr(u8)]` discriminant is the resource stream's
-// `resource_kind` tag (like `ComponentTag` for components); cook writes it and
-// the runtime selects the table by it. Order is the assignment order cook uses.
+/// The kinds of resource the runtime keeps in per-kind tables, one dense handle
+/// space per kind. The `#[repr(u8)]` discriminant is the resource stream's
+/// `resource_kind` tag (like `ComponentTag` for components); cook writes it and
+/// the runtime selects the table by it. Order is the assignment order cook uses.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
+    /// Static mesh geometry.
     Mesh,
+    /// A 2D texture.
     Texture,
+    /// A baked material.
     Material,
+    /// A font atlas.
     Font,
+    /// A decoded audio clip.
     AudioClip,
+    /// A cubemap texture.
     CubemapTexture,
+    /// A prefiltered environment map.
     EnvironmentMap,
+    /// A colour lookup table.
     ColorLut,
+    /// Skinned mesh geometry.
     SkinnedMesh,
 }
 
-// One entry in the blob's resource stream: a compiled resource addressed by its
-// dense per-kind handle, carried alongside the component stream. `resource_kind`
-// selects the per-kind table (`ResourceKind as u8`); `handle` is the dense index
-// within that kind (== the record's position within its kind). A payload
-// resource (mesh, texture, audio clip) carries a `PayloadLocator` into the blob
-// payload section; a data resource (a baked Material) carries its runtime bytes
-// in `data_bytes`. Both fields are present so either shape round-trips; a given
-// kind uses one branch (AudioClip uses `payload`).
+/// One entry in the blob's resource stream: a compiled resource addressed by its
+/// dense per-kind handle, carried alongside the component stream. `resource_kind`
+/// selects the per-kind table (`ResourceKind as u8`); `handle` is the dense index
+/// within that kind (== the record's position within its kind). A payload
+/// resource (mesh, texture, audio clip) carries a `PayloadLocator` into the blob
+/// payload section; a data resource (a baked Material) carries its runtime bytes
+/// in `data_bytes`. Both fields are present so either shape round-trips; a given
+/// kind uses one branch (AudioClip uses `payload`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceRecord {
+    /// Which per-kind table this record belongs to (`ResourceKind as u8`).
     pub resource_kind: u8,
+    /// Dense index within that kind.
     pub handle: u32,
+    /// Where the compiled payload lives, for a payload resource.
     pub payload: Option<PayloadLocator>,
     #[serde(with = "serde_bytes")]
+    /// The runtime bytes, for a data resource.
     pub data_bytes: Vec<u8>,
 }
 
-// A verified summary of the blob's shape, produced by cook from the final
-// record streams and carried alongside them in the metadata block. The runtime
-// trusts it (debug builds re-derive and assert it matches): the per-type
-// counts pre-size the ECS columns before the bulk component load, and
-// `max_blob_index` names the overflow files without scanning either stream.
-// Anything further (type presence, feature flags) is deliberately not
-// duplicated here: it is a counts lookup away.
+/// A verified summary of the blob's shape, produced by cook from the final
+/// record streams and carried alongside them in the metadata block. The runtime
+/// trusts it (debug builds re-derive and assert it matches): the per-type
+/// counts pre-size the ECS columns before the bulk component load, and
+/// `max_blob_index` names the overflow files without scanning either stream.
+/// Anything further (type presence, feature flags) is deliberately not
+/// duplicated here: it is a counts lookup away.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct WorldManifest {
-    // (component discriminant, record count), ascending, nonzero counts only.
+    /// (component discriminant, record count), ascending, nonzero counts only.
     pub component_counts: Vec<(u8, u32)>,
-    // Highest blob index any payload locator references; 0 = no overflow.
+    /// Highest blob index any payload locator references; 0 = no overflow.
     pub max_blob_index: u32,
 }
 
 impl WorldManifest {
-    // Derive the manifest from the final record streams. Cook builds the
-    // shipped manifest with this (so it is consistent by construction); the
-    // runtime re-derives it in debug builds to assert the shipped copy
-    // matches.
+    /// Derive the manifest from the final record streams. Cook builds the
+    /// shipped manifest with this (so it is consistent by construction); the
+    /// runtime re-derives it in debug builds to assert the shipped copy
+    /// matches.
     pub fn from_records(defs: &[BlobAssetDef], resources: &[ResourceRecord]) -> Self {
         let mut counts = [0u32; 256];
         for def in defs {
@@ -110,47 +128,58 @@ impl WorldManifest {
     }
 }
 
-// The blob's metadata section: the component stream, the resource stream, and
-// the manifest summarizing them, postcard-serialized together as the block the
-// header's `meta_len` measures. Folding everything into one block keeps the
-// 16-byte header and every payload-offset computation
-// (`payload_section_start`, the lock's `payload_bytes`) unchanged; only the
-// block's contents grew. Blob 0 carries the full metadata; overflow blobs
-// carry an empty `BlobMeta` (whose default manifest is consistent with its
-// empty streams).
+/// The blob's metadata section: the component stream, the resource stream, and
+/// the manifest summarizing them, postcard-serialized together as the block the
+/// header's `meta_len` measures. Folding everything into one block keeps the
+/// 16-byte header and every payload-offset computation
+/// (`payload_section_start`, the lock's `payload_bytes`) unchanged; only the
+/// block's contents grew. Blob 0 carries the full metadata; overflow blobs
+/// carry an empty `BlobMeta` (whose default manifest is consistent with its
+/// empty streams).
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct BlobMeta {
+    /// The component stream.
     pub defs: Vec<BlobAssetDef>,
+    /// The resource stream.
     pub resources: Vec<ResourceRecord>,
+    /// Verified summary of both streams.
     pub manifest: WorldManifest,
+    /// Per-scene exclusive content, in scene declaration order.
     pub scene_groups: Vec<SceneGroup>,
+    /// Baked geometry summaries, keyed by mesh-source handle.
     pub mesh_bounds: Vec<MeshBoundsRecord>,
 }
 
-// Baked geometry summary of one static mesh payload, keyed by its unified
-// mesh-source handle. Lets the runtime build draw records (AABB) and size
-// geometry reservations (counts) without decoding the payload; a payload with
-// no record decodes eagerly.
+/// Baked geometry summary of one static mesh payload, keyed by its unified
+/// mesh-source handle. Lets the runtime build draw records (AABB) and size
+/// geometry reservations (counts) without decoding the payload; a payload with
+/// no record decodes eagerly.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MeshBoundsRecord {
+    /// The mesh-source handle this record summarizes.
     pub handle: u32,
+    /// Lower corner of the mesh's local AABB.
     pub min: [f32; 3],
+    /// Upper corner of the mesh's local AABB.
     pub max: [f32; 3],
+    /// Vertices in the payload.
     pub vertex_count: u32,
+    /// Indices in the payload.
     pub index_count: u32,
 }
 
-// One scene's exclusively-owned blob content: the resource-stream entries and
-// payload-carrying component defs reachable only from that scene's members.
-// Content shared between scenes (or used outside any scene) belongs to no
-// group and loads with the world. Groups are listed in scene declaration
-// order; their payloads are packed into dedicated blobs after the global set.
+/// One scene's exclusively-owned blob content: the resource-stream entries and
+/// payload-carrying component defs reachable only from that scene's members.
+/// Content shared between scenes (or used outside any scene) belongs to no
+/// group and loads with the world. Groups are listed in scene declaration
+/// order; their payloads are packed into dedicated blobs after the global set.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct SceneGroup {
+    /// The scene that exclusively owns this content.
     pub scene: AssetId,
-    // (resource_kind, handle) pairs from the resource stream.
+    /// (resource_kind, handle) pairs from the resource stream.
     pub resources: Vec<(u8, u32)>,
-    // Names of payload-carrying component defs.
+    /// Names of payload-carrying component defs.
     pub defs: Vec<AssetId>,
 }
 

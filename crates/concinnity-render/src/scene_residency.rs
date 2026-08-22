@@ -1,44 +1,44 @@
-// src/scene_residency.rs
-//
-// Scene residency bookkeeping: which scenes are pinned (their streamed
-// content wanted on the GPU), which of each scene's members are currently
-// resident, and the derived per-scene load state and progress. Pure
-// bookkeeping against `core` + `alloc` only, like the streaming policy core:
-// the driver applies pin changes to the stream planners as blocked flags and
-// reports residency transitions back here.
+//! Scene residency bookkeeping: which scenes are pinned (their streamed
+//! content wanted on the GPU), which of each scene's members are currently
+//! resident, and the derived per-scene load state and progress. Pure
+//! bookkeeping against `core` + `alloc` only, like the streaming policy core:
+//! the driver applies pin changes to the stream planners as blocked flags and
+//! reports residency transitions back here.
 
 use crate::ecs::asset_id::AssetId;
 
-// A streamed item a scene exclusively owns: the driver's channel tag (which
-// pool the item lives in) plus the pool's item id.
+/// A streamed item a scene exclusively owns: the driver's channel tag (which
+/// pool the item lives in) plus the pool's item id.
 pub type Member = (u8, u32);
 
+/// Residency channel for textures.
 pub const CHANNEL_TEXTURE: u8 = 0;
+/// Residency channel for meshes.
 pub const CHANNEL_MESH: u8 = 1;
-// A shader bucket's render pipeline, built on pin and released on unload. The
-// item id is the bucket (the material's `ShaderHandle` value).
+/// A shader bucket's render pipeline, built on pin and released on unload. The
+/// item id is the bucket (the material's `ShaderHandle` value).
 pub const CHANNEL_SHADER: u8 = 2;
 
-// Load state of one scene's streamed content, derived from pins + residency.
+/// Load state of one scene's streamed content, derived from pins + residency.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneLoadState {
-    // Unpinned, nothing resident.
+    /// Unpinned, nothing resident.
     Unloaded,
-    // Pinned, some members still loading.
+    /// Pinned, some members still loading.
     Loading,
-    // Pinned, every member resident (trivially true with no members).
+    /// Pinned, every member resident (trivially true with no members).
     Resident,
-    // Unpinned, members still draining off the GPU.
+    /// Unpinned, members still draining off the GPU.
     Unloading,
 }
 
-// Pin changes produced by one `sync_pins` call, as planner blocked-flag
-// updates the driver must apply.
+/// Pin changes produced by one `sync_pins` call, as planner blocked-flag
+/// updates the driver must apply.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PinChanges {
-    // Members whose owning scene became unpinned: block them.
+    /// Members whose owning scene became unpinned: block them.
     pub blocked: Vec<Member>,
-    // Members whose owning scene became pinned: unblock them.
+    /// Members whose owning scene became pinned: unblock them.
     pub unblocked: Vec<Member>,
 }
 
@@ -50,6 +50,7 @@ struct SceneSet {
     resident: Vec<bool>,
 }
 
+/// Per-scene residency pins, one refcount per resource and channel.
 pub struct SceneResidency {
     sets: Vec<SceneSet>,
     // (member, set index), sorted by member for binary search.
@@ -57,10 +58,10 @@ pub struct SceneResidency {
 }
 
 impl SceneResidency {
-    // Build from each scene's exclusively-owned members. Every scene starts
-    // unpinned with nothing resident; the driver blocks every owned member
-    // ([`all_members`](Self::all_members)) at setup, then the first
-    // `sync_pins` unblocks the pinned scenes' members.
+    /// Build from each scene's exclusively-owned members. Every scene starts
+    /// unpinned with nothing resident; the driver blocks every owned member
+    /// ([`all_members`](Self::all_members)) at setup, then the first
+    /// `sync_pins` unblocks the pinned scenes' members.
     pub fn new(scenes: Vec<(AssetId, Vec<Member>)>) -> Self {
         let mut owner: Vec<(Member, usize)> = scenes
             .iter()
@@ -80,19 +81,20 @@ impl SceneResidency {
         Self { sets, owner }
     }
 
+    /// Whether nothing is pinned.
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty()
     }
 
-    // Every scene-owned member, for the driver's setup pass: all owned members
-    // start blocked, matching every scene starting unpinned.
+    /// Every scene-owned member, for the driver's setup pass: all owned members
+    /// start blocked, matching every scene starting unpinned.
     pub fn all_members(&self) -> impl Iterator<Item = Member> + '_ {
         self.owner.iter().map(|&(m, _)| m)
     }
 
-    // Establish the pin set: exactly the scenes in `pinned` are pinned after
-    // this call. Returns the members whose blocked state must change on the
-    // stream planners (a no-op sync returns empty changes).
+    /// Establish the pin set: exactly the scenes in `pinned` are pinned after
+    /// this call. Returns the members whose blocked state must change on the
+    /// stream planners (a no-op sync returns empty changes).
     pub fn sync_pins(&mut self, pinned: &[AssetId]) -> PinChanges {
         let mut changes = PinChanges::default();
         for set in &mut self.sets {
@@ -111,8 +113,8 @@ impl SceneResidency {
         changes
     }
 
-    // Record a member's residency transition (a completed upload or an applied
-    // eviction). Members owned by no scene are ignored.
+    /// Record a member's residency transition (a completed upload or an applied
+    /// eviction). Members owned by no scene are ignored.
     pub fn note_resident(&mut self, member: Member, resident: bool) {
         let Ok(pos) = self.owner.binary_search_by_key(&member, |&(m, _)| m) else {
             return;
@@ -123,7 +125,7 @@ impl SceneResidency {
         }
     }
 
-    // The scene's derived load state, or `None` for an unknown scene.
+    /// The scene's derived load state, or `None` for an unknown scene.
     pub fn state(&self, scene: AssetId) -> Option<SceneLoadState> {
         self.sets
             .iter()
@@ -131,8 +133,8 @@ impl SceneResidency {
             .map(derive_state)
     }
 
-    // Fraction of the scene's members resident (1.0 with no members), or
-    // `None` for an unknown scene.
+    /// Fraction of the scene's members resident (1.0 with no members), or
+    /// `None` for an unknown scene.
     pub fn progress(&self, scene: AssetId) -> Option<f32> {
         self.sets
             .iter()
@@ -140,22 +142,22 @@ impl SceneResidency {
             .map(derive_progress)
     }
 
-    // Whether any pinned scene still has members loading.
+    /// Whether any pinned scene still has members loading.
     pub fn any_loading(&self) -> bool {
         self.sets
             .iter()
             .any(|s| derive_state(s) == SceneLoadState::Loading)
     }
 
-    // Every scene's `(id, state, progress)`, in declaration order.
+    /// Every scene's `(id, state, progress)`, in declaration order.
     pub fn status(&self) -> Vec<(AssetId, SceneLoadState, f32)> {
         let mut out = Vec::new();
         self.status_into(&mut out);
         out
     }
 
-    // `status`, written into `out` (cleared first) so a per-frame poll reuses
-    // its buffer.
+    /// `status`, written into `out` (cleared first) so a per-frame poll reuses
+    /// its buffer.
     pub fn status_into(&self, out: &mut Vec<(AssetId, SceneLoadState, f32)>) {
         out.clear();
         out.extend(

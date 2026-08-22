@@ -25,7 +25,7 @@ pub use crate::gfx::input::RenderInput as InputState;
 // Created once by GraphicsSystem during init(); polled every step().
 // All GLFW calls must happen on the thread that created this struct -- the
 // world loop guarantees single-threaded system execution.
-pub struct GlfwWindow {
+pub(crate) struct GlfwWindow {
     pub glfw: glfw::Glfw,
     pub window: glfw::PWindow,
     events: glfw::GlfwReceiver<(f64, glfw::WindowEvent)>,
@@ -198,7 +198,7 @@ fn key_from_glfw(key: glfw::Key) -> Option<Key> {
 
 impl GlfwWindow {
     // create a new glfw window with no opengl context (vulkan surface mode)
-    pub fn new(
+    pub(crate) fn new(
         title: &str,
         width: u32,
         height: u32,
@@ -303,7 +303,7 @@ impl GlfwWindow {
     // Hide the cursor and begin delivering relative mouse deltas via CursorPos
     // events. Should be called once after the window is shown, when a
     // Camera3D component is present.
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         self.cursor_captured = true;
         self.apply_cursor_mode();
         // enable raw mouse motion if the platform supports it -- bypasses
@@ -316,7 +316,7 @@ impl GlfwWindow {
 
     // Show the cursor and stop accumulating relative deltas; symmetric with
     // `capture_cursor`. Driven by `set_camera_capture` in menu mode.
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         if !self.cursor_captured {
             return;
         }
@@ -327,7 +327,7 @@ impl GlfwWindow {
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered: re-applies the combined
     // cursor mode only on a transition.
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         if hidden == self.ui_cursor_hidden {
             return;
         }
@@ -338,13 +338,13 @@ impl GlfwWindow {
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`. The poll loop reads this to route Escape
     // to the ECS instead of releasing the cursor inline.
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;
     }
 
     // Edge-triggered capture: capture for camera control, release while a menu
     // is open. GraphicsSystem calls this each frame in menu mode.
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         if capture == self.cursor_captured {
             return;
         }
@@ -358,7 +358,7 @@ impl GlfwWindow {
     // Whether the real cursor has left the window so the renderer should stop
     // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
     // `poll`; false while captured or in fullscreen (which confines instead).
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.cursor_outside_window
     }
 
@@ -415,7 +415,7 @@ impl GlfwWindow {
     //
     // Switch windowed / borderless / fullscreen. The framebuffer-size change
     // makes the next present return OUT_OF_DATE, which rebuilds the swapchain.
-    pub fn set_window_mode(&mut self, mode: WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         // Leaving a mode-switched fullscreen: GLFW restores the desktop mode
         // as part of the switch away, so a borderless cover must size to the
         // cached desktop mode, not the (still-switched) current video mode.
@@ -493,14 +493,14 @@ impl GlfwWindow {
 
     // The display modes of the primary monitor (enumerated at creation),
     // feeding the Resolution settings row; the caller dedups + sorts.
-    pub fn display_modes(&self) -> Vec<DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<DisplayMode> {
         self.display_modes.clone()
     }
 
     // The desktop mode of the primary monitor (captured at creation, before
     // any fullscreen switch): what the Resolution row shows before the user
     // ever picks a mode.
-    pub fn current_display_mode(&self) -> Option<DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         self.desktop_mode
     }
 
@@ -509,7 +509,7 @@ impl GlfwWindow {
     // display is ignored with a warning, mirroring Metal / DirectX). While
     // fullscreen it applies immediately by re-entering fullscreen at the new
     // mode; otherwise the next switch to Fullscreen picks it up.
-    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
         let Some(idx) = crate::gfx::display_mode::best_native_index(&self.display_modes, mode)
         else {
             tracing::warn!(
@@ -531,20 +531,20 @@ impl GlfwWindow {
 
     // Resize the window (windowed mode only; GraphicsSystem gates this). The
     // framebuffer-size change triggers a swapchain rebuild via OUT_OF_DATE.
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         self.window.set_size(width as i32, height as i32);
     }
 
     // Replace the runtime movement key map. `poll` decodes key events through
     // it, so a settings-menu rebind takes effect immediately.
-    pub fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.keymap = *keymap;
     }
 
     // Drain all pending GLFW events, update input state, and return true if
     // the window should close. Key state is tracked as a running bitmask;
     // cursor deltas are accumulated so no delta is lost between poll calls.
-    pub fn poll(&mut self) -> bool {
+    pub(crate) fn poll(&mut self) -> bool {
         self.glfw.poll_events();
         let mut should_close = self.window.should_close();
 
@@ -685,7 +685,7 @@ impl GlfwWindow {
     // the camera stutter for that gap. Only the momentary one-shot inputs
     // (interact/jump/left_click) and the per-call accumulated mouse delta
     // are cleared.
-    pub fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> InputState {
         let snapshot = self.input;
         self.input.interact = false;
         self.input.jump = false;
@@ -705,14 +705,14 @@ impl GlfwWindow {
     }
 
     // The framebuffer size in pixels, the extent the swapchain is sized to.
-    pub fn framebuffer_size(&self) -> (i32, i32) {
+    pub(crate) fn framebuffer_size(&self) -> (i32, i32) {
         self.window.get_framebuffer_size()
     }
 
     // The overlay coordinate space: GLFW window coordinates, the same units
     // `CursorPos` reports the cursor in. Equal to `framebuffer_size` on an
     // unscaled surface; smaller by the content scale on hi-DPI Wayland.
-    pub fn logical_size(&self) -> (f32, f32) {
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
         let (w, h) = self.window.get_size();
         (w as f32, h as f32)
     }
@@ -720,7 +720,7 @@ impl GlfwWindow {
     // Create the presentation surface for this window (GLFW picks the
     // platform's surface extension). `_entry` keeps the signature shared with
     // the Win32 window, which loads VK_KHR_win32_surface through it.
-    pub fn create_surface(
+    pub(crate) fn create_surface(
         &mut self,
         _entry: &ash::Entry,
         instance: &ash::Instance,
@@ -746,7 +746,7 @@ impl GlfwWindow {
     }
 
     // vulkan instance extensions required for surface creation on this platform
-    pub fn required_instance_extensions(&self) -> Vec<String> {
+    pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         self.glfw
             .get_required_instance_extensions()
             .unwrap_or_default()

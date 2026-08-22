@@ -25,7 +25,7 @@ use crate::ecs::{Entity, PipelineContext};
 // The index this pass publishes is renderer-free and lives in concinnity-core so
 // the physics / audio subsystem crates can name it; re-export it under the
 // historical `crate::ecs::decompose::EntityByName` path for every reader.
-pub use concinnity_core::ecs::EntityByName;
+pub(crate) use concinnity_core::ecs::EntityByName;
 
 // Decompose every loaded Prop into per-instance components on its own entity,
 // then drain the Prop column.

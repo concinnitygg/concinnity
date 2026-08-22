@@ -1,8 +1,8 @@
-// concinnity-cli: the `concinnity` dev CLI binary.
-//
-// Owns the clap command tree + dispatch (entry.rs) and the subcommand
-// implementations (cli/), driving the dev-session entry points the
-// concinnity-editor library exposes and the concinnity-cook compile pipeline.
+//! concinnity-cli: the `concinnity` dev CLI binary.
+//!
+//! Owns the clap command tree + dispatch (entry.rs) and the subcommand
+//! implementations (cli/), driving the dev-session entry points the
+//! concinnity-editor library exposes and the concinnity-cook compile pipeline.
 
 concinnity_memory::install_global_allocator!();
 

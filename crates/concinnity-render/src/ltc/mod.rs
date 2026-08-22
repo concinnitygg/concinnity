@@ -1,24 +1,28 @@
-// src/ltc/mod.rs
-//
-// The linearly-transformed-cosine lookup tables the rectangular area-light
-// shading path samples, generated at build time by the fitter in `fit.rs`.
-//
-// Two tables, both `LTC_LUT_SIZE` square and indexed the same way:
-//   u = roughness in [0, 1]
-//   v = sqrt(1 - cos(theta_view)), which spends more of the axis on the grazing
-//       angles where the lobe changes fastest
-//
-// `matrix_texels` holds 4 floats per cell: the non-trivial entries of the inverse
-// transform, normalised so the middle entry is 1. The shader rebuilds
-// `[[x, 0, z], [0, 1, 0], [y, 0, w]]`, transforms the light quad's corners by it,
-// and evaluates the closed-form clamped-cosine polygon integral.
-//
-// `magnitude_texels` holds 2 floats per cell: the lobe's directional albedo and
-// its Fresnel weight, recombined by the shader as
-// `f0 * albedo + (1 - f0) * fresnel`.
+//! The linearly-transformed-cosine lookup tables the rectangular area-light
+//! shading path samples, generated at build time by the fitter in `fit.rs`.
+//!
+//! Two tables, both `LTC_LUT_SIZE` square and indexed the same way:
+//!   u = roughness in [0, 1]
+//!   v = sqrt(1 - cos(theta_view)), which spends more of the axis on the grazing
+//!       angles where the lobe changes fastest
+//!
+//! `matrix_texels` holds 4 floats per cell: the non-trivial entries of the inverse
+//! transform, normalised so the middle entry is 1. The shader rebuilds
+//! `[[x, 0, z], [0, 1, 0], [y, 0, w]]`, transforms the light quad's corners by it,
+//! and evaluates the closed-form clamped-cosine polygon integral.
+//!
+//! `magnitude_texels` holds 2 floats per cell: the lobe's directional albedo and
+//! its Fresnel weight, recombined by the shader as
+//! `f0 * albedo + (1 - f0) * fresnel`.
 
-pub mod fit;
-pub mod polygon;
+// The fitter runs from build.rs, which `include!`s the file; the lib compiles
+// it too but reads only `LTC_LUT_SIZE`.
+#[allow(dead_code)]
+pub(crate) mod fit;
+// The CPU twin of the shader's polygon integral, kept so the closed form can
+// be checked against brute-force Monte Carlo. Nothing else calls it.
+#[cfg(test)]
+mod polygon;
 
 use std::sync::OnceLock;
 
@@ -40,13 +44,13 @@ fn decode(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-// RGBA32Float texels, `LTC_LUT_SIZE` square. Decoded once on first use, which is
-// the backend's one-time texture upload.
+/// RGBA32Float texels, `LTC_LUT_SIZE` square. Decoded once on first use, which is
+/// the backend's one-time texture upload.
 pub fn matrix_texels() -> &'static [f32] {
     MATRIX.get_or_init(|| decode(MATRIX_BYTES))
 }
 
-// RG32Float texels, `LTC_LUT_SIZE` square.
+/// RG32Float texels, `LTC_LUT_SIZE` square.
 pub fn magnitude_texels() -> &'static [f32] {
     MAGNITUDE.get_or_init(|| decode(MAGNITUDE_BYTES))
 }

@@ -20,7 +20,7 @@ impl VkContext {
     // `VoxelWorld` chunks, seed the chunk sub-allocators with it, and build
     // the shared chunk (albedo, normal) descriptor set from the world's chunk
     // material.
-    pub fn setup_chunk_streaming(
+    pub(crate) fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
@@ -139,7 +139,7 @@ impl VkContext {
 
     // Place one streamed chunk's geometry in the chunk headroom region and
     // write its `DrawObject` at the engine-allocated destination slot.
-    pub fn add_chunk_mesh(
+    pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: crate::gfx::draw_slot::SlotAlloc,
@@ -255,7 +255,11 @@ impl VkContext {
 
     // Free a streamed chunk's geometry region and retire its `DrawObject`
     // slot for reuse.
-    pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn remove_chunk_mesh(
+        &mut self,
+        draw_idx: usize,
+        retire_frame: u64,
+    ) -> Result<(), String> {
         let obj =
             self.draw.objects.get(draw_idx).ok_or_else(|| {
                 format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
@@ -276,7 +280,11 @@ impl VkContext {
     }
 
     // Rewrite a resident chunk's model matrix.
-    pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
+    pub(crate) fn set_chunk_model(
+        &mut self,
+        draw_idx: usize,
+        model: [[f32; 4]; 4],
+    ) -> Result<(), String> {
         let obj = self
             .draw
             .objects

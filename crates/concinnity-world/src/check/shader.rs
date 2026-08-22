@@ -1,5 +1,6 @@
 use concinnity_core::platform::Platform;
 
+/// Check a `Shader`'s authored args.
 pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
 }

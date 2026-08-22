@@ -13,6 +13,7 @@
 
 use alloc::vec::Vec;
 
+/// A double-buffered event queue: events stay readable for two frames.
 pub struct Events<E> {
     // Two frame buffers. `newest` indexes the one new events go into; the other
     // holds the previous frame's events, still readable.
@@ -25,6 +26,7 @@ pub struct Events<E> {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+/// A reader's position in an [`Events`] queue.
 pub struct EventCursor {
     // Next sequence id this reader has not yet consumed.
     next: usize,
@@ -42,19 +44,20 @@ impl<E> Default for Events<E> {
 }
 
 impl<E> Events<E> {
+    /// An empty queue.
     pub fn new() -> Events<E> {
         Events::default()
     }
 
-    // Queue an event. It becomes visible to readers immediately and stays
-    // readable until the second `update` after this one.
+    /// Queue an event. It becomes visible to readers immediately and stays
+    /// readable until the second `update` after this one.
     pub fn send(&mut self, event: E) {
         self.buffers[self.newest].push(event);
         self.next_id += 1;
     }
 
-    // Advance one frame: retire the older buffer and start a fresh newest one.
-    // Events older than two cycles are dropped.
+    /// Advance one frame: retire the older buffer and start a fresh newest one.
+    /// Events older than two cycles are dropped.
     pub fn update(&mut self) {
         let oldest = self.newest ^ 1;
         self.buffers[oldest].clear();
@@ -62,15 +65,15 @@ impl<E> Events<E> {
         self.newest = oldest;
     }
 
-    // Read every buffered event the cursor has not yet seen, in send order, and
-    // advance the cursor past them.
-    //
-    // Lazy: a drain costs no allocation, which matters because every event
-    // reader does this every frame. The cursor advances here rather than as the
-    // iterator is consumed, so a caller that reads only part of the run still
-    // ends up past all of it -- the same thing a returned collection did, and
-    // the only behaviour that makes "every reader sees every event exactly
-    // once" hold for a partial read.
+    /// Read every buffered event the cursor has not yet seen, in send order, and
+    /// advance the cursor past them.
+    ///
+    /// Lazy: a drain costs no allocation, which matters because every event
+    /// reader does this every frame. The cursor advances here rather than as the
+    /// iterator is consumed, so a caller that reads only part of the run still
+    /// ends up past all of it -- the same thing a returned collection did, and
+    /// the only behaviour that makes "every reader sees every event exactly
+    /// once" hold for a partial read.
     pub fn read(&self, cursor: &mut EventCursor) -> impl Iterator<Item = &E> {
         // Visit buffers oldest-first so events come back in send order.
         let (older, newer) = if self.starts[0] > self.starts[1] {
@@ -92,11 +95,12 @@ impl<E> Events<E> {
         self.buffers[buffer].iter().skip(skip)
     }
 
-    // Total events currently buffered across both frames.
+    /// Total events currently buffered across both frames.
     pub fn len(&self) -> usize {
         self.buffers[0].len() + self.buffers[1].len()
     }
 
+    /// Whether both frame buffers are empty.
     pub fn is_empty(&self) -> bool {
         self.buffers[0].is_empty() && self.buffers[1].is_empty()
     }

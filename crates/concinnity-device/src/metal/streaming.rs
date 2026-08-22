@@ -20,7 +20,7 @@ impl MtlContext {
     // (larger) buffers; chunks are placed in the appended headroom by
     // `add_chunk_mesh`. This runs before the first frame, so no in-flight
     // command buffer references the replaced buffers.
-    pub fn setup_chunk_streaming(
+    pub(crate) fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
@@ -67,7 +67,7 @@ impl MtlContext {
     // The chunk is non-cullable and joins the `draw.always` set: the streaming
     // window already bounds the resident chunk count, so the renderer draws
     // every resident chunk. `frame` reclaims retired deferred frees first.
-    pub fn add_chunk_mesh(
+    pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: crate::gfx::draw_slot::SlotAlloc,
@@ -173,7 +173,11 @@ impl MtlContext {
     // command buffer never has the freed region overwritten by a later
     // `add_chunk_mesh`. The slot stays in `draw.objects` / `draw.always` but
     // is marked non-resident and invisible, so every pass skips it.
-    pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn remove_chunk_mesh(
+        &mut self,
+        draw_idx: usize,
+        retire_frame: u64,
+    ) -> Result<(), String> {
         let obj =
             self.draw.objects.get_mut(draw_idx).ok_or_else(|| {
                 format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
@@ -208,7 +212,11 @@ impl MtlContext {
     // velocity pre-pass still diffs against the origin the chunk was last
     // rendered with: the rebase is exact, so a stationary chunk shows zero
     // motion across an origin shift.
-    pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
+    pub(crate) fn set_chunk_model(
+        &mut self,
+        draw_idx: usize,
+        model: [[f32; 4]; 4],
+    ) -> Result<(), String> {
         let obj = self
             .draw
             .objects

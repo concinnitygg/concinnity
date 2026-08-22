@@ -39,6 +39,7 @@ impl<H> VoiceSlots<H> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.voices.len()
     }

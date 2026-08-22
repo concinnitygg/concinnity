@@ -21,12 +21,12 @@ pub(crate) use crate::gfx::skinning::{IDENTITY as IDENTITY4, mat4_mul};
 // slots, the GPU uniforms, and the shader bucket its draws render under.
 #[derive(Clone, Copy)]
 pub(crate) struct MaterialEntry {
-    pub albedo_slot: usize,
-    pub normal_map_slot: usize,
-    pub uniforms: MaterialUniforms,
+    pub(crate) albedo_slot: usize,
+    pub(crate) normal_map_slot: usize,
+    pub(crate) uniforms: MaterialUniforms,
     // Dense ShaderHandle value of the material's `shader` reference; 0 (the
     // world default) when the material names none.
-    pub shader_bucket: u32,
+    pub(crate) shader_bucket: u32,
 }
 
 // Geometry decoded for one Room: the asset, its vertices, LOD0 indices, and
@@ -62,8 +62,8 @@ pub(crate) struct DeferredMeshSeed {
 // decodes eagerly.
 #[derive(Default)]
 pub(crate) struct DeferredMeshSources {
-    pub by_handle: std::collections::HashSet<u32>,
-    pub by_def: std::collections::HashSet<AssetId>,
+    pub(crate) by_handle: std::collections::HashSet<u32>,
+    pub(crate) by_def: std::collections::HashSet<AssetId>,
     pub bounds: std::collections::HashMap<u32, ([f32; 3], [f32; 3])>,
     pub counts: std::collections::HashMap<u32, (u32, u32)>,
 }
@@ -94,11 +94,11 @@ impl DeferredMeshSources {
 pub(crate) struct DrawListData {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub draw_objects: Vec<DrawObject>,
-    pub instanced_clusters: Vec<InstancedCluster>,
-    pub prop_draw_indices: Vec<Vec<usize>>,
-    pub mesh_handle_to_draws: std::collections::HashMap<usize, Vec<usize>>,
-    pub prop_local_bounds: Vec<([f32; 3], [f32; 3])>,
+    pub(crate) draw_objects: Vec<DrawObject>,
+    pub(crate) instanced_clusters: Vec<InstancedCluster>,
+    pub(crate) prop_draw_indices: Vec<Vec<usize>>,
+    pub(crate) mesh_handle_to_draws: std::collections::HashMap<usize, Vec<usize>>,
+    pub(crate) prop_local_bounds: Vec<([f32; 3], [f32; 3])>,
 }
 
 // One appended mesh's placement in the shared buffers: vertex_offset,
@@ -154,7 +154,7 @@ pub(crate) struct RenderableItem {
     pub material: Option<MaterialHandle>,
     pub texture: Option<TextureHandle>,
     pub cull_distance: f32,
-    pub is_dynamic: bool,
+    pub(crate) is_dynamic: bool,
 }
 
 // Build one entity's RenderableItem: read its renderer fields from its

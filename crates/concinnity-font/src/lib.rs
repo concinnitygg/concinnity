@@ -1,11 +1,11 @@
-// Build-time font compilation: rasterises the printable ASCII glyphs of a TTF
-// face with fontdue, packs them into a power-of-two RGBA atlas as a signed
-// distance field, and encodes the result as the blob payload
-// `concinnity_cpu::build::font::deserialise` reads back.
-//
-// Split out of the cook pipeline so both the asset build and the engine's own
-// build script can bake an atlas: the engine embeds one for its startup error
-// screen, which must render without any compiled world data.
+//! Build-time font compilation: rasterises the printable ASCII glyphs of a TTF
+//! face with fontdue, packs them into a power-of-two RGBA atlas as a signed
+//! distance field, and encodes the result as the blob payload
+//! `concinnity_cpu::build::font::deserialise` reads back.
+//!
+//! Split out of the cook pipeline so both the asset build and the engine's own
+//! build script can bake an atlas: the engine embeds one for its startup error
+//! screen, which must render without any compiled world data.
 
 mod payload;
 mod sdf;

@@ -117,4 +117,5 @@ mod state;
 mod wire;
 
 pub use protocol::WatchTarget;
-pub use wire::{DebugServer, client};
+pub(crate) use wire::DebugServer;
+pub use wire::client;

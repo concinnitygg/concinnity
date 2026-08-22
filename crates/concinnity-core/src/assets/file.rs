@@ -15,17 +15,20 @@ use crate::ecs::{Component, PayloadLocator};
 /// becomes mesh data); other kinds are path-only references.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct File {
+    /// Assigned by the loader; not authored.
     pub asset_id: AssetId,
+    /// Path to the source file, relative to the world.
     pub path: String,
+    /// Content category, derived from the extension when not authored.
     pub kind: Option<FileKind>,
     /// Injected at load time for kinds that produce a compiled blob (e.g. obj → mesh payload).
     pub locator: Option<PayloadLocator>,
 }
 
 impl File {
-    // Translate the authored args into the runtime file reference: derive
-    // `kind` from the path extension when unset. Run by cook at build time
-    // (the baked blob record carries the result).
+    /// Translate the authored args into the runtime file reference: derive
+    /// `kind` from the path extension when unset. Run by cook at build time
+    /// (the baked blob record carries the result).
     pub fn bake(args: FileArgs) -> Self {
         let kind = args
             .kind

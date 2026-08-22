@@ -11,18 +11,18 @@ use crate::{ColliderShape, DynamicParams, JointMotor, JointSpec};
 use concinnity_core::assets::{BodyDynamics, Joint, JointKind, PropCollider};
 
 // Convert an engine `[x, y, z]` array into a Rapier vector.
-pub fn to_vec(v: [f32; 3]) -> Vector {
+pub(crate) fn to_vec(v: [f32; 3]) -> Vector {
     Vector::new(v[0], v[1], v[2])
 }
 
 // Convert a Rapier vector back into an engine `[x, y, z]` array.
-pub fn from_vec(v: Vector) -> [f32; 3] {
+pub(crate) fn from_vec(v: Vector) -> [f32; 3] {
     [v.x, v.y, v.z]
 }
 
 // Build a Rapier rotation from engine Euler degrees `[pitch, yaw, roll]`,
 // applied in YXZ order to match `Prop::model_matrix`.
-pub fn to_rotation(euler_deg: [f32; 3]) -> Rotation {
+pub(crate) fn to_rotation(euler_deg: [f32; 3]) -> Rotation {
     let [pitch, yaw, roll] = euler_deg;
     Rotation::from_euler(
         EulerRot::YXZ,
@@ -34,31 +34,31 @@ pub fn to_rotation(euler_deg: [f32; 3]) -> Rotation {
 
 // Decompose a Rapier rotation back into engine Euler degrees
 // `[pitch, yaw, roll]` (YXZ order).
-pub fn from_rotation(rot: Rotation) -> [f32; 3] {
+pub(crate) fn from_rotation(rot: Rotation) -> [f32; 3] {
     let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
     [pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees()]
 }
 
 // A Rapier rotation's components as a plain `[x, y, z, w]` quaternion.
-pub fn to_quat(rot: Rotation) -> [f32; 4] {
+pub(crate) fn to_quat(rot: Rotation) -> [f32; 4] {
     [rot.x, rot.y, rot.z, rot.w]
 }
 
 // The `[x, y, z, w]` quaternion for engine Euler degrees. Pose interpolation
 // blends in quaternion space, so the lossy Euler decomposition happens only
 // once, at the Transform write boundary.
-pub fn quat_from_euler_deg(euler_deg: [f32; 3]) -> [f32; 4] {
+pub(crate) fn quat_from_euler_deg(euler_deg: [f32; 3]) -> [f32; 4] {
     to_quat(to_rotation(euler_deg))
 }
 
 // Engine Euler degrees `[pitch, yaw, roll]` for an `[x, y, z, w]` quaternion.
-pub fn euler_deg_from_quat(q: [f32; 4]) -> [f32; 3] {
+pub(crate) fn euler_deg_from_quat(q: [f32; 4]) -> [f32; 3] {
     from_rotation(Rotation::from_xyzw(q[0], q[1], q[2], q[3]).normalize())
 }
 
 // The `JointSpec` a `Joint` asset describes, converting authored degrees to
 // the radians Rapier expects for revolute joints.
-pub fn joint_spec(joint: &Joint) -> JointSpec {
+pub(crate) fn joint_spec(joint: &Joint) -> JointSpec {
     let limits = if joint.limits_enabled {
         Some(joint.limits)
     } else {
@@ -94,7 +94,7 @@ pub fn joint_spec(joint: &Joint) -> JointSpec {
 
 // The Rapier collision shape for a `PropCollider`, baking in the prop's
 // `scale` (the simulation has no separate scale concept).
-pub fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape {
+pub(crate) fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape {
     let [sx, sy, sz] = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
     match collider.shape.as_str() {
         "ball" | "sphere" => ColliderShape::Ball {
@@ -116,7 +116,7 @@ pub fn collider_shape(collider: &PropCollider, scale: [f32; 3]) -> ColliderShape
 }
 
 // The Rapier dynamic-body parameters a `BodyDynamics` component describes.
-pub fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
+pub(crate) fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
     DynamicParams {
         mass: body.mass.max(0.0),
         friction: body.friction.max(0.0),

@@ -1,38 +1,36 @@
-// src/build/environment_map.rs
-//
-// Compiles an EnvironmentMap component's args into a payload bundling two
-// precomputed IBL cubemaps:
-//
-//   - **Irradiance cubemap.** Low-resolution (32x32 per face by default)
-//     cosine-weighted hemisphere integral of the source. Used by the shader's
-//     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
-//   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
-//     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
-//     Used with the Karis env-BRDF analytic fit (already in every fragment shader
-//     as `env_brdf_approx`) for the specular ambient term.
-//
-// A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-// (`env_brdf_approx` in main.metal / main_frag.hlsl / FRAG_GLSL) replaces
-// it analytically. That keeps one binding slot free and dodges a build step.
-//
-// Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
-// Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
-// (phi, theta) grid for irradiance.
-//
-// Payload format (little-endian):
-//   u32  magic              = b"ENVM" = 0x4D564E45
-//   u32  format_id          = 0  (RGBA32F)
-//   u32  irradiance_face    (e.g. 32)
-//   u32  prefilter_face     (mip 0 size, e.g. 512)
-//   u32  prefilter_mips     (e.g. 5)
-//   u32  _pad
-//   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
-//   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
-//   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
-//   ...
-//   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
-//
-// Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
+//! Compiles an EnvironmentMap component's args into a payload bundling two
+//! precomputed IBL cubemaps:
+//!
+//!   - **Irradiance cubemap.** Low-resolution (32x32 per face by default)
+//!     cosine-weighted hemisphere integral of the source. Used by the shader's
+//!     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
+//!   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
+//!     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
+//!     Used with the Karis env-BRDF analytic fit (already in every fragment shader
+//!     as `env_brdf_approx`) for the specular ambient term.
+//!
+//! A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
+//! (`env_brdf_approx` in main.metal / main_frag.hlsl / FRAG_GLSL) replaces
+//! it analytically. That keeps one binding slot free and dodges a build step.
+//!
+//! Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
+//! Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
+//! (phi, theta) grid for irradiance.
+//!
+//! Payload format (little-endian):
+//!   u32  magic              = b"ENVM" = 0x4D564E45
+//!   u32  format_id          = 0  (RGBA32F)
+//!   u32  irradiance_face    (e.g. 32)
+//!   u32  prefilter_face     (mip 0 size, e.g. 512)
+//!   u32  prefilter_mips     (e.g. 5)
+//!   u32  _pad
+//!   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
+//!   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
+//!   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
+//!   ...
+//!   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
+//!
+//! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
 use crate::decode::{ByteReader, checked_product};
 
@@ -40,16 +38,18 @@ use crate::geometry::vec3::{cross as cross3, dot as dot3};
 
 use rayon::prelude::*;
 
-pub const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
-pub const ENVMAP_FORMAT_RGBA32F: u32 = 0;
-pub const ENVMAP_PAYLOAD_HEADER_BYTES: usize = 24;
+pub(crate) const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
+pub(crate) const ENVMAP_FORMAT_RGBA32F: u32 = 0;
+pub(crate) const ENVMAP_PAYLOAD_HEADER_BYTES: usize = 24;
 
+/// Default azimuthal samples per irradiance texel.
 pub const DEFAULT_IRRADIANCE_PHI_SAMPLES: u32 = 64;
+/// Default polar samples per irradiance texel.
 pub const DEFAULT_IRRADIANCE_THETA_SAMPLES: u32 = 16;
 
-// Number of mip levels for a square cube face of `face_size` pixels. The
-// smallest mip is clamped to 4×4 to keep the prefilter convolution sensible
-// at high roughness.
+/// Number of mip levels for a square cube face of `face_size` pixels. The
+/// smallest mip is clamped to 4×4 to keep the prefilter convolution sensible
+/// at high roughness.
 pub fn max_mip_count(face_size: u32) -> u32 {
     let mut mips = 0u32;
     let mut s = face_size;
@@ -154,7 +154,7 @@ fn make_tbn(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 
 // Hammersley quasi-random 2D sequence over `n` samples. Used to drive the
 // GGX importance sampler for prefilter convolution.
-pub fn hammersley(i: u32, n: u32) -> [f32; 2] {
+pub(crate) fn hammersley(i: u32, n: u32) -> [f32; 2] {
     let mut bits = i;
     bits = bits.rotate_right(16);
     bits = ((bits & 0x5555_5555) << 1) | ((bits & 0xAAAA_AAAA) >> 1);
@@ -189,11 +189,11 @@ fn importance_sample_ggx(
 
 // Irradiance
 
-// Compute a low-resolution irradiance cubemap by uniform (phi, theta)
-// integration over the upper hemisphere around each output direction.
-// Returns RGBA32F face-major (alpha = 1.0). The integral includes the
-// cosine + Jacobian terms so the shader can plug the sample straight in
-// as `irradiance / π * albedo`.
+/// Compute a low-resolution irradiance cubemap by uniform (phi, theta)
+/// integration over the upper hemisphere around each output direction.
+/// Returns RGBA32F face-major (alpha = 1.0). The integral includes the
+/// cosine + Jacobian terms so the shader can plug the sample straight in
+/// as `irradiance / π * albedo`.
 pub fn compute_irradiance(
     source: &[Vec<f32>; 6],
     source_face_size: u32,
@@ -253,9 +253,9 @@ pub fn compute_irradiance(
 
 // Prefiltered radiance
 
-// Build a prefiltered radiance cube mip chain. Mip 0 is the unmodified
-// source (roughness=0 → Dirac lobe). Mip N is the GGX convolution at
-// roughness = N / (mip_count - 1).
+/// Build a prefiltered radiance cube mip chain. Mip 0 is the unmodified
+/// source (roughness=0 → Dirac lobe). Mip N is the GGX convolution at
+/// roughness = N / (mip_count - 1).
 pub fn compute_prefilter(
     source: &[Vec<f32>; 6],
     source_face_size: u32,
@@ -398,6 +398,7 @@ fn convolve_ggx(
 
 // Payload codec
 
+/// Pack the baked irradiance and prefilter cubes into a blob payload.
 pub fn serialise_payload(
     irradiance_face: u32,
     prefilter_face: u32,
@@ -429,14 +430,17 @@ pub fn serialise_payload(
     buf
 }
 
-// Metadata read from a serialised EnvironmentMap payload. The byte ranges
-// point into the payload buffer so the runtime can upload them directly.
+/// Metadata read from a serialised EnvironmentMap payload. The byte ranges
+/// point into the payload buffer so the runtime can upload them directly.
 #[derive(Debug)]
 pub struct EnvMapView<'a> {
+    /// Irradiance cube edge in pixels.
     pub irradiance_face: u32,
+    /// Prefilter cube edge in pixels at mip 0.
     pub prefilter_face: u32,
+    /// The six irradiance faces, RGBA32F.
     pub irradiance_bytes: &'a [u8],
-    // One slice per prefilter mip, ordered mip 0 → mip N-1.
+    /// One slice per prefilter mip, ordered mip 0 → mip N-1.
     pub prefilter_mip_bytes: Vec<&'a [u8]>,
 }
 
@@ -449,6 +453,7 @@ fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
     checked_product(label, &[6, edge as usize, edge as usize, 4, 4])
 }
 
+/// Read a packed payload back as byte-range views into `bytes`.
 pub fn deserialise(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
     let mut r = ByteReader::open_payload(
         bytes,

@@ -1,22 +1,22 @@
-// World templates: named bundles of asset specs the editor and `cn add --template`
-// layer onto a world. Each template's assets are built from the typed
-// `crate::spec::asset` builders, so a consumer gets structured specs (never a JSON
-// string to parse).
-// Every asset stays standalone (no required cross-references) and free of source-file
-// dependencies, so a template applies cleanly to any fresh world.
+//! World templates: named bundles of asset specs the editor and `cn add --template`
+//! layer onto a world. Each template's assets are built from the typed
+//! `crate::spec::asset` builders, so a consumer gets structured specs (never a JSON
+//! string to parse).
+//! Every asset stays standalone (no required cross-references) and free of source-file
+//! dependencies, so a template applies cleanly to any fresh world.
 
 mod minimal_world;
 
 use crate::spec::AssetSpec;
 
-// A named bundle of asset specs.
+/// A named bundle of asset specs.
 pub struct WorldTemplate {
-    // Stable machine name used on the command line and in the editor
-    // (`cn add --template <name>`).
+    /// Stable machine name used on the command line and in the editor
+    /// (`cn add --template <name>`).
     pub name: &'static str,
-    // Human-facing label shown in the editor's templates dropdown.
+    /// Human-facing label shown in the editor's templates dropdown.
     pub title: &'static str,
-    // One-line description of what the template layers onto a world.
+    /// One-line description of what the template layers onto a world.
     pub description: &'static str,
     // Builds the template's assets. A function (not a stored slice) because an
     // `AssetSpec` owns heap data and cannot be a `const`.
@@ -24,7 +24,7 @@ pub struct WorldTemplate {
 }
 
 impl WorldTemplate {
-    // The template's assets as typed specs, in application order.
+    /// The template's assets as typed specs, in application order.
     pub fn assets(&self) -> Vec<AssetSpec> {
         (self.build)()
     }

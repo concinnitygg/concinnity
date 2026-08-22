@@ -6,10 +6,14 @@ use alloc::string::ToString;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
+/// How the application window is presented.
 pub enum WindowMode {
+    /// A resizable desktop window.
     #[default]
     Windowed,
+    /// Exclusive fullscreen at the display's mode.
     Fullscreen,
+    /// A borderless window filling the display.
     Borderless,
 }
 

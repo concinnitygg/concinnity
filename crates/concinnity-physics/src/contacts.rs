@@ -17,15 +17,20 @@ use crate::convert::from_vec;
 // fixed 60 Hz tick).
 const REPORT_COOLDOWN_TICKS: u64 = 15;
 
-// One contact strong enough to pass the pipeline's force threshold: the two
-// bodies, the deepest contact point with its world-space normal (pointing
-// from `a` toward `b`), and the total contact impulse.
+/// One contact strong enough to pass the pipeline's force threshold: the two
+/// bodies, the deepest contact point with its world-space normal (pointing
+/// from `a` toward `b`), and the total contact impulse.
 #[derive(Debug, Clone, Copy)]
 pub struct ContactHit {
+    /// One side of the contact.
     pub a: BodyHandle,
+    /// The other side of the contact.
     pub b: BodyHandle,
+    /// Deepest contact point, in world space.
     pub point: [f32; 3],
+    /// Unit-length normal.
     pub normal: [f32; 3],
+    /// Total contact impulse magnitude.
     pub impulse: f32,
 }
 
@@ -70,14 +75,14 @@ pub(crate) struct ContactBatch {
 }
 
 impl ContactBatch {
-    pub fn add(&mut self, hit: ContactHit) {
+    pub(crate) fn add(&mut self, hit: ContactHit) {
         let entry = self.hits.entry(pair_key(&hit)).or_insert(hit);
         if hit.impulse > entry.impulse {
             *entry = hit;
         }
     }
 
-    pub fn drain(&mut self) -> impl Iterator<Item = ContactHit> + '_ {
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = ContactHit> + '_ {
         self.hits.drain().map(|(_, hit)| hit)
     }
 }
@@ -92,7 +97,7 @@ pub(crate) struct ContactGate {
 }
 
 impl ContactGate {
-    pub fn advance_tick(&mut self) {
+    pub(crate) fn advance_tick(&mut self) {
         self.tick += 1;
         // Long-cooled entries are dead pairs; sweep occasionally so the map
         // tracks live contact, not history.
@@ -103,7 +108,7 @@ impl ContactGate {
         }
     }
 
-    pub fn admit(&mut self, hit: &ContactHit) -> bool {
+    pub(crate) fn admit(&mut self, hit: &ContactHit) -> bool {
         let key = pair_key(hit);
         if self
             .last_report

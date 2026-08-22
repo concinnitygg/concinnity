@@ -1,17 +1,18 @@
-// src/geometry/water_grid.rs: flat tessellated quad for a WaterSurface.
-//
-// The mesh sits in the XZ plane at Y = 0. All vertical motion comes from the
-// per-frame Gerstner displacement applied by the water vertex shader; the
-// build-time geometry is just the rest pose. Per-vertex normals are flat
-// (+Y); the shader rebuilds them analytically from the wave derivatives.
-//
-// Parameters:
-//   half_width    -- half extent along X    (default 10.0)
-//   half_depth    -- half extent along Z    (default 10.0)
-//   subdivisions  -- grid resolution per axis (default 64, clamped 8..=255)
+//! src/geometry/water_grid.rs: flat tessellated quad for a WaterSurface.
+//!
+//! The mesh sits in the XZ plane at Y = 0. All vertical motion comes from the
+//! per-frame Gerstner displacement applied by the water vertex shader; the
+//! build-time geometry is just the rest pose. Per-vertex normals are flat
+//! (+Y); the shader rebuilds them analytically from the wave derivatives.
+//!
+//! Parameters:
+//!   half_width    -- half extent along X    (default 10.0)
+//!   half_depth    -- half extent along Z    (default 10.0)
+//!   subdivisions  -- grid resolution per axis (default 64, clamped 8..=255)
 
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
+/// Build a flat water grid of `subdivisions` quads per axis.
 pub fn build_water_grid(
     half_width: f32,
     half_depth: f32,

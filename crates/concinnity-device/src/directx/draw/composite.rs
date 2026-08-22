@@ -27,7 +27,7 @@ use crate::directx::texture::transition_barrier;
 // type can't name a lifetime). `pub` because it is the `Args` associated type of
 // the (cross-crate) `render::fullscreen::CompositeEncoder` impl below, so it
 // cannot be more private than that public trait's interface.
-pub struct DxCompositeArgs {
+pub(crate) struct DxCompositeArgs {
     back_buffer: ID3D12Resource,
     back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,

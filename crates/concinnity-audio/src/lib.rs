@@ -1,16 +1,14 @@
-// concinnity-audio/src/lib.rs
-//
-// A thin wrapper around the kira audio engine for 3D positional sound and
-// screen-triggered cues. kira (and its cpal / symphonia dependencies) is
-// confined to this crate: callers work entirely in the engine's `[f32; 3]`
-// representation and the schema types from concinnity-core.
-//
-// `AudioEngine` owns one kira `AudioManager`, a listener, the music / sfx /
-// voice mix buses, one spatial track per emitter, the one-shot voice pool,
-// and the background decode worker. `AudioSystem` builds it at init and
-// drives it every frame. The engine depends on this crate and constructs
-// `AudioSystem` through its system registry; the dependency arrow is
-// concinnity-audio <- concinnity-engine.
+//! A thin wrapper around the kira audio engine for 3D positional sound and
+//! screen-triggered cues. kira (and its cpal / symphonia dependencies) is
+//! confined to this crate: callers work entirely in the engine's `[f32; 3]`
+//! representation and the schema types from concinnity-core.
+//!
+//! `AudioEngine` owns one kira `AudioManager`, a listener, the music / sfx /
+//! voice mix buses, one spatial track per emitter, the one-shot voice pool,
+//! and the background decode worker. `AudioSystem` builds it at init and
+//! drives it every frame. The engine depends on this crate and constructs
+//! `AudioSystem` through its system registry; the dependency arrow is
+//! concinnity-audio <- concinnity-engine.
 
 // Clip decode bookkeeping (in flight / ready / failed + deferred plays).
 mod clips;

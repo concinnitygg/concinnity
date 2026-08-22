@@ -62,6 +62,7 @@ struct PickCandidate {
     local_max: [f32; 3],
 }
 
+/// Drives the render backend: builds it at init, submits a frame per step.
 pub struct GraphicsSystem {
     window_args: WindowArgs,
     clear_color: [f32; 4],
@@ -364,33 +365,38 @@ pub(crate) struct SliderViz {
     pub(crate) value_id: AssetId,
 }
 
-// Init-time asset-resolution tables consulted by the world.jsonl hot-reload
-// pass when applying adds and non-transform edits. Captured at init and
-// never mutated afterwards: the reload path cannot introduce new
-// Materials / Textures / Meshes / Models on the fly (those need a process
-// restart), but every authored Prop that points at an asset already in the
-// init world resolves through these maps without re-running build.
-// Built by init, read only by the `cn debug` binary's world.jsonl reload pass,
-// so its fields read as dead under `cargo check --lib`.
+/// Init-time asset-resolution tables consulted by the world.jsonl hot-reload
+/// pass when applying adds and non-transform edits. Captured at init and
+/// never mutated afterwards: the reload path cannot introduce new
+/// Materials / Textures / Meshes / Models on the fly (those need a process
+/// restart), but every authored Prop that points at an asset already in the
+/// init world resolves through these maps without re-running build.
+/// Built by init, read only by the `cn debug` binary's world.jsonl reload pass,
+/// so its fields read as dead under `cargo check --lib`.
 pub struct WorldReloadState {
-    // Texture asset name -> live pool slot, so runtime decal / emitter spawn
-    // (`cn debug`) can resolve an authored Texture name to its slot.
+    /// Texture asset name -> live pool slot, so runtime decal / emitter spawn
+    /// (`cn debug`) can resolve an authored Texture name to its slot.
     pub texture_name_to_slot: std::collections::HashMap<AssetId, usize>,
 }
 
-// Disjoint mutable screen of the `GraphicsSystem` fields the hot-reload passes
-// edit in one tick: the active backend, the texture-name map for runtime
-// decal / emitter spawn, and the fog bookkeeping the world.jsonl reload pass
-// dedupes against. Returned by [`GraphicsSystem::hot_reload_apply_parts`] so the
-// binary-only `DebugHook::tick` drive can apply the reload passes from outside
-// the per-system step without the library depending on it. The reload catalogue
-// + in-flight state live on the debug side (`crate::debug::hot_reload`), built
-// from [`HotReloadSources`]. The library never constructs this; hence the
-// `dead_code` allowance (the fields are read only from the `cn debug` binary's
-// drive, never under `cargo check --lib`).
+/// Disjoint mutable screen of the `GraphicsSystem` fields the hot-reload passes
+/// edit in one tick: the active backend, the texture-name map for runtime
+/// decal / emitter spawn, and the fog bookkeeping the world.jsonl reload pass
+/// dedupes against. Returned by [`GraphicsSystem::hot_reload_apply_parts`] so the
+/// binary-only `DebugHook::tick` drive can apply the reload passes from outside
+/// the per-system step without the library depending on it. The reload
+/// catalogue and in-flight state live on the debug side
+/// (`crate::debug::hot_reload`), built from
+/// [`HotReloadSources`](crate::gfx::graphics_system::hot_reload_sources::HotReloadSources).
+/// The library never constructs this; hence the
+/// `dead_code` allowance: the fields are read only from the `cn debug` binary's
+/// drive, never under `cargo check --lib`.
 pub struct HotReloadApplyParts<'a> {
+    /// The live render backend.
     pub backend: &'a mut dyn RenderBackend,
+    /// The in-flight world reload, when one is running.
     pub world_reload: &'a Option<WorldReloadState>,
+    /// The fog settings last pushed, so a reload can detect a change.
     pub last_fog_settings: &'a mut Option<crate::gfx::volumetric_fog::FogSettings>,
 }
 
@@ -404,9 +410,9 @@ impl std::fmt::Debug for GraphicsSystem {
 }
 
 impl GraphicsSystem {
-    // Fresh renderer driver with no backend yet. Config (frames-in-flight,
-    // clear color, `max_frames`, shadow-map size) is read from the world's
-    // `GraphicsConfig` in [`System::init`].
+    /// Fresh renderer driver with no backend yet. Config (frames-in-flight,
+    /// clear color, `max_frames`, shadow-map size) is read from the world's
+    /// `GraphicsConfig` in [`System::init`].
     pub fn new() -> Self {
         Self {
             window_args: Default::default(),
@@ -562,13 +568,13 @@ impl System for GraphicsSystem {
 }
 
 impl GraphicsSystem {
-    // Disjoint mutable screen of the backend + hot-reload bookkeeping the
-    // binary-only `DebugHook::tick` reload drive applies changes through. The
-    // caller supplies the backend (borrowed from the world's parked slot via
-    // `World::systems_and_render_backend`) since this system yields it after
-    // init. The library never calls this (the asset hot-reload drive lives in
-    // the `cn debug` binary), so it reads as dead code under
-    // `cargo check --lib`.
+    /// Disjoint mutable screen of the backend + hot-reload bookkeeping the
+    /// binary-only `DebugHook::tick` reload drive applies changes through. The
+    /// caller supplies the backend (borrowed from the world's parked slot via
+    /// `World::systems_and_render_backend`) since this system yields it after
+    /// init. The library never calls this (the asset hot-reload drive lives in
+    /// the `cn debug` binary), so it reads as dead code under
+    /// `cargo check --lib`.
     pub fn hot_reload_apply_parts<'a>(
         &'a mut self,
         backend: &'a mut dyn RenderBackend,
@@ -580,10 +586,10 @@ impl GraphicsSystem {
         }
     }
 
-    // Take the init-captured hot-reload source catalogues, leaving `None`
-    // behind. The `cn debug` drive calls this once on its first tick to build
-    // the filesystem watcher + `AssetHotReloadState`. `None` under `cn run`,
-    // or when no file-backed asset / world.jsonl was declared.
+    /// Take the init-captured hot-reload source catalogues, leaving `None`
+    /// behind. The `cn debug` drive calls this once on its first tick to build
+    /// the filesystem watcher + `AssetHotReloadState`. `None` under `cn run`,
+    /// or when no file-backed asset / world.jsonl was declared.
     pub fn take_hot_reload_sources(&mut self) -> Option<hot_reload_sources::HotReloadSources> {
         self.pending_hot_reload_sources.take()
     }

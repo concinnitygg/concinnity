@@ -23,6 +23,8 @@ pub enum JointKind {
 }
 
 impl JointKind {
+    /// The kind an authored name selects, accepting the common synonyms
+    /// (`hinge`, `ball`, `slider`, ...). `None` for an unknown name.
     pub fn from_str_norm(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "fixed" | "weld" => Some(Self::Fixed),
@@ -33,6 +35,7 @@ impl JointKind {
         }
     }
 
+    /// The kind's canonical authored name.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fixed => "fixed",

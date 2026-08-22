@@ -1,11 +1,12 @@
+/// The world source file's conventional name.
 pub const WORLD_JSONL: &str = "world.jsonl";
-// Locate a world JSONL file.
-//
-// If `name` is given, returns `.concinnity/worlds/<name>.jsonl` when it exists.
-// If `name` is None, returns the most recently modified `.jsonl` in
-// `.concinnity/worlds/`. Falls back to `world.jsonl` in the current directory
-// and then walks up parent directories for backward compatibility with
-// development workflows that pre-date the `.concinnity/` layout.
+/// Locate a world JSONL file.
+///
+/// If `name` is given, returns `.concinnity/worlds/<name>.jsonl` when it exists.
+/// If `name` is None, returns the most recently modified `.jsonl` in
+/// `.concinnity/worlds/`. Falls back to `world.jsonl` in the current directory
+/// and then walks up parent directories for backward compatibility with
+/// development workflows that pre-date the `.concinnity/` layout.
 pub fn find_world_jsonl(name: Option<&str>) -> std::io::Result<String> {
     let worlds_dir = crate::paths::worlds_dir();
 

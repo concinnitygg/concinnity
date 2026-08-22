@@ -61,10 +61,10 @@ pub fn note(key: &str, value: &str) {
     }
 }
 
-/// Write a crash-style report for a lost GPU device. The process itself is
-/// healthy, so no minidump is captured; the report exists so a device loss on
-/// another machine leaves the same local evidence as a crash.
-pub fn report_device_lost(detail: &str) {
+// Write a crash-style report for a lost GPU device. The process itself is
+// healthy, so no minidump is captured; the report exists so a device loss on
+// another machine leaves the same local evidence as a crash.
+pub(crate) fn report_device_lost(detail: &str) {
     let report = report::CrashReport::gather(report::ReportKind::DeviceLost, detail.to_string());
     if write::emit(&report).is_none() {
         tracing::warn!("crash report for device loss could not be written");

@@ -13,7 +13,7 @@ use concinnity_render::skinned_pool::SkinnedInstancePool;
 // World resource: the draw-slot free list plus the skinned instance pool.
 // Published by graphics init once the backend's build-time draw count and
 // capabilities are known.
-pub struct RenderSlots {
+pub(crate) struct RenderSlots {
     draws: DrawSlotAllocator,
     skinned: SkinnedInstancePool,
     // Slots below this index are never recycled: a backend whose cull BVH and
@@ -24,7 +24,7 @@ pub struct RenderSlots {
 }
 
 impl RenderSlots {
-    pub fn new(
+    pub(crate) fn new(
         build_draw_count: usize,
         reuses_build_slots: bool,
         skinned_reservations: &[(usize, usize)],
@@ -45,13 +45,13 @@ impl RenderSlots {
     }
 
     // Hand out a draw slot for a runtime clone or streamed chunk.
-    pub fn allocate_draw(&mut self) -> SlotAlloc {
+    pub(crate) fn allocate_draw(&mut self) -> SlotAlloc {
         self.draws.allocate()
     }
 
     // Return a retired draw slot for reuse. Build-time slots stay allocated
     // on backends that cannot refit them (`reuse_floor`).
-    pub fn free_draw(&mut self, slot: usize) {
+    pub(crate) fn free_draw(&mut self, slot: usize) {
         if slot >= self.reuse_floor {
             self.draws.free(slot);
         }
@@ -59,18 +59,18 @@ impl RenderSlots {
 
     // Claim a free pre-reserved skinned instance of `template`, or `None`
     // when the reserve is exhausted.
-    pub fn claim_skinned(&mut self, template: usize) -> Option<usize> {
+    pub(crate) fn claim_skinned(&mut self, template: usize) -> Option<usize> {
         self.skinned.acquire(template)
     }
 
     // Return a live skinned instance to its template's pool. False if the
     // slot was never a pre-reserved instance (an authored template slot).
-    pub fn release_skinned(&mut self, instance: usize) -> bool {
+    pub(crate) fn release_skinned(&mut self, instance: usize) -> bool {
         self.skinned.release(instance)
     }
 
     // Total free skinned instances, for the profiler's pool chip.
-    pub fn skinned_free(&self) -> usize {
+    pub(crate) fn skinned_free(&self) -> usize {
         self.skinned.total_free()
     }
 }

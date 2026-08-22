@@ -1,18 +1,16 @@
-// src/app/run.rs
-//
-// The runtime player path. Loads compiled blob data and drives the system
-// loop. Fully synchronous -- no Tokio runtime here. Systems that need async
-// (HttpServerSystem, LlmSystem, etc.) spin up their own runtimes internally.
-//
-// On macOS the world loop is driven by CFRunLoopRunInMode so that AppKit
-// (GLFW window creation, Metal pipeline compilation, event dispatch) can
-// process its callbacks on the main thread each tick. On all other platforms
-// a tight Rust loop is used, which is what VulkanRenderer expects.
-//
-// This is the `cn run` path only: no debug server, no WebSocket command
-// channel, no in-memory rebuild. A shipped run is neither remotely inspectable
-// nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
-// the command channel lives in the editor crate.
+//! The runtime player path. Loads compiled blob data and drives the system
+//! loop. Fully synchronous -- no Tokio runtime here. Systems that need async
+//! (HttpServerSystem, LlmSystem, etc.) spin up their own runtimes internally.
+//!
+//! On macOS the world loop is driven by CFRunLoopRunInMode so that AppKit
+//! (GLFW window creation, Metal pipeline compilation, event dispatch) can
+//! process its callbacks on the main thread each tick. On all other platforms
+//! a tight Rust loop is used, which is what VulkanRenderer expects.
+//!
+//! This is the `cn run` path only: no debug server, no WebSocket command
+//! channel, no in-memory rebuild. A shipped run is neither remotely inspectable
+//! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
+//! the command channel lives in the editor crate.
 
 use crate::app::runloop;
 use crate::app::startup_error::StartupError;
@@ -36,10 +34,10 @@ fn log_filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_directive()))
 }
 
-// Install the global tracing subscriber. The single place the log level is
-// configured: the CLI entry points call it directly, and the FFI entry point
-// (cn_init) calls it for the macOS app. Safe to call once per process. The
-// crash ring layer rides along so crash reports carry the recent log lines.
+/// Install the global tracing subscriber. The single place the log level is
+/// configured: the CLI entry points call it directly, and the FFI entry point
+/// (cn_init) calls it for the macOS app. Safe to call once per process. The
+/// crash ring layer rides along so crash reports carry the recent log lines.
 pub fn init_logging() {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
@@ -52,34 +50,37 @@ pub fn init_logging() {
         .try_init();
 }
 
-// Whether the runtime overlaps simulation and rendering on separate threads
-// (the default) or steps both serially on the main thread (the editor's mode,
-// and `cn run --serial` for A/B comparison and as an escape hatch).
+/// Whether the runtime overlaps simulation and rendering on separate threads
+/// (the default) or steps both serially on the main thread (the editor's mode,
+/// and `cn run --serial` for A/B comparison and as an escape hatch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PipelineMode {
     #[default]
+    /// Simulation and rendering overlap on separate threads.
     Pipelined,
+    /// Simulation and rendering step serially on the main thread.
     Serial,
 }
 
-// Runtime launch options beyond the world itself.
+/// Runtime launch options beyond the world itself.
 #[derive(Debug, Default)]
 pub struct RunOptions {
+    /// Whether the runtime pipelines simulation and rendering.
     pub mode: PipelineMode,
-    // Whether systems may fan their internal work across the job pool
-    // (default) or keep everything on the stepping thread
-    // (`cn run --serial-schedule`, the determinism oracle).
+    /// Whether systems may fan their internal work across the job pool
+    /// (default) or keep everything on the stepping thread
+    /// (`cn run --serial-schedule`, the determinism oracle).
     pub schedule: crate::ecs::ScheduleMode,
-    // Capture the last presented frame to this path when the run stops, for
-    // headless verification of the runtime path (`cn run --screenshot`).
+    /// Capture the last presented frame to this path when the run stops, for
+    /// headless verification of the runtime path (`cn run --screenshot`).
     pub screenshot: Option<String>,
-    // Override the world's `GraphicsConfig.max_frames`, bounding the run.
+    /// Override the world's `GraphicsConfig.max_frames`, bounding the run.
     pub max_frames: Option<u64>,
 }
 
-// Production entry point (`cn run`). Reads the compiled binary blobs from
-// data/, written by a prior `cn build`. No debug server, no WebSocket command
-// channel: a shipped run is neither remotely inspectable nor remotely driven.
+/// Production entry point (`cn run`). Reads the compiled binary blobs from
+/// data/, written by a prior `cn build`. No debug server, no WebSocket command
+/// channel: a shipped run is neither remotely inspectable nor remotely driven.
 pub fn run(options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
@@ -110,11 +111,11 @@ fn report_startup_error(error: StartupError) {
     }
 }
 
-// Production entry point for a shipped app: like `run`, but with the state root
-// pinned to `state_dir` (the flat tree beside the executable or inside an app
-// bundle, holding `data/`, `saves/`, and `settings`), and a missing blob is a
-// hard error rather than a silent no-op -- a packaged app without its data
-// cannot do anything useful. The concinnity-runtime binary calls this.
+/// Production entry point for a shipped app: like `run`, but with the state root
+/// pinned to `state_dir` (the flat tree beside the executable or inside an app
+/// bundle, holding `data/`, `saves/`, and `settings`), and a missing blob is a
+/// hard error rather than a silent no-op -- a packaged app without its data
+/// cannot do anything useful. The concinnity-runtime binary calls this.
 pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
     init_logging();
     concinnity_store::paths::set_state_dir(state_dir);

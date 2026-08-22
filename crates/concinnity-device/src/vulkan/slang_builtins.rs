@@ -575,7 +575,7 @@ pub(crate) static ALL: &[&SlangProgram] = &[
 
 impl SlangProgram {
     // Assemble the exact source text this program compiles under `ctx`.
-    pub fn source(&self, ctx: &Ctx) -> String {
+    pub(crate) fn source(&self, ctx: &Ctx) -> String {
         let pool = ctx.pool_size.to_string();
         let probes = ctx.probe_count.to_string();
         let mut defines: Vec<(&str, &str)> = self.gates.iter().map(|g| (*g, "1")).collect();
@@ -615,7 +615,7 @@ impl SlangProgram {
 
     // Compile to SPIR-V, reusing a cached artifact when this exact assembled
     // source has been compiled before.
-    pub fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
+    pub(crate) fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
         let source = self.source(ctx);
         let key = self.cache_key(&source);
         crate::shader_cache::cached(&key, self.label, || compile_uncached(self, &source))

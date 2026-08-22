@@ -14,46 +14,46 @@ use crate::math::exp2;
 // stray value cannot push the scene to `inf` / `0`.
 const EXPOSURE_EV_LIMIT: f32 = 16.0;
 
-// Resolves a `PostProcessConfig`'s authored tunables into the clamped,
-// GPU-facing settings the renderer consumes. Kept in core (not concinnity-asset)
-// because every return type is a `crate::gfx` settings struct.
+/// Resolves a `PostProcessConfig`'s authored tunables into the clamped,
+/// GPU-facing settings the renderer consumes. Kept in core (not concinnity-asset)
+/// because every return type is a `crate::gfx` settings struct.
 pub trait PostProcessResolve {
-    // Resolve the authored fields into the GPU-facing `PostProcessParams`:
-    // clamps each tunable and converts `exposure_ev` (stops) into the linear
-    // multiplier the shaders expect. `hdr_output` is left at 0.0 (SDR path);
-    // the backend overwrites it to 1.0 only after confirming EDR support, so the
-    // asset-side resolve stays pure.
+    /// Resolve the authored fields into the GPU-facing `PostProcessParams`:
+    /// clamps each tunable and converts `exposure_ev` (stops) into the linear
+    /// multiplier the shaders expect. `hdr_output` is left at 0.0 (SDR path);
+    /// the backend overwrites it to 1.0 only after confirming EDR support, so the
+    /// asset-side resolve stays pure.
     fn resolve(&self) -> PostProcessParams;
 
-    // Clamp the authored `ambient_intensity` to a safe `[0, 16]` multiplier the
-    // backend folds into `LightUniforms` to scale the indirect (ambient / IBL)
-    // term.
+    /// Clamp the authored `ambient_intensity` to a safe `[0, 16]` multiplier the
+    /// backend folds into `LightUniforms` to scale the indirect (ambient / IBL)
+    /// term.
     fn ambient_intensity(&self) -> f32;
 
-    // Per-axis divisor for the roughness-aware reflection blur target, resolved
-    // from `reflection_blur_resolution`. Always at least 1.
+    /// Per-axis divisor for the roughness-aware reflection blur target, resolved
+    /// from `reflection_blur_resolution`. Always at least 1.
     fn reflection_blur_divisor(&self) -> u32;
 
-    // Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
-    // `ssao` toggle is off so the backend can skip the SSAO passes entirely.
+    /// Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
+    /// `ssao` toggle is off so the backend can skip the SSAO passes entirely.
     fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings>;
 
-    // Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
-    // `ssr` toggle is off.
+    /// Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
+    /// `ssr` toggle is off.
     fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings>;
 
-    // Resolve the ray-traced-reflection tunables into clamped
-    // `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
-    // Reuses the SSR intensity / distance fields; the backend additionally gates
-    // on GPU ray-tracing support.
+    /// Resolve the ray-traced-reflection tunables into clamped
+    /// `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
+    /// Reuses the SSR intensity / distance fields; the backend additionally gates
+    /// on GPU ray-tracing support.
     fn rt_reflection_settings(&self) -> Option<crate::gfx::rt_reflections::RtReflectionSettings>;
 
-    // Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
-    // `indirect_lighting` is not `Ssgi` so the backend can skip the SSGI passes.
+    /// Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
+    /// `indirect_lighting` is not `Ssgi` so the backend can skip the SSGI passes.
     fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings>;
 
-    // Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
-    // `None` when the toggle is off so the backend can skip the histogram passes.
+    /// Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
+    /// `None` when the toggle is off so the backend can skip the histogram passes.
     fn auto_exposure_settings(&self) -> Option<crate::gfx::auto_exposure::AutoExposureSettings>;
 }
 

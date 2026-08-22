@@ -1,11 +1,9 @@
-// src/lights.rs
-//
-// Converts drained DirectionalLight, PointLight, SpotLight, and RectAreaLight
-// asset components into the GPU data the renderer consumes: the fixed
-// LightUniforms uniform (directional lights, ambient, and the legacy point array
-// the raymarch / fog / probe paths read), the GpuLight storage buffer the
-// clustered forward pass iterates, the per-slice spot shadow projections, and
-// the rect area-light extents.
+//! Converts drained DirectionalLight, PointLight, SpotLight, and RectAreaLight
+//! asset components into the GPU data the renderer consumes: the fixed
+//! LightUniforms uniform (directional lights, ambient, and the legacy point array
+//! the raymarch / fog / probe paths read), the GpuLight storage buffer the
+//! clustered forward pass iterates, the per-slice spot shadow projections, and
+//! the rect area-light extents.
 
 use crate::area_light;
 use crate::assets::{DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry};
@@ -16,22 +14,25 @@ use crate::render_types::{
 };
 use crate::spot_shadow;
 
-// The per-scene GPU light data: the storage buffer the clustered forward pass
-// iterates, plus the side tables it indexes into. Kept together because
-// `GpuLight.shadow_index` indexes `spot_shadows` and `GpuLight.data_index`
-// indexes `area_lights` -- invariants that would be easy to break if the three
-// were built independently.
+/// The per-scene GPU light data: the storage buffer the clustered forward pass
+/// iterates, plus the side tables it indexes into. Kept together because
+/// `GpuLight.shadow_index` indexes `spot_shadows` and `GpuLight.data_index`
+/// indexes `area_lights` -- invariants that would be easy to break if the three
+/// were built independently.
 pub struct LightData {
+    /// Every local light for the clustered forward pass.
     pub lights: Vec<GpuLight>,
+    /// One entry per shadowed spot light.
     pub spot_shadows: Vec<SpotShadowData>,
+    /// One entry per rectangular area light.
     pub area_lights: Vec<AreaLightData>,
 }
 
-// Packs point, spot, and rect area lights into the GpuLight storage buffer and
-// assigns their side-table slots. All three share the MAX_LOCAL_LIGHTS budget
-// (not the 8-entry LightUniforms array); extras past the cap are dropped with a
-// warning. Unused fields stay at their neutral GpuLight::ZERO values, so a point
-// light carries no cone, shadow, or area data.
+/// Packs point, spot, and rect area lights into the GpuLight storage buffer and
+/// assigns their side-table slots. All three share the MAX_LOCAL_LIGHTS budget
+/// (not the 8-entry LightUniforms array); extras past the cap are dropped with a
+/// warning. Unused fields stay at their neutral GpuLight::ZERO values, so a point
+/// light carries no cone, shadow, or area data.
 pub fn build_light_data(
     pt_lights: &[PointLight],
     spot_lights: &[SpotLight],
@@ -117,8 +118,8 @@ pub fn build_light_data(
     }
 }
 
-// `local_lights` is the buffer `build_light_data` produced; its length is the
-// authoritative `num_local_lights` the forward pass iterates.
+/// `local_lights` is the buffer `build_light_data` produced; its length is the
+/// authoritative `num_local_lights` the forward pass iterates.
 pub fn build_light_uniforms(
     dir_lights: Vec<DirectionalLight>,
     pt_lights: Vec<PointLight>,

@@ -19,78 +19,90 @@ pub use concinnity_core::resource::{
     ResourceEntry, SkinnedMeshTable, TextureTable,
 };
 
-// One texture's identity + source file, in `TextureHandle` order. A procedural
-// texture has an empty `source`. `name_id` is the interned asset name (the same
-// interner the runtime shares in-process under `cn debug`), used by the runtime
-// spawn-by-name path without interning at runtime.
+/// One texture's identity + source file, in `TextureHandle` order. A procedural
+/// texture has an empty `source`. `name_id` is the interned asset name (the same
+/// interner the runtime shares in-process under `cn debug`), used by the runtime
+/// spawn-by-name path without interning at runtime.
 #[derive(Debug, Clone, Default)]
 pub struct TextureSource {
+    /// The interned asset name.
     pub name_id: u32,
+    /// Authored source path; empty for a procedural texture.
     pub source: String,
+    /// Index of the image within the source document.
     pub image_index: u32,
 }
 
-// Dev-only catalogue of texture source files, indexed by `TextureHandle`,
-// inserted as a world resource by the in-memory (`cn debug` / editor) build.
-// `GraphicsSystem::init` reads it to seed the hot-reload watcher now that Texture
-// is a resource without a drained `source` field. Absent in the shipped disk
-// runtime, which does not hot-reload; init simply captures no sources then.
+/// Dev-only catalogue of texture source files, indexed by `TextureHandle`,
+/// inserted as a world resource by the in-memory (`cn debug` / editor) build.
+/// `GraphicsSystem::init` reads it to seed the hot-reload watcher now that Texture
+/// is a resource without a drained `source` field. Absent in the shipped disk
+/// runtime, which does not hot-reload; init simply captures no sources then.
 #[derive(Debug, Clone, Default)]
 pub struct TextureSources(pub Vec<TextureSource>);
 
-// Dev-only source catalogue for the singleton ColorLut, inserted by the in-memory
-// (`cn debug` / editor) build so `GraphicsSystem::init` can seed the hot-reload
-// watcher now that ColorLut is a resource without a drained `source` field. The
-// raw authored source path of the first declared ColorLut, or `None`. Absent in
-// the shipped disk runtime, which does not hot-reload.
+/// Dev-only source catalogue for the singleton ColorLut, inserted by the in-memory
+/// (`cn debug` / editor) build so `GraphicsSystem::init` can seed the hot-reload
+/// watcher now that ColorLut is a resource without a drained `source` field. The
+/// raw authored source path of the first declared ColorLut, or `None`. Absent in
+/// the shipped disk runtime, which does not hot-reload.
 #[derive(Debug, Clone, Default)]
 pub struct ColorLutSources(pub Option<String>);
 
-// One file-backed EnvironmentMap's re-bake inputs, captured dev-only so the
-// hot-reload watcher can re-run the IBL convolution with the same dimensions the
-// build used (a size change would invalidate the shader's prefilter-mip
-// assumptions).
+/// One file-backed EnvironmentMap's re-bake inputs, captured dev-only so the
+/// hot-reload watcher can re-run the IBL convolution with the same dimensions the
+/// build used (a size change would invalidate the shader's prefilter-mip
+/// assumptions).
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentMapSourceInfo {
+    /// Authored source path of the environment map.
     pub source: String,
+    /// Prefilter cube edge in pixels.
     pub prefilter_face_size: u32,
+    /// Irradiance cube edge in pixels.
     pub irradiance_face_size: u32,
+    /// Samples per prefilter texel.
     pub prefilter_samples: u32,
+    /// Radiance clamp applied while prefiltering, to suppress fireflies.
     pub prefilter_clamp: f32,
 }
 
-// Dev-only source catalogue for the singleton EnvironmentMap. `Some` only for a
-// file-backed map (a procedural `generator` has nothing to watch). Mirrors
-// [`ColorLutSources`]; absent in the shipped disk runtime.
+/// Dev-only source catalogue for the singleton EnvironmentMap. `Some` only for a
+/// file-backed map (a procedural `generator` has nothing to watch). Mirrors
+/// [`ColorLutSources`]; absent in the shipped disk runtime.
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentMapSources(pub Option<EnvironmentMapSourceInfo>);
 
-// One file-backed Mesh's re-import inputs, in `MeshHandle` order. Mirrors
-// cook's `MeshSourceInfo`; an inline-authored mesh has an empty `source`.
+/// One file-backed Mesh's re-import inputs, in `MeshHandle` order. Mirrors
+/// cook's `MeshSourceInfo`; an inline-authored mesh has an empty `source`.
 #[derive(Debug, Clone, Default)]
 pub struct MeshSource {
+    /// Authored source path; empty for an inline-authored mesh.
     pub source: String,
+    /// Index of the primitive within the source document.
     pub primitive_index: u32,
+    /// How many LODs the mesh declares, including LOD0.
     pub lod_levels: u32,
+    /// Camera distance at which each LOD past 0 takes over.
     pub lod_distances: Vec<f32>,
 }
 
-// Dev-only catalogue of mesh source files, indexed by `MeshHandle`, inserted as
-// a world resource by the in-memory (`cn debug` / editor) build so
-// `GraphicsSystem::init` can seed the hot-reload watcher now that Mesh is a
-// resource without a drained `source` field. Absent in the shipped disk runtime.
+/// Dev-only catalogue of mesh source files, indexed by `MeshHandle`, inserted as
+/// a world resource by the in-memory (`cn debug` / editor) build so
+/// `GraphicsSystem::init` can seed the hot-reload watcher now that Mesh is a
+/// resource without a drained `source` field. Absent in the shipped disk runtime.
 #[derive(Debug, Clone, Default)]
 pub struct MeshSources(pub Vec<MeshSource>);
 
-// Install every per-kind resource table from a compiled blob's resource stream
-// into `world`. This is the single place the table set is enumerated: the
-// shipped runtime (`App::load_blob`), the editor's in-memory build, and the
-// examples' `compile_world` all call it, so a resource kind that migrates into
-// the stream gets wired into every host by adding one line here. Systems then
-// read their table by handle. Each builder MOVES its kind's data bytes out of
-// the records, so the caller's record vec is spent scaffolding afterwards.
-// Dev-only source catalogues (hot-reload) stay with the debug path that
-// captures them, not here.
+/// Install every per-kind resource table from a compiled blob's resource stream
+/// into `world`. This is the single place the table set is enumerated: the
+/// shipped runtime (`App::load_blob`), the editor's in-memory build, and the
+/// examples' `compile_world` all call it, so a resource kind that migrates into
+/// the stream gets wired into every host by adding one line here. Systems then
+/// read their table by handle. Each builder MOVES its kind's data bytes out of
+/// the records, so the caller's record vec is spent scaffolding afterwards.
+/// Dev-only source catalogues (hot-reload) stay with the debug path that
+/// captures them, not here.
 pub fn install_resource_tables(world: &mut crate::ecs::World, records: &mut [ResourceRecord]) {
     log_resource_footprint(records);
     world.insert_resource(AudioClipTable::from_records(records));

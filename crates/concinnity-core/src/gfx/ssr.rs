@@ -1,10 +1,8 @@
-// src/gfx/ssr.rs
-//
-// Screen-space reflection (SSR) configuration. Backend-agnostic resolve of the
-// authored `PostProcessConfig` SSR fields into clamped settings, plus the
-// per-frame GPU uniform. The screen-space ray-march itself lives in each
-// backend's shader; this module owns only the parameter math so it can be
-// unit-tested without a GPU.
+//! Screen-space reflection (SSR) configuration. Backend-agnostic resolve of the
+//! authored `PostProcessConfig` SSR fields into clamped settings, plus the
+//! per-frame GPU uniform. The screen-space ray-march itself lives in each
+//! backend's shader; this module owns only the parameter math so it can be
+//! unit-tested without a GPU.
 
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
@@ -32,32 +30,34 @@ const MARCH_STEPS: f32 = 48.0;
 // punch through thin geometry.
 const THICKNESS_SCALE: f32 = 2.5;
 
-// Canonical roughness cut for sharp reflections: surfaces rougher than this get
-// no screen-space / ray-traced reflection. One value drives four shaders that
-// must agree for the reflection pipeline to be self-consistent:
-//   - the SSR resolve gate           (ssr.metal)
-//   - the RT-reflection resolve gate (rt_reflections.slang)
-//   - the roughness blur ramp        (reflection_composite.metal)
-//   - the forward double-count fade  (REFL_RESOLVE_CUT in main.metal)
-// All four shaders are compiled offline, so each declares the literal itself
-// and a unit test locks every declaration to this value (the engine shaders in
-// reflection_shaders_lock_shared_roughness_cut, main.metal alongside this
-// module). As an MSL `constant` it folds at compile time: sharing it costs
-// nothing at runtime.
+/// Canonical roughness cut for sharp reflections: surfaces rougher than this get
+/// no screen-space / ray-traced reflection. One value drives four shaders that
+/// must agree for the reflection pipeline to be self-consistent:
+///
+/// - the SSR resolve gate (ssr.metal)
+/// - the RT-reflection resolve gate (rt_reflections.slang)
+/// - the roughness blur ramp (reflection_composite.metal)
+/// - the forward double-count fade (`REFL_RESOLVE_CUT` in main.metal)
+///
+/// All four shaders are compiled offline, so each declares the literal itself
+/// and a unit test locks every declaration to this value (the engine shaders in
+/// reflection_shaders_lock_shared_roughness_cut, main.metal alongside this
+/// module). As an MSL `constant` it folds at compile time: sharing it costs
+/// nothing at runtime.
 pub const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;
 
-// Clamped SSR tunables resolved from the authored asset fields. Held by the
-// backend and turned into a per-frame [`SsrParams`] once the camera is known.
+/// Clamped SSR tunables resolved from the authored asset fields. Held by the
+/// backend and turned into a per-frame [`SsrParams`] once the camera is known.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SsrSettings {
-    // Reflection blend strength multiplier in `[0, 1]`.
+    /// Reflection blend strength multiplier in `[0, 1]`.
     pub intensity: f32,
-    // World-space distance the reflection ray marches before giving up.
+    /// World-space distance the reflection ray marches before giving up.
     pub max_distance: f32,
 }
 
 impl SsrSettings {
-    // Clamp the authored intensity / distance into a safe range.
+    /// Clamp the authored intensity / distance into a safe range.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, MAX_INTENSITY),
@@ -65,15 +65,15 @@ impl SsrSettings {
         }
     }
 
-    // Build the per-frame GPU uniform from these settings and the active
-    // camera. `fov_y_radians` is the vertical field of view and `aspect` the
-    // viewport width / height ratio: together they give the view-ray scale
-    // the resolve pass needs to project a view-space ray point to a UV.
-    // `inv_view_rot` is the view-space to world-space rotation and `cam_pos` the
-    // world camera position (together the rigid camera-to-world transform), and
-    // `prefilter_mip_count` the IBL prefilter cubemap mip count (0 = no IBL); the
-    // resolve uses these to sample the cubemap (or a reflection probe) as a
-    // reflection fallback.
+    /// Build the per-frame GPU uniform from these settings and the active
+    /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
+    /// viewport width / height ratio: together they give the view-ray scale
+    /// the resolve pass needs to project a view-space ray point to a UV.
+    /// `inv_view_rot` is the view-space to world-space rotation and `cam_pos` the
+    /// world camera position (together the rigid camera-to-world transform), and
+    /// `prefilter_mip_count` the IBL prefilter cubemap mip count (0 = no IBL); the
+    /// resolve uses these to sample the cubemap (or a reflection probe) as a
+    /// reflection fallback.
     pub fn params(
         &self,
         fov_y_radians: f32,

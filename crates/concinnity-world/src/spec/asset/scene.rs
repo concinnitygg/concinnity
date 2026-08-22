@@ -6,7 +6,7 @@ use crate::spec::AssetSpec;
 
 // A directional (sun) light of `color` (RGB) shining along `direction`, scaled by
 // `intensity`.
-pub fn directional_light(
+pub(crate) fn directional_light(
     name: impl Into<String>,
     color: [f32; 3],
     direction: [f32; 3],
@@ -18,8 +18,8 @@ pub fn directional_light(
         .set("intensity", intensity)
 }
 
-// A point light of `color` (RGB) at `position`, with `intensity` and falloff
-// `range`.
+/// A point light of `color` (RGB) at `position`, with `intensity` and falloff
+/// `range`.
 pub fn point_light(
     name: impl Into<String>,
     color: [f32; 3],
@@ -37,7 +37,8 @@ pub fn point_light(
 // A spot light of `color` (RGB) at `position` aimed along `direction`, with
 // `intensity`, falloff `range`, and a cone that fades from `cone[0]` to `cone[1]`
 // (inner and outer half-angles, in degrees).
-pub fn spot_light(
+#[cfg(test)]
+pub(crate) fn spot_light(
     name: impl Into<String>,
     color: [f32; 3],
     position: [f32; 3],
@@ -58,13 +59,13 @@ pub fn spot_light(
 
 // An image-based-lighting environment generated from the procedural sky (no .hdr
 // source needed).
-pub fn environment_map_sky(name: impl Into<String>) -> AssetSpec {
+pub(crate) fn environment_map_sky(name: impl Into<String>) -> AssetSpec {
     AssetSpec::new(name, "EnvironmentMap").set("generator", "sky")
 }
 
-// A perspective camera at `position` (world units), facing `yaw` / `pitch`
-// (radians; yaw 0 / pitch 0 looks down -Z). The type's default inspector
-// controller keeps the scene navigable out of the box.
+/// A perspective camera at `position` (world units), facing `yaw` / `pitch`
+/// (radians; yaw 0 / pitch 0 looks down -Z). The type's default inspector
+/// controller keeps the scene navigable out of the box.
 pub fn camera(name: impl Into<String>, position: [f32; 3], yaw: f32, pitch: f32) -> AssetSpec {
     AssetSpec::new(name, "Camera3D")
         .set("position", position)
@@ -72,15 +73,15 @@ pub fn camera(name: impl Into<String>, position: [f32; 3], yaw: f32, pitch: f32)
         .set("pitch", pitch)
 }
 
-// A self-contained room (floor, ceiling, four walls) of full extents
-// `size` = [width, depth, height], centred on the origin. Standalone geometry:
-// no mesh source or texture reference needed.
+/// A self-contained room (floor, ceiling, four walls) of full extents
+/// `size` = [width, depth, height], centred on the origin. Standalone geometry:
+/// no mesh source or texture reference needed.
 pub fn room(name: impl Into<String>, size: [f32; 3]) -> AssetSpec {
     AssetSpec::new(name, "Room").set("size", size)
 }
 
-// A volumetric fog volume: `density`, tint `color` (RGB), vertical `height_falloff`,
-// `max_distance`, and the Henyey-Greenstein `phase_g`.
+/// A volumetric fog volume: `density`, tint `color` (RGB), vertical `height_falloff`,
+/// `max_distance`, and the Henyey-Greenstein `phase_g`.
 pub fn volumetric_fog(
     name: impl Into<String>,
     density: f32,
@@ -95,19 +96,6 @@ pub fn volumetric_fog(
         .set("height_falloff", height_falloff)
         .set("max_distance", max_distance)
         .set("phase_g", phase_g)
-}
-
-// A post-process configuration: bloom strength / threshold and exposure bias.
-pub fn post_process(
-    name: impl Into<String>,
-    bloom_intensity: f32,
-    bloom_threshold: f32,
-    exposure_ev: f32,
-) -> AssetSpec {
-    AssetSpec::new(name, "PostProcessConfig")
-        .set("bloom_intensity", bloom_intensity)
-        .set("bloom_threshold", bloom_threshold)
-        .set("exposure_ev", exposure_ev)
 }
 
 #[cfg(test)]

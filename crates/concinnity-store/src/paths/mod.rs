@@ -1,88 +1,92 @@
-// Project state root: where the engine's state tree is anchored, and the names
-// of the directories hanging off it.
-//
-// Everything the engine writes for a project lives under one state directory:
-// the compiled blobs (`data/`), the payload cache (`cache/`), fetched source
-// assets (`assets/`), named worlds (`worlds/`), the runtime save files
-// (`saves/`), and the mutable settings file (`settings`). In a dev project that
-// tree is wrapped in a `.concinnity/` directory addressed relative to the
-// current working directory, so `.concinnity/` sits wherever a command runs.
-// That is the historical behavior and is unchanged when no root is installed.
-//
-// A host that must change the working directory for an unrelated reason (an
-// example that chdirs so its world's relative asset paths resolve against the
-// example directory) would otherwise drag `.concinnity/` along with it. Such a
-// host captures the invocation directory and installs it here before it chdirs,
-// so state stays put while content resolution follows the working directory.
-//
-// A shipped application installs a flat state root via `set_state_dir`: the state tree
-// then sits directly at that directory with no `.concinnity/` wrapper, so
-// `data/`, `saves/`, and `settings` resolve beside the executable or inside the
-// app bundle.
-//
-// The read-only content of the tree (`data/`) and the runtime-writable state
-// (`saves/` + `settings`) usually share one root, but a shipped application installed
-// in a read-only location (Program Files) cannot write beside its data. Such a
-// application installs a separate writable root via `set_writable_state_dir` so only
-// `saves/` and `settings` relocate to a per-user directory while `data/` stays
-// beside the executable. When no writable root is installed, writable state
-// stays with the content, so dev and portable installs are unaffected.
-//
-// Resolution touches no files: these functions compute paths. Reading the tree
-// is `crate::source` (finding a source asset) and `crate::blob` (the compiled
-// blob).
+//! Project state root: where the engine's state tree is anchored, and the names
+//! of the directories hanging off it.
+//!
+//! Everything the engine writes for a project lives under one state directory:
+//! the compiled blobs (`data/`), the payload cache (`cache/`), fetched source
+//! assets (`assets/`), named worlds (`worlds/`), the runtime save files
+//! (`saves/`), and the mutable settings file (`settings`). In a dev project that
+//! tree is wrapped in a `.concinnity/` directory addressed relative to the
+//! current working directory, so `.concinnity/` sits wherever a command runs.
+//! That is the historical behavior and is unchanged when no root is installed.
+//!
+//! A host that must change the working directory for an unrelated reason (an
+//! example that chdirs so its world's relative asset paths resolve against the
+//! example directory) would otherwise drag `.concinnity/` along with it. Such a
+//! host captures the invocation directory and installs it here before it chdirs,
+//! so state stays put while content resolution follows the working directory.
+//!
+//! A shipped application installs a flat state root via `set_state_dir`: the state tree
+//! then sits directly at that directory with no `.concinnity/` wrapper, so
+//! `data/`, `saves/`, and `settings` resolve beside the executable or inside the
+//! app bundle.
+//!
+//! The read-only content of the tree (`data/`) and the runtime-writable state
+//! (`saves/` + `settings`) usually share one root, but a shipped application installed
+//! in a read-only location (Program Files) cannot write beside its data. Such a
+//! application installs a separate writable root via `set_writable_state_dir` so only
+//! `saves/` and `settings` relocate to a per-user directory while `data/` stays
+//! beside the executable. When no writable root is installed, writable state
+//! stays with the content, so dev and portable installs are unaffected.
+//!
+//! Resolution touches no files: these functions compute paths. Reading the tree
+//! is `crate::source` (finding a source asset) and `crate::blob` (the compiled
+//! blob).
 
 use std::path::PathBuf;
 
 mod root;
 
+#[cfg(test)]
+pub(crate) use root::{HOME_ENV, STATE_DIR, clear_root, clear_writable_state_dir};
 pub use root::{
-    HOME_ENV, STATE_DIR, clear_root, clear_state_dir, clear_writable_state_dir, set_root,
-    set_state_dir, set_writable_state_dir, state_dir, writable_state_dir,
+    clear_state_dir, set_root, set_state_dir, set_writable_state_dir, state_dir, writable_state_dir,
 };
-
+/// The state root's `assets/` directory.
 pub fn assets_dir() -> PathBuf {
     state_dir().join("assets")
 }
 
+/// The state root's `data/` directory.
 pub fn data_dir() -> PathBuf {
     state_dir().join("data")
 }
 
-// Directory holding the runtime save files (`auto`, `save1` ..). Created on
-// first write by the running application, never by a build. Resolves under the
-// writable-state dir, which is the content root unless an application redirected it.
+/// Directory holding the runtime save files (`auto`, `save1` ..). Created on
+/// first write by the running application, never by a build. Resolves under the
+/// writable-state dir, which is the content root unless an application redirected it.
 pub fn saves_dir() -> PathBuf {
     writable_state_dir().join("saves")
 }
 
-// Sandboxed sibling of [saves_dir] for preview sessions (see the
-// `TransientSaves` protocol resource): the save UI keeps working against this
-// directory, but the real saves are never touched and the sandbox is wiped at
-// each session start.
+/// Sandboxed sibling of [saves_dir] for preview sessions (see the
+/// `TransientSaves` protocol resource): the save UI keeps working against this
+/// directory, but the real saves are never touched and the sandbox is wiped at
+/// each session start.
 pub fn preview_saves_dir() -> PathBuf {
     writable_state_dir().join("preview-saves")
 }
 
-// The mutable settings file (CBOR). Written by the in-engine settings menu,
-// never by a build. A sibling of `data/` in the common case, or under the
-// writable-state dir when a read-only install redirected it.
+/// The mutable settings file (CBOR). Written by the in-engine settings menu,
+/// never by a build. A sibling of `data/` in the common case, or under the
+/// writable-state dir when a read-only install redirected it.
 pub fn settings_path() -> PathBuf {
     writable_state_dir().join("settings")
 }
 
-// Directory holding crash reports (and minidumps) written by the crash
-// reporting machinery. Resolves under the writable-state dir like `saves/`,
-// since a shipped install's content root may be read-only. Created on first
-// write; capped by the writer's retention pruning, never by a build.
+/// Directory holding crash reports (and minidumps) written by the crash
+/// reporting machinery. Resolves under the writable-state dir like `saves/`,
+/// since a shipped install's content root may be read-only. Created on first
+/// write; capped by the writer's retention pruning, never by a build.
 pub fn crashes_dir() -> PathBuf {
     writable_state_dir().join("crashes")
 }
 
+/// The state root's `worlds/` directory.
 pub fn worlds_dir() -> PathBuf {
     state_dir().join("worlds")
 }
 
+/// The state root's `cache/` directory.
 pub fn cache_dir() -> PathBuf {
     state_dir().join("cache")
 }

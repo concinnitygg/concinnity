@@ -33,24 +33,26 @@ impl<E: Send + 'static> AnyEventQueue for Events<E> {
 }
 
 #[derive(Default)]
+/// Type-keyed event queues, one per event type in use.
 pub struct EventStore {
     queues: BTreeMap<TypeId, Box<dyn AnyEventQueue>>,
 }
 
 impl EventStore {
+    /// An empty store.
     pub fn new() -> EventStore {
         EventStore::default()
     }
 
-    // Borrow the queue for event type E, if one has been created.
+    /// Borrow the queue for event type E, if one has been created.
     pub fn get<E: 'static>(&self) -> Option<&Events<E>> {
         self.queues
             .get(&TypeId::of::<E>())
             .and_then(|queue| queue.as_any().downcast_ref::<Events<E>>())
     }
 
-    // Mutably borrow the queue for event type E, creating an empty one on
-    // first access so writers and readers never miss it.
+    /// Mutably borrow the queue for event type E, creating an empty one on
+    /// first access so writers and readers never miss it.
     pub fn get_mut_or_create<E: Send + 'static>(&mut self) -> &mut Events<E> {
         self.queues
             .entry(TypeId::of::<E>())
@@ -60,8 +62,8 @@ impl EventStore {
             .expect("queue stored under E's TypeId is Events<E>")
     }
 
-    // Advance every queue one frame (see `Events::update`). Queues are
-    // independent, so rotation order does not matter.
+    /// Advance every queue one frame (see `Events::update`). Queues are
+    /// independent, so rotation order does not matter.
     pub fn update_all(&mut self) {
         for queue in self.queues.values_mut() {
             queue.update();

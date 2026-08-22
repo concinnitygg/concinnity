@@ -1,47 +1,51 @@
-// src/registry.rs
-//
-// The authoring metadata registry: `ComponentType`, the enum of every asset
-// type paired with its on-disk discriminant, plus the authoring-only operations
-// over it (name parsing, arg reserialization, enum-field probing, and
-// reference-field listing). Consumed by the build pipeline and the in-engine
-// editor; never by the runtime ECS, which loads components straight from their
-// blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
-//
-// The component list itself is the single source of truth in
-// `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
-// module instantiates the authoring half of it.
+//! The authoring metadata registry: `ComponentType`, the enum of every asset
+//! type paired with its on-disk discriminant, plus the authoring-only operations
+//! over it (name parsing, arg reserialization, enum-field probing, and
+//! reference-field listing). Consumed by the build pipeline and the in-engine
+//! editor; never by the runtime ECS, which loads components straight from their
+//! blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
+//!
+//! The component list itself is the single source of truth in
+//! `concinnity_core::ecs::registry` (the `for_each_component!` macro); this
+//! module instantiates the authoring half of it.
 
 use crate::result::CnResult;
 
-pub use crate::ecs::{AssetOrigin, AssetPayload};
+pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
 
-// Static authoring metadata for an asset type: how it is declared, whether it
-// compiles a payload, and its default args JSON. Derived from the registry
-// entry's metadata block -- the runtime `Component` trait carries none of it
-// (blob records carry everything a shipped game loads).
+/// Static authoring metadata for an asset type: how it is declared, whether it
+/// compiles a payload, and its default args JSON. Derived from the registry
+/// entry's metadata block -- the runtime `Component` trait carries none of it
+/// (blob records carry everything a shipped game loads).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Registration {
+    /// The asset type's registry name.
     pub type_name: &'static str,
+    /// Where the asset comes from and whether it persists.
     pub origin: AssetOrigin,
+    /// Whether the asset compiles a binary payload.
     pub payload: AssetPayload,
+    /// Default args JSON, for types that declare one.
     pub default_args: Option<serde_json::Value>,
 }
 
 impl Registration {
+    /// Whether a world may declare this type directly.
     pub fn addable(&self) -> bool {
         self.origin == AssetOrigin::External
     }
 
     #[allow(dead_code)]
-    pub fn serializable(&self) -> bool {
+    pub(crate) fn serializable(&self) -> bool {
         self.origin != AssetOrigin::RuntimeOnly
     }
 
     #[allow(dead_code)]
-    pub fn runtime_present(&self) -> bool {
+    pub(crate) fn runtime_present(&self) -> bool {
         self.origin != AssetOrigin::BuildOnly
     }
 
+    /// Whether the build must compile a payload for this type.
     pub fn needs_compilation(&self) -> bool {
         self.payload == AssetPayload::Compiled
     }
@@ -70,7 +74,7 @@ pub(crate) fn parse_expected_variants(msg: &str) -> Option<Vec<String>> {
 // The empty args schema of a runtime-only component: never authored, so its
 // registration carries an empty default and its reserialize accepts `{}`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct NoArgs {}
+pub(crate) struct NoArgs {}
 
 // Metadata scanners over a registry entry's `{ ... }` flag tokens. Each walks
 // the token stream for its key and falls back to a default when absent; the
@@ -158,46 +162,51 @@ pub(crate) use {__meta_renders, __meta_singleton, __meta_useful_blank};
 // `Component` trait carries none of it.
 macro_rules! define_component_type {
     ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
+        // One variant per registered component type, named for that type.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[allow(missing_docs)]
         pub enum ComponentType {
             $( $variant ),+
         }
 
         impl ComponentType {
+            /// The type's registry name.
             pub fn as_str(self) -> &'static str {
                 match self { $( Self::$variant => stringify!($variant) ),+ }
             }
-            // The on-disk blob tag / in-memory `ComponentId`, derived from the
-            // shared `ComponentTag` enum (list position) so it matches the
-            // runtime loader exactly.
+            /// The on-disk blob tag / in-memory `ComponentId`, derived from the
+            /// shared `ComponentTag` enum (list position) so it matches the
+            /// runtime loader exactly.
             pub fn discriminant(self) -> u8 {
                 match self {
                     $( Self::$variant => crate::ecs::ComponentTag::$variant as u8 ),+
                 }
             }
             #[allow(dead_code)]
+            /// The type carrying a blob discriminant, or `None` if unknown.
             pub fn from_discriminant(val: u8) -> Option<Self> {
                 $( if val == crate::ecs::ComponentTag::$variant as u8 { return Some(Self::$variant); } )+
                 None
             }
-            // A name either matches a known type or it does not; callers that
-            // want a message supply their own via `ok_or`/`ok_or_else`.
+            /// A name either matches a known type or it does not; callers that
+            /// want a message supply their own via `ok_or`/`ok_or_else`.
             pub fn parse(s: &str) -> Option<Self> {
                 $(
                     if s == stringify!($variant) { return Some(Self::$variant); }
                 )+
                 None
             }
-            // The name of this type's authored args schema struct: the
-            // component itself for pass-through types, the `args:` override
-            // for the divergent ones. The docs pipeline renders that struct's
-            // fields as the asset's parameters.
+            /// The name of this type's authored args schema struct: the
+            /// component itself for pass-through types, the `args:` override
+            /// for the divergent ones. The docs pipeline renders that struct's
+            /// fields as the asset's parameters.
             #[allow(dead_code)]
             pub fn args_struct_name(self) -> &'static str {
                 match self {
                     $( Self::$variant => __meta_args_name!($variant; $($meta)*) ),+
                 }
             }
+            /// This type's static authoring metadata.
             pub fn registration(self) -> Registration {
                 match self {
                     $(
@@ -213,13 +222,13 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // Bake a JSON args value into the blob record's component bytes:
-            // deserialize through the typed args schema (interning name-string
-            // cross-references), apply the type's bake-time validator, and
-            // serialize the runtime component as postcard. For a pass-through
-            // type the args ARE the component; a divergent type (`args:`
-            // metadata) routes through its `bake` translation in
-            // `bake_divergent`.
+            /// Bake a JSON args value into the blob record's component bytes:
+            /// deserialize through the typed args schema (interning name-string
+            /// cross-references), apply the type's bake-time validator, and
+            /// serialize the runtime component as postcard. For a pass-through
+            /// type the args ARE the component; a divergent type (`args:`
+            /// metadata) routes through its `bake` translation in
+            /// `bake_divergent`.
             pub fn reserialize_args(self, args: &serde_json::Value) -> Result<Vec<u8>, CnResult> {
                 // Deserializing the args interns any name-string cross-reference,
                 // which needs the name resolver installed. The build pipeline
@@ -239,11 +248,11 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // Normalize a JSON args value through the typed args schema: the
-            // same deserialize + validate as `reserialize_args`, but back to
-            // JSON with defaults filled and references resolved. Authoring
-            // tools (`cn add`, the editor form) write this into world.jsonl;
-            // the baked postcard bytes cannot round-trip to JSON.
+            /// Normalize a JSON args value through the typed args schema: the
+            /// same deserialize + validate as `reserialize_args`, but back to
+            /// JSON with defaults filled and references resolved. Authoring
+            /// tools (`cn add`, the editor form) write this into world.jsonl;
+            /// the baked postcard bytes cannot round-trip to JSON.
             pub fn normalized_args(
                 self,
                 args: &serde_json::Value,
@@ -262,14 +271,14 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // The allowed values of a string-enum args field (in declaration
-            // order), or `None` if `field` is a free-form string / absent / not a
-            // string-enum. Probes the typed args by deserializing the defaults
-            // with `field` set to a sentinel: a string-enum yields serde's
-            // "unknown variant ..., expected ..." which `parse_expected_variants`
-            // reads; a free string accepts the sentinel and yields `None`. Used by
-            // authoring tools to offer a picker instead of a free text box; it
-            // degrades to `None` (free text) if serde's phrasing ever changes.
+            /// The allowed values of a string-enum args field (in declaration
+            /// order), or `None` if `field` is a free-form string / absent / not a
+            /// string-enum. Probes the typed args by deserializing the defaults
+            /// with `field` set to a sentinel: a string-enum yields serde's
+            /// "unknown variant ..., expected ..." which `parse_expected_variants`
+            /// reads; a free string accepts the sentinel and yields `None`. Used by
+            /// authoring tools to offer a picker instead of a free text box; it
+            /// degrades to `None` (free text) if serde's phrasing ever changes.
             pub fn field_enum_variants(self, field: &str) -> Option<Vec<String>> {
                 const SENTINEL: &str = "\u{0}__cn_enum_probe_sentinel__";
                 match self {
@@ -296,8 +305,8 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // The asset-reference fields of this type, as (field, target_type),
-            // from the entry's `refs:` metadata.
+            /// The asset-reference fields of this type, as (field, target_type),
+            /// from the entry's `refs:` metadata.
             pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
                 match self {
                     $(
@@ -305,34 +314,39 @@ macro_rules! define_component_type {
                     ),+
                 }
             }
-            // The structural flags, from the entry's metadata: `singleton`
-            // (at most one instance belongs to a world; authoring tools use an
-            // edit-or-add flow), `useful_blank` (meaningful when declared with
-            // only default args, so authoring tools offer a plain add), and
-            // `renders` (presence implies the world renders; drives the
-            // GraphicsConfig companion injection at build time).
+            /// The structural flags, from the entry's metadata: `singleton`
+            /// (at most one instance belongs to a world; authoring tools use an
+            /// edit-or-add flow), `useful_blank` (meaningful when declared with
+            /// only default args, so authoring tools offer a plain add), and
+            /// `renders` (presence implies the world renders; drives the
+            /// GraphicsConfig companion injection at build time).
             pub fn singleton(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_singleton!($($meta)*) ),+
                 }
             }
+            /// Whether declaring the type with no args still does something useful.
             pub fn useful_blank(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_useful_blank!($($meta)*) ),+
                 }
             }
+            /// Whether declaring the type implies the world renders.
             pub fn renders(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_renders!($($meta)*) ),+
                 }
             }
             #[allow(dead_code)]
+            /// Whether a world may declare this type directly.
             pub fn addable(self) -> bool {
                 self.registration().addable()
             }
+            /// Every registered component type, in list order.
             pub fn all() -> &'static [ComponentType] {
                 &[ $( Self::$variant ),+ ]
             }
+            /// Every type a world may declare, with its registration metadata.
             pub fn addable_types() -> impl Iterator<Item = (ComponentType, Registration)> {
                 Self::all()
                     .iter()
@@ -345,12 +359,12 @@ macro_rules! define_component_type {
 
 concinnity_core::for_each_component!(define_component_type);
 
-// The authored-value trait: the bridge from a typed authoring struct to the
-// world line that declares it. Implemented for every declarable asset's args
-// schema (the `args:` override where the authored form diverges from the
-// component, the component itself where it does not) and for every resource
-// asset, so a caller hands the cook a typed value instead of a name/type/args
-// triple assembled by hand.
+/// The authored-value trait: the bridge from a typed authoring struct to the
+/// world line that declares it. Implemented for every declarable asset's args
+/// schema (the `args:` override where the authored form diverges from the
+/// component, the component itself where it does not) and for every resource
+/// asset, so a caller hands the cook a typed value instead of a name/type/args
+/// triple assembled by hand.
 pub trait Authored: serde::Serialize {
     /// The registered asset type, as it appears in a world line's `type`.
     const TYPE: &'static str;
@@ -443,11 +457,11 @@ fn json_args_err(e: serde_json::Error) -> CnResult {
     CnResult::InvalidArgument
 }
 
-// Bake the runtime component for the asset types whose baked form diverges
-// from their authored args (the entries with `args:` metadata): run the type's
-// `bake` translation at build time and serialize the component itself, which
-// the type's `from_baked` deserializes at load. Pass-through types return
-// `None`; cook reserializes their args (which ARE the component).
+/// Bake the runtime component for the asset types whose baked form diverges
+/// from their authored args (the entries with `args:` metadata): run the type's
+/// `bake` translation at build time and serialize the component itself, which
+/// the type's `from_baked` deserializes at load. Pass-through types return
+/// `None`; cook reserializes their args (which ARE the component).
 pub fn bake_divergent(
     ct: ComponentType,
     args: &serde_json::Value,
@@ -475,10 +489,10 @@ pub fn bake_divergent(
     }
 }
 
-// Whether an asset type's presence implies the world renders: the registry's
-// `renders` flag, across both the component and resource registries. Matches
-// by normalized name (case-insensitive, underscores stripped) so cook's
-// companion pass and authoring tools classify the same way.
+/// Whether an asset type's presence implies the world renders: the registry's
+/// `renders` flag, across both the component and resource registries. Matches
+/// by normalized name (case-insensitive, underscores stripped) so cook's
+/// companion pass and authoring tools classify the same way.
 pub fn type_renders(asset_type: &str) -> bool {
     let norm: String = asset_type.chars().filter(|c| *c != '_').collect();
     let matches = |name: &str| name.eq_ignore_ascii_case(&norm);

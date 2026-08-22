@@ -45,7 +45,7 @@ fn effective_cap(user_cap: u32, menu_active: bool) -> u32 {
 // Holds each frame's start to the target interval so the loop runs at most
 // `FrameRateCap` frames a second. One per `App`, driven once per world step.
 #[derive(Debug, Default)]
-pub struct FramePacer {
+pub(crate) struct FramePacer {
     // The pacer's running target for the next frame's start.
     deadline: Option<Instant>,
     // The user cap the deadline was accumulated under. A cap change re-bases
@@ -57,7 +57,7 @@ pub struct FramePacer {
 impl FramePacer {
     // Pace the upcoming world step from the world's published pacing state.
     // No-op (and deadline cleared) while no cap is published or the cap is 0.
-    pub fn pace(&mut self, world: &World) {
+    pub(crate) fn pace(&mut self, world: &World) {
         let user_cap = world
             .resource::<crate::ecs::FrameRateCap>()
             .map(|c| c.0)

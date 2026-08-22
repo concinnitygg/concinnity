@@ -40,9 +40,13 @@ pub(super) fn source_dimensions(doc: &GltfDoc, image_index: u32) -> Result<(u32,
     }
 }
 
-/// Decode the panorama image into a linear-light equirectangular image. See
-/// the module header for the range this assumes.
-pub fn load_equirect(doc: &GltfDoc, source: &str, image_index: u32) -> Result<HdrImage, String> {
+// Decode the panorama image into a linear-light equirectangular image. See
+// the module header for the range this assumes.
+pub(crate) fn load_equirect(
+    doc: &GltfDoc,
+    source: &str,
+    image_index: u32,
+) -> Result<HdrImage, String> {
     let (bytes, mime) = doc
         .image_bytes(image_index)
         .map_err(|e| format!("'{}': {}", source, e))?;

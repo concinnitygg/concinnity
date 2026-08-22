@@ -1,14 +1,12 @@
-// benches/anim.rs
-//
-// Benchmarks over the CPU animation pipeline: clip sampling, weighted pose
-// blending, skinning-matrix resolution, the composed per-character cost, and
-// the two-bone IK solve. The skeleton is a 64-joint chain in the shape of a
-// humanoid rig; the realistic clip carries 61 keys per track (two seconds
-// baked at 30 Hz, what the FBX importer emits), and a 2-key variant isolates
-// the track scan cost from the interpolation itself. Sample times advance
-// every iteration so keyframe search never settles on one branch.
-//
-// Run with `cargo bench -p concinnity-bench --bench anim`.
+//! Benchmarks over the CPU animation pipeline: clip sampling, weighted pose
+//! blending, skinning-matrix resolution, the composed per-character cost, and
+//! the two-bone IK solve. The skeleton is a 64-joint chain in the shape of a
+//! humanoid rig; the realistic clip carries 61 keys per track (two seconds
+//! baked at 30 Hz, what the FBX importer emits), and a 2-key variant isolates
+//! the track scan cost from the interpolation itself. Sample times advance
+//! every iteration so keyframe search never settles on one branch.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench anim`.
 
 use concinnity_bench::{Bench, Rng};
 use concinnity_cpu::gfx::ik::{TwoBoneChain, apply_two_bone_ik};

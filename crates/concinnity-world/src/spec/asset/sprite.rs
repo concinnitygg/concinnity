@@ -2,9 +2,9 @@
 
 use crate::spec::AssetSpec;
 
-// A rectangular Sprite at `rect` ([x, y, w, h], window pixels) with `tint`
-// (RGBA). Visibility, texture, and corner radius keep their defaults; chain
-// `.set("visible", ...)` to override.
+/// A rectangular Sprite at `rect` ([x, y, w, h], window pixels) with `tint`
+/// (RGBA). Visibility, texture, and corner radius keep their defaults; chain
+/// `.set("visible", ...)` to override.
 pub fn sprite(name: impl Into<String>, rect: [f32; 4], tint: [f32; 4]) -> AssetSpec {
     AssetSpec::new(name, "Sprite")
         .set("x", rect[0])

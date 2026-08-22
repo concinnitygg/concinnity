@@ -26,7 +26,7 @@ const SNAPSHOT_INTERVAL: u64 = 30;
 
 // A running debug server. Implements `DebugHook`, so the run loop owns it as
 // `Box<dyn DebugHook>` and ticks it each frame.
-pub struct DebugServer {
+pub(crate) struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
@@ -43,7 +43,7 @@ pub struct DebugServer {
 impl DebugServer {
     // Bind a localhost WebSocket server on `port` and spawn its accept thread.
     // Binds `127.0.0.1` only: the debug surface is never exposed off-box.
-    pub fn start(port: u16) -> std::io::Result<Self> {
+    pub(crate) fn start(port: u16) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let shared = Arc::new(Mutex::new(DebugState::default()));
 

@@ -1,9 +1,6 @@
 // src/build.rs: shared in-memory build orchestration
 
-#[allow(unused_imports)]
-pub use concinnity_cook::{
-    PipelineResult, build_compiled, build_pipeline_from_str, validate_asset, validate_world_jsonl,
-};
+pub(crate) use concinnity_cook::build_compiled;
 
 use crate::ecs::{ComponentAsset, World};
 use concinnity_cook::world::LoadedWorld;
@@ -85,8 +82,8 @@ fn scan_environment_map_source(
     })
 }
 
-// Compile a prepared world and assemble it into an in-memory World, ready to
-// run without touching any blob files on disk.
+/// Compile a prepared world and assemble it into an in-memory World, ready to
+/// run without touching any blob files on disk.
 pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Capture the dev-only hot-reload source info for the singleton ColorLut and
     // EnvironmentMap resources BEFORE `build_compiled` consumes the asset list.
@@ -162,30 +159,30 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     Ok(world)
 }
 
-// Run the full in-memory pipeline on a world.jsonl string, returning a
-// ready-to-run World without touching any blob files on disk. The editor uses
-// this to boot an empty (or otherwise non-renderable) world from a seeded
-// GraphicsConfig so a window still opens.
+/// Run the full in-memory pipeline on a world.jsonl string, returning a
+/// ready-to-run World without touching any blob files on disk. The editor uses
+/// this to boot an empty (or otherwise non-renderable) world from a seeded
+/// GraphicsConfig so a window still opens.
 pub fn build_world_from_str(content: &str) -> std::io::Result<World> {
     let loaded = prepare(content)?;
     world_from_loaded(loaded)
 }
 
-// Read a world.jsonl file from disk and run the full in-memory pipeline on it,
-// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
-// loads its world through here; it is the file-backed counterpart of `prepare`
-// + `world_from_loaded`.
+/// Read a world.jsonl file from disk and run the full in-memory pipeline on it,
+/// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
+/// loads its world through here; it is the file-backed counterpart of `prepare`
+/// + `world_from_loaded`.
 pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
     build_world_from_str(&content)
 }
 
-// Compile a world.jsonl file and write the compiled blobs + world-lock.json to
-// the active `.concinnity/data/` state dir, exactly as `cn build` does. This is
-// `cn build` as a library call: the editor's SAVE goes through here to persist
-// edits, reusing the validated compile + blob-write tail rather than patching
-// blobs directly. Same-process recompiles are fast because the payload / expand
-// caches are warm.
+/// Compile a world.jsonl file and write the compiled blobs + world-lock.json to
+/// the active `.concinnity/data/` state dir, exactly as `cn build` does. This is
+/// `cn build` as a library call: the editor's SAVE goes through here to persist
+/// edits, reusing the validated compile + blob-write tail rather than patching
+/// blobs directly. Same-process recompiles are fast because the payload / expand
+/// caches are warm.
 pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
     build_world_str_to_disk(&content)

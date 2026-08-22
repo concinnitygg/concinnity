@@ -1,16 +1,16 @@
-// Reflection probe capture math: the six cube-face view-projection matrices a
-// probe renders the scene through, plus the load-time conversion of the
-// captured faces into the prefiltered IBL payload the environment sampler
-// consumes. Backend-agnostic; the Metal backend drives the actual scene render
-// into each face (see metal/probe.rs). DirectX / Vulkan can reuse this math.
-//
-// Face order and orientation match the engine's cube convention (the build-time
-// `concinnity-cook::hdr` equirect resampler and core `environment_map`'s private
-// `cube_texel_dir`):
-//   0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z, with a face texel at (u,v) in [-1,1]
-// looking along `cube_texel_dir(face, u, v)`. Each face's view-projection is
-// built so that direction projects to NDC (u, -v) (screen-down is +v), which
-// the orientation test pins exactly.
+//! Reflection probe capture math: the six cube-face view-projection matrices a
+//! probe renders the scene through, plus the load-time conversion of the
+//! captured faces into the prefiltered IBL payload the environment sampler
+//! consumes. Backend-agnostic; the Metal backend drives the actual scene render
+//! into each face (see metal/probe.rs). DirectX / Vulkan can reuse this math.
+//!
+//! Face order and orientation match the engine's cube convention (the build-time
+//! `concinnity-cook::hdr` equirect resampler and core `environment_map`'s private
+//! `cube_texel_dir`):
+//!   0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z, with a face texel at (u,v) in [-1,1]
+//! looking along `cube_texel_dir(face, u, v)`. Each face's view-projection is
+//! built so that direction projects to NDC (u, -v) (screen-down is +v), which
+//! the orientation test pins exactly.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -68,7 +68,7 @@ fn face_view(eye: [f32; 3], r: [f32; 3], u: [f32; 3], f: [f32; 3]) -> [[f32; 4];
     ]
 }
 
-// The view-projection for cube face `face` (0..6) captured from `eye`.
+/// The view-projection for cube face `face` (0..6) captured from `eye`.
 #[allow(dead_code)]
 pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
@@ -76,30 +76,33 @@ pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> 
     mul(perspective_90(near, far), view)
 }
 
-// The world->view matrix alone for cube face `face`, captured from `eye`. The
-// main pass needs both the combined view-projection (vertex clip transform) and
-// the bare view matrix (some shaders reconstruct view-space data), so the probe
-// capture builds a `ViewUniforms` from this plus `face_view_projection`.
+/// The world->view matrix alone for cube face `face`, captured from `eye`. The
+/// main pass needs both the combined view-projection (vertex clip transform) and
+/// the bare view matrix (some shaders reconstruct view-space data), so the probe
+/// capture builds a `ViewUniforms` from this plus `face_view_projection`.
 #[allow(dead_code)]
 pub fn face_view_matrix(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     face_view(eye, b[0], b[1], b[2])
 }
 
-// Where one reflection probe is captured from and the influence box it serves.
-// Backend-agnostic: the renderer bakes a cube at `position` and, for a surface
-// inside [box_min, box_max], selects this probe and parallax-corrects against the
-// box. Derived from a declared `ReflectionProbe` asset or `auto_seed_probes`.
+/// Where one reflection probe is captured from and the influence box it serves.
+/// Backend-agnostic: the renderer bakes a cube at `position` and, for a surface
+/// inside [box_min, box_max], selects this probe and parallax-corrects against the
+/// box. Derived from a declared `ReflectionProbe` asset or `auto_seed_probes`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProbePlacement {
+    /// World-space position.
     pub position: [f32; 3],
+    /// Lower corner of the probe's parallax box.
     pub box_min: [f32; 3],
+    /// Upper corner of the probe's parallax box.
     pub box_max: [f32; 3],
 }
 
 impl ProbePlacement {
-    // Build a placement from an authored `ReflectionProbe` (capture point +
-    // half-extents): the box is `position` plus or minus `half_extents`.
+    /// Build a placement from an authored `ReflectionProbe` (capture point +
+    /// half-extents): the box is `position` plus or minus `half_extents`.
     pub fn from_center_extents(position: [f32; 3], half_extents: [f32; 3]) -> ProbePlacement {
         ProbePlacement {
             position,
@@ -117,11 +120,11 @@ impl ProbePlacement {
     }
 }
 
-// Tracks how far a staggered probe bake has progressed. Baking every probe on
-// one frame stalls proportionally to the probe count; instead the renderer bakes
-// a bounded budget per frame and walks this cursor, so the load cost is spread
-// and unbaked probes fall back to the sky until their turn. Indices are handed
-// out in order so the baked cube array stays aligned with the placement list.
+/// Tracks how far a staggered probe bake has progressed. Baking every probe on
+/// one frame stalls proportionally to the probe count; instead the renderer bakes
+/// a bounded budget per frame and walks this cursor, so the load cost is spread
+/// and unbaked probes fall back to the sky until their turn. Indices are handed
+/// out in order so the baked cube array stays aligned with the placement list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProbeBakeQueue {
     total: usize,
@@ -129,16 +132,17 @@ pub struct ProbeBakeQueue {
 }
 
 impl ProbeBakeQueue {
+    /// A queue seeded with `total` probes waiting to bake.
     pub fn new(total: usize) -> ProbeBakeQueue {
         ProbeBakeQueue { total, next: 0 }
     }
 
-    // Whether any placement is still waiting to bake.
+    /// Whether any placement is still waiting to bake.
     pub fn pending(&self) -> bool {
         self.next < self.total
     }
 
-    // The next placement index to bake, advancing the cursor. `None` when done.
+    /// The next placement index to bake, advancing the cursor. `None` when done.
     pub fn take_next(&mut self) -> Option<usize> {
         (self.next < self.total).then(|| {
             let i = self.next;
@@ -147,55 +151,65 @@ impl ProbeBakeQueue {
         })
     }
 
-    // Abandon every remaining placement (e.g. a permanently ineligible world or
-    // an unrecoverable bake error). Leaves the queue not `pending`.
+    /// Abandon every remaining placement (e.g. a permanently ineligible world or
+    /// an unrecoverable bake error). Leaves the queue not `pending`.
     pub fn abort(&mut self) {
         self.next = self.total;
     }
 }
 
-// Phase of the single in-flight asynchronous bake. Exactly one probe is baked at
-// a time, walking three phases across frames so the render thread never blocks on
-// the capture: `Rendering` (six faces submitted, GPU running), `Converting` (faces
-// read back, the prefilter convolution running off the render thread), and `Idle`
-// (nothing in flight). The renderer holds the GPU resources for the in-flight
-// probe; this enum only names which phase it is in.
+/// Phase of the single in-flight asynchronous bake. Exactly one probe is baked at
+/// a time, walking three phases across frames so the render thread never blocks on
+/// the capture: `Rendering` (six faces submitted, GPU running), `Converting` (faces
+/// read back, the prefilter convolution running off the render thread), and `Idle`
+/// (nothing in flight). The renderer holds the GPU resources for the in-flight
+/// probe; this enum only names which phase it is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BakePhase {
+    /// Nothing to bake.
     Idle,
+    /// Rendering the probe's cube faces.
     Rendering,
+    /// Converting the rendered faces into the prefiltered cube.
     Converting,
 }
 
-// What the renderer should do this frame to advance the asynchronous bake. The
-// renderer maps each variant to a side effect: `StartNext` builds the next
-// placement's capture buffers + targets (no face submitted yet), `RenderFace`
-// submits one cube face (the six are spread one-per-frame so no single frame
-// pays the whole capture), `Readback` copies the finished faces back and kicks
-// the off-thread convolution, `Install` uploads the convolved cube and advances
-// the queue, `Idle` does nothing.
+/// What the renderer should do this frame to advance the asynchronous bake. The
+/// renderer maps each variant to a side effect: `StartNext` builds the next
+/// placement's capture buffers + targets (no face submitted yet), `RenderFace`
+/// submits one cube face (the six are spread one-per-frame so no single frame
+/// pays the whole capture), `Readback` copies the finished faces back and kicks
+/// the off-thread convolution, `Install` uploads the convolved cube and advances
+/// the queue, `Idle` does nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BakeAction {
+    /// Nothing to do this frame.
     Idle,
+    /// Begin the next queued probe.
     StartNext,
+    /// Render one cube face.
     RenderFace,
+    /// Install the converted cube into the probe pool.
     Install,
+    /// Read the rendered faces back for conversion.
     Readback,
 }
 
-// Decide the next action for the single-in-flight asynchronous bake. Pure so the
-// transition table is locked by unit tests without a GPU:
-//   * while `Rendering`, submit the next cube face while `more_faces` remain (one
-//     per frame); once all six are submitted, do nothing until the GPU completion
-//     flag `done` is set, then `Readback`;
-//   * while `Converting`, do nothing until the off-thread `payload_ready`, then
-//     `Install`;
-//   * while `Idle`, start the next placement only when one is `queue_pending` and
-//     the world is `eligible` to bake this frame (bindless + geometry present +
-//     a non-empty cull); otherwise stay `Idle`.
-// The invariants this guarantees: never read faces back before all six are
-// submitted and the GPU signals completion, never install before the convolution
-// finishes, and never begin a second bake while one is already in flight.
+/// Decide the next action for the single-in-flight asynchronous bake. Pure so the
+/// transition table is locked by unit tests without a GPU:
+///
+/// - while `Rendering`, submit the next cube face while `more_faces` remain
+///   (one per frame); once all six are submitted, do nothing until the GPU
+///   completion flag `done` is set, then `Readback`;
+/// - while `Converting`, do nothing until the off-thread `payload_ready`, then
+///   `Install`;
+/// - while `Idle`, start the next placement only when one is `queue_pending`
+///   and the world is `eligible` to bake this frame (bindless plus geometry
+///   present plus a non-empty cull); otherwise stay `Idle`.
+///
+/// The invariants this guarantees: never read faces back before all six are
+/// submitted and the GPU signals completion, never install before the convolution
+/// finishes, and never begin a second bake while one is already in flight.
 pub fn next_bake_action(
     phase: BakePhase,
     done: bool,
@@ -235,7 +249,7 @@ pub fn next_bake_action(
 // memory for an un-authored world. Must not exceed the renderer's per-frame probe
 // bind limit (`crate::uniforms::MAX_PROBES`); asserted by
 // `auto_seed_budget_fits_max_probes` in the metal uniforms tests.
-pub const AUTO_SEED_BUDGET: usize = 8;
+pub(crate) const AUTO_SEED_BUDGET: usize = 8;
 
 // Horizontal size (metres) each auto-seeded cell aims to cover -- roughly a large
 // room / courtyard, so a probe stays locally accurate across its cell. A 24 m
@@ -704,9 +718,9 @@ fn seed_interior_probes_tris(
     interior_probes_from_solid(aabb_min, vs, nx, ny, nz, &solid, budget)
 }
 
-// Auto-seed probes from the scene bounds, used when a world declares no
-// `ReflectionProbe`. Convenience wrapper over `auto_seed_probes_with_geometry` with no
-// triangle geometry: interior detection uses object AABB occupancy (the coarse path).
+/// Auto-seed probes from the scene bounds, used when a world declares no
+/// `ReflectionProbe`. Convenience wrapper over `auto_seed_probes_with_geometry` with no
+/// triangle geometry: interior detection uses object AABB occupancy (the coarse path).
 pub fn auto_seed_probes(
     aabb_min: [f32; 3],
     aabb_max: [f32; 3],
@@ -715,17 +729,17 @@ pub fn auto_seed_probes(
     auto_seed_probes_with_geometry(aabb_min, aabb_max, occupancy, &[])
 }
 
-// Auto-seed probes from the scene bounds. First places a probe INSIDE each enclosed
-// interior region (a room / walled courtyard, where a local capture is most valuable),
-// then fills the remaining `AUTO_SEED_BUDGET` with a `seed_grid_probes` grid for broad /
-// open coverage. An open scene finds no interiors, so it falls straight through to the
-// grid (unchanged); a fully-enclosed scene is mostly rooms; a mixed scene gets both,
-// cross-faded by the partition-of-unity blend. When `triangles` is non-empty, interior
-// detection surface-voxelises them (so a watertight single mesh's hollow is found);
-// when empty, it falls back to the coarse AABB `occupancy`. The grid fill always uses
-// the AABB `occupancy` for its open-vantage capture-point nudge. Approximate --
-// authored probes give per-space control -- but better than one global cube. Returns
-// empty for a degenerate (non-finite or zero-area) scene.
+/// Auto-seed probes from the scene bounds. First places a probe INSIDE each enclosed
+/// interior region (a room / walled courtyard, where a local capture is most valuable),
+/// then fills the remaining `AUTO_SEED_BUDGET` with a `seed_grid_probes` grid for broad /
+/// open coverage. An open scene finds no interiors, so it falls straight through to the
+/// grid (unchanged); a fully-enclosed scene is mostly rooms; a mixed scene gets both,
+/// cross-faded by the partition-of-unity blend. When `triangles` is non-empty, interior
+/// detection surface-voxelises them (so a watertight single mesh's hollow is found);
+/// when empty, it falls back to the coarse AABB `occupancy`. The grid fill always uses
+/// the AABB `occupancy` for its open-vantage capture-point nudge. Approximate --
+/// authored probes give per-space control -- but better than one global cube. Returns
+/// empty for a degenerate (non-finite or zero-area) scene.
 pub fn auto_seed_probes_with_geometry(
     aabb_min: [f32; 3],
     aabb_max: [f32; 3],
@@ -791,9 +805,9 @@ fn seed_grid_probes(
     out
 }
 
-// Union the world-space AABBs of every scene object into one bounds, skipping
-// any box with a non-finite corner (a degenerate / sentinel AABB). Returns
-// `None` for an empty scene. The probe eye is then `probe_eye_point` of this.
+/// Union the world-space AABBs of every scene object into one bounds, skipping
+/// any box with a non-finite corner (a degenerate / sentinel AABB). Returns
+/// `None` for an empty scene. The probe eye is then `probe_eye_point` of this.
 #[allow(dead_code)]
 pub fn fold_world_bounds(
     boxes: impl IntoIterator<Item = ([f32; 3], [f32; 3])>,
@@ -816,12 +830,12 @@ pub fn fold_world_bounds(
     acc
 }
 
-// Convert six captured cube faces (each `face_size*face_size` RGBA `f32`, row
-// major, in the FACE_BASIS order) into the serialised `ENVM` payload the
-// environment sampler consumes: a cosine-convolved irradiance cube + a GGX
-// prefilter mip chain. Reuses the exact build-time convolutions (including the
-// firefly clamp), so a scene-captured probe and an imported HDR produce
-// byte-compatible payloads that flow through the same `upload_environment_map`.
+/// Convert six captured cube faces (each `face_size*face_size` RGBA `f32`, row
+/// major, in the FACE_BASIS order) into the serialised `ENVM` payload the
+/// environment sampler consumes: a cosine-convolved irradiance cube + a GGX
+/// prefilter mip chain. Reuses the exact build-time convolutions (including the
+/// firefly clamp), so a scene-captured probe and an imported HDR produce
+/// byte-compatible payloads that flow through the same `upload_environment_map`.
 #[allow(dead_code)]
 pub fn build_probe_payload(
     faces: &[Vec<f32>; 6],
@@ -861,7 +875,7 @@ pub fn build_probe_payload(
 // position can later replace this heuristic. `aabb_min`/`aabb_max` are the world
 // bounds; +Y is up.
 #[allow(dead_code)]
-pub fn probe_eye_point(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> [f32; 3] {
+pub(crate) fn probe_eye_point(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> [f32; 3] {
     const EYE_HEIGHT: f32 = 1.7;
     let cx = 0.5 * (aabb_min[0] + aabb_max[0]);
     let cz = 0.5 * (aabb_min[2] + aabb_max[2]);

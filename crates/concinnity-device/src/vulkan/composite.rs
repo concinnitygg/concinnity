@@ -24,7 +24,7 @@ use super::upload_ring::UPLOAD_ALIGN;
 // Per-invocation binding context for the composite pass. `pub` because it is the
 // `Args` associated type of the (cross-crate) `render::fullscreen::CompositeEncoder`
 // impl below, so it cannot be more private than that public trait's interface.
-pub struct VkCompositeArgs {
+pub(crate) struct VkCompositeArgs {
     image_index: usize,
     frame_idx: usize,
 }

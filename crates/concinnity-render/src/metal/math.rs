@@ -1,5 +1,8 @@
-// Right-handed perspective matching Apple's matrix_perspective_right_hand.
-// Depth maps to [0, 1] in Metal NDC. Column-major storage: arr[col][row].
+//! Column-major matrix helpers in Metal's NDC convention: right-handed with
+//! depth mapped to [0, 1].
+
+/// Right-handed perspective matching Apple's matrix_perspective_right_hand.
+/// Depth maps to `[0, 1]` in Metal NDC. Column-major storage: `arr[col][row]`.
 pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
     let ys = 1.0 / (fov_y / 2.0).tan();
     let xs = ys / aspect;
@@ -12,7 +15,7 @@ pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4
     ]
 }
 
-// Column-major multiply: out[col][row] = sum_k a[k][row] * b[col][k].
+/// Column-major multiply: `out[col][row] = sum_k a[k][row] * b[col][k]`.
 pub fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];
     for col in 0..4 {
@@ -25,6 +28,7 @@ pub fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
+/// The 4x4 identity, column-major.
 pub const IDENTITY4: [[f32; 4]; 4] = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
@@ -32,10 +36,10 @@ pub const IDENTITY4: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-// General 4×4 matrix inverse via cofactor expansion. Returns `IDENTITY4` for
-// a singular input (determinant ≈ 0). Used per-frame by the decal pass to
-// invert the view-projection so the shader can reconstruct world position
-// from depth. Column-major storage: result[col][row].
+/// General 4×4 matrix inverse via cofactor expansion. Returns `IDENTITY4` for
+/// a singular input (determinant ≈ 0). Used per-frame by the decal pass to
+/// invert the view-projection so the shader can reconstruct world position
+/// from depth. Column-major storage: `result[col][row]`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn mat4_inverse(m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     // Read the input as a flat row-major slice for the standard cofactor

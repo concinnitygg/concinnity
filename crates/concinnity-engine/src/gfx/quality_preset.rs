@@ -23,7 +23,7 @@ use crate::gfx::backend::{GpuProfile, GpuTier};
 // a `None` (never persisted) means "never configured": the first launch seeds
 // `Auto` and saves once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum QualityPreset {
+pub(crate) enum QualityPreset {
     Auto,
     Low,
     Medium,
@@ -53,21 +53,21 @@ pub(crate) struct QualityCeiling {
     // more aggressive (lower internal resolution) of the world's choice and this.
     // `Quality` (the least aggressive) means "no forced upscaling" -- the world's
     // choice stands.
-    pub min_upscale: UpscaleQuality,
+    pub(crate) min_upscale: UpscaleQuality,
     // Caps on the SSGI gather sub-quality (they only bite where `ssgi` is
     // permitted): the finest gather resolution, and the most rays / ray-march
     // steps per pixel. Each clamps DOWN: the effective value is the coarser
     // resolution / smaller count of the world's choice and the cap. The
     // no-ceiling values are the engine maxima (`Full`, 32, 64), so a world's
     // authored value always stands under them.
-    pub ssgi_resolution: SsgiResolution,
-    pub ssgi_rays: u32,
-    pub ssgi_steps: u32,
+    pub(crate) ssgi_resolution: SsgiResolution,
+    pub(crate) ssgi_rays: u32,
+    pub(crate) ssgi_steps: u32,
     // Cap on the roughness-aware reflection blur resolution (only bites where
     // `ssr` or `ray_traced_reflections` is permitted): the finest blur the tier
     // allows, clamping the world's choice coarser. The no-ceiling value is `Full`
     // (finest), so a world's authored value always stands under it.
-    pub reflection_blur_resolution: ReflectionBlurResolution,
+    pub(crate) reflection_blur_resolution: ReflectionBlurResolution,
     // Cap on the shadow-map cascade resolution in texels (restart-required): the
     // effective size is the smaller of the world's choice and this cap. The
     // no-ceiling value is `u32::MAX`, so a world's authored size always stands.
@@ -75,12 +75,12 @@ pub(crate) struct QualityCeiling {
     // Whether the tier permits the `EveryFrame` shadow re-render cadence (live).
     // When false the cadence is clamped to the cheaper `Hybrid`; the no-ceiling
     // value is `true`, so a world's authored cadence always stands.
-    pub allow_every_frame_shadows: bool,
+    pub(crate) allow_every_frame_shadows: bool,
     // Cap on the scene sampler's max anisotropic-filtering degree
     // (restart-required): the effective degree is the smaller of the world's
     // choice and this cap. The no-ceiling value is `ANISO_MAX` (16, the GPU
     // maximum), so a world's authored degree always stands.
-    pub anisotropy: u32,
+    pub(crate) anisotropy: u32,
     // Cap on the shadow distance in world units (live): the effective distance is
     // the smaller of the world's choice and this cap. The no-ceiling value is
     // `u32::MAX`, so a world's authored distance always stands. A lower tier
@@ -99,7 +99,7 @@ pub(crate) struct QualityCeiling {
     // A lower tier renders fewer full render-res MSAA mirror passes (saving VRAM +
     // GPU cost); reflectors past the budget fall back to the box-projected probe
     // cube.
-    pub planar_reflection_planes: u32,
+    pub(crate) planar_reflection_planes: u32,
 }
 
 // The coarser (higher render-resolution divisor) of two SSGI resolutions, the

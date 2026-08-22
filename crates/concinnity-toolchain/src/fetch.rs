@@ -1,9 +1,9 @@
-// First-run asset fetching for the workspace examples.
-//
-// An example that needs a large asset pack downloads and unpacks it on first
-// run rather than at build time, so `cargo build` never touches the network.
-// The policy (where the pack lives, what overrides the source) stays with the
-// caller; this module owns the mechanics.
+//! First-run asset fetching for the workspace examples.
+//!
+//! An example that needs a large asset pack downloads and unpacks it on first
+//! run rather than at build time, so `cargo build` never touches the network.
+//! The policy (where the pack lives, what overrides the source) stays with the
+//! caller; this module owns the mechanics.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};

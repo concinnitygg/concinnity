@@ -1,10 +1,10 @@
-// Compile stage of the build pipeline. The world is loaded, expanded, and
-// validated upstream by crate::world::prepare_world; this module takes the
-// resulting WorldJsonlAsset list and:
-// - Resolves each asset to a BlobAssetDef via asset_api::create_asset_def()
-// - Compiles payloads for assets that need compilation
-// - Packs all payloads into blobs using PayloadPacker (fills locators)
-// - Sorts: components first, then systems in declared order
+//! Compile stage of the build pipeline. The world is loaded, expanded, and
+//! validated upstream by crate::world::prepare_world; this module takes the
+//! resulting WorldJsonlAsset list and:
+//! - Resolves each asset to a BlobAssetDef via asset_api::create_asset_def()
+//! - Compiles payloads for assets that need compilation
+//! - Packs all payloads into blobs using PayloadPacker (fills locators)
+//! - Sorts: components first, then systems in declared order
 
 use serde::Deserialize;
 
@@ -24,6 +24,7 @@ use crate::resource_handles::ResourceAssetCompile;
 const MESH_TYPE: &str = "Mesh";
 const SKINNED_MESH_TYPE: &str = "SkinnedMesh";
 
+/// Build the world at `json_path` and write its blobs to disk.
 pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
     let loaded = crate::world::prepare_world(&content)
@@ -55,9 +56,9 @@ pub fn build_from_path(json_path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-// Write the blobs and world-lock.json for a compiled world: the shared build
-// tail used by the CLI and the FFI host. The lock records each asset under its
-// real name plus every injected default with its full args.
+/// Write the blobs and world-lock.json for a compiled world: the shared build
+/// tail used by the CLI and the FFI host. The lock records each asset under its
+/// real name plus every injected default with its full args.
 pub fn write_build_outputs(
     result: &PipelineResult,
     injected: &[crate::world::InjectedAsset],
@@ -100,82 +101,93 @@ fn errors_to_io(errors: Vec<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, errors.join("\n"))
 }
 
-// A texture's identity + on-disk source, in `TextureHandle` order. Now that
-// Texture is a resource (no `source`/`asset_id` on a component the renderer
-// drains), this is how a dev build hands the `cn debug` tools what they need: the
-// hot-reload watcher maps `source` -> handle, and the runtime spawn-by-name path
-// maps `name_id` -> handle. `source` is empty for a procedural texture (nothing
-// to watch). `name_id` is the interned asset name (same interner the runtime
-// shares in-process under `cn debug`), so nothing is interned at runtime.
+/// A texture's identity + on-disk source, in `TextureHandle` order. Now that
+/// Texture is a resource (no `source`/`asset_id` on a component the renderer
+/// drains), this is how a dev build hands the `cn debug` tools what they need: the
+/// hot-reload watcher maps `source` -> handle, and the runtime spawn-by-name path
+/// maps `name_id` -> handle. `source` is empty for a procedural texture (nothing
+/// to watch). `name_id` is the interned asset name (same interner the runtime
+/// shares in-process under `cn debug`), so nothing is interned at runtime.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextureSourceInfo {
+    /// The interned asset name.
     pub name_id: u32,
+    /// Authored source path; empty for a procedural texture.
     pub source: String,
+    /// Index of the image within the source document.
     pub image_index: u32,
 }
 
-// A file-backed Mesh's re-import inputs, in `MeshHandle` order (the Mesh block
-// leads the shared mesh-source handle space, so Mesh handles are dense from 0).
-// Now that Mesh is a resource (no `source` on a component the renderer drains),
-// this is how a dev build hands the `cn debug` hot-reload watcher what it needs
-// to re-import a saved `.glb`/`.fbx`. `source` is empty for an inline-authored
-// mesh (nothing to watch).
+/// A file-backed Mesh's re-import inputs, in `MeshHandle` order (the Mesh block
+/// leads the shared mesh-source handle space, so Mesh handles are dense from 0).
+/// Now that Mesh is a resource (no `source` on a component the renderer drains),
+/// this is how a dev build hands the `cn debug` hot-reload watcher what it needs
+/// to re-import a saved `.glb`/`.fbx`. `source` is empty for an inline-authored
+/// mesh (nothing to watch).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshSourceInfo {
+    /// Authored source path; empty for an inline-authored mesh.
     pub source: String,
+    /// Index of the primitive within the source document.
     pub primitive_index: u32,
+    /// How many LODs the mesh declares, including LOD0.
     pub lod_levels: u32,
+    /// Camera distance at which each LOD past 0 takes over.
     pub lod_distances: Vec<f32>,
 }
 
-// The in-memory result of a complete build pipeline run.
-// Defs have payload locators filled in; payloads[i] is the raw bytes for
-// blob i. This can be used directly without touching disk.
+/// The in-memory result of a complete build pipeline run.
+/// Defs have payload locators filled in; `payloads[i]` is the raw bytes for
+/// blob i. This can be used directly without touching disk.
 pub struct PipelineResult {
+    /// The compiled component defs, with payload locators filled in.
     pub defs: Vec<BlobAssetDef>,
-    // Asset name of each def, index-aligned with `defs` (defs only carry the
-    // interned id; the lock file records the readable name).
+    /// Asset name of each def, index-aligned with `defs` (defs only carry the
+    /// interned id; the lock file records the readable name).
     pub names: Vec<String>,
-    // The blob's resource stream: compiled resources addressed by their dense
-    // per-kind handle, carried alongside the component defs. Empty until a
-    // resource kind migrates off the component registry (AudioClip first).
+    /// The blob's resource stream: compiled resources addressed by their dense
+    /// per-kind handle, carried alongside the component defs. Empty until a
+    /// resource kind migrates off the component registry (AudioClip first).
     pub resources: Vec<ResourceRecord>,
-    // Per-scene exclusively-owned blob content, in scene declaration order.
+    /// Per-scene exclusively-owned blob content, in scene declaration order.
     pub scene_groups: Vec<concinnity_blob::SceneGroup>,
-    // Baked AABB + counts per static mesh payload, by mesh-source handle.
+    /// Baked AABB + counts per static mesh payload, by mesh-source handle.
     pub mesh_bounds: Vec<concinnity_blob::MeshBoundsRecord>,
     // Unified mesh-source handle -> asset name for mesh payloads compiled as
     // component defs (ProceduralMesh and friends). Resource-stream Mesh
     // handles lead the space and resolve through `resources`; these resolve
     // through `names`/`defs`. Consumed by the thumbnail baker to compose a
     // Model's sub-meshes.
-    pub mesh_component_names: Vec<(u32, String)>,
+    pub(crate) mesh_component_names: Vec<(u32, String)>,
+    /// Raw bytes of each blob, indexed by blob number.
     pub payloads: Vec<Vec<u8>>,
     // Compiled-asset payloads served from the build cache this run.
-    pub cache_hits: usize,
+    pub(crate) cache_hits: usize,
     // Compiled-asset payloads compiled fresh this run.
-    pub cache_misses: usize,
-    // File-backed texture sources in `TextureHandle` order, for the `cn debug`
-    // hot-reload watcher. Dev-only info; not written to the shipped blob.
+    pub(crate) cache_misses: usize,
+    /// File-backed texture sources in `TextureHandle` order, for the `cn debug`
+    /// hot-reload watcher. Dev-only info; not written to the shipped blob.
     pub texture_sources: Vec<TextureSourceInfo>,
-    // File-backed mesh sources in `MeshHandle` order (dense over the Mesh block
-    // of the shared mesh-source space), for the `cn debug` hot-reload watcher.
-    // Dev-only info; not written to the shipped blob.
+    /// File-backed mesh sources in `MeshHandle` order (dense over the Mesh block
+    /// of the shared mesh-source space), for the `cn debug` hot-reload watcher.
+    /// Dev-only info; not written to the shipped blob.
     pub mesh_sources: Vec<MeshSourceInfo>,
     // Lock-file provenance for the resource stream, index-aligned with
     // `resources` (records only carry the kind tag + handle; the lock records
     // the readable name and args hash).
-    pub resource_locks: Vec<crate::blob::LockedResource>,
+    pub(crate) resource_locks: Vec<crate::blob::LockedResource>,
 }
 
-// Validate a single asset's type and generator without running the full build
-// pipeline. Called by the server on each world_add so the LLM gets per-asset
-// feedback without waiting for a WebSocket round-trip.
-//
-// Checks:
-//   - asset type is registered (via asset_api::create_asset_def)
-//   - per-type structural checks via crate::check
-// Shader assets are not compiled here; use the validate_shader tool for that.
+/// Validate a single asset's type and generator without running the full build
+/// pipeline. Called by the server on each world_add so the LLM gets per-asset
+/// feedback without waiting for a WebSocket round-trip.
+///
+/// Checks:
+///
+/// - asset type is registered (via `asset_api::create_asset_def`)
+/// - per-type structural checks via `crate::check`
+///
+/// Shader assets are not compiled here; use the validate_shader tool for that.
 pub fn validate_asset(
     asset_type: &str,
     name: &str,
@@ -218,11 +230,11 @@ pub fn validate_asset(
     Ok(())
 }
 
-// Run the full build pipeline on an in-memory JSONL string without touching
-// disk. Loads, expands, and validates the world (crate::world::prepare_world),
-// then compiles it. `artifacts_dir` is an optional directory consulted when
-// resolving bare shader filenames not found under assets/; pass the account's
-// artifact directory so test_world can compile user-written shaders.
+/// Run the full build pipeline on an in-memory JSONL string without touching
+/// disk. Loads, expands, and validates the world (crate::world::prepare_world),
+/// then compiles it. `artifacts_dir` is an optional directory consulted when
+/// resolving bare shader filenames not found under assets/; pass the account's
+/// artifact directory so test_world can compile user-written shaders.
 pub fn build_pipeline_from_str(
     content: &str,
     artifacts_dir: Option<&str>,
@@ -236,14 +248,17 @@ pub fn build_pipeline_from_str(
 /// (progress there is indeterminate).
 #[derive(Debug, Clone, Copy)]
 pub struct BuildProgress {
+    /// The stage's name.
     pub stage: &'static str,
+    /// Work completed in this stage.
     pub done: u32,
+    /// Total work in this stage; 0 when the stage cannot count it.
     pub total: u32,
 }
 
-// Compile an already-prepared world (expanded + structurally and semantically
-// validated) into in-memory blobs. This is the compile-only stage; it assumes
-// the assets have passed crate::world::prepare_world.
+/// Compile an already-prepared world (expanded + structurally and semantically
+/// validated) into in-memory blobs. This is the compile-only stage; it assumes
+/// the assets have passed crate::world::prepare_world.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     artifacts_dir: Option<&str>,
@@ -1298,11 +1313,11 @@ fn desugar_root_motion(assets: &mut [WorldJsonlAsset]) -> std::io::Result<()> {
     Ok(())
 }
 
-// Validate world JSONL without running compilation. Runs the full front half
-// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
-// resolution, but stops short of compiling payloads: intended for fast
-// server-side pre-deploy checks where shader compilation is not needed.
-// Every problem found is reported in a single newline-joined error.
+/// Validate world JSONL without running compilation. Runs the full front half
+/// of the pipeline (load, expand, semantic checks) plus a per-asset type/args
+/// resolution, but stops short of compiling payloads: intended for fast
+/// server-side pre-deploy checks where shader compilation is not needed.
+/// Every problem found is reported in a single newline-joined error.
 pub fn validate_world_jsonl(content: &str) -> std::io::Result<()> {
     let loaded = crate::world::prepare_world(content).map_err(errors_to_io)?;
 

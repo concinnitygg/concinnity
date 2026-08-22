@@ -28,7 +28,7 @@ impl MtlContext {
     // the caller is expected to gate this on a quiet renderer (the
     // asset-hot-reload path already is -- it runs at frame start before
     // the streaming poll).
-    pub fn rebuild_static_geometry(
+    pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<crate::gfx::backend::DrawGeometryUpdate>,
     ) -> Result<(), String> {

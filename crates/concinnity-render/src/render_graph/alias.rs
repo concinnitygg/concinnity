@@ -66,31 +66,36 @@ impl SlotClass {
 // (the allocation the backend must make); `members` are resource indices into
 // `CompiledGraph.resources`, in assignment order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AliasSlot {
+pub(crate) struct AliasSlot {
     pub byte_size: u64,
     pub members: Vec<usize>,
 }
 
 // The computed aliasing plan for one compiled graph at one drawable extent.
 #[derive(Debug, Clone)]
-pub struct AliasPlan {
+pub(crate) struct AliasPlan {
     // Physical slots; the backend allocates one pool entry per slot.
     pub slots: Vec<AliasSlot>,
     // Per-resource slot index, indexed by `ResourceId`. `None` for every
     // resource the planner does not place (imported, buffer, or a transient
-    // with no texture desc).
+    // with no texture desc). Measured output: the executor consumes `slots`,
+    // this module's tests assert the rest.
+    #[allow(dead_code)]
     pub assignment: Vec<Option<usize>>,
     // Total bytes the slots occupy (the aliased footprint).
+    #[allow(dead_code)]
     pub aliased_bytes: u64,
     // Total bytes the same resources would occupy with no aliasing (one
     // allocation each).
+    #[allow(dead_code)]
     pub unaliased_bytes: u64,
 }
 
 impl AliasPlan {
     // Bytes saved by aliasing: the unaliased footprint minus the slot
     // footprint. Zero when no two transients have disjoint lifetimes.
-    pub fn saved_bytes(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn saved_bytes(&self) -> u64 {
         self.unaliased_bytes.saturating_sub(self.aliased_bytes)
     }
 }
@@ -106,7 +111,7 @@ impl AliasPlan {
 // other, instead of pairing one of them with an unpooled resource and leaving
 // the other alone. Everything `poolable` rejects is left unplaced, exactly like
 // an imported resource.
-pub fn plan_aliasing_for(
+pub(crate) fn plan_aliasing_for(
     graph: &CompiledGraph,
     drawable_w: u32,
     drawable_h: u32,

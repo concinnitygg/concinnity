@@ -1,141 +1,152 @@
-// Shared GPU data types used by all rendering backends. Defined here (no
-// #[cfg] gate) so a future Vulkan backend can import them without pulling in
-// Metal-specific code. metal.rs imports from this module rather than defining
-// its own copies.
+//! Shared GPU data types used by all rendering backends. Defined here (no
+//! #[cfg] gate) so a future Vulkan backend can import them without pulling in
+//! Metal-specific code. metal.rs imports from this module rather than defining
+//! its own copies.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::math::sqrt;
 
+/// Capacity of the fixed directional-light array in `LightUniforms`.
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
+/// Capacity of the fixed point-light array in `LightUniforms`, which the
+/// raymarch / fog / probe paths read.
 pub const MAX_POINT_LIGHTS: usize = 8;
 
-// Capacity of the per-scene local-light storage buffer the forward pass reads.
-// Distinct from MAX_POINT_LIGHTS, which still bounds the fixed LightUniforms
-// point array consumed by the raymarch / fog / probe paths. Lights past this
-// cap are dropped with a warning.
+/// Capacity of the per-scene local-light storage buffer the forward pass reads.
+/// Distinct from MAX_POINT_LIGHTS, which still bounds the fixed LightUniforms
+/// point array consumed by the raymarch / fog / probe paths. Lights past this
+/// cap are dropped with a warning.
 pub const MAX_LOCAL_LIGHTS: usize = 1024;
 
-// GpuLight.kind discriminants.
+/// GpuLight.kind discriminants.
 pub const LIGHT_KIND_POINT: u32 = 0;
+/// `GpuLight.kind` for a spot light. See [`LIGHT_KIND_POINT`].
 pub const LIGHT_KIND_SPOT: u32 = 1;
+/// `GpuLight.kind` for a rectangular area light. See [`LIGHT_KIND_POINT`].
 pub const LIGHT_KIND_AREA: u32 = 2;
 
-// Capacity of the per-scene AreaLightData table. Area lights are far heavier to
-// shade than point or spot lights (a polygon integral per fragment), so the cap
-// is deliberately well under MAX_LOCAL_LIGHTS.
+/// Capacity of the per-scene AreaLightData table. Area lights are far heavier to
+/// shade than point or spot lights (a polygon integral per fragment), so the cap
+/// is deliberately well under MAX_LOCAL_LIGHTS.
 pub const MAX_AREA_LIGHTS: usize = 64;
 
-// Clustered forward lighting froxel grid. The screen is tiled
-// CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;
-// a compute pass bins the local lights into per-cluster index lists the forward
-// pass reads instead of iterating every light.
+/// Clustered forward lighting froxel grid. The screen is tiled
+/// CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;
+/// a compute pass bins the local lights into per-cluster index lists the forward
+/// pass reads instead of iterating every light.
 pub const CLUSTER_GRID_X: u32 = 16;
+/// Cluster tiles down the screen. See [`CLUSTER_GRID_X`].
 pub const CLUSTER_GRID_Y: u32 = 9;
+/// Exponential depth slices per cluster column. See [`CLUSTER_GRID_X`].
 pub const CLUSTER_GRID_Z: u32 = 24;
+/// Total clusters in the froxel grid.
 pub const CLUSTER_COUNT: u32 = CLUSTER_GRID_X * CLUSTER_GRID_Y * CLUSTER_GRID_Z;
-// Per-cluster light-index list capacity. Each cluster occupies
-// CLUSTER_LIGHT_LIST_STRIDE u32 slots: slot 0 is the count, slots 1.. are light
-// indices into the GpuLight buffer. Lights past the cap are dropped.
+/// Per-cluster light-index list capacity. Each cluster occupies
+/// CLUSTER_LIGHT_LIST_STRIDE u32 slots: slot 0 is the count, slots 1.. are light
+/// indices into the GpuLight buffer. Lights past the cap are dropped.
 pub const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
+/// `u32` slots one cluster occupies in the light-index buffer: the count plus
+/// [`MAX_LIGHTS_PER_CLUSTER`] indices.
 pub const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
 
-// Number of cascades the directional shadow pre-pass renders into the shadow
-// map array. Hardcoded because changing N requires re-compiling the shaders
-// (the array length appears in the MSL/HLSL/GLSL source).
+/// Number of cascades the directional shadow pre-pass renders into the shadow
+/// map array. Hardcoded because changing N requires re-compiling the shaders
+/// (the array length appears in the MSL/HLSL/GLSL source).
 pub const NUM_SHADOW_CASCADES: usize = 4;
 
-// Slices in the spot shadow map array: the number of spot lights that can cast
-// shadows at once. Spots past this still light the scene with `shadow_index`
-// left at -1. Hardcoded for the same reason as NUM_SHADOW_CASCADES.
+/// Slices in the spot shadow map array: the number of spot lights that can cast
+/// shadows at once. Spots past this still light the scene with `shadow_index`
+/// left at -1. Hardcoded for the same reason as NUM_SHADOW_CASCADES.
 pub const MAX_SHADOWED_SPOTS: usize = 16;
 
-// Per-slice edge of the spot shadow map array, derived from the authored
-// directional `shadow_map_size` so one quality knob scales both. Quartered
-// because a spot's cone covers far less world area than a CSM cascade, and the
-// array multiplies the cost by MAX_SHADOWED_SPOTS.
+/// Per-slice edge of the spot shadow map array, derived from the authored
+/// directional `shadow_map_size` so one quality knob scales both. Quartered
+/// because a spot's cone covers far less world area than a CSM cascade, and the
+/// array multiplies the cost by MAX_SHADOWED_SPOTS.
 pub fn spot_shadow_slice_size(shadow_map_size: u32) -> u32 {
     (shadow_map_size / 4).clamp(256, 1024)
 }
 
-// Maximum number of joints in a single skinned-mesh skeleton. Enforced
-// CPU-side as a clamp on each `SkinnedDrawObject.joint_count` and on the
-// matching `skinned_joint_matrices` Vec length. The skinned shaders read
-// the joints buffer through a pointer (`constant float4x4 *joints`) using
-// vertex-encoded joint indices, so the GPU buffer size and joint count are
-// fully dynamic: this constant just caps how many matrices the per-frame
-// upload may carry per object.
+/// Maximum number of joints in a single skinned-mesh skeleton. Enforced
+/// CPU-side as a clamp on each `SkinnedDrawObject.joint_count` and on the
+/// matching `skinned_joint_matrices` Vec length. The skinned shaders read
+/// the joints buffer through a pointer (`constant float4x4 *joints`) using
+/// vertex-encoded joint indices, so the GPU buffer size and joint count are
+/// fully dynamic: this constant just caps how many matrices the per-frame
+/// upload may carry per object.
 pub const MAX_JOINTS: usize = 64;
 
-// Per-draw-call material parameters pushed to the fragment shader at buffer(3).
-// Must stay in sync with the `MaterialUniforms` struct in every .metal shader.
+/// Per-draw-call material parameters pushed to the fragment shader at buffer(3).
+/// Must stay in sync with the `MaterialUniforms` struct in every .metal shader.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct MaterialUniforms {
-    // Perceptual roughness [0, 1]: 0 = mirror, 1 = fully diffuse.
+    /// Perceptual roughness [0, 1]: 0 = mirror, 1 = fully diffuse.
     pub roughness: f32,
-    // Metallic factor [0, 1]: 0 = dielectric, 1 = metal.
+    /// Metallic factor [0, 1]: 0 = dielectric, 1 = metal.
     pub metallic: f32,
-    // Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
+    /// Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
     pub macro_variation: f32,
-    // Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
-    // non-zero switches the shader to a triplanar world-space projection
-    // with slope-based rocky-tint blending. See `Material::terrain_blend`.
+    /// Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
+    /// non-zero switches the shader to a triplanar world-space projection
+    /// with slope-based rocky-tint blending. See `Material::terrain_blend`.
     pub terrain_blend: f32,
-    // Linear-space RGB multiplier on the albedo sample.
+    /// Linear-space RGB multiplier on the albedo sample.
     pub tint: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad2: f32,
-    // Additive emission colour in linear space.
+    /// Additive emission colour in linear space.
     pub emissive: [f32; 3],
-    // Sharpness of the slope-based blend between the primary and the
-    // `albedo_secondary` texture pair. 0 = wide soft gradient;
-    // 1 = nearly hard cliff edge. Ignored unless both `terrain_blend > 0`
-    // and the secondary texture pair is bound.
+    /// Sharpness of the slope-based blend between the primary and the
+    /// `albedo_secondary` texture pair. 0 = wide soft gradient;
+    /// 1 = nearly hard cliff edge. Ignored unless both `terrain_blend > 0`
+    /// and the secondary texture pair is bound.
     pub secondary_blend_sharpness: f32,
-    // Index into the per-draw albedo texture (legacy path) or the
-    // bindless texture pool (bindless path) for the slope-shaded
-    // secondary albedo. `0` is also the fallback when the material
-    // doesn't declare a secondary texture; the shader's
-    // `terrain_blend > 0 && secondary_blend_sharpness > 0` gate keeps
-    // it from being sampled in that case.
+    /// Index into the per-draw albedo texture (legacy path) or the
+    /// bindless texture pool (bindless path) for the slope-shaded
+    /// secondary albedo. `0` is also the fallback when the material
+    /// doesn't declare a secondary texture; the shader's
+    /// `terrain_blend > 0 && secondary_blend_sharpness > 0` gate keeps
+    /// it from being sampled in that case.
     pub albedo_secondary_index: u32,
-    // Companion to `albedo_secondary_index` for the slope-shaded
-    // secondary normal map.
+    /// Companion to `albedo_secondary_index` for the slope-shaded
+    /// secondary normal map.
     pub normal_secondary_index: u32,
-    // Bindless-pool index for the emissive map. `0` means no map: the shader
-    // gates on a non-zero index, falling back to the scalar `emissive` factor.
+    /// Bindless-pool index for the emissive map. `0` means no map: the shader
+    /// gates on a non-zero index, falling back to the scalar `emissive` factor.
     pub emissive_map_index: u32,
-    // Bindless-pool index for the packed occlusion/roughness/metalness map
-    // (R = occlusion, G = roughness, B = metalness). `0` means no map: the
-    // shader keeps the scalar `roughness`/`metallic` and full occlusion.
+    /// Bindless-pool index for the packed occlusion/roughness/metalness map
+    /// (R = occlusion, G = roughness, B = metalness). `0` means no map: the
+    /// shader keeps the scalar `roughness`/`metallic` and full occlusion.
     pub orm_map_index: u32,
-    // Alpha-cutout threshold in [0, 1]; 0 disables the test. Non-zero makes the
-    // fragment shader discard any texel whose albedo alpha falls below it, which
-    // is how foliage and decal cards punch holes while staying in the opaque pass.
+    /// Alpha-cutout threshold in [0, 1]; 0 disables the test. Non-zero makes the
+    /// fragment shader discard any texel whose albedo alpha falls below it, which
+    /// is how foliage and decal cards punch holes while staying in the opaque pass.
     pub alpha_cutoff: f32,
-    // Base surface opacity in [0, 1]; 1 = fully opaque (the default). Only
-    // meaningful with `transparent`: it drives the glass alpha in the
-    // transparent pass. Carried on the material so it rides Material ->
-    // DrawObject.material to the backend; the opaque main-pass shader ignores it.
+    /// Base surface opacity in [0, 1]; 1 = fully opaque (the default). Only
+    /// meaningful with `transparent`: it drives the glass alpha in the
+    /// transparent pass. Carried on the material so it rides Material ->
+    /// DrawObject.material to the backend; the opaque main-pass shader ignores it.
     pub opacity: f32,
-    // 1 when this surface routes through the transparent pass instead of the
-    // opaque one (a glass MESH on an RT-capable device); 0 for opaque. A CPU
-    // routing flag: the backend reads it to skip the draw in the opaque pass +
-    // the RT BLAS and to feed the per-pixel-RT transparent producer. No GPU
-    // shader reads it (the opaque skip is decided CPU-side).
+    /// 1 when this surface routes through the transparent pass instead of the
+    /// opaque one (a glass MESH on an RT-capable device); 0 for opaque. A CPU
+    /// routing flag: the backend reads it to skip the draw in the opaque pass +
+    /// the RT BLAS and to feed the per-pixel-RT transparent producer. No GPU
+    /// shader reads it (the opaque skip is decided CPU-side).
     pub transparent: u32,
-    // 1 when a `transparent` glass MESH renders as genuinely see-through (Layer
-    // 2: the scene behind shows through plus a sharp per-pixel reflection); 0
-    // keeps it as opaque low-roughness reflective glass (Layer 1). Another CPU
-    // routing flag (no GPU shader reads it): the see-through producer, the
-    // opaque-pass skip, and the RT-BLAS exclude all key off it, so Layer 2 is
-    // opt-in per material. Always 0 unless `transparent` is also 1.
+    /// 1 when a `transparent` glass MESH renders as genuinely see-through (Layer
+    /// 2: the scene behind shows through plus a sharp per-pixel reflection); 0
+    /// keeps it as opaque low-roughness reflective glass (Layer 1). Another CPU
+    /// routing flag (no GPU shader reads it): the see-through producer, the
+    /// opaque-pass skip, and the RT-BLAS exclude all key off it, so Layer 2 is
+    /// opt-in per material. Always 0 unless `transparent` is also 1.
     pub see_through: u32,
 }
 
 impl MaterialUniforms {
-    // Neutral material: matte, non-metallic, white tint, no emission.
+    /// Neutral material: matte, non-metallic, white tint, no emission.
     pub const DEFAULT: Self = Self {
         roughness: 0.8,
         metallic: 0.0,
@@ -156,65 +167,74 @@ impl MaterialUniforms {
     };
 }
 
-// One directional light entry in LightUniforms.
-// Layout (32 bytes) must match DirectionalLightData in every .metal shader.
-// MSL shaders must declare float3 fields as packed_float3 in constant buffer
-// structs; plain float3 has size=16 in MSL which shifts subsequent fields.
+/// One directional light entry in LightUniforms.
+/// Layout (32 bytes) must match DirectionalLightData in every .metal shader.
+/// MSL shaders must declare float3 fields as packed_float3 in constant buffer
+/// structs; plain float3 has size=16 in MSL which shifts subsequent fields.
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DirectionalLightData {
-    // Unit vector pointing TOWARD the light source (same as L in Blinn-Phong).
+    /// Unit vector pointing TOWARD the light source (same as L in Blinn-Phong).
     pub direction: [f32; 3],
+    /// Radiance scale.
     pub intensity: f32,
+    /// Linear RGB light colour.
     pub color: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,
 }
 
-// One point light entry in LightUniforms.
-// Layout (32 bytes) must match PointLightData in every .metal shader.
-// Same packed_float3 requirement as DirectionalLightData above.
+/// One point light entry in LightUniforms.
+/// Layout (32 bytes) must match PointLightData in every .metal shader.
+/// Same packed_float3 requirement as DirectionalLightData above.
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct PointLightData {
-    // World-space position of the light source.
+    /// World-space position of the light source.
     pub position: [f32; 3],
-    // Maximum reach in metres; attenuation is zero at this distance.
+    /// Maximum reach in metres; attenuation is zero at this distance.
     pub range: f32,
+    /// Linear RGB light colour.
     pub color: [f32; 3],
+    /// Radiance scale.
     pub intensity: f32,
 }
 
-// One local light in the per-scene storage buffer the forward pass iterates
-// (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
-// packed_float3 sits inside one lane with no GPU alignment promotion. Must match
-// the `GpuLight` struct in the single-source shaders.
+/// One local light in the per-scene storage buffer the forward pass iterates
+/// (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
+/// packed_float3 sits inside one lane with no GPU alignment promotion. Must match
+/// the `GpuLight` struct in the single-source shaders.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuLight {
-    // World-space position (point / spot).
+    /// World-space position (point / spot).
     pub position: [f32; 3],
-    // Maximum reach in metres; attenuation reaches zero at this distance.
+    /// Maximum reach in metres; attenuation reaches zero at this distance.
     pub range: f32,
+    /// Linear RGB light colour.
     pub color: [f32; 3],
+    /// Radiance scale.
     pub intensity: f32,
-    // Unit vector the light points along (spot / area). Zero for a point light.
+    /// Unit vector the light points along (spot / area). Zero for a point light.
     pub direction: [f32; 3],
-    // LIGHT_KIND_* discriminant.
+    /// LIGHT_KIND_* discriminant.
     pub kind: u32,
-    // Spot cone: cosine of the inner (full-bright) and outer (cutoff) half-angles.
-    // Both zero for a point light; the shader gates the cone term on `kind`.
+    /// Spot cone: cosine of the inner (full-bright) and outer (cutoff) half-angles.
+    /// Both zero for a point light; the shader gates the cone term on `kind`.
     pub cos_inner: f32,
+    /// Cosine of the spot cone's outer (cutoff) half-angle.
     pub cos_outer: f32,
-    // Index into the spot shadow atlas, or -1 when the light casts no shadow.
+    /// Index into the spot shadow atlas, or -1 when the light casts no shadow.
     pub shadow_index: i32,
-    // Index into the AreaLightData table for an area light, or -1 for a point /
-    // spot light. A rect needs two edge vectors that do not fit in the spare
-    // fields here, so the extra data lives in a parallel table (the same shape
-    // `shadow_index` uses for the spot shadow slices).
+    /// Index into the AreaLightData table for an area light, or -1 for a point /
+    /// spot light. A rect needs two edge vectors that do not fit in the spare
+    /// fields here, so the extra data lives in a parallel table (the same shape
+    /// `shadow_index` uses for the spot shadow slices).
     pub data_index: i32,
 }
 
 impl GpuLight {
+    /// An all-zero light, used to fill unused slots.
     pub const ZERO: Self = Self {
         position: [0.0; 3],
         range: 0.0,
@@ -243,30 +263,34 @@ const ZERO_POINT_LIGHT: PointLightData = PointLightData {
     intensity: 0.0,
 };
 
-// All scene lights packed into a single GPU buffer pushed at fragment buffer(4).
-// Must stay in sync with LightUniforms in every .metal shader.
+/// All scene lights packed into a single GPU buffer pushed at fragment buffer(4).
+/// Must stay in sync with LightUniforms in every .metal shader.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LightUniforms {
+    /// Directional lights, the first `num_directional` entries live.
     pub directional: [DirectionalLightData; MAX_DIRECTIONAL_LIGHTS],
+    /// Point lights, the first `num_point` entries live.
     pub point: [PointLightData; MAX_POINT_LIGHTS],
+    /// Live entries in `directional`.
     pub num_directional: i32,
+    /// Live entries in `point`.
     pub num_point: i32,
-    // Multiplier on the indirect (IBL / flat-fallback) ambient term in the main
-    // pass, resolved from `PostProcessConfig.ambient_intensity`. 1.0 leaves the
-    // physically derived ambient untouched; higher values lift fill in shadowed
-    // areas the directional light cannot reach. Occupies the first of the two
-    // trailing pad words, so the 400-byte layout is unchanged.
+    /// Multiplier on the indirect (IBL / flat-fallback) ambient term in the main
+    /// pass, resolved from `PostProcessConfig.ambient_intensity`. 1.0 leaves the
+    /// physically derived ambient untouched; higher values lift fill in shadowed
+    /// areas the directional light cannot reach. Occupies the first of the two
+    /// trailing pad words, so the 400-byte layout is unchanged.
     pub ambient_intensity: f32,
-    // Number of valid entries in the GpuLight storage buffer the forward pass
-    // reads. Occupies the second trailing pad word, so the 400-byte layout is
-    // unchanged. The raymarch / fog / probe paths ignore it and read `num_point`
-    // against the fixed `point` array instead.
+    /// Number of valid entries in the GpuLight storage buffer the forward pass
+    /// reads. Occupies the second trailing pad word, so the 400-byte layout is
+    /// unchanged. The raymarch / fog / probe paths ignore it and read `num_point`
+    /// against the fixed `point` array instead.
     pub num_local_lights: i32,
 }
 
 impl LightUniforms {
-    // Neutral directional sun; used when no Light components are declared.
+    /// Neutral directional sun; used when no Light components are declared.
     pub const DEFAULT: Self = Self {
         directional: [
             DirectionalLightData {
@@ -296,47 +320,52 @@ impl LightUniforms {
     };
 }
 
-// Per-frame uniform for the clustered light-binning compute pass and the forward
-// pass that reads the per-cluster lists. The compute kernel unprojects each
-// cluster's screen tile through `inv_view_proj` and walks camera rays to the
-// slice's near/far depth to build a world-space AABB (same convention as the fog
-// froxel kernel), then tests each GpuLight sphere against it. The forward pass
-// reads the grid dims + depth range + screen size to map a fragment to its
-// cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
-// 16-byte lanes. Must match the `ClusterParams` struct in the light-cull and
-// forward shaders.
+/// Per-frame uniform for the clustered light-binning compute pass and the forward
+/// pass that reads the per-cluster lists. The compute kernel unprojects each
+/// cluster's screen tile through `inv_view_proj` and walks camera rays to the
+/// slice's near/far depth to build a world-space AABB (same convention as the fog
+/// froxel kernel), then tests each GpuLight sphere against it. The forward pass
+/// reads the grid dims + depth range + screen size to map a fragment to its
+/// cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
+/// 16-byte lanes. Must match the `ClusterParams` struct in the light-cull and
+/// forward shaders.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ClusterParams {
-    // Inverse view-projection; unprojects a clip-space corner to world space.
+    /// Inverse view-projection; unprojects a clip-space corner to world space.
     pub inv_view_proj: [[f32; 4]; 4],
-    // Camera world position; ray origin for the cluster-AABB build.
+    /// Camera world position; ray origin for the cluster-AABB build.
     pub cam_pos: [f32; 3],
-    // Camera near plane in view units (positive distance).
+    /// Camera near plane in view units (positive distance).
     pub z_near: f32,
-    // Camera forward axis (world space, unit); projects a ray onto view depth.
+    /// Camera forward axis (world space, unit); projects a ray onto view depth.
     pub view_forward: [f32; 3],
-    // Far bound of the clustered range in view units (positive distance).
+    /// Far bound of the clustered range in view units (positive distance).
     pub z_far: f32,
+    /// Cluster tiles across the screen.
     pub grid_x: u32,
+    /// Cluster tiles down the screen.
     pub grid_y: u32,
+    /// Exponential depth slices per cluster column.
     pub grid_z: u32,
-    // Number of valid GpuLight entries the kernel bins.
+    /// Number of valid GpuLight entries the kernel bins.
     pub num_lights: u32,
-    // Render-target size in pixels; maps a fragment's `position.xy` to a tile.
+    /// Render-target size in pixels; maps a fragment's `position.xy` to a tile.
     pub screen_w: f32,
+    /// Render-target height in pixels.
     pub screen_h: f32,
-    // 1 = the forward pass reads the per-cluster list (main camera); 0 = it
-    // falls back to iterating all `num_lights` lights (planar / probe re-renders,
-    // whose viewpoint differs from the grid the main camera binned).
+    /// 1 = the forward pass reads the per-cluster list (main camera); 0 = it
+    /// falls back to iterating all `num_lights` lights (planar / probe re-renders,
+    /// whose viewpoint differs from the grid the main camera binned).
     pub use_clusters: u32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: u32,
 }
 
 impl ClusterParams {
-    // Neutral params for context construction before the first per-frame update.
-    // use_clusters = 0 so the forward pass falls back to brute-force iteration
-    // until a real frame's camera fills the grid.
+    /// Neutral params for context construction before the first per-frame update.
+    /// use_clusters = 0 so the forward pass falls back to brute-force iteration
+    /// until a real frame's camera fills the grid.
     pub const ZERO: Self = Self {
         inv_view_proj: [[0.0; 4]; 4],
         cam_pos: [0.0; 3],
@@ -354,78 +383,82 @@ impl ClusterParams {
     };
 }
 
-// Cascaded shadow map view-projection matrices and split depths.
-//
-// Pushed to the shadow-pass vertex shader at buffer(0) (alongside a
-// cascade_idx push constant that picks one matrix) and to the main-pass
-// fragment shader at buffer(5). Layout must stay in sync with the
-// `ShadowUniforms` struct in the single-source shaders. Three of them declare
-// it: the forward pass stops at `active_cascades`, the shadow pass at
-// `cascade_splits`, and only the fog froxel kernel spells out the trailing pad.
-//
-// `cascade_splits` are the view-space depth thresholds (positive) marking the
-// FAR end of each cascade. The fragment shader picks the first cascade whose
-// split is greater than the fragment's view-space depth. Slot 3 (the last
-// cascade's far end) doubles as the overall shadow distance.
+/// Cascaded shadow map view-projection matrices and split depths.
+///
+/// Pushed to the shadow-pass vertex shader at buffer(0) (alongside a
+/// cascade_idx push constant that picks one matrix) and to the main-pass
+/// fragment shader at buffer(5). Layout must stay in sync with the
+/// `ShadowUniforms` struct in the single-source shaders. Three of them declare
+/// it: the forward pass stops at `active_cascades`, the shadow pass at
+/// `cascade_splits`, and only the fog froxel kernel spells out the trailing pad.
+///
+/// `cascade_splits` are the view-space depth thresholds (positive) marking the
+/// FAR end of each cascade. The fragment shader picks the first cascade whose
+/// split is greater than the fragment's view-space depth. Slot 3 (the last
+/// cascade's far end) doubles as the overall shadow distance.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowUniforms {
-    // One light-space VP matrix per cascade, column-major.
+    /// One light-space VP matrix per cascade, column-major.
     pub light_vps: [[[f32; 4]; 4]; NUM_SHADOW_CASCADES],
-    // View-space depth at the FAR end of each cascade. Stored as a vec4 to
-    // keep MSL std140-like alignment trivial across backends. Slots
-    // `[active_cascades..]` hold a negative sentinel so the fragment shader's
-    // split comparison never selects an unrendered cascade.
+    /// View-space depth at the FAR end of each cascade. Stored as a vec4 to
+    /// keep MSL std140-like alignment trivial across backends. Slots
+    /// `[active_cascades..]` hold a negative sentinel so the fragment shader's
+    /// split comparison never selects an unrendered cascade.
     pub cascade_splits: [f32; NUM_SHADOW_CASCADES],
-    // How many of the `NUM_SHADOW_CASCADES` slots are live this frame (1..=4,
-    // from `GraphicsConfig.shadow_cascades`). The array capacity stays 4; only
-    // the first `active_cascades` are split, rendered, and sampled. The fragment
-    // shader bounds both its cascade fallback and its cross-cascade blend by this
-    // so it never reads a slot the CPU did not render.
+    /// How many of the `NUM_SHADOW_CASCADES` slots are live this frame (1..=4,
+    /// from `GraphicsConfig.shadow_cascades`). The array capacity stays 4; only
+    /// the first `active_cascades` are split, rendered, and sampled. The fragment
+    /// shader bounds both its cascade fallback and its cross-cascade blend by this
+    /// so it never reads a slot the CPU did not render.
     pub active_cascades: u32,
-    // Pads the struct to 288 bytes (a multiple of 16). The Rust `[[f32; 4]; 4]`
-    // matrices are only 4-byte aligned, so Rust would otherwise leave this at 276;
-    // the MSL `float4x4`-aligned struct and the GLSL std140 block both round up to
-    // 288, so the upload size must match for the bound buffer range to cover them.
+    /// Pads the struct to 288 bytes (a multiple of 16). The Rust `[[f32; 4]; 4]`
+    /// matrices are only 4-byte aligned, so Rust would otherwise leave this at 276;
+    /// the MSL `float4x4`-aligned struct and the GLSL std140 block both round up to
+    /// 288, so the upload size must match for the bound buffer range to cover them.
     pub _pad: [u32; 3],
 }
 
-// Per-shadow-pass push constant identifying which cascade is being rendered.
-// Used so the shadow vertex shader can index `ShadowUniforms.light_vps[i]`
-// from a single bound UBO instead of re-binding a different uniform per pass.
-//
-// Consumed at runtime only by the Metal shadow pass (Vulkan and DirectX each
-// define their own private push-constant layouts in their respective `draw.rs`
-// modules), but kept un-gated like the rest of this module so the shared
-// shader-layout contract can validate its MSL layout on every platform.
+/// Per-shadow-pass push constant identifying which cascade is being rendered.
+/// Used so the shadow vertex shader can index `ShadowUniforms.light_vps[i]`
+/// from a single bound UBO instead of re-binding a different uniform per pass.
+///
+/// Consumed at runtime only by the Metal shadow pass (Vulkan and DirectX each
+/// define their own private push-constant layouts in their respective `draw.rs`
+/// modules), but kept un-gated like the rest of this module so the shared
+/// shader-layout contract can validate its MSL layout on every platform.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowPassPush {
+    /// Which cascade the shadow pass is rendering.
     pub cascade_idx: u32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [u32; 3],
 }
 
-// One shadowed spot light's slice of the spot shadow map array. Indexed by
-// `GpuLight.shadow_index`; the index doubles as the array slice. Uploaded once
-// per scene, since local lights are static.
-//
-// 80 bytes: the matrix fills the first four 16-byte lanes and the three scalars
-// plus a pad fill the fifth, so the MSL (float4x4 + floats), HLSL (no 16-byte
-// straddle), and GLSL std430 (mat4 align-16) layouts all agree.
+/// One shadowed spot light's slice of the spot shadow map array. Indexed by
+/// `GpuLight.shadow_index`; the index doubles as the array slice. Uploaded once
+/// per scene, since local lights are static.
+///
+/// 80 bytes: the matrix fills the first four 16-byte lanes and the three scalars
+/// plus a pad fill the fifth, so the MSL (float4x4 + floats), HLSL (no 16-byte
+/// straddle), and GLSL std430 (mat4 align-16) layouts all agree.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SpotShadowData {
-    // World -> light clip matrix for this spot, column-major.
+    /// World -> light clip matrix for this spot, column-major.
     pub light_vp: [[f32; 4]; 4],
-    // Constant depth offset applied when comparing against the stored depth.
+    /// Constant depth offset applied when comparing against the stored depth.
     pub depth_bias: f32,
-    // Offset along the surface normal before projecting, which suppresses
-    // shadow acne on surfaces near-parallel to the light.
+    /// Offset along the surface normal before projecting, which suppresses
+    /// shadow acne on surfaces near-parallel to the light.
     pub normal_bias: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [f32; 2],
 }
 
 impl SpotShadowData {
+    /// An all-zero slice, used to fill unused entries.
     pub const ZERO: Self = SpotShadowData {
         light_vp: [
             [1.0, 0.0, 0.0, 0.0],
@@ -439,27 +472,29 @@ impl SpotShadowData {
     };
 }
 
-// One rectangular area light's extent, indexed by `GpuLight.data_index`. The
-// centre is the GpuLight's `position` and the emitting direction its
-// `direction`; only the two in-plane edge vectors and the sidedness flag need
-// the extra room.
-//
-// 32 bytes: a scalar follows each vec3 so the MSL (packed_float3), HLSL (float3,
-// no 16-byte straddle), and GLSL std430 (vec3 align-16) layouts all agree.
+/// One rectangular area light's extent, indexed by `GpuLight.data_index`. The
+/// centre is the GpuLight's `position` and the emitting direction its
+/// `direction`; only the two in-plane edge vectors and the sidedness flag need
+/// the extra room.
+///
+/// 32 bytes: a scalar follows each vec3 so the MSL (packed_float3), HLSL (float3,
+/// no 16-byte straddle), and GLSL std430 (vec3 align-16) layouts all agree.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct AreaLightData {
-    // Half-width times the panel's width axis, in world units.
+    /// Half-width times the panel's width axis, in world units.
     pub right: [f32; 3],
-    // 1 when the panel emits from both faces, 0 when it emits only along
-    // `GpuLight.direction`.
+    /// 1 when the panel emits from both faces, 0 when it emits only along
+    /// `GpuLight.direction`.
     pub two_sided: u32,
-    // Half-height times the panel's height axis, in world units.
+    /// Half-height times the panel's height axis, in world units.
     pub up: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,
 }
 
 impl AreaLightData {
+    /// An all-zero entry, used to fill unused slots.
     pub const ZERO: Self = AreaLightData {
         right: [0.0; 3],
         two_sided: 0,
@@ -468,97 +503,100 @@ impl AreaLightData {
     };
 }
 
-// Compact vertex type used exclusively by the text render pass.
-// 32 bytes: screen-pixel position, atlas UV, text colour, and sampling mode.
+/// Compact vertex type used exclusively by the text render pass.
+/// 32 bytes: screen-pixel position, atlas UV, text colour, and sampling mode.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TextVertex {
-    // Screen-space position in pixels (x from left, y from top).
+    /// Screen-space position in pixels (x from left, y from top).
     pub pos: [f32; 2],
-    // Normalised UV into the bound atlas texture. A negative u marks a
-    // solid-fill quad (no sampling; alpha carried in v).
+    /// Normalised UV into the bound atlas texture. A negative u marks a
+    /// solid-fill quad (no sampling; alpha carried in v).
     pub uv: [f32; 2],
-    // Linear-space RGB colour: text colour, fill colour, or texture tint.
+    /// Linear-space RGB colour: text colour, fill colour, or texture tint.
     pub color: [f32; 3],
-    // 0 = SDF glyph sampling; > 0 = textured quad (RGBA sample multiplied by
-    // `color`), with the value itself as the quad's alpha multiplier.
+    /// 0 = SDF glyph sampling; > 0 = textured quad (RGBA sample multiplied by
+    /// `color`), with the value itself as the quad's alpha multiplier.
     pub mode: f32,
 }
 
-// Compact vertex type used exclusively by the line pass. 32 bytes: the
-// expanded ribbon corner in world space, its signed position across the ribbon
-// width (for the shader's edge fade), and the corner colour.
+/// Compact vertex type used exclusively by the line pass. 32 bytes: the
+/// expanded ribbon corner in world space, its signed position across the ribbon
+/// width (for the shader's edge fade), and the corner colour.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LineVertex {
-    // World-space position of this ribbon corner. Already offset off the line
-    // centre by the CPU expansion, so the shader only applies the camera VP.
+    /// World-space position of this ribbon corner. Already offset off the line
+    /// centre by the CPU expansion, so the shader only applies the camera VP.
     pub pos: [f32; 3],
-    // Signed offset across the ribbon: -1 on one edge, +1 on the other. The
-    // fragment fades the outer pixel from it, so lines antialias without MSAA.
+    /// Signed offset across the ribbon: -1 on one edge, +1 on the other. The
+    /// fragment fades the outer pixel from it, so lines antialias without MSAA.
     pub edge: f32,
-    // Linear-space RGBA. Alpha carries the distance fade, interpolated along
-    // the ribbon.
+    /// Linear-space RGBA. Alpha carries the distance fade, interpolated along
+    /// the ribbon.
     pub color: [f32; 4],
 }
 
-// Uniforms pushed to the text vertex shader once per text draw call.
-// Carries the framebuffer size so the shader can convert pixel coords to NDC.
+/// Uniforms pushed to the text vertex shader once per text draw call.
+/// Carries the framebuffer size so the shader can convert pixel coords to NDC.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TextUniforms {
+    /// Framebuffer width in pixels.
     pub win_width: f32,
+    /// Framebuffer height in pixels.
     pub win_height: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [f32; 2],
 }
 
-// Post-process tunables resolved from the `PostProcessConfig` asset (or its
-// defaults) and threaded into each backend at init. Pushed verbatim to the
-// bloom prefilter and composite fragment shaders, so the layout must stay in
-// sync with the `PostUniforms` struct in those shaders. 36 bytes.
+/// Post-process tunables resolved from the `PostProcessConfig` asset (or its
+/// defaults) and threaded into each backend at init. Pushed verbatim to the
+/// bloom prefilter and composite fragment shaders, so the layout must stay in
+/// sync with the `PostUniforms` struct in those shaders. 36 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct PostProcessParams {
-    // Additive bloom strength. 0 disables the bloom passes entirely.
+    /// Additive bloom strength. 0 disables the bloom passes entirely.
     pub bloom_intensity: f32,
-    // Luminance threshold for the bloom prefilter.
+    /// Luminance threshold for the bloom prefilter.
     pub bloom_threshold: f32,
-    // Quadratic soft-knee width below the threshold.
+    /// Quadratic soft-knee width below the threshold.
     pub bloom_knee: f32,
-    // Linear exposure multiplier applied to HDR radiance before the bloom
-    // prefilter and the composite tonemap. Resolved from `exposure_ev` as
-    // `2^ev`, so 1.0 is neutral.
+    /// Linear exposure multiplier applied to HDR radiance before the bloom
+    /// prefilter and the composite tonemap. Resolved from `exposure_ev` as
+    /// `2^ev`, so 1.0 is neutral.
     pub exposure: f32,
-    // Vignette strength in `[0, 1]`. 0 disables the corner darkening.
+    /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette: f32,
-    // Colour-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
-    // composite pass. Has no effect when no `ColorLut` is declared: the
-    // renderer then binds an identity LUT, so the grade is a no-op.
+    /// Colour-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
+    /// composite pass. Has no effect when no `ColorLut` is declared: the
+    /// renderer then binds an identity LUT, so the grade is a no-op.
     pub lut_strength: f32,
-    // HDR display output flag. `0.0` = SDR path (ACES tonemap + gamma 2.2 +
-    // FXAA + ColorLut, output BGRA8Unorm). `1.0` = HDR EDR path (no tonemap
-    // or gamma; the exposed HDR scene is emitted into a `RGBA16Float`
-    // swapchain attached to a Display P3 EDR layer). FXAA + ColorLut are
-    // skipped on the HDR path because both depend on display-referred
-    // values. Stored as a float (not a uint) so the MSL shader can branch
-    // on `> 0.5` without a cast.
+    /// HDR display output flag. `0.0` = SDR path (ACES tonemap + gamma 2.2 +
+    /// FXAA + ColorLut, output BGRA8Unorm). `1.0` = HDR EDR path (no tonemap
+    /// or gamma; the exposed HDR scene is emitted into a `RGBA16Float`
+    /// swapchain attached to a Display P3 EDR layer). FXAA + ColorLut are
+    /// skipped on the HDR path because both depend on display-referred
+    /// values. Stored as a float (not a uint) so the MSL shader can branch
+    /// on `> 0.5` without a cast.
     pub hdr_output: f32,
-    // Output-encoding flag inside the HDR branch. `0.0` = scRGB-linear
-    // passthrough (the OS handles the encode for the panel). `1.0` =
-    // PQ-encode (SMPTE ST 2084) in-shader so the swapchain ships
-    // PQ-encoded values directly to an HDR10 panel. Only read when
-    // `hdr_output > 0.5`; always 0.0 on the SDR path.
+    /// Output-encoding flag inside the HDR branch. `0.0` = scRGB-linear
+    /// passthrough (the OS handles the encode for the panel). `1.0` =
+    /// PQ-encode (SMPTE ST 2084) in-shader so the swapchain ships
+    /// PQ-encoded values directly to an HDR10 panel. Only read when
+    /// `hdr_output > 0.5`; always 0.0 on the SDR path.
     pub pq_output: f32,
-    // FXAA edge-filter flag on the SDR path. `1.0` runs the composite's
-    // FXAA pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved
-    // from `PostProcessConfig.aa_mode`: on for `Fxaa` and `Taa`, off for
-    // `Off`. Always ignored on the HDR path, which never runs FXAA. Stored
-    // as a float so the shader branches on `> 0.5` without a cast.
+    /// FXAA edge-filter flag on the SDR path. `1.0` runs the composite's
+    /// FXAA pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved
+    /// from `PostProcessConfig.aa_mode`: on for `Fxaa` and `Taa`, off for
+    /// `Off`. Always ignored on the HDR path, which never runs FXAA. Stored
+    /// as a float so the shader branches on `> 0.5` without a cast.
     pub fxaa: f32,
 }
 
 impl PostProcessParams {
-    // Matches `PostProcessConfig::default()`: used when no asset is declared.
+    /// Matches `PostProcessConfig::default()`: used when no asset is declared.
     pub const DEFAULT: Self = Self {
         bloom_intensity: 0.6,
         bloom_threshold: 1.0,
@@ -584,6 +622,7 @@ impl PostProcessParams {
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CompositeParams {
+    /// The authored post-process tunables.
     pub post: PostProcessParams,
     /// Scene-transition fade to black in `[0, 1]`: 0 renders the composited
     /// image untouched, 1 renders it fully black. The shader scales by
@@ -599,429 +638,449 @@ pub struct CompositeParams {
     pub far: f32,
 }
 
-// Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
-// clamped authored tunables plus the view-ray scale the kernel needs to
-// rebuild a view-space position from the linear depth the SSAO pre-pass
-// writes. Pushed verbatim to the SSAO kernel fragment shader, so the layout
-// must stay in sync with the `SsaoParams` struct there. 16 bytes.
+/// Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
+/// clamped authored tunables plus the view-ray scale the kernel needs to
+/// rebuild a view-space position from the linear depth the SSAO pre-pass
+/// writes. Pushed verbatim to the SSAO kernel fragment shader, so the layout
+/// must stay in sync with the `SsaoParams` struct there. 16 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsaoParams {
-    // World-space hemisphere radius the horizon search covers.
+    /// World-space hemisphere radius the horizon search covers.
     pub radius: f32,
-    // Occlusion strength multiplier applied to the integrated visibility.
+    /// Occlusion strength multiplier applied to the integrated visibility.
     pub intensity: f32,
-    // `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
     pub tan_half_fov_y: f32,
-    // Viewport aspect ratio (width / height).
+    /// Viewport aspect ratio (width / height).
     pub aspect: f32,
 }
 
-// Per-frame uniform for the screen-space reflection (SSR) ray-march. Carries
-// the clamped authored tunables, the view-ray scale the resolve pass uses to
-// project a view-space ray point back to a screen UV, and the data the resolve
-// needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
-// the SSR resolve fragment shader, so the layout must stay in sync with the
-// `SsrParams` struct there. 96 bytes.
+/// Per-frame uniform for the screen-space reflection (SSR) ray-march. Carries
+/// the clamped authored tunables, the view-ray scale the resolve pass uses to
+/// project a view-space ray point back to a screen UV, and the data the resolve
+/// needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
+/// the SSR resolve fragment shader, so the layout must stay in sync with the
+/// `SsrParams` struct there. 96 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrParams {
-    // Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
+    /// Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
     pub intensity: f32,
-    // Maximum world-space distance a reflection ray marches before giving up.
+    /// Maximum world-space distance a reflection ray marches before giving up.
     pub max_distance: f32,
-    // `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
     pub tan_half_fov_y: f32,
-    // Viewport aspect ratio (width / height).
+    /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    // World-space length of one ray-march step.
+    /// World-space length of one ray-march step.
     pub stride: f32,
-    // View-space depth tolerance for accepting a ray/scene-depth intersection.
+    /// View-space depth tolerance for accepting a ray/scene-depth intersection.
     pub thickness: f32,
-    // IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
-    // resolve then skips the cube fallback and keeps the base shading instead.
+    /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
+    /// resolve then skips the cube fallback and keeps the base shading instead.
     pub prefilter_mip_count: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,
-    // Camera-to-world transform (column-major, the rigid inverse of the view
-    // matrix): the orthonormal 3x3 turns a view-space reflection ray into the
-    // world-space direction the cubemap is sampled with, and the translation
-    // column (the world camera position) lets the resolve rebuild the world-space
-    // surface position a reflection probe box-projects against. Backends that only
-    // sample the cube use the 3x3 (the `r_world` direction) and ignore translation.
+    /// Camera-to-world transform (column-major, the rigid inverse of the view
+    /// matrix): the orthonormal 3x3 turns a view-space reflection ray into the
+    /// world-space direction the cubemap is sampled with, and the translation
+    /// column (the world camera position) lets the resolve rebuild the world-space
+    /// surface position a reflection probe box-projects against. Backends that only
+    /// sample the cube use the 3x3 (the `r_world` direction) and ignore translation.
     pub inv_view: [[f32; 4]; 4],
 }
 
-// Per-frame uniform for the screen-space global-illumination (SSGI) gather +
-// composite. Carries the clamped authored tunables and the view-ray scale the
-// gather pass uses to project a view-space ray point back to a screen UV.
-// Pushed verbatim to the SSGI gather + composite fragment shaders, so the
-// layout must stay in sync with the `SsgiParams` struct there. 32 bytes.
+/// Per-frame uniform for the screen-space global-illumination (SSGI) gather +
+/// composite. Carries the clamped authored tunables and the view-ray scale the
+/// gather pass uses to project a view-space ray point back to a screen UV.
+/// Pushed verbatim to the SSGI gather + composite fragment shaders, so the
+/// layout must stay in sync with the `SsgiParams` struct there. 32 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsgiParams {
-    // Indirect-bounce blend strength; scales the gathered radiance the
-    // composite pass adds on top of the existing shading.
+    /// Indirect-bounce blend strength; scales the gathered radiance the
+    /// composite pass adds on top of the existing shading.
     pub intensity: f32,
-    // Maximum world-space distance a hemisphere ray marches before giving up.
+    /// Maximum world-space distance a hemisphere ray marches before giving up.
     pub max_distance: f32,
-    // `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
     pub tan_half_fov_y: f32,
-    // Viewport aspect ratio (width / height).
+    /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    // World-space length of one ray-march step.
+    /// World-space length of one ray-march step.
     pub stride: f32,
-    // View-space depth tolerance for accepting a ray/scene-depth intersection.
+    /// View-space depth tolerance for accepting a ray/scene-depth intersection.
     pub thickness: f32,
-    // Hemisphere rays cast per pixel (carried as f32; the shader reads it as an
-    // int loop bound). Backends that still bake a compile-time ray count ignore
-    // this field, so the 32-byte layout is unchanged.
+    /// Hemisphere rays cast per pixel (carried as f32; the shader reads it as an
+    /// int loop bound). Backends that still bake a compile-time ray count ignore
+    /// this field, so the 32-byte layout is unchanged.
     pub rays: f32,
-    // Ray-march samples per ray (same f32-as-int-bound convention as `rays`).
+    /// Ray-march samples per ray (same f32-as-int-bound convention as `rays`).
     pub steps: f32,
 }
 
-// Per-frame uniform for the hardware ray-traced reflection pass. Like
-// [`SsrParams`] it carries the clamped intensity / distance, the view-ray
-// scale used to rebuild a view-space position from the SSR pre-pass G-buffer,
-// and the IBL prefilter mip count for the miss fallback. Unlike SSR it traces
-// a world-space ray against an acceleration structure, so it also carries the
-// camera-to-world transform (to lift the view-space hit point + normal into
-// world space), the world camera position (the ray origin), and the sun
-// direction + colour the hit-shading uses. Pushed verbatim to the RT kernel,
-// so the layout must stay in sync with the `RtParams` struct there. 144 bytes,
-// 16-byte aligned (every `vec3` is padded to a `float4`).
+/// Per-frame uniform for the hardware ray-traced reflection pass. Like
+/// [`SsrParams`] it carries the clamped intensity / distance, the view-ray
+/// scale used to rebuild a view-space position from the SSR pre-pass G-buffer,
+/// and the IBL prefilter mip count for the miss fallback. Unlike SSR it traces
+/// a world-space ray against an acceleration structure, so it also carries the
+/// camera-to-world transform (to lift the view-space hit point + normal into
+/// world space), the world camera position (the ray origin), and the sun
+/// direction + colour the hit-shading uses. Pushed verbatim to the RT kernel,
+/// so the layout must stay in sync with the `RtParams` struct there. 144 bytes,
+/// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct RtParams {
-    // Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
+    /// Reflection blend strength in `[0, 1]`; scales the Fresnel-weighted mix.
     pub intensity: f32,
-    // Maximum world-space distance a reflection ray travels before it misses.
+    /// Maximum world-space distance a reflection ray travels before it misses.
     pub max_distance: f32,
-    // `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
     pub tan_half_fov_y: f32,
-    // Viewport aspect ratio (width / height).
+    /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    // IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
-    // kernel then keeps the base shading for missed rays instead of a cube tap.
+    /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
+    /// kernel then keeps the base shading for missed rays instead of a cube tap.
     pub prefilter_mip_count: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad2: f32,
-    // World-space camera position (`xyz`); the reflection ray origin. `w` unused.
+    /// World-space camera position (`xyz`); the reflection ray origin. `w` unused.
     pub cam_pos: [f32; 4],
-    // World-space unit direction *toward* the sun (`xyz`); the hit-shading N·L
-    // term uses it. `w` unused.
+    /// World-space unit direction *toward* the sun (`xyz`); the hit-shading N·L
+    /// term uses it. `w` unused.
     pub sun_dir: [f32; 4],
-    // Sun radiance (`xyz`); the direct term at a reflected hit. `w` unused.
+    /// Sun radiance (`xyz`); the direct term at a reflected hit. `w` unused.
     pub sun_color: [f32; 4],
-    // Camera-to-world transform (column-major, the rigid inverse of the view
-    // matrix). Lifts the view-space reconstructed position + normal into the
-    // world space the acceleration structure is built in.
+    /// Camera-to-world transform (column-major, the rigid inverse of the view
+    /// matrix). Lifts the view-space reconstructed position + normal into the
+    /// world space the acceleration structure is built in.
     pub inv_view: [[f32; 4]; 4],
 }
 
-// One entry of the ray-tracing geometry table, indexed by the intersector's
-// `instance_id` (the instance's position in the TLAS instance buffer, one
-// entry per instance, in instance order). Lets the RT kernel find the hit
-// triangle's indices in the shared index buffer, transform its local-space
-// vertices into world space for the geometric normal, and pick a base albedo to
-// shade the hit with. `#[repr(C)]`, 128 bytes: the layout must stay in sync
-// with the `RtGeomEntry` struct in the shared RT records (`rt_types.slang`), where
-// `tint` and `emissive` are `packed_float3` so the field offsets match; a plain
-// `float3` there would stride the buffer differently and fault the trace. The
-// `_pad` tail rounds the struct to 128 bytes so its array stride is a multiple
-// of the 16-byte GPU alignment of the `float4x4` `model` (MSL/HLSL/GLSL round a
-// matrix-bearing struct up to a 16-byte multiple, so a 116-byte Rust struct
-// would stride 116 while the shader strides 128 and faults the trace). The
-// `size_eq` / `offsets` unit tests below lock the Rust side. The model matrix is
-// stored here (rather than read from the intersector's instance transform) so
-// the kernel's normal math is self-contained.
+/// One entry of the ray-tracing geometry table, indexed by the intersector's
+/// `instance_id` (the instance's position in the TLAS instance buffer, one
+/// entry per instance, in instance order). Lets the RT kernel find the hit
+/// triangle's indices in the shared index buffer, transform its local-space
+/// vertices into world space for the geometric normal, and pick a base albedo to
+/// shade the hit with. `#[repr(C)]`, 128 bytes: the layout must stay in sync
+/// with the `RtGeomEntry` struct in the shared RT records (`rt_types.slang`), where
+/// `tint` and `emissive` are `packed_float3` so the field offsets match; a plain
+/// `float3` there would stride the buffer differently and fault the trace. The
+/// `_pad` tail rounds the struct to 128 bytes so its array stride is a multiple
+/// of the 16-byte GPU alignment of the `float4x4` `model` (MSL/HLSL/GLSL round a
+/// matrix-bearing struct up to a 16-byte multiple, so a 116-byte Rust struct
+/// would stride 116 while the shader strides 128 and faults the trace). The
+/// `size_eq` / `offsets` unit tests below lock the Rust side. The model matrix is
+/// stored here (rather than read from the intersector's instance transform) so
+/// the kernel's normal math is self-contained.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub struct RtGeomEntry {
-    // Element offset of this object's first index in the shared index buffer
-    // (`DrawObject::index_offset`).
+    /// Element offset of this object's first index in the shared index buffer
+    /// (`DrawObject::index_offset`).
     pub index_offset: u32,
-    // Value added to each fetched index before the vertex lookup
-    // (`DrawObject::base_vertex`).
+    /// Value added to each fetched index before the vertex lookup
+    /// (`DrawObject::base_vertex`).
     pub base_vertex: u32,
-    // Index into the bindless albedo texture pool (`DrawObject::texture_slot`,
-    // clamped to the albedo count). The textured RT-hit shader samples
-    // `tex_pool[albedo_index]` at the hit UV; the flat fallback ignores it.
+    /// Index into the bindless albedo texture pool (`DrawObject::texture_slot`,
+    /// clamped to the albedo count). The textured RT-hit shader samples
+    /// `tex_pool[albedo_index]` at the hit UV; the flat fallback ignores it.
     pub albedo_index: u32,
-    // Index into the bindless texture pool for this object's normal map
-    // (`albedo_count + normal_map_slot`). The textured RT-hit shader samples
-    // `tex_pool[normal_index]` to perturb the hit normal via the interpolated
-    // tangent frame; objects with no normal map resolve to the 1x1 flat-normal
-    // fallback at normal slot 0, so the sample is always safe (no perturbation).
+    /// Index into the bindless texture pool for this object's normal map
+    /// (`albedo_count + normal_map_slot`). The textured RT-hit shader samples
+    /// `tex_pool[normal_index]` to perturb the hit normal via the interpolated
+    /// tangent frame; objects with no normal map resolve to the 1x1 flat-normal
+    /// fallback at normal slot 0, so the sample is always safe (no perturbation).
     pub normal_index: u32,
-    // Base albedo for hit shading (the material tint), `[r, g, b]`. The
-    // textured shader multiplies the sampled albedo by this; the flat fallback
-    // uses it directly.
+    /// Base albedo for hit shading (the material tint), `[r, g, b]`. The
+    /// textured shader multiplies the sampled albedo by this; the flat fallback
+    /// uses it directly.
     pub tint: [f32; 3],
-    // Surface roughness, used to pick the IBL prefilter mip at the hit.
+    /// Surface roughness, used to pick the IBL prefilter mip at the hit.
     pub roughness: f32,
-    // Metallic factor [0, 1] for the hit PBR response: metals drop the diffuse
-    // term and tint the reflected environment specular by their albedo.
+    /// Metallic factor [0, 1] for the hit PBR response: metals drop the diffuse
+    /// term and tint the reflected environment specular by their albedo.
     pub metallic: f32,
-    // Self-emission added to the hit colour, so glowing surfaces light up in
-    // reflections regardless of incident lighting. Fills the three words that
-    // pad `metallic` out to a 16-byte boundary (the MSL side reads it as a
-    // `packed_float3` at the same offset; the layout test pins the exact size).
+    /// Self-emission added to the hit colour, so glowing surfaces light up in
+    /// reflections regardless of incident lighting. Fills the three words that
+    /// pad `metallic` out to a 16-byte boundary (the MSL side reads it as a
+    /// `packed_float3` at the same offset; the layout test pins the exact size).
     pub emissive: [f32; 3],
-    // Column-major object-to-world transform (`DrawObject::model`), used to
-    // lift the hit triangle's local-space vertices into world space.
+    /// Column-major object-to-world transform (`DrawObject::model`), used to
+    /// lift the hit triangle's local-space vertices into world space.
     pub model: [[f32; 4]; 4],
-    // Bindless albedo-pool index for the emissive map (0 = none). The textured
-    // RT-hit shader multiplies the self-emission by this map sample, so glowing
-    // textured surfaces (e.g. the bistro string lights) reflect in colour rather
-    // than the scalar `emissive`; the flat fallback ignores it. Mirrors
-    // `MaterialUniforms::emissive_map_index` / `GpuObjectData::emissive_map_index`.
+    /// Bindless albedo-pool index for the emissive map (0 = none). The textured
+    /// RT-hit shader multiplies the self-emission by this map sample, so glowing
+    /// textured surfaces (e.g. the bistro string lights) reflect in colour rather
+    /// than the scalar `emissive`; the flat fallback ignores it. Mirrors
+    /// `MaterialUniforms::emissive_map_index` / `GpuObjectData::emissive_map_index`.
     pub emissive_map_index: u32,
-    // Pads the struct to 128 bytes (a multiple of the 16-byte GPU alignment of
-    // the `float4x4` `model`) so the Rust array stride matches the shader stride.
+    /// Pads the struct to 128 bytes (a multiple of the 16-byte GPU alignment of
+    /// the `float4x4` `model`) so the Rust array stride matches the shader stride.
     pub _pad: [u32; 3],
 }
 
-// Per-frame uniform consumed by the volumetric-fog ray-march. Carries the
-// clamped authored tunables plus the view inputs the shader needs to
-// reconstruct world positions from depth and integrate sun-aligned
-// scattering. Pushed verbatim to the fog fragment shader, so the layout must
-// stay in sync with `FogParams` in `metal/shaders/fog.metal`. 176 bytes.
+/// Per-frame uniform consumed by the volumetric-fog ray-march. Carries the
+/// clamped authored tunables plus the view inputs the shader needs to
+/// reconstruct world positions from depth and integrate sun-aligned
+/// scattering. Pushed verbatim to the fog fragment shader, so the layout must
+/// stay in sync with `FogParams` in `metal/shaders/fog.metal`. 176 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct FogParams {
-    // Inverse view-projection: reconstructs world position from depth.
+    /// Inverse view-projection: reconstructs world position from depth.
     pub inv_vp: [[f32; 4]; 4],
-    // Linear-space fog tint (RGB); alpha unused.
+    /// Linear-space fog tint (RGB); alpha unused.
     pub color: [f32; 4],
-    // World-space camera position. The marcher starts here and walks the
-    // view ray to the scene point. `_pad` keeps `cam_pos` 16-byte aligned
-    // inside MSL.
+    /// World-space camera position. The marcher starts here and walks the
+    /// view ray to the scene point. `_pad` keeps `cam_pos` 16-byte aligned
+    /// inside MSL.
     pub cam_pos: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
-    // First directional light's world-space direction (toward the light),
-    // used for the Henyey-Greenstein phase and the per-step sun radiance.
+    /// First directional light's world-space direction (toward the light),
+    /// used for the Henyey-Greenstein phase and the per-step sun radiance.
     pub sun_dir: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
-    // First directional light's colour pre-multiplied with its intensity.
-    // Drives the per-step sun in-scatter alongside the phase function.
+    /// First directional light's colour pre-multiplied with its intensity.
+    /// Drives the per-step sun in-scatter alongside the phase function.
     pub sun_color: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad2: f32,
-    // Base density at `height_reference` (per world unit).
+    /// Base density at `height_reference` (per world unit).
     pub density: f32,
-    // Exponential height-falloff rate; 0 = homogeneous medium.
+    /// Exponential height-falloff rate; 0 = homogeneous medium.
     pub height_falloff: f32,
-    // World-space Y at which density equals `density`.
+    /// World-space Y at which density equals `density`.
     pub height_reference: f32,
-    // Ray-march cap in world units.
+    /// Ray-march cap in world units.
     pub max_distance: f32,
-    // Henyey-Greenstein anisotropy in `(-0.95, 0.95)`.
+    /// Henyey-Greenstein anisotropy in `(-0.95, 0.95)`.
     pub phase_g: f32,
-    // Ambient (sky-side) scattering term added each step.
+    /// Ambient (sky-side) scattering term added each step.
     pub ambient: f32,
-    // Width / height of the HDR resolve target in pixels: drives the
-    // screen→NDC conversion in the fragment shader.
+    /// Width / height of the HDR resolve target in pixels: drives the
+    /// screen→NDC conversion in the fragment shader.
     pub viewport: [f32; 2],
-    // Pre-computed reciprocal of `max_distance`; the shader uses it to skip
-    // a per-step `1 / max_distance` divide.
+    /// Pre-computed reciprocal of `max_distance`; the shader uses it to skip
+    /// a per-step `1 / max_distance` divide.
     pub inv_max_distance: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad3: [f32; 3],
 }
 
-// Per-frame uniform consumed by the volumetric-fog froxel compute kernel and
-// the matching fragment-shader sample path. Carries the view matrix (so the
-// compute kernel + the fragment sampler can map between world-space froxel
-// positions and the volume's Z axis) and the discrete volume dimensions. Used
-// by the froxel-volume fog path; only worlds that declare a `VolumetricFog`
-// bind it.
-//
-// Bound at the fog fragment shader + the froxel kernel. Layout must stay in
-// sync with `FogFroxelParams` in `shaders/fog.slang`, the single source both
-// halves compile from on every backend. 96 bytes.
+/// Per-frame uniform consumed by the volumetric-fog froxel compute kernel and
+/// the matching fragment-shader sample path. Carries the view matrix (so the
+/// compute kernel + the fragment sampler can map between world-space froxel
+/// positions and the volume's Z axis) and the discrete volume dimensions. Used
+/// by the froxel-volume fog path; only worlds that declare a `VolumetricFog`
+/// bind it.
+///
+/// Bound at the fog fragment shader + the froxel kernel. Layout must stay in
+/// sync with `FogFroxelParams` in `shaders/fog.slang`, the single source both
+/// halves compile from on every backend. 96 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct FogFroxelParams {
-    // View matrix (world → view), so the compute kernel can pick a CSM
-    // cascade for each froxel and the fragment sampler can map a scene
-    // depth into the volume's Z slice index.
+    /// View matrix (world → view), so the compute kernel can pick a CSM
+    /// cascade for each froxel and the fragment sampler can map a scene
+    /// depth into the volume's Z slice index.
     pub view: [[f32; 4]; 4],
-    // Number of froxels along screen-x / screen-y / view-z.
+    /// Number of froxels along screen-x / screen-y / view-z.
     pub froxel_dims: [u32; 3],
-    // Explicit 4-byte pad so the MSL `uint3 froxel_dims` (which the
-    // MSL alignment rules promote to a 16-byte slot) and the Rust
-    // `[u32; 3]` (which `#[repr(C)]` packs to 12 bytes) describe the
-    // same on-wire layout. Without this padding `z_near` lands at
-    // offset 76 in Rust but offset 80 in MSL, swapping `z_near` /
-    // `z_far` and inverting the volume's Z mapping.
+    /// Explicit 4-byte pad so the MSL `uint3 froxel_dims` (which the
+    /// MSL alignment rules promote to a 16-byte slot) and the Rust
+    /// `[u32; 3]` (which `#[repr(C)]` packs to 12 bytes) describe the
+    /// same on-wire layout. Without this padding `z_near` lands at
+    /// offset 76 in Rust but offset 80 in MSL, swapping `z_near` /
+    /// `z_far` and inverting the volume's Z mapping.
     pub _pad_align: u32,
-    // Camera near-plane in view units. The fragment sampler maps a scene
-    // view-z to a normalised volume w via `(z - z_near) / (z_far - z_near)`
-    // for linear Z.
+    /// Camera near-plane in view units. The fragment sampler maps a scene
+    /// view-z to a normalised volume w via `(z - z_near) / (z_far - z_near)`
+    /// for linear Z.
     pub z_near: f32,
-    // Camera far-plane mirror: `FogSettings.max_distance`. The volume
-    // covers `[z_near, max_distance]` along view-space depth. Beyond
-    // `max_distance` the sampler clamps to the last slice (already
-    // fully-integrated).
+    /// Camera far-plane mirror: `FogSettings.max_distance`. The volume
+    /// covers `[z_near, max_distance]` along view-space depth. Beyond
+    /// `max_distance` the sampler clamps to the last slice (already
+    /// fully-integrated).
     pub z_far: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [f32; 2],
 }
 
-// Per-frame uniform consumed by the particle compute + render kernels. Carries
-// the resolved emitter tunables (position, direction, gravity, ...) plus the
-// dynamic per-frame inputs the compute kernel needs to age + integrate +
-// respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
-// Metal particle passes, so the layout must stay in sync with
-// `ParticleParams` in `shaders/particle_types.slang`. 144 bytes.
+/// Per-frame uniform consumed by the particle compute + render kernels. Carries
+/// the resolved emitter tunables (position, direction, gravity, ...) plus the
+/// dynamic per-frame inputs the compute kernel needs to age + integrate +
+/// respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
+/// Metal particle passes, so the layout must stay in sync with
+/// `ParticleParams` in `shaders/particle_types.slang`. 144 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleParams {
-    // World-space spawn origin. `packed_float3` in MSL: alignment 4, with
-    // `spread_cos` packed into the trailing float slot of the float4.
+    /// World-space spawn origin. `packed_float3` in MSL: alignment 4, with
+    /// `spread_cos` packed into the trailing float slot of the float4.
     pub position: [f32; 3],
-    // Cosine of the emission cone's half-angle. `1.0` = straight jet,
-    // `-1.0` = full sphere.
+    /// Cosine of the emission cone's half-angle. `1.0` = straight jet,
+    /// `-1.0` = full sphere.
     pub spread_cos: f32,
-    // Unit-length mean emission direction.
+    /// Unit-length mean emission direction.
     pub direction: [f32; 3],
+    /// Lower bound of the initial speed range, in units per second.
     pub speed_min: f32,
-    // Constant per-frame acceleration applied to each particle.
+    /// Constant per-frame acceleration applied to each particle.
     pub gravity: [f32; 3],
+    /// Upper bound of the initial speed range, in units per second.
     pub speed_max: f32,
-    // Linear-space RGBA at `age = 0`.
+    /// Linear-space RGBA at `age = 0`.
     pub color_start: [f32; 4],
-    // Linear-space RGBA at `age = lifetime`.
+    /// Linear-space RGBA at `age = lifetime`.
     pub color_end: [f32; 4],
+    /// Lower bound of the particle lifetime range, in seconds.
     pub lifetime_min: f32,
+    /// Upper bound of the particle lifetime range, in seconds.
     pub lifetime_max: f32,
+    /// Quad size at `age = 0`.
     pub size_start: f32,
+    /// Quad size at `age = lifetime`.
     pub size_end: f32,
-    // Frame delta time (seconds). Drives the age + integration step.
+    /// Frame delta time (seconds). Drives the age + integration step.
     pub dt: f32,
-    // Integer count of new particles the compute kernel may emit this frame.
-    // Carried atomically inside the kernel so threads racing for spawn slots
-    // only succeed up to this many times.
+    /// Integer count of new particles the compute kernel may emit this frame.
+    /// Carried atomically inside the kernel so threads racing for spawn slots
+    /// only succeed up to this many times.
     pub spawn_budget: u32,
-    // Per-frame seed mixed with the thread id by the kernel's cheap RNG.
+    /// Per-frame seed mixed with the thread id by the kernel's cheap RNG.
     pub random_seed: u32,
-    // Pool size in slots; the kernel returns early past it.
+    /// Pool size in slots; the kernel returns early past it.
     pub max_particles: u32,
 }
 
-// One text draw call: quads for all visible characters sharing one atlas texture.
+/// One text draw call: quads for all visible characters sharing one atlas texture.
 pub struct TextDrawCall {
-    // One quad (4 vertices, 6 indices) per character.
+    /// One quad (4 vertices, 6 indices) per character.
     pub vertices: Vec<TextVertex>,
+    /// Triangle indices into `vertices`.
     pub indices: Vec<u16>,
-    // Index into the backend's text atlas texture array.
+    /// Index into the backend's text atlas texture array.
     pub atlas_slot: usize,
-    // Optional clip rectangle in window pixels `[x, y, width, height]`. When
-    // set, the backend scissors this call to the rect so a scrollable UI panel's
-    // off-band rows do not bleed over its chrome. `None` draws unclipped.
+    /// Optional clip rectangle in window pixels `[x, y, width, height]`. When
+    /// set, the backend scissors this call to the rect so a scrollable UI panel's
+    /// off-band rows do not bleed over its chrome. `None` draws unclipped.
     pub clip_rect: Option<[f32; 4]>,
-    // Draw layer for overlay ordering: calls are stable-sorted by this (ascending,
-    // so higher draws on top) before submission when a `HudLayers` override is
-    // active. `0` for everything by default, which leaves insertion order intact.
+    /// Draw layer for overlay ordering: calls are stable-sorted by this (ascending,
+    /// so higher draws on top) before submission when a `HudLayers` override is
+    /// active. `0` for everything by default, which leaves insertion order intact.
     pub layer: i32,
 }
 
-// One LOD level past LOD0 for a `DrawObject`. Holds the rebased shared-index
-// buffer slice and the camera-distance threshold above which the renderer
-// picks this slice instead of the one stored on the parent `DrawObject`.
-// `LodSlice`s are stored in ascending `switch_distance` order; the runtime
-// picks the highest-indexed slice whose threshold is ≤ the current camera
-// distance. The same `base_vertex` as the parent applies: LOD decimation
-// reuses the LOD0 vertex range, only the index list changes.
+/// One LOD level past LOD0 for a `DrawObject`. Holds the rebased shared-index
+/// buffer slice and the camera-distance threshold above which the renderer
+/// picks this slice instead of the one stored on the parent `DrawObject`.
+/// `LodSlice`s are stored in ascending `switch_distance` order; the runtime
+/// picks the highest-indexed slice whose threshold is ≤ the current camera
+/// distance. The same `base_vertex` as the parent applies: LOD decimation
+/// reuses the LOD0 vertex range, only the index list changes.
 #[derive(Copy, Clone, Debug)]
 pub struct LodSlice {
+    /// First index of this LOD's slice in the shared index buffer.
     pub index_offset: usize,
+    /// Index count of this LOD's slice.
     pub index_count: usize,
+    /// Camera distance above which the renderer picks this slice.
     pub switch_distance: f32,
 }
 
-// Sentinel `normal_map_slot` meaning "this object has no normal map." The
-// texture pool is a single handle-indexed table shared by albedo and normal
-// maps, so a real normal map carries its own texture handle (which may be 0);
-// `usize::MAX` cannot collide with any handle and lets a backend substitute the
-// synthesized flat-normal fallback (tangent-space (0,0,1)) without a shader
-// branch. Backends map this to the fallback's reserved pool index.
+/// Sentinel `normal_map_slot` meaning "this object has no normal map." The
+/// texture pool is a single handle-indexed table shared by albedo and normal
+/// maps, so a real normal map carries its own texture handle (which may be 0);
+/// `usize::MAX` cannot collide with any handle and lets a backend substitute the
+/// synthesized flat-normal fallback (tangent-space (0,0,1)) without a shader
+/// branch. Backends map this to the fallback's reserved pool index.
 pub const NO_NORMAL_MAP_SLOT: usize = usize::MAX;
 
-// One renderable object: vertex/index slice within the shared GPU buffers,
-// a model matrix, albedo and normal-map texture slots, and material parameters.
+/// One renderable object: vertex/index slice within the shared GPU buffers,
+/// a model matrix, albedo and normal-map texture slots, and material parameters.
 pub struct DrawObject {
-    // Byte offset into the shared vertex buffer.
+    /// Byte offset into the shared vertex buffer.
     pub vertex_offset: usize,
-    // Number of vertices this object occupies in the shared vertex buffer,
-    // starting at `vertex_offset`. Used by mesh streaming to memcpy the
-    // object's geometry region in and out of the GPU buffer.
+    /// Number of vertices this object occupies in the shared vertex buffer,
+    /// starting at `vertex_offset`. Used by mesh streaming to memcpy the
+    /// object's geometry region in and out of the GPU buffer.
     pub vertex_count: usize,
-    // Element offset into the shared index buffer.
+    /// Element offset into the shared index buffer.
     pub index_offset: usize,
-    // Number of indices to draw.
+    /// Number of indices to draw.
     pub index_count: usize,
-    // Value added to every index before the vertex fetch (the
-    // `drawIndexedPrimitives` `baseVertex` / D3D12 `BaseVertexLocation` /
-    // Vulkan `vertex_offset`). 0 for static and streamed-mesh geometry, whose
-    // indices are already absolute into the shared vertex buffer. Streamed
-    // `VoxelWorld` chunks instead keep mesh-relative (0-based) indices and set
-    // this to their vertex region's base, so a chunk placed past the
-    // 65 535-vertex `u16` index range still renders. Read by all three
-    // backends' shadow/main/velocity passes.
+    /// Value added to every index before the vertex fetch (the
+    /// `drawIndexedPrimitives` `baseVertex` / D3D12 `BaseVertexLocation` /
+    /// Vulkan `vertex_offset`). 0 for static and streamed-mesh geometry, whose
+    /// indices are already absolute into the shared vertex buffer. Streamed
+    /// `VoxelWorld` chunks instead keep mesh-relative (0-based) indices and set
+    /// this to their vertex region's base, so a chunk placed past the
+    /// 65 535-vertex `u16` index range still renders. Read by all three
+    /// backends' shadow/main/velocity passes.
     pub base_vertex: i32,
-    // Bumped every time the slot's vertex / index bytes are rewritten in place
-    // at unchanged offsets (a size-matched asset hot-reload). The offsets and
-    // counts above identify only *where* the geometry lives, so without this
-    // counter an in-place rewrite is indistinguishable from no change at all
-    // and a ray-tracing BLAS built over the previous contents would be reused.
+    /// Bumped every time the slot's vertex / index bytes are rewritten in place
+    /// at unchanged offsets (a size-matched asset hot-reload). The offsets and
+    /// counts above identify only *where* the geometry lives, so without this
+    /// counter an in-place rewrite is indistinguishable from no change at all
+    /// and a ray-tracing BLAS built over the previous contents would be reused.
     pub geometry_generation: u32,
-    // Column-major model-to-world matrix.
+    /// Column-major model-to-world matrix.
     pub model: [[f32; 4]; 4],
-    // Index into the shared texture pool for this object's albedo map.
-    // Clamped to the last slot if out of range.
+    /// Index into the shared texture pool for this object's albedo map.
+    /// Clamped to the last slot if out of range.
     pub texture_slot: usize,
-    // Index into the shared texture pool for this object's normal map, or
-    // `NO_NORMAL_MAP_SLOT` when the object has no normal map (the backend then
-    // substitutes the flat-normal fallback).
+    /// Index into the shared texture pool for this object's normal map, or
+    /// `NO_NORMAL_MAP_SLOT` when the object has no normal map (the backend then
+    /// substitutes the flat-normal fallback).
     pub normal_map_slot: usize,
-    // Per-draw material scalars pushed to the fragment shader at buffer(3).
+    /// Per-draw material scalars pushed to the fragment shader at buffer(3).
     pub material: MaterialUniforms,
-    // When false the object is skipped in both the shadow and main passes.
-    // Which world shader renders this object: the dense ShaderHandle value of
-    // the material's `shader` reference, or 0 (the world default) when the
-    // material names none. The backend binds the matching pipeline for each
-    // bucket; the value never changes after the draw is built.
+    /// When false the object is skipped in both the shadow and main passes.
+    /// Which world shader renders this object: the dense ShaderHandle value of
+    /// the material's `shader` reference, or 0 (the world default) when the
+    /// material names none. The backend binds the matching pipeline for each
+    /// bucket; the value never changes after the draw is built.
     pub shader_bucket: u32,
-    // Controlled by scene switches to hide props belonging to inactive scenes.
+    /// Controlled by scene switches to hide props belonging to inactive scenes.
     pub visible: bool,
-    // When false the object's geometry is not yet uploaded to the GPU buffers
-    // and the object is skipped in every pass. Always true unless the asset-
-    // streaming subsystem is active; the mesh streamer flips it to true once
-    // the geometry region is resident.
-    // Read by the shadow/main/velocity passes.
+    /// When false the object's geometry is not yet uploaded to the GPU buffers
+    /// and the object is skipped in every pass. Always true unless the asset-
+    /// streaming subsystem is active; the mesh streamer flips it to true once
+    /// the geometry region is resident.
+    /// Read by the shadow/main/velocity passes.
     pub resident: bool,
-    // World-space axis-aligned bounding box used for frustum culling.
-    // Baked from the mesh's local bounds and the prop's initial model matrix
-    // at GraphicsSystem init. Set to a degenerate (NaN) box to disable culling.
+    /// World-space axis-aligned bounding box used for frustum culling.
+    /// Baked from the mesh's local bounds and the prop's initial model matrix
+    /// at GraphicsSystem init. Set to a degenerate (NaN) box to disable culling.
     pub bb_min: [f32; 3],
+    /// Upper corner of the world-space culling AABB.
     pub bb_max: [f32; 3],
-    // If > 0, the object is skipped when the camera is further than this from
-    // the AABB centre. Lets a Prop opt in to distance-based unloading.
+    /// If > 0, the object is skipped when the camera is further than this from
+    /// the AABB centre. Lets a Prop opt in to distance-based unloading.
     pub cull_distance: f32,
-    // LOD1..N slices for this draw, in ascending `switch_distance` order.
-    // Empty when the mesh declared `lod_levels <= 1`; the renderer then
-    // always uses the LOD0 `(index_offset, index_count)` carried on this
-    // object. With non-empty alternates the renderer picks the highest
-    // slice whose threshold is ≤ the camera→AABB-centre distance each frame.
+    /// LOD1..N slices for this draw, in ascending `switch_distance` order.
+    /// Empty when the mesh declared `lod_levels <= 1`; the renderer then
+    /// always uses the LOD0 `(index_offset, index_count)` carried on this
+    /// object. With non-empty alternates the renderer picks the highest
+    /// slice whose threshold is ≤ the camera→AABB-centre distance each frame.
     pub lod_alternates: Vec<LodSlice>,
 }
 
 impl DrawObject {
-    // Pick the active `(index_offset, index_count)` for this object given
-    // the current camera distance to its AABB centre. Returns the LOD0
-    // pair when no alternates are present or when the camera is closer
-    // than the first alternate's threshold; otherwise returns the
-    // highest-indexed alternate whose `switch_distance` ≤ `distance`.
+    /// Pick the active `(index_offset, index_count)` for this object given
+    /// the current camera distance to its AABB centre. Returns the LOD0
+    /// pair when no alternates are present or when the camera is closer
+    /// than the first alternate's threshold; otherwise returns the
+    /// highest-indexed alternate whose `switch_distance` ≤ `distance`.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
         crate::gfx::lod_select::pick_lod_slice(
             (self.index_offset, self.index_count),
@@ -1030,112 +1089,112 @@ impl DrawObject {
         )
     }
 
-    // Returns true when the AABB encodes valid finite bounds suitable for
-    // frustum/distance culling. A degenerate box (NaN min) disables culling.
+    /// Returns true when the AABB encodes valid finite bounds suitable for
+    /// frustum/distance culling. A degenerate box (NaN min) disables culling.
     pub fn cullable(&self) -> bool {
         crate::gfx::lod_select::bounds_finite(self.bb_min, self.bb_max)
     }
 }
 
-// Per-object record consumed by the Metal "bindless" static main pass.
-//
-// The static pipeline no longer rebinds model/material/textures per draw
-// call: every object's transform, material scalars, and texture-pool indices
-// live in one GPU buffer, and the vertex/fragment shaders index it by the
-// object id delivered through `[[base_instance]]`. That makes each draw call
-// stateless, which is the prerequisite for the GPU-driven compute-cull +
-// indirect-command-buffer pass.
-//
-// The renderer rebuilds the buffer each frame from its `DrawObject` list, so
-// `update_model` / `update_visibility` changes are picked up automatically.
-// `bb_min` / `bb_max` / `cull_distance` mirror the `DrawObject` AABB and are
-// unused by the main-pass shaders; they are carried so a GPU-driven compute
-// cull kernel can read object bounds straight from this buffer without a
-// layout change.
-//
-// Layout (176 bytes) must stay in sync with the shader-side record, declared
-// once per language in concinnity-device: `vulkan/shaders/object_common.glsl`,
-// `directx/shaders/object_common.hlsl` and `metal/shaders/object_common.msl`,
-// each spliced into its backend's passes at an `{OBJECT_DATA}` marker, plus
-// `shaders/object_common.slang` for the single-source passes.
-// `object_data_layout` in concinnity-device pins the three hand-written
-// fragments to each other, and `shader_layout` there pins this struct against
-// slangc's reflection of the fourth.
-//
-// `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
-// are indices into each backend's single handle-indexed texture pool: albedo,
-// normal, and every optional map share one dense table, so a texture used in
-// more than one role resolves to one descriptor. The pool's flat-normal
-// fallback occupies a reserved slot past the real textures; an object with no
-// normal map addresses it, so `normal_index` never needs a shader branch.
+/// Per-object record consumed by the Metal "bindless" static main pass.
+///
+/// The static pipeline no longer rebinds model/material/textures per draw
+/// call: every object's transform, material scalars, and texture-pool indices
+/// live in one GPU buffer, and the vertex/fragment shaders index it by the
+/// object id delivered through `[[base_instance]]`. That makes each draw call
+/// stateless, which is the prerequisite for the GPU-driven compute-cull +
+/// indirect-command-buffer pass.
+///
+/// The renderer rebuilds the buffer each frame from its `DrawObject` list, so
+/// `update_model` / `update_visibility` changes are picked up automatically.
+/// `bb_min` / `bb_max` / `cull_distance` mirror the `DrawObject` AABB and are
+/// unused by the main-pass shaders; they are carried so a GPU-driven compute
+/// cull kernel can read object bounds straight from this buffer without a
+/// layout change.
+///
+/// Layout (176 bytes) must stay in sync with the shader-side record, declared
+/// once per language in concinnity-device: `vulkan/shaders/object_common.glsl`,
+/// `directx/shaders/object_common.hlsl` and `metal/shaders/object_common.msl`,
+/// each spliced into its backend's passes at an `{OBJECT_DATA}` marker, plus
+/// `shaders/object_common.slang` for the single-source passes.
+/// `object_data_layout` in concinnity-device pins the three hand-written
+/// fragments to each other, and `shader_layout` there pins this struct against
+/// slangc's reflection of the fourth.
+///
+/// `albedo_index` / `normal_index` (and the secondary / emissive / ORM indices)
+/// are indices into each backend's single handle-indexed texture pool: albedo,
+/// normal, and every optional map share one dense table, so a texture used in
+/// more than one role resolves to one descriptor. The pool's flat-normal
+/// fallback occupies a reserved slot past the real textures; an object with no
+/// normal map addresses it, so `normal_index` never needs a shader branch.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuObjectData {
-    // Column-major model-to-world matrix.
+    /// Column-major model-to-world matrix.
     pub model: [[f32; 4]; 4],
-    // Linear-space RGB multiplier on the albedo sample.
+    /// Linear-space RGB multiplier on the albedo sample.
     pub tint: [f32; 3],
-    // Perceptual roughness [0, 1].
+    /// Perceptual roughness [0, 1].
     pub roughness: f32,
-    // Additive emission colour in linear space.
+    /// Additive emission colour in linear space.
     pub emissive: [f32; 3],
-    // Metallic factor [0, 1].
+    /// Metallic factor [0, 1].
     pub metallic: f32,
-    // Index into the bindless texture pool for this object's albedo map.
+    /// Index into the bindless texture pool for this object's albedo map.
     pub albedo_index: u32,
-    // Index into the bindless texture pool for this object's normal map.
+    /// Index into the bindless texture pool for this object's normal map.
     pub normal_index: u32,
-    // Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
+    /// Macro-variation strength [0, 1]; 0 disables the tiling-break noise.
     pub macro_variation: f32,
-    // Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
-    // non-zero switches the shader to a triplanar world-space projection
-    // with slope-based rocky-tint blending. See `Material::terrain_blend`.
+    /// Terrain-shading blend [0, 1]; 0 disables (default PBR sampling),
+    /// non-zero switches the shader to a triplanar world-space projection
+    /// with slope-based rocky-tint blending. See `Material::terrain_blend`.
     pub terrain_blend: f32,
-    // World-space AABB minimum (compute-cull bounds input).
+    /// World-space AABB minimum (compute-cull bounds input).
     pub bb_min: [f32; 3],
-    // View-distance cutoff; 0 = no cutoff (compute-cull bounds input).
+    /// View-distance cutoff; 0 = no cutoff (compute-cull bounds input).
     pub cull_distance: f32,
-    // World-space AABB maximum (compute-cull bounds input).
+    /// World-space AABB maximum (compute-cull bounds input).
     pub bb_max: [f32; 3],
-    // Sharpness of the slope-based blend between primary and
-    // `albedo_secondary_index` textures. 0 = wide soft gradient;
-    // 1 = nearly hard cliff edge. Mirrors
-    // `MaterialUniforms::secondary_blend_sharpness`.
+    /// Sharpness of the slope-based blend between primary and
+    /// `albedo_secondary_index` textures. 0 = wide soft gradient;
+    /// 1 = nearly hard cliff edge. Mirrors
+    /// `MaterialUniforms::secondary_blend_sharpness`.
     pub secondary_blend_sharpness: f32,
-    // Bindless-pool index for the secondary albedo (slope-shaded).
-    // 0 when the material doesn't declare a secondary texture; the
-    // shader's `terrain_blend > 0` gate keeps it from being sampled
-    // in that case.
+    /// Bindless-pool index for the secondary albedo (slope-shaded).
+    /// 0 when the material doesn't declare a secondary texture; the
+    /// shader's `terrain_blend > 0` gate keeps it from being sampled
+    /// in that case.
     pub albedo_secondary_index: u32,
-    // Bindless-pool index for the secondary normal map (slope-shaded).
+    /// Bindless-pool index for the secondary normal map (slope-shaded).
     pub normal_secondary_index: u32,
-    // Bindless-pool index for the emissive map (0 = none). Mirrors
-    // `MaterialUniforms::emissive_map_index`.
+    /// Bindless-pool index for the emissive map (0 = none). Mirrors
+    /// `MaterialUniforms::emissive_map_index`.
     pub emissive_map_index: u32,
-    // Bindless-pool index for the packed occlusion/roughness/metalness map
-    // (0 = none). Mirrors `MaterialUniforms::orm_map_index`.
+    /// Bindless-pool index for the packed occlusion/roughness/metalness map
+    /// (0 = none). Mirrors `MaterialUniforms::orm_map_index`.
     pub orm_map_index: u32,
-    // Alpha-cutout threshold in [0, 1]; 0 disables the test. Mirrors
-    // `MaterialUniforms::alpha_cutoff`.
+    /// Alpha-cutout threshold in [0, 1]; 0 disables the test. Mirrors
+    /// `MaterialUniforms::alpha_cutoff`.
     pub alpha_cutoff: f32,
-    // Rounds the record to a 16-byte multiple so an array of them keeps every
-    // `model` matrix 16-byte aligned.
+    /// Rounds the record to a 16-byte multiple so an array of them keeps every
+    /// `model` matrix 16-byte aligned.
     pub _pad: [f32; 3],
 }
 
-// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
-// pool, clamped into the real-texture range so a stale slot reads the last
-// valid entry rather than out of bounds. `texture_count` is the pool's
-// real-texture count (the flat-normal fallback sits one past it).
+/// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
+/// pool, clamped into the real-texture range so a stale slot reads the last
+/// valid entry rather than out of bounds. `texture_count` is the pool's
+/// real-texture count (the flat-normal fallback sits one past it).
 pub fn albedo_pool_index(texture_slot: usize, texture_count: u32) -> u32 {
     (texture_slot as u32).min(texture_count.saturating_sub(1))
 }
 
-// Resolve a `normal_map_slot` to its index in the handle-indexed texture pool.
-// A real normal map addresses its own texture slot (clamped into the
-// real-texture range); `NO_NORMAL_MAP_SLOT` addresses the flat-normal fallback
-// at `texture_count` (one past the last real texture), so the shader never
-// needs a "has a normal map?" branch.
+/// Resolve a `normal_map_slot` to its index in the handle-indexed texture pool.
+/// A real normal map addresses its own texture slot (clamped into the
+/// real-texture range); `NO_NORMAL_MAP_SLOT` addresses the flat-normal fallback
+/// at `texture_count` (one past the last real texture), so the shader never
+/// needs a "has a normal map?" branch.
 pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
     if normal_map_slot == NO_NORMAL_MAP_SLOT {
         texture_count
@@ -1147,7 +1206,7 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
 // The world bound and per-object cull range a packed record carries. The
 // main-pass shaders ignore both; a GPU-driven compute cull reads object bounds
 // straight from this buffer, so every packer fills them.
-pub struct RecordBounds {
+pub(crate) struct RecordBounds {
     pub bb_min: [f32; 3],
     pub bb_max: [f32; 3],
     pub cull_distance: f32,
@@ -1188,15 +1247,15 @@ impl GpuObjectData {
     }
 }
 
-// Pack one `DrawObject` into its `GpuObjectData` record for the DirectX and
-// Vulkan bindless static pass. The caller supplies the resolved texture-pool
-// indices: `albedo_index` / `normal_index` are dense indices into the one
-// handle-indexed pool (a normal-less object's `normal_index` points at the
-// pool's flat-normal fallback slot), identical across all three backends.
-//
-// `bb_min` / `bb_max` / `cull_distance` are copied even though the
-// main-pass shaders ignore them, so a GPU-driven compute cull can read object
-// bounds straight from this buffer without a layout change.
+/// Pack one `DrawObject` into its `GpuObjectData` record for the DirectX and
+/// Vulkan bindless static pass. The caller supplies the resolved texture-pool
+/// indices: `albedo_index` / `normal_index` are dense indices into the one
+/// handle-indexed pool (a normal-less object's `normal_index` points at the
+/// pool's flat-normal fallback slot), identical across all three backends.
+///
+/// `bb_min` / `bb_max` / `cull_distance` are copied even though the
+/// main-pass shaders ignore them, so a GPU-driven compute cull can read object
+/// bounds straight from this buffer without a layout change.
 pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32) -> GpuObjectData {
     let bounds = RecordBounds {
         bb_min: obj.bb_min,
@@ -1214,7 +1273,7 @@ pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32
 // from the cluster rather than a `DrawObject`. The instanced mesh's indices are
 // already absolute (rebased at `append_mesh`), so the per-instance draw args use
 // `base_vertex = 0`.
-pub fn pack_instance_record(
+pub(crate) fn pack_instance_record(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
     albedo_index: u32,
@@ -1230,13 +1289,13 @@ pub fn pack_instance_record(
     GpuObjectData::new(model, &cluster.material, bounds, albedo_index, normal_index)
 }
 
-// Expand every instance of every cluster into a flat `GpuObjectData` list for the
-// GPU-driven bindless instanced path, in cluster-then-instance order (so a
-// parallel per-instance draw-args list can be walked in the same order). The
-// texture-pool indices are resolved through `albedo_pool_index` /
-// `normal_pool_index`, matching `build_object_buffer`'s static addressing.
-// `texture_count` is the pool's real-texture count (the flat-normal fallback
-// sits at `texture_count`).
+/// Expand every instance of every cluster into a flat `GpuObjectData` list for the
+/// GPU-driven bindless instanced path, in cluster-then-instance order (so a
+/// parallel per-instance draw-args list can be walked in the same order). The
+/// texture-pool indices are resolved through `albedo_pool_index` /
+/// `normal_pool_index`, matching `build_object_buffer`'s static addressing.
+/// `texture_count` is the pool's real-texture count (the flat-normal fallback
+/// sits at `texture_count`).
 pub fn instance_object_records(
     clusters: &[InstancedCluster],
     texture_count: u32,
@@ -1261,12 +1320,12 @@ pub fn instance_object_records(
 // per-frame bound emitted by the skin compute kernel is a planned follow-up.
 const SKINNED_BB_PAD_FACTOR: f32 = 2.0;
 
-// Build the GPU-driven cull/draw record for one skinned object, folded into the
-// bindless main pass as rigid geometry. The skin compute kernel deforms the
-// bind-pose vertices into MODEL space, so `model` is applied after skinning
-// (model -> world) exactly like a static object; the cull bound is the padded
-// bind-pose AABB transformed by `model`. Mirrors `pack_instance_record`, sourcing
-// material + flat texture indices from the skinned object.
+/// Build the GPU-driven cull/draw record for one skinned object, folded into the
+/// bindless main pass as rigid geometry. The skin compute kernel deforms the
+/// bind-pose vertices into MODEL space, so `model` is applied after skinning
+/// (model -> world) exactly like a static object; the cull bound is the padded
+/// bind-pose AABB transformed by `model`. Mirrors `pack_instance_record`, sourcing
+/// material + flat texture indices from the skinned object.
 pub fn pack_skinned_record(
     obj: &SkinnedDrawObject,
     albedo_index: u32,
@@ -1289,63 +1348,63 @@ pub fn pack_skinned_record(
     GpuObjectData::new(obj.model, &obj.material, bounds, albedo_index, normal_index)
 }
 
-// Per-object draw parameters consumed by the GPU-driven compute cull kernel.
-// Parallel to `GpuObjectData` (one record per `DrawObject`, same index):
-// `GpuObjectData` carries the cull bounds the kernel tests, this carries the
-// indexed-draw arguments the kernel encodes into the indirect command buffer
-// (Metal `MTLIndirectCommandBuffer` / DirectX `ExecuteIndirect` argument
-// buffer / Vulkan `multiDrawIndexedIndirect` buffer) when an object survives
-// the cull.
-//
-// The kernel reads `flags` to decide an object's fate without re-deriving it
-// from the AABB: `ENABLED` gates the per-frame `visible` / `resident` state,
-// `CULLABLE` selects whether the object is frustum/distance-tested at all
-// (mirrors `DrawObject::cullable()`: non-cullable objects always draw).
-//
-// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in every
-// backend's cull kernel: `main.metal` / the Metal `build_cull_pipeline`
-// MSL, the inline cull HLSL in `directx/pipeline.rs`, and the inline cull
-// GLSL in `vulkan/pipeline.rs`.
+/// Per-object draw parameters consumed by the GPU-driven compute cull kernel.
+/// Parallel to `GpuObjectData` (one record per `DrawObject`, same index):
+/// `GpuObjectData` carries the cull bounds the kernel tests, this carries the
+/// indexed-draw arguments the kernel encodes into the indirect command buffer
+/// (Metal `MTLIndirectCommandBuffer` / DirectX `ExecuteIndirect` argument
+/// buffer / Vulkan `multiDrawIndexedIndirect` buffer) when an object survives
+/// the cull.
+///
+/// The kernel reads `flags` to decide an object's fate without re-deriving it
+/// from the AABB: `ENABLED` gates the per-frame `visible` / `resident` state,
+/// `CULLABLE` selects whether the object is frustum/distance-tested at all
+/// (mirrors `DrawObject::cullable()`: non-cullable objects always draw).
+///
+/// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in every
+/// backend's cull kernel: `main.metal` / the Metal `build_cull_pipeline`
+/// MSL, the inline cull HLSL in `directx/pipeline.rs`, and the inline cull
+/// GLSL in `vulkan/pipeline.rs`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuDrawArgs {
-    // Number of indices to draw (`DrawObject::index_count`).
+    /// Number of indices to draw (`DrawObject::index_count`).
     pub index_count: u32,
-    // Element offset into the shared index buffer (`DrawObject::index_offset`).
+    /// Element offset into the shared index buffer (`DrawObject::index_offset`).
     pub index_offset: u32,
-    // Value added to every index before the vertex fetch
-    // (`DrawObject::base_vertex`; always >= 0 in practice).
+    /// Value added to every index before the vertex fetch
+    /// (`DrawObject::base_vertex`; always >= 0 in practice).
     pub base_vertex: u32,
-    // Cull-decision bits; see `DrawArgsFlags`.
+    /// Cull-decision bits; see `DrawArgsFlags`.
     pub flags: u32,
 }
 
 // Bit flags packed into `GpuDrawArgs::flags`.
-pub struct DrawArgsFlags;
+pub(crate) struct DrawArgsFlags;
 
 impl DrawArgsFlags {
     // The object is visible and its geometry is resident this frame. When
     // clear the kernel resets the object's indirect command (draws nothing).
-    pub const ENABLED: u32 = 1;
+    pub(crate) const ENABLED: u32 = 1;
     // The object has a finite AABB and should be frustum/distance-culled.
     // When clear the object always draws (subject to `ENABLED`).
-    pub const CULLABLE: u32 = 2;
+    pub(crate) const CULLABLE: u32 = 2;
     // The record's shader bucket rides bits 8..16: the cull kernel routes the
     // record's indirect command into that bucket's ICB. Values and layout are
     // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.metal).
-    pub const BUCKET_SHIFT: u32 = 8;
+    pub(crate) const BUCKET_SHIFT: u32 = 8;
 }
 
-// Upper bound on world shader buckets a cull dispatch can route between (the
-// ICB argument-buffer array length in the cull shaders). Mirrored by
-// MAX_SHADER_BUCKETS in cull.metal, enforced by the world-shape check, and
-// quoted as a number in the Shader asset docs.
+/// Upper bound on world shader buckets a cull dispatch can route between (the
+/// ICB argument-buffer array length in the cull shaders). Mirrored by
+/// MAX_SHADER_BUCKETS in cull.metal, enforced by the world-shape check, and
+/// quoted as a number in the Shader asset docs.
 pub const MAX_SHADER_BUCKETS: usize = 8;
 
-// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
-// CPU `visible = BVH(cullable) + always_draw` partition: an object draws when
-// it is visible and resident, and is frustum-tested only when it has finite
-// bounds.
+/// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
+/// CPU `visible = BVH(cullable) + always_draw` partition: an object draws when
+/// it is visible and resident, and is frustum-tested only when it has finite
+/// bounds.
 pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
     let mut flags = 0;
     if visible && resident {
@@ -1357,94 +1416,99 @@ pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
     flags
 }
 
-// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
-// clamped to the routing budget the cull kernels implement. A bucket past the
-// budget renders with the world default program rather than reading a command
-// region that does not exist; the world-shape check fails such a world at build
-// time, so the clamp is a backstop.
+/// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
+/// clamped to the routing budget the cull kernels implement. A bucket past the
+/// budget renders with the world default program rather than reading a command
+/// region that does not exist; the world-shape check fails such a world at build
+/// time, so the clamp is a backstop.
 pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
     let bucket = (shader_bucket as usize).min(MAX_SHADER_BUCKETS - 1) as u32;
     bucket << DrawArgsFlags::BUCKET_SHIFT
 }
 
-// One GPU-instanced draw: a shared mesh slice + material rendered at many
-// world-space transforms in a single `drawIndexedInstanced` / `cmd_draw_indexed`
-// (instance_count > 1). The cluster has a single union AABB across all
-// instances; it is frustum-tested as a whole. Cluster culling trades per-
-// instance precision for one draw call instead of N.
+/// One GPU-instanced draw: a shared mesh slice + material rendered at many
+/// world-space transforms in a single `drawIndexedInstanced` / `cmd_draw_indexed`
+/// (instance_count > 1). The cluster has a single union AABB across all
+/// instances; it is frustum-tested as a whole. Cluster culling trades per-
+/// instance precision for one draw call instead of N.
 pub struct InstancedCluster {
-    // Byte offset into the shared vertex buffer. Currently unused because
-    // every backend keeps the shared vertex buffer bound at offset 0 and
-    // `append_mesh` rebases indices accordingly; retained for symmetry with
-    // `DrawObject` and future per-cluster vertex bindings.
+    /// Byte offset into the shared vertex buffer. Currently unused because
+    /// every backend keeps the shared vertex buffer bound at offset 0 and
+    /// `append_mesh` rebases indices accordingly; retained for symmetry with
+    /// `DrawObject` and future per-cluster vertex bindings.
     pub vertex_offset: usize,
-    // Number of vertices this cluster's mesh occupies in the shared vertex
-    // buffer, starting at `vertex_offset`. Used by the shrinkable-seed
-    // compaction to relocate the cluster's geometry region when streamed-mesh
-    // gaps are removed from the shared buffer.
+    /// Number of vertices this cluster's mesh occupies in the shared vertex
+    /// buffer, starting at `vertex_offset`. Used by the shrinkable-seed
+    /// compaction to relocate the cluster's geometry region when streamed-mesh
+    /// gaps are removed from the shared buffer.
     pub vertex_count: usize,
-    // Element offset into the shared index buffer.
+    /// Element offset into the shared index buffer.
     pub index_offset: usize,
-    // Number of indices per instance.
+    /// Number of indices per instance.
     pub index_count: usize,
-    // Index into the shared texture pool for this cluster's albedo map.
+    /// Index into the shared texture pool for this cluster's albedo map.
     pub texture_slot: usize,
-    // Index into the shared texture pool for this cluster's normal map, or
-    // `NO_NORMAL_MAP_SLOT` when the cluster has no normal map.
+    /// Index into the shared texture pool for this cluster's normal map, or
+    /// `NO_NORMAL_MAP_SLOT` when the cluster has no normal map.
     pub normal_map_slot: usize,
-    // Per-cluster material scalars, identical for every instance.
+    /// Per-cluster material scalars, identical for every instance.
     pub material: MaterialUniforms,
-    // Union AABB of all per-instance world AABBs; used for cluster-wide
-    // frustum culling. A degenerate (NaN) box disables culling.
+    /// Union AABB of all per-instance world AABBs; used for cluster-wide
+    /// frustum culling. A degenerate (NaN) box disables culling.
     pub cluster_bb_min: [f32; 3],
+    /// Upper corner of the cluster's union world AABB.
     pub cluster_bb_max: [f32; 3],
-    // Mesh-local (object-space) AABB, identical for every instance. The
-    // GPU-driven instanced path transforms this by each instance's model matrix
-    // to get a per-instance world AABB for per-instance frustum/distance/Hi-Z
-    // culling; the union AABB above is only the whole-cluster bound.
+    /// Mesh-local (object-space) AABB, identical for every instance. The
+    /// GPU-driven instanced path transforms this by each instance's model matrix
+    /// to get a per-instance world AABB for per-instance frustum/distance/Hi-Z
+    /// culling; the union AABB above is only the whole-cluster bound.
     pub local_bb_min: [f32; 3],
+    /// Upper corner of the mesh-local bind AABB.
     pub local_bb_max: [f32; 3],
-    // View-distance cutoff applied to the cluster centre. 0 = no cutoff.
+    /// View-distance cutoff applied to the cluster centre. 0 = no cutoff.
     pub cull_distance: f32,
-    // Per-instance column-major model matrices. Uploaded to a transient GPU
-    // buffer each frame.
+    /// Per-instance column-major model matrices. Uploaded to a transient GPU
+    /// buffer each frame.
     pub instances: Vec<[[f32; 4]; 4]>,
-    // LOD1..N slices for this cluster's mesh, in ascending `switch_distance`
-    // order. Empty when the mesh declared `lod_levels <= 1`. Each per-instance
-    // LOD is picked from camera distance to that instance's translation; the
-    // per-pass draw loop partitions `instances` by their picked LOD and issues
-    // one `drawIndexedInstanced` per non-empty bucket. The vertex set is
-    // shared with LOD0 (QEM decimation preserves vertices), so only
-    // `(index_offset, index_count)` varies per slice.
+    /// LOD1..N slices for this cluster's mesh, in ascending `switch_distance`
+    /// order. Empty when the mesh declared `lod_levels <= 1`. Each per-instance
+    /// LOD is picked from camera distance to that instance's translation; the
+    /// per-pass draw loop partitions `instances` by their picked LOD and issues
+    /// one `drawIndexedInstanced` per non-empty bucket. The vertex set is
+    /// shared with LOD0 (QEM decimation preserves vertices), so only
+    /// `(index_offset, index_count)` varies per slice.
     pub lod_alternates: Vec<LodSlice>,
 }
 
-// One LOD bucket emitted by [`InstancedCluster::lod_buckets`]: the index
-// range for that LOD plus the subset of instance matrices that picked it.
-// Each bucket becomes one `drawIndexedInstanced` call.
+/// One LOD bucket emitted by [`InstancedCluster::lod_buckets`]: the index
+/// range for that LOD plus the subset of instance matrices that picked it.
+/// Each bucket becomes one `drawIndexedInstanced` call.
 #[derive(Clone, Debug)]
 pub struct InstancedLodBucket {
+    /// First index of the bucket's slice in the shared index buffer.
     pub index_offset: usize,
+    /// Index count of the bucket's slice.
     pub index_count: usize,
+    /// Column-major model matrices of the instances in this bucket.
     pub instances: Vec<[[f32; 4]; 4]>,
 }
 
 impl InstancedCluster {
-    // True when the cluster AABB encodes valid finite bounds suitable for
-    // frustum / distance culling.
+    /// True when the cluster AABB encodes valid finite bounds suitable for
+    /// frustum / distance culling.
     pub fn cullable(&self) -> bool {
         crate::gfx::lod_select::bounds_finite(self.cluster_bb_min, self.cluster_bb_max)
     }
 
-    // Partition the cluster's instances into LOD buckets keyed by camera
-    // distance to each instance's translation. Returns one entry per
-    // non-empty bucket, in mesh-LOD order (LOD0 first). With no alternates
-    // every instance lands in a single LOD0 bucket so the caller's loop
-    // degenerates to the legacy one-`drawIndexedInstanced` path.
-    //
-    // Per-instance distance uses the model-matrix translation rather than
-    // a transformed-AABB centre: close enough for distance-keyed swaps
-    // without paying the per-instance AABB transform every pass.
+    /// Partition the cluster's instances into LOD buckets keyed by camera
+    /// distance to each instance's translation. Returns one entry per
+    /// non-empty bucket, in mesh-LOD order (LOD0 first). With no alternates
+    /// every instance lands in a single LOD0 bucket so the caller's loop
+    /// degenerates to the legacy one-`drawIndexedInstanced` path.
+    ///
+    /// Per-instance distance uses the model-matrix translation rather than
+    /// a transformed-AABB centre: close enough for distance-keyed swaps
+    /// without paying the per-instance AABB transform every pass.
     pub fn lod_buckets(&self, cam_pos: [f32; 3]) -> Vec<InstancedLodBucket> {
         // Fast path: no alternates → single LOD0 bucket containing every
         // instance. Cloning is unavoidable since the GPU buffer expects an
@@ -1488,17 +1552,17 @@ impl InstancedCluster {
         buckets
     }
 
-    // Visit each non-empty LOD bucket for this cluster, calling
-    // `visit(index_offset, index_count, instances)` once per bucket in
-    // mesh-LOD order (LOD0 first). Stops and returns the first error a `visit`
-    // produces.
-    //
-    // In the common no-alternates case `instances` borrows `self.instances`
-    // directly (no allocation, no copy) so a caller that memcpy's the slice
-    // into a GPU buffer skips the wholesale clone that the owned
-    // [`lod_buckets`](Self::lod_buckets) makes. Clusters that declared LOD
-    // alternates still regroup their instances per LOD (a copy that separate
-    // per-LOD draw calls genuinely require); that path reuses `lod_buckets`.
+    /// Visit each non-empty LOD bucket for this cluster, calling
+    /// `visit(index_offset, index_count, instances)` once per bucket in
+    /// mesh-LOD order (LOD0 first). Stops and returns the first error a `visit`
+    /// produces.
+    ///
+    /// In the common no-alternates case `instances` borrows `self.instances`
+    /// directly (no allocation, no copy) so a caller that memcpy's the slice
+    /// into a GPU buffer skips the wholesale clone that the owned
+    /// [`lod_buckets`](Self::lod_buckets) makes. Clusters that declared LOD
+    /// alternates still regroup their instances per LOD (a copy that separate
+    /// per-LOD draw calls genuinely require); that path reuses `lod_buckets`.
     pub fn try_for_each_lod_bucket<E>(
         &self,
         cam_pos: [f32; 3],
@@ -1516,8 +1580,8 @@ impl InstancedCluster {
         Ok(())
     }
 
-    // Infallible [`try_for_each_lod_bucket`](Self::try_for_each_lod_bucket)
-    // for callers whose per-bucket work cannot fail.
+    /// Infallible [`try_for_each_lod_bucket`](Self::try_for_each_lod_bucket)
+    /// for callers whose per-bucket work cannot fail.
     pub fn for_each_lod_bucket(
         &self,
         cam_pos: [f32; 3],
@@ -1533,64 +1597,65 @@ impl InstancedCluster {
     }
 }
 
-// One skeletally animated draw: a slice of the shared skinned vertex/index
-// buffers plus the per-joint matrix buffer the vertex shader blends.
-//
-// Skinned objects deform every frame, so they are excluded from the static
-// BVH and drawn unconditionally (after the visibility flag). The joint
-// matrices live in a separate per-object GPU buffer the renderer rewrites
-// each frame from `AnimationSystem`'s output.
+/// One skeletally animated draw: a slice of the shared skinned vertex/index
+/// buffers plus the per-joint matrix buffer the vertex shader blends.
+///
+/// Skinned objects deform every frame, so they are excluded from the static
+/// BVH and drawn unconditionally (after the visibility flag). The joint
+/// matrices live in a separate per-object GPU buffer the renderer rewrites
+/// each frame from `AnimationSystem`'s output.
 pub struct SkinnedDrawObject {
-    // Vertex offset (in vertex units, not bytes) of this slot's first
-    // vertex in the shared skinned vertex buffer. The shared index buffer
-    // holds absolute vertex indices (each slot's mesh-relative indices are
-    // re-based onto this `vertex_base` at upload time), so the value is
-    // not consumed by the draw call itself, but the asset hot-reload's
-    // `rebuild_skinned_geometry` path needs to know each slot's vertex
-    // region to copy unchanged geometry across a size-changing rebuild.
-    // Stored as u16 because the shared skinned index buffer is u16 and
-    // every slot's `vertex_base` has to fit there.
+    /// Vertex offset (in vertex units, not bytes) of this slot's first
+    /// vertex in the shared skinned vertex buffer. The shared index buffer
+    /// holds absolute vertex indices (each slot's mesh-relative indices are
+    /// re-based onto this `vertex_base` at upload time), so the value is
+    /// not consumed by the draw call itself, but the asset hot-reload's
+    /// `rebuild_skinned_geometry` path needs to know each slot's vertex
+    /// region to copy unchanged geometry across a size-changing rebuild.
+    /// Stored as u16 because the shared skinned index buffer is u16 and
+    /// every slot's `vertex_base` has to fit there.
     pub vertex_base: u16,
-    // Number of vertices in this slot's region of the shared skinned
-    // vertex buffer.
+    /// Number of vertices in this slot's region of the shared skinned
+    /// vertex buffer.
     pub vertex_count: usize,
-    // Element offset into the shared skinned index buffer.
+    /// Element offset into the shared skinned index buffer.
     pub index_offset: usize,
-    // Number of indices to draw.
+    /// Number of indices to draw.
     pub index_count: usize,
-    // Column-major model-to-world matrix. Applied after skinning.
+    /// Column-major model-to-world matrix. Applied after skinning.
     pub model: [[f32; 4]; 4],
-    // Index into the shared texture pool for this object's albedo map.
+    /// Index into the shared texture pool for this object's albedo map.
     pub texture_slot: usize,
-    // Index into the shared texture pool for this object's normal map, or
-    // `NO_NORMAL_MAP_SLOT` when the object has no normal map.
+    /// Index into the shared texture pool for this object's normal map, or
+    /// `NO_NORMAL_MAP_SLOT` when the object has no normal map.
     pub normal_map_slot: usize,
-    // Per-object material scalars.
+    /// Per-object material scalars.
     pub material: MaterialUniforms,
-    // When false the object is skipped in both the shadow and main passes.
+    /// When false the object is skipped in both the shadow and main passes.
     pub visible: bool,
-    // Number of joints in this object's skeleton, capped at `MAX_JOINTS`.
-    // The vertex shader only blends matrices below this count.
+    /// Number of joints in this object's skeleton, capped at `MAX_JOINTS`.
+    /// The vertex shader only blends matrices below this count.
     pub joint_count: usize,
-    // Mesh-local (object-space) bind-pose AABB, computed from the bind-pose
-    // vertices at load. The GPU-driven skinned fold pads this (animations reach
-    // past the bind pose) and transforms it by `model` to get the per-frame world
-    // bound the cull kernel frustum/Hi-Z tests. See `pack_skinned_record`.
+    /// Mesh-local (object-space) bind-pose AABB, computed from the bind-pose
+    /// vertices at load. The GPU-driven skinned fold pads this (animations reach
+    /// past the bind pose) and transforms it by `model` to get the per-frame world
+    /// bound the cull kernel frustum/Hi-Z tests. See `pack_skinned_record`.
     pub local_bb_min: [f32; 3],
+    /// Upper corner of the mesh-local bind-pose AABB.
     pub local_bb_max: [f32; 3],
-    // LOD1..N slices, in ascending `switch_distance` order. Empty when
-    // the SkinnedMesh declared `lod_levels <= 1`. Each slice points at a
-    // rebased index range in the shared skinned IB; QEM half-edge
-    // decimation keeps the vertex set unchanged so all LODs share this
-    // slot's `vertex_base` / `vertex_count`.
+    /// LOD1..N slices, in ascending `switch_distance` order. Empty when
+    /// the SkinnedMesh declared `lod_levels <= 1`. Each slice points at a
+    /// rebased index range in the shared skinned IB; QEM half-edge
+    /// decimation keeps the vertex set unchanged so all LODs share this
+    /// slot's `vertex_base` / `vertex_count`.
     pub lod_alternates: Vec<LodSlice>,
 }
 
 impl SkinnedDrawObject {
-    // Pick the active `(index_offset, index_count)` for this object given
-    // the camera distance to its model-matrix translation. Returns the
-    // LOD0 pair when no alternates are present or the distance is below
-    // the first threshold.
+    /// Pick the active `(index_offset, index_count)` for this object given
+    /// the camera distance to its model-matrix translation. Returns the
+    /// LOD0 pair when no alternates are present or the distance is below
+    /// the first threshold.
     pub fn active_lod(&self, distance: f32) -> (usize, usize) {
         crate::gfx::lod_select::pick_lod_slice(
             (self.index_offset, self.index_count),
@@ -1599,10 +1664,10 @@ impl SkinnedDrawObject {
         )
     }
 
-    // World-space translation of this object (column 3 of the model
-    // matrix). Skinned objects have no static AABB (they deform every
-    // frame), so per-frame LOD picks use the model translation as the
-    // stand-in for an AABB centre.
+    /// World-space translation of this object (column 3 of the model
+    /// matrix). Skinned objects have no static AABB (they deform every
+    /// frame), so per-frame LOD picks use the model translation as the
+    /// stand-in for an AABB centre.
     pub fn translation(&self) -> [f32; 3] {
         [self.model[3][0], self.model[3][1], self.model[3][2]]
     }

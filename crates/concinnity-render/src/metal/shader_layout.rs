@@ -1,19 +1,17 @@
-// src/metal/shader_layout.rs
-//
-// The engine's buffer-binding contract for user-authored Metal shaders, plus
-// the pure comparison that catches CPU/GPU struct-layout mismatches. A custom
-// Shader is linked into the engine's standard pipeline and inherits the
-// engine's buffer bindings (per-frame view uniforms, per-object data, lights,
-// shadow cascades). If the user declares one of those structs with a different
-// layout than the engine's `#[repr(C)]` struct, the GPU reads the engine's
-// bytes through the wrong offsets: garbage, and a GPU fault when a wrong stride
-// walks a binding off the end of its buffer (the `RtGeomEntry` failure mode).
-//
-// This module is deliberately free of any Metal API: it defines what the engine
-// expects (built from the real `#[repr(C)]` structs via `offset_of!`) and how to
-// compare a backend-neutral reflected layout against it. The Metal reflection
-// that produces the reflected layout lives in `shader_reflect.rs`; keeping the
-// comparison separate makes it unit-testable without a GPU device.
+//! The engine's buffer-binding contract for user-authored Metal shaders, plus
+//! the pure comparison that catches CPU/GPU struct-layout mismatches. A custom
+//! Shader is linked into the engine's standard pipeline and inherits the
+//! engine's buffer bindings (per-frame view uniforms, per-object data, lights,
+//! shadow cascades). If the user declares one of those structs with a different
+//! layout than the engine's `#[repr(C)]` struct, the GPU reads the engine's
+//! bytes through the wrong offsets: garbage, and a GPU fault when a wrong stride
+//! walks a binding off the end of its buffer (the `RtGeomEntry` failure mode).
+//!
+//! This module is deliberately free of any Metal API: it defines what the engine
+//! expects (built from the real `#[repr(C)]` structs via `offset_of!`) and how to
+//! compare a backend-neutral reflected layout against it. The Metal reflection
+//! that produces the reflected layout lives in `shader_reflect.rs`; keeping the
+//! comparison separate makes it unit-testable without a GPU device.
 
 use std::collections::HashMap;
 use std::mem::{offset_of, size_of};
@@ -26,52 +24,64 @@ use crate::render_types::{
 use super::uniforms::ModelUniforms;
 use crate::uniforms::ViewUniforms;
 
-// One field the engine guarantees at a fixed byte offset inside an
-// engine-provided buffer struct.
+/// One field the engine guarantees at a fixed byte offset inside an
+/// engine-provided buffer struct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExpectedField {
+    /// The field's name in the shader struct.
     pub name: &'static str,
+    /// The field's byte offset in the shader struct.
     pub offset: usize,
 }
 
-// The engine's authoritative layout for one buffer struct a user shader may
-// bind. `size` is the `#[repr(C)]` `size_of`; for a buffer bound as an array /
-// pointer (e.g. `GpuObjectData`) it is the per-element stride, which is what a
-// wrong-stride bug corrupts.
+/// The engine's authoritative layout for one buffer struct a user shader may
+/// bind. `size` is the `#[repr(C)]` `size_of`; for a buffer bound as an array /
+/// pointer (e.g. `GpuObjectData`) it is the per-element stride, which is what a
+/// wrong-stride bug corrupts.
 #[derive(Clone, Debug)]
 pub struct ExpectedStruct {
+    /// The struct's name in the shader.
     pub name: &'static str,
+    /// The struct's size in bytes.
     pub size: usize,
+    /// Expected fields, in declaration order.
     pub fields: Vec<ExpectedField>,
 }
 
-// Which engine pipeline stage an entry point belongs to. A custom Shader stage
-// declared `kind: "vertex"` can be a main vertex shader or a shadow caster;
-// they bind different engine buffers, so the reflector resolves the stage from
-// the entry-point name (see `shader_reflect.rs`).
+/// Which engine pipeline stage an entry point belongs to. A custom Shader stage
+/// declared `kind: "vertex"` can be a main vertex shader or a shadow caster;
+/// they bind different engine buffers, so the reflector resolves the stage from
+/// the entry-point name (see `shader_reflect.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EngineStage {
+    /// The vertex stage.
     Vertex,
+    /// The fragment stage.
     Fragment,
+    /// The shadow-pass vertex stage.
     Shadow,
 }
 
-// A struct layout as reflected from a compiled user shader. Backend-neutral so
-// the comparison stays Metal-free; `shader_reflect.rs` fills it from Metal
-// pipeline reflection, and the unit tests fill it by hand.
+/// A struct layout as reflected from a compiled user shader. Backend-neutral so
+/// the comparison stays Metal-free; `shader_reflect.rs` fills it from Metal
+/// pipeline reflection, and the unit tests fill it by hand.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReflectedStruct {
-    // The struct type name the shader declared at this binding.
+    /// The struct type name the shader declared at this binding.
     pub name: String,
-    // The binding's data size in bytes (struct size, or element stride for a
-    // pointer/array binding).
+    /// The binding's data size in bytes (struct size, or element stride for a
+    /// pointer/array binding).
     pub size: usize,
+    /// The fields reflection reported, in declaration order.
     pub fields: Vec<ReflectedField>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// One field as the shader compiler reported it.
 pub struct ReflectedField {
+    /// The field's name.
     pub name: String,
+    /// The field's byte offset.
     pub offset: usize,
 }
 
@@ -85,14 +95,14 @@ macro_rules! field {
     };
 }
 
-// The engine-owned buffer bindings for a stage: `(buffer_index, expected
-// layout)`. Only indices the engine itself binds are listed: buffers the user
-// fully owns, the `Vertex` stage-in at buffer(1), and the bindless texture
-// argument buffer are intentionally absent and never validated.
-//
-// The indices mirror the binds in `metal/draw/main.rs` and the shadow shader;
-// the layouts are derived from the real `#[repr(C)]` structs (the single source
-// of truth, the same ones the `*_layout_matches_msl` tests pin to MSL).
+/// The engine-owned buffer bindings for a stage: `(buffer_index, expected
+/// layout)`. Only indices the engine itself binds are listed: buffers the user
+/// fully owns, the `Vertex` stage-in at buffer(1), and the bindless texture
+/// argument buffer are intentionally absent and never validated.
+///
+/// The indices mirror the binds in `metal/draw/main.rs` and the shadow shader;
+/// the layouts are derived from the real `#[repr(C)]` structs (the single source
+/// of truth, the same ones the `*_layout_matches_msl` tests pin to MSL).
 pub fn engine_buffers(stage: EngineStage) -> Vec<(u32, ExpectedStruct)> {
     match stage {
         EngineStage::Vertex => vec![
@@ -260,19 +270,19 @@ fn shadow_pass_push_layout() -> ExpectedStruct {
     }
 }
 
-// Compare the engine's expected layout against the shader's reflected layout
-// for one binding. Returns `Err(message)` on a mismatch, naming the binding,
-// the field, and the expected-vs-actual offset.
-//
-// Two checks, complementary:
-//   * The binding's data size must match the engine struct's size. A wrong
-//     field type (`float3` where the engine packs `[f32; 3]`) changes the
-//     stride even when every named offset still lines up: this is the check
-//     that would have caught the `RtGeomEntry` fault.
-//   * Every engine field the shader also declares (matched by name) must sit at
-//     the engine's offset. Fields the shader renames or omits are skipped: it
-//     only has to read the fields it uses from where the engine put them. The
-//     size check remains the backstop for the renamed-field case.
+/// Compare the engine's expected layout against the shader's reflected layout
+/// for one binding. Returns `Err(message)` on a mismatch, naming the binding,
+/// the field, and the expected-vs-actual offset.
+///
+/// Two checks, complementary:
+///   * The binding's data size must match the engine struct's size. A wrong
+///     field type (`float3` where the engine packs `[f32; 3]`) changes the
+///     stride even when every named offset still lines up: this is the check
+///     that would have caught the `RtGeomEntry` fault.
+///   * Every engine field the shader also declares (matched by name) must sit at
+///     the engine's offset. Fields the shader renames or omits are skipped: it
+///     only has to read the fields it uses from where the engine put them. The
+///     size check remains the backstop for the renamed-field case.
 pub fn compare_binding(
     index: u32,
     expected: &ExpectedStruct,
@@ -300,10 +310,10 @@ pub fn compare_binding(
     Ok(())
 }
 
-// Validate every engine-owned binding a shader stage uses against the engine's
-// contract. `reflected` maps buffer index → the layout reflected at that index;
-// indices the shader does not bind are simply absent and skipped. Returns the
-// first mismatch, or `Ok(())` if every engine binding the shader uses matches.
+/// Validate every engine-owned binding a shader stage uses against the engine's
+/// contract. `reflected` maps buffer index → the layout reflected at that index;
+/// indices the shader does not bind are simply absent and skipped. Returns the
+/// first mismatch, or `Ok(())` if every engine binding the shader uses matches.
 pub fn validate_stage(
     stage: EngineStage,
     reflected: &HashMap<u32, ReflectedStruct>,

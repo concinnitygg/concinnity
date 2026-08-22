@@ -3,18 +3,21 @@
 // rewrite world.jsonl through here. The shipped runtime plays compiled blobs
 // and never touches world.jsonl, so this lives in the build crate, not core.
 
-// An asset entry after $include resolution and type parsing.
+/// An asset entry after $include resolution and type parsing.
 #[derive(Clone)]
 pub struct WorldJsonlAsset {
+    /// The asset's declared name.
     pub name: String,
+    /// The asset's registry type name.
     pub asset_type: String,
+    /// The asset's authored args.
     pub args: serde_json::Value,
 }
 
 impl WorldJsonlAsset {
-    // Build a typed entry from a raw JSON asset object. `name` and `type` are
-    // expected to be present; a missing field degrades to an empty string
-    // rather than failing.
+    /// Build a typed entry from a raw JSON asset object. `name` and `type` are
+    /// expected to be present; a missing field degrades to an empty string
+    /// rather than failing.
     pub fn from_value(v: &serde_json::Value) -> Self {
         WorldJsonlAsset {
             name: v
@@ -35,10 +38,10 @@ impl WorldJsonlAsset {
     }
 }
 
-// Parse a world.jsonl string into a flat list of raw asset objects.
-//
-// Each non-blank, non-comment line must be a valid JSON object. The order
-// of entries is preserved. Returns an error on the first malformed line.
+/// Parse a world.jsonl string into a flat list of raw asset objects.
+///
+/// Each non-blank, non-comment line must be a valid JSON object. The order
+/// of entries is preserved. Returns an error on the first malformed line.
 pub fn parse_world_jsonl(content: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
     let mut assets = Vec::new();
     for line in content.lines() {
@@ -52,10 +55,10 @@ pub fn parse_world_jsonl(content: &str) -> Result<Vec<serde_json::Value>, serde_
     Ok(assets)
 }
 
-// Serialize a list of asset objects back to world.jsonl format.
-//
-// Each entry is written as a compact single-line JSON object followed by a
-// newline. The result is a valid world.jsonl file.
+/// Serialize a list of asset objects back to world.jsonl format.
+///
+/// Each entry is written as a compact single-line JSON object followed by a
+/// newline. The result is a valid world.jsonl file.
 pub fn write_world_jsonl(assets: &[serde_json::Value]) -> serde_json::Result<String> {
     let mut out = String::new();
     for asset in assets {
@@ -65,8 +68,8 @@ pub fn write_world_jsonl(assets: &[serde_json::Value]) -> serde_json::Result<Str
     Ok(out)
 }
 
-// Read src_path, apply a fallible mutation to the asset list, and write
-// the result to dst_path. src and dst may be the same path or different.
+/// Read src_path, apply a fallible mutation to the asset list, and write
+/// the result to dst_path. src and dst may be the same path or different.
 pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
@@ -89,7 +92,7 @@ where
     std::fs::write(dst_path, out)
 }
 
-// Read world.jsonl at json_path, mutate the asset list in-place, write back.
+/// Read world.jsonl at json_path, mutate the asset list in-place, write back.
 pub fn patch_world_jsonl<F>(json_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>),
@@ -100,7 +103,7 @@ where
     })
 }
 
-// Read asset names from world.jsonl without a full parse, for error messages.
+/// Read asset names from world.jsonl without a full parse, for error messages.
 pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content)

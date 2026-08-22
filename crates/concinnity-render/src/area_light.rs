@@ -1,18 +1,16 @@
-// src/area_light.rs
-//
-// Packs authored `RectAreaLight`s into the per-scene `AreaLightData` table the
-// forward pass reads alongside the `GpuLight` buffer.
-//
-// The GpuLight record carries the panel's centre (`position`), emitting
-// direction (`direction`), colour, intensity, and range; only the two in-plane
-// edge vectors and the sidedness flag need the parallel table, indexed by
-// `GpuLight.data_index`. The edge vectors are pre-scaled by the half-extents, so
-// the shader reconstructs the four corners as `centre +/- right +/- up` without
-// needing the sizes separately.
-//
-// The tangent frame comes from `geometry::glass_quad::plane_basis`, shared with
-// the glass-panel quad builder, so a panel and an area light with the same
-// normal agree on which way is "across".
+//! Packs authored `RectAreaLight`s into the per-scene `AreaLightData` table the
+//! forward pass reads alongside the `GpuLight` buffer.
+//!
+//! The GpuLight record carries the panel's centre (`position`), emitting
+//! direction (`direction`), colour, intensity, and range; only the two in-plane
+//! edge vectors and the sidedness flag need the parallel table, indexed by
+//! `GpuLight.data_index`. The edge vectors are pre-scaled by the half-extents, so
+//! the shader reconstructs the four corners as `centre +/- right +/- up` without
+//! needing the sizes separately.
+//!
+//! The tangent frame comes from `geometry::glass_quad::plane_basis`, shared with
+//! the glass-panel quad builder, so a panel and an area light with the same
+//! normal agree on which way is "across".
 
 use crate::assets::RectAreaLight;
 use crate::geometry::glass_quad::plane_basis;
@@ -20,7 +18,7 @@ use crate::render_types::{AreaLightData, MAX_AREA_LIGHTS};
 
 // Per-rect table index: `indices[i]` is the `AreaLightData` slot rect `i` owns,
 // or -1 once the table is full. The value is what `GpuLight.data_index` carries.
-pub fn assign_area_light_slots(rect_lights: &[RectAreaLight]) -> Vec<i32> {
+pub(crate) fn assign_area_light_slots(rect_lights: &[RectAreaLight]) -> Vec<i32> {
     if rect_lights.len() > MAX_AREA_LIGHTS {
         tracing::warn!(
             "GraphicsSystem: {} area lights declared; only {} are supported -- extras ignored",
@@ -34,7 +32,10 @@ pub fn assign_area_light_slots(rect_lights: &[RectAreaLight]) -> Vec<i32> {
 }
 
 // The `AreaLightData` for each assigned slot, ordered by slot index.
-pub fn build_area_light_data(rect_lights: &[RectAreaLight], slots: &[i32]) -> Vec<AreaLightData> {
+pub(crate) fn build_area_light_data(
+    rect_lights: &[RectAreaLight],
+    slots: &[i32],
+) -> Vec<AreaLightData> {
     let mut out = vec![AreaLightData::ZERO; count_area_lights(slots)];
     for (light, &slot) in rect_lights.iter().zip(slots) {
         if slot >= 0 {
@@ -45,7 +46,7 @@ pub fn build_area_light_data(rect_lights: &[RectAreaLight], slots: &[i32]) -> Ve
 }
 
 // How many slots `assign_area_light_slots` handed out.
-pub fn count_area_lights(slots: &[i32]) -> usize {
+pub(crate) fn count_area_lights(slots: &[i32]) -> usize {
     slots.iter().filter(|s| **s >= 0).count()
 }
 

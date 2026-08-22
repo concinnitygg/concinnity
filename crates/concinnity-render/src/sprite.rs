@@ -1,12 +1,10 @@
-// src/sprite.rs
-//
-// Sprite quad assembly. Piggybacks on the text render pass: a plain Sprite is
-// emitted as a TextDrawCall containing a single quad with the sentinel UV
-// (u < 0) the text shader interprets as a solid-coloured fill (alpha carried
-// in v); a Sprite with a `texture` is emitted with real 0..1 UVs and a
-// positive vertex `mode` so the shader samples the sprite's texture, which
-// lives in the same atlas pool as the font atlases. Either way, screen-space
-// rectangles need no pipeline of their own.
+//! Sprite quad assembly. Piggybacks on the text render pass: a plain Sprite is
+//! emitted as a TextDrawCall containing a single quad with the sentinel UV
+//! (u < 0) the text shader interprets as a solid-coloured fill (alpha carried
+//! in v); a Sprite with a `texture` is emitted with real 0..1 UVs and a
+//! positive vertex `mode` so the shader samples the sprite's texture, which
+//! lives in the same atlas pool as the font atlases. Either way, screen-space
+//! rectangles need no pipeline of their own.
 
 use std::collections::HashMap;
 
@@ -16,9 +14,9 @@ use crate::ecs::asset_id::AssetId;
 use crate::render_types::{TextDrawCall, TextVertex};
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 
-// A view-owned sprite that spans the whole reference canvas is a full-screen
-// backdrop (e.g. a menu dim): it is stretched to fill the live window rather
-// than uniform-scaled, and an opaque one hides the scene behind it.
+/// A view-owned sprite that spans the whole reference canvas is a full-screen
+/// backdrop (e.g. a menu dim): it is stretched to fill the live window rather
+/// than uniform-scaled, and an opaque one hides the scene behind it.
 pub fn covers_canvas(s: &Sprite) -> bool {
     let [ref_w, ref_h] = UI_REFERENCE_SIZE;
     s.screen.is_some()
@@ -38,7 +36,8 @@ pub fn covers_canvas(s: &Sprite) -> bool {
 // window size: view-owned sprites are overlay UI authored in the reference
 // canvas and are mapped onto the window so menus scale with it; HUD / scene
 // sprites (view == None) keep literal window pixels.
-pub fn build_sprite_calls(
+#[cfg(test)]
+pub(crate) fn build_sprite_calls(
     sprites: &[Sprite],
     default_atlas_slot: Option<usize>,
     texture_slots: &HashMap<TextureHandle, usize>,
@@ -59,11 +58,11 @@ pub fn build_sprite_calls(
     out.take()
 }
 
-// `build_sprite_calls`, appending onto an existing draw list so a caller
-// assembling a frame from several element groups reuses one buffer (and, in
-// steady state, the pooled geometry of the spent frame it recycled). A
-// `follow_cursor` sprite is skipped: it is the cursor pass's silhouette
-// source (see `cursor.rs`), not a scene quad.
+/// `build_sprite_calls`, appending onto an existing draw list so a caller
+/// assembling a frame from several element groups reuses one buffer (and, in
+/// steady state, the pooled geometry of the spent frame it recycled). A
+/// `follow_cursor` sprite is skipped: it is the cursor pass's silhouette
+/// source (see `cursor.rs`), not a scene quad.
 pub fn build_sprite_calls_into(
     out: &mut crate::call_buffer::TextCallBuffer,
     sprites: &[Sprite],

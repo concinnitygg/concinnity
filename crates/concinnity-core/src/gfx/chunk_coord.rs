@@ -1,62 +1,62 @@
-// src/gfx/chunk_coord.rs
-//
-// Integer coordinate of one chunk column in an infinite voxel world.
-//
-// The chunk grid is 2D: infinite in X/Z, a single fixed-height chunk in Y
-// (voxel/Minecraft-style worlds bound the vertical extent). A `ChunkCoord` is
-// the integer index of a chunk column; the world position of its `(0,0,0)`
-// corner is `coord * chunk_world_size`.
+//! Integer coordinate of one chunk column in an infinite voxel world.
+//!
+//! The chunk grid is 2D: infinite in X/Z, a single fixed-height chunk in Y
+//! (voxel/Minecraft-style worlds bound the vertical extent). A `ChunkCoord` is
+//! the integer index of a chunk column; the world position of its `(0,0,0)`
+//! corner is `coord * chunk_world_size`.
 
-// Integer index of a chunk column in the infinite X/Z grid.
-//
-// `x` and `z` are chunk indices, not world units; the chunk's world-space
-// `(0,0,0)` corner is `(x as f32 * chunk_w, 0, z as f32 * chunk_d)`.
+/// Integer index of a chunk column in the infinite X/Z grid.
+///
+/// `x` and `z` are chunk indices, not world units; the chunk's world-space
+/// `(0,0,0)` corner is `(x as f32 * chunk_w, 0, z as f32 * chunk_d)`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ChunkCoord {
+    /// Chunk index along X.
     pub x: i32,
+    /// Chunk index along Z.
     pub z: i32,
 }
 
 impl ChunkCoord {
-    // A chunk coordinate from raw indices.
+    /// A chunk coordinate from raw indices.
     pub const fn new(x: i32, z: i32) -> Self {
         Self { x, z }
     }
 
-    // The chunk column a world-space `(wx, wz)` position falls in.
-    //
-    // `chunk_w` / `chunk_d` are the chunk's world-space size on X / Z. Floors
-    // rather than truncates, so a negative coordinate maps to the chunk *below*
-    // it rather than toward zero.
+    /// The chunk column a world-space `(wx, wz)` position falls in.
+    ///
+    /// `chunk_w` / `chunk_d` are the chunk's world-space size on X / Z. Floors
+    /// rather than truncates, so a negative coordinate maps to the chunk *below*
+    /// it rather than toward zero.
     pub fn from_world(wx: f32, wz: f32, chunk_w: f32, chunk_d: f32) -> Self {
         Self::new(floor_div(wx, chunk_w), floor_div(wz, chunk_d))
     }
 
-    // World-space `(x, z)` of this chunk's `(0,0,0)` corner.
+    /// World-space `(x, z)` of this chunk's `(0,0,0)` corner.
     pub fn origin_world(self, chunk_w: f32, chunk_d: f32) -> (f32, f32) {
         (self.x as f32 * chunk_w, self.z as f32 * chunk_d)
     }
 
-    // This coordinate shifted by `(dx, dz)` chunks.
+    /// This coordinate shifted by `(dx, dz)` chunks.
     pub fn offset(self, dx: i32, dz: i32) -> Self {
         Self::new(self.x + dx, self.z + dz)
     }
 
-    // Chebyshev (square-ring) distance to `other`, in chunks.
-    //
-    // This is the metric the streaming window uses for radius membership: a
-    // chunk is "in view" when its Chebyshev distance to the camera chunk is
-    // `<= view_radius`, which selects a square block of chunks.
+    /// Chebyshev (square-ring) distance to `other`, in chunks.
+    ///
+    /// This is the metric the streaming window uses for radius membership: a
+    /// chunk is "in view" when its Chebyshev distance to the camera chunk is
+    /// `<= view_radius`, which selects a square block of chunks.
     pub fn chebyshev_distance(self, other: ChunkCoord) -> i32 {
         let dx = (self.x - other.x).abs();
         let dz = (self.z - other.z).abs();
         if dx > dz { dx } else { dz }
     }
 
-    // Squared Euclidean distance to `other`, in chunk units.
-    //
-    // Used to prioritise loads (nearest chunk first). Squared keeps the math
-    // `sqrt`-free; `i64` so a far-apart pair cannot overflow.
+    /// Squared Euclidean distance to `other`, in chunk units.
+    ///
+    /// Used to prioritise loads (nearest chunk first). Squared keeps the math
+    /// `sqrt`-free; `i64` so a far-apart pair cannot overflow.
     pub fn sq_distance(self, other: ChunkCoord) -> i64 {
         let dx = (self.x - other.x) as i64;
         let dz = (self.z - other.z) as i64;
@@ -73,21 +73,21 @@ fn floor_div(v: f32, size: f32) -> i32 {
     crate::math::floor(v / size) as i32
 }
 
-// Rebase a column-major view matrix onto a render `origin` for
-// camera-relative rendering.
-//
-// The returned matrix keeps `view`'s orientation but places the camera at
-// `cam_pos - origin`, so geometry expressed relative to `origin` transforms
-// identically to the absolute scene -- `camera_relative_view(view, ..) *
-// model_relative` equals `view * model_absolute` -- while being computed
-// entirely from small coordinates, avoiding the catastrophic cancellation a
-// large-magnitude `view * model` product suffers.
-//
-// Only the rotation (the upper-left 3x3) of `view` is used; the translation
-// column is rebuilt as `rotation * (origin - cam_pos)`. That subtraction is
-// exact in `f32` when the camera sits within a chunk of the origin (two
-// nearby like-signed values subtract without rounding), so no precision is
-// lost rebasing.
+/// Rebase a column-major view matrix onto a render `origin` for
+/// camera-relative rendering.
+///
+/// The returned matrix keeps `view`'s orientation but places the camera at
+/// `cam_pos - origin`, so geometry expressed relative to `origin` transforms
+/// identically to the absolute scene -- `camera_relative_view(view, ..) *
+/// model_relative` equals `view * model_absolute` -- while being computed
+/// entirely from small coordinates, avoiding the catastrophic cancellation a
+/// large-magnitude `view * model` product suffers.
+///
+/// Only the rotation (the upper-left 3x3) of `view` is used; the translation
+/// column is rebuilt as `rotation * (origin - cam_pos)`. That subtraction is
+/// exact in `f32` when the camera sits within a chunk of the origin (two
+/// nearby like-signed values subtract without rounding), so no precision is
+/// lost rebasing.
 pub fn camera_relative_view(
     view: [[f32; 4]; 4],
     cam_pos: [f32; 3],

@@ -888,7 +888,7 @@ impl VkContext {
     // into the reserved slot for `id`; the encoder reads it next frame.
     // Reuses tombstoned slots from a prior `remove_decal` before growing
     // the vec.
-    pub fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
+    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
         let last_tex = self.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
@@ -927,7 +927,7 @@ impl VkContext {
     // `add_decal` may reuse it. Reached only through the bin's `cn debug`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
     #[allow(dead_code)]
-    pub fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
         let slot = self
             .decal
             .records

@@ -16,5 +16,5 @@ before it is sampled, so there is never missing shadow data.
 
 ## Values
 
-- `every_frame`
-- `hybrid`
+- `every_frame`: Re-render every cascade every frame.
+- `hybrid`: Re-render the near cascades every frame and the distant ones on a rotation.

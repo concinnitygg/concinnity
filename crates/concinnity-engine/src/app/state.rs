@@ -1,17 +1,18 @@
-// src/app/state.rs
+//! The `App` value: a world plus the loop state that drives it.
+
 use crate::blob;
 use crate::ecs::{StepResult, World};
 use crate::result::CnResult;
 use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppStatus {
+pub(crate) enum AppStatus {
     Created,
     Started,
-    Stopped,
 }
 
 #[derive(Debug)]
+/// The application: a world plus the loop state that drives it.
 pub struct App {
     status: AppStatus,
     world: World,
@@ -31,21 +32,12 @@ impl Default for App {
 }
 
 impl App {
+    /// An app holding an empty world.
     pub fn new() -> Self {
         Self {
             status: AppStatus::Created,
             world: World::new(),
             shutdown: ShutdownToken::new(),
-            pacer: Default::default(),
-            clock: Default::default(),
-        }
-    }
-
-    pub fn new_with_token(shutdown: ShutdownToken) -> Self {
-        Self {
-            status: AppStatus::Created,
-            world: World::new(),
-            shutdown,
             pacer: Default::default(),
             clock: Default::default(),
         }
@@ -58,8 +50,8 @@ impl App {
         app
     }
 
-    // load assets and blob payload data from the primary blob and
-    // populate the world. Replaces any previously loaded world
+    /// load assets and blob payload data from the primary blob and
+    /// populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
         let loaded = blob::load()?;
         let (assets, mut resources, scene_groups, mesh_bounds, manifest, blob_data) = (
@@ -96,20 +88,24 @@ impl App {
         Ok(())
     }
 
+    /// Borrow the app's world.
     pub fn world(&self) -> &World {
         &self.world
     }
 
+    /// Mutably borrow the app's world.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
     }
 
-    // clone of the root cancellation token. Pass this to systems or the
-    // ctrl+c handler so they all share a single cancellation source
+    /// clone of the root cancellation token. Pass this to systems or the
+    /// ctrl+c handler so they all share a single cancellation source
     pub fn shutdown_token(&self) -> ShutdownToken {
         self.shutdown.clone()
     }
 
+    /// Build the world's systems and run their `init`. Must run once, before
+    /// the first step.
     pub fn start(&mut self) -> Result<(), CnResult> {
         if self.status != AppStatus::Created {
             tracing::error!("App must be in Created state to start");
@@ -171,8 +167,8 @@ impl App {
         self.world.insert_resource(memory);
     }
 
-    // Replace the current world and reset to Created so start() can be called again.
-    // Used to load a new scene at runtime.
+    /// Replace the current world and reset to Created so start() can be called again.
+    /// Used to load a new scene at runtime.
     pub fn load_world(&mut self, world: World) {
         self.world = world;
         self.status = AppStatus::Created;
@@ -184,7 +180,7 @@ impl App {
     // then the simulation clock publishes the frame's fixed-tick budget. The
     // menu state read is the previous frame's, the same one-frame lag the
     // pacer's clamp accepts.
-    pub fn world_step(&mut self) -> StepResult {
+    pub(crate) fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
         let paused = self
             .world
@@ -200,9 +196,9 @@ impl App {
         self.run_with(crate::app::run::RunOptions::default())
     }
 
-    /// Run this app on the runtime loop, consuming it. Drives frames until the
-    /// window closes, a system stops the world, or CTRL+C is received.
-    pub fn run_with(self, options: crate::app::run::RunOptions) -> std::io::Result<()> {
+    // Run this app on the runtime loop, consuming it. Drives frames until the
+    // window closes, a system stops the world, or CTRL+C is received.
+    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> std::io::Result<()> {
         crate::app::run::start_runtime(self, options)
     }
 }
@@ -319,19 +315,6 @@ mod tests {
         let mut app = App::from_world(world);
         assert!(app.world().query::<Application>().next().is_some());
         assert_eq!(app.start(), Ok(()), "an adopted world starts");
-    }
-
-    // The token handed to new_with_token is the same cancellation source
-    // shutdown_token() clones out, so one cancel stops every holder.
-    #[test]
-    fn new_with_token_shares_one_cancellation_source() {
-        let token = ShutdownToken::new();
-        let app = App::new_with_token(token.clone());
-        let handed_out = app.shutdown_token();
-        assert!(!handed_out.is_cancelled());
-
-        token.cancel();
-        assert!(handed_out.is_cancelled(), "the clone observes the cancel");
     }
 
     // With no FrameRateCap published the pacer has nothing to hold the frame

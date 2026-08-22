@@ -11,34 +11,38 @@
 
 use crate::ecs::{Access, SYSTEMS, SystemAsset};
 
-pub struct ExecSchedule {
+pub(crate) struct ExecSchedule {
     // Wave membership: indices into the world's system list, grouped by
-    // level, members in table order within each wave.
+    // level, members in table order within each wave. Derived and asserted by
+    // this module's tests; `World::step` still walks systems in table order,
+    // so nothing reads it yet. Drop the allow once the step walks waves.
+    #[allow(dead_code)]
     waves: Vec<Vec<usize>>,
     accesses: Vec<Access>,
 }
 
 impl ExecSchedule {
-    pub fn waves(&self) -> &[Vec<usize>] {
+    #[allow(dead_code)]
+    pub(crate) fn waves(&self) -> &[Vec<usize>] {
         &self.waves
     }
 
-    pub fn access(&self, system: usize) -> Access {
+    pub(crate) fn access(&self, system: usize) -> Access {
         self.accesses[system]
     }
 
     // Total systems scheduled (across all waves).
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.accesses.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.accesses.is_empty()
     }
 }
 
 // Build the schedule for the world's gated systems, in their table order.
-pub fn build(systems: &[SystemAsset]) -> ExecSchedule {
+pub(crate) fn build(systems: &[SystemAsset]) -> ExecSchedule {
     let names: Vec<&'static str> = systems.iter().map(|s| s.name()).collect();
     let accesses: Vec<Access> = systems.iter().map(|s| s.access()).collect();
     build_from(&names, &accesses, |name| {

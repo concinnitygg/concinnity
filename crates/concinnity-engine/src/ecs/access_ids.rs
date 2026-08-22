@@ -45,7 +45,7 @@ macro_rules! define_access_ids {
         // Ensure every event queue a declared access can touch exists, so a
         // validated system's `events_mut` never grows the store's map
         // mid-tick. Exclusive systems keep today's lazy creation.
-        pub fn ensure_event_queues(store: &mut EventStore, access: Access) {
+        pub(crate) fn ensure_event_queues(store: &mut EventStore, access: Access) {
             if access.is_exclusive() {
                 return;
             }
@@ -102,7 +102,7 @@ define_access_ids! {
 }
 
 // The schedule id of a registered resource or event type.
-pub fn id_of<T: 'static>() -> Option<ComponentId> {
+pub(crate) fn id_of<T: 'static>() -> Option<ComponentId> {
     resolve(TypeId::of::<T>())
 }
 
@@ -114,7 +114,6 @@ fn resolve(type_id: TypeId) -> Option<ComponentId> {
 }
 
 // Build a component mask from registered component types.
-#[macro_export]
 macro_rules! component_mask {
     ( $( $ty:ty ),* $(,)? ) => {{
         #[allow(unused_mut)]
@@ -129,7 +128,6 @@ macro_rules! component_mask {
 // Build a resource mask from types in the access-id registry. Panics on an
 // unregistered type: called once at schedule build, so a typo fails loudly at
 // world start, not silently at runtime.
-#[macro_export]
 macro_rules! resource_mask {
     ( $( $ty:ty ),* $(,)? ) => {{
         #[allow(unused_mut)]
@@ -145,6 +143,8 @@ macro_rules! resource_mask {
     }};
 }
 
+pub(crate) use {component_mask, resource_mask};
+
 #[cfg(debug_assertions)]
 mod validate {
     use super::{resolve, table};
@@ -159,11 +159,11 @@ mod validate {
     // Mark the given system's declared access active on this thread for the
     // duration of its step. `None` clears it (init, decompose, and editor
     // drives run unvalidated).
-    pub fn set_active(active: Option<(Access, &'static str)>) {
+    pub(crate) fn set_active(active: Option<(Access, &'static str)>) {
         ACTIVE.with(|a| a.set(active));
     }
 
-    pub fn install_hook() {
+    pub(crate) fn install_hook() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| access_check::install(check));
     }
@@ -215,7 +215,7 @@ mod validate {
 }
 
 #[cfg(debug_assertions)]
-pub use validate::{install_hook, set_active};
+pub(crate) use validate::{install_hook, set_active};
 
 #[cfg(test)]
 mod tests {

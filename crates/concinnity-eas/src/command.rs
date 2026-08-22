@@ -20,40 +20,48 @@ use crate::entity::{Entities, Entity};
 
 type WorldFn<W> = Box<dyn FnOnce(&mut W) + Send>;
 
-// What the World must provide for a command queue to apply against it. The
-// engine's World implements this once the EAS World lands; the `Run` closures
-// receive `&mut W` directly and need nothing from the trait.
+/// What the World must provide for a command queue to apply against it. The
+/// engine's World implements this once the EAS World lands; the `Run` closures
+/// receive `&mut W` directly and need nothing from the trait.
 pub trait CommandTarget {
+    /// Remove the entity and every component row it owns.
     fn despawn_entity(&mut self, entity: Entity);
 }
 
+/// One deferred structural change, applied when the queue drains.
 pub enum Command<W> {
+    /// Despawn the entity.
     Despawn(Entity),
+    /// Run a closure against the world.
     Run(WorldFn<W>),
 }
 
 #[derive(Default)]
+/// Deferred structural changes recorded during a tick.
 pub struct CommandQueue<W> {
     commands: Vec<Command<W>>,
 }
 
 impl<W> CommandQueue<W> {
+    /// An empty queue.
     pub fn new() -> CommandQueue<W> {
         CommandQueue {
             commands: Vec::new(),
         }
     }
 
+    /// Commands recorded so far.
     pub fn len(&self) -> usize {
         self.commands.len()
     }
 
+    /// Whether nothing has been recorded.
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
-    // Borrow the queue for recording, pairing it with the entity allocator so
-    // `spawn` can reserve fresh ids.
+    /// Borrow the queue for recording, pairing it with the entity allocator so
+    /// `spawn` can reserve fresh ids.
     pub fn recorder<'a>(&'a mut self, entities: &'a Entities) -> Commands<'a, W> {
         Commands {
             entities,
@@ -65,9 +73,9 @@ impl<W> CommandQueue<W> {
         self.commands.push(command);
     }
 
-    // Apply every recorded command in record order against the World, draining
-    // the queue. Record order (not completion order) keeps application
-    // deterministic.
+    /// Apply every recorded command in record order against the World, draining
+    /// the queue. Record order (not completion order) keeps application
+    /// deterministic.
     pub fn apply(&mut self, world: &mut W)
     where
         W: CommandTarget,
@@ -81,26 +89,27 @@ impl<W> CommandQueue<W> {
     }
 }
 
+/// A recording handle over a queue and its entity allocator.
 pub struct Commands<'a, W> {
     entities: &'a Entities,
     queue: &'a mut CommandQueue<W>,
 }
 
 impl<W> Commands<'_, W> {
-    // Reserve a fresh entity id, usable immediately. Components are populated by
-    // queuing a `run` closure that inserts them.
+    /// Reserve a fresh entity id, usable immediately. Components are populated by
+    /// queuing a `run` closure that inserts them.
     pub fn spawn(&mut self) -> Entity {
         self.entities.reserve()
     }
 
-    // Queue a despawn, applied at the next sync point.
+    /// Queue a despawn, applied at the next sync point.
     pub fn despawn(&mut self, entity: Entity) {
         self.queue.push(Command::Despawn(entity));
     }
 
-    // Queue an arbitrary World mutation, applied at the next sync point. This is
-    // the closed-world escape hatch the engine uses for typed component
-    // insert and remove.
+    /// Queue an arbitrary World mutation, applied at the next sync point. This is
+    /// the closed-world escape hatch the engine uses for typed component
+    /// insert and remove.
     pub fn run(&mut self, f: impl FnOnce(&mut W) + Send + 'static) {
         self.queue.push(Command::Run(Box::new(f)));
     }

@@ -1,49 +1,52 @@
-// src/rt_refit.rs
-//
-// Backend-agnostic refit cadence for the per-frame skinned bottom-level
-// acceleration structures. A skinned object's BLAS traces vertices a compute
-// pass re-poses every frame, so it has to be updated every frame -- but while
-// the triangle set is unchanged that update can be a REFIT (Vulkan's
-// `VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR`, DXR's `PERFORM_UPDATE`),
-// which re-fits the existing tree's bounding volumes in place instead of
-// rebuilding it from scratch.
-//
-// A refit keeps the tree the last full build produced, so traversal quality
-// decays as the pose drifts away from the one that tree was built for; this
-// module bounds that with a periodic full rebuild. It owns only the pure
-// decision -- the descriptors, the allocation and the recorded build are
-// per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the
-// cadence is unit-testable without a GPU.
-//
-// Consumed by the DirectX + Vulkan backends. The Metal backend keeps its own
-// equivalent copy (metal/rt_ring.rs), the same split `rt_topology` already has.
+//! Backend-agnostic refit cadence for the per-frame skinned bottom-level
+//! acceleration structures. A skinned object's BLAS traces vertices a compute
+//! pass re-poses every frame, so it has to be updated every frame -- but while
+//! the triangle set is unchanged that update can be a REFIT (Vulkan's
+//! `VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR`, DXR's `PERFORM_UPDATE`),
+//! which re-fits the existing tree's bounding volumes in place instead of
+//! rebuilding it from scratch.
+//!
+//! A refit keeps the tree the last full build produced, so traversal quality
+//! decays as the pose drifts away from the one that tree was built for; this
+//! module bounds that with a periodic full rebuild. It owns only the pure
+//! decision -- the descriptors, the allocation and the recorded build are
+//! per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the
+//! cadence is unit-testable without a GPU.
+//!
+//! Consumed by the DirectX + Vulkan backends. The Metal backend keeps its own
+//! equivalent copy (metal/rt_ring.rs), the same split `rt_topology` already has.
 
-// Full rebuilds per ring slot: after this many consecutive refits the next
-// skinned update rebuilds that slot's BLAS from scratch. Each slot counts
-// independently and they are touched on different frames, so the rebuilds
-// stagger rather than landing on one frame.
+/// Full rebuilds per ring slot: after this many consecutive refits the next
+/// skinned update rebuilds that slot's BLAS from scratch. Each slot counts
+/// independently and they are touched on different frames, so the rebuilds
+/// stagger rather than landing on one frame.
 pub const REFIT_LIMIT: u32 = 32;
 
-// The geometry one skinned BLAS is built over: its slice of the shared skinned
-// index buffer plus the vertex range the deformed buffer spans. Equal
-// signatures mean the same triangles addressing the same vertex range with only
-// the positions moved, which is exactly when a refit is legal; anything else (a
-// mesh hot-reload, a different mesh becoming visible, a grown deformed buffer)
-// changes the geometry description and needs a full rebuild. `vertex_extent` is
-// carried because both APIs require the vertex count to match the structure
-// being updated, even though the vertex buffer's address may move.
+/// The geometry one skinned BLAS is built over: its slice of the shared skinned
+/// index buffer plus the vertex range the deformed buffer spans. Equal
+/// signatures mean the same triangles addressing the same vertex range with only
+/// the positions moved, which is exactly when a refit is legal; anything else (a
+/// mesh hot-reload, a different mesh becoming visible, a grown deformed buffer)
+/// changes the geometry description and needs a full rebuild. `vertex_extent` is
+/// carried because both APIs require the vertex count to match the structure
+/// being updated, even though the vertex buffer's address may move.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SkinnedShape {
+    /// First index of this slot's range in the shared index buffer.
     pub index_offset: usize,
+    /// Indices in this slot's range.
     pub index_count: usize,
+    /// Vertices the slot's range spans.
     pub vertex_extent: u32,
 }
 
-// Whether a slot's skinned BLAS can be refit from this frame's pose or must be
-// rebuilt from scratch.
+/// Whether a slot's skinned BLAS can be refit from this frame's pose or must be
+/// rebuilt from scratch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlasUpdate {
+    /// Rebuild the acceleration structure from scratch.
     Build,
+    /// Refit the existing acceleration structure in place.
     Refit,
 }
 
@@ -58,9 +61,9 @@ fn blas_update(shape_changed: bool, built: bool, refits: u32, limit: u32) -> Bla
     }
 }
 
-// One ring slot's refit bookkeeping: the geometry its BLAS were last built over,
-// whether they hold a tree a refit can update, and how many consecutive refits
-// have run since the last full build.
+/// One ring slot's refit bookkeeping: the geometry its BLAS were last built over,
+/// whether they hold a tree a refit can update, and how many consecutive refits
+/// have run since the last full build.
 #[derive(Default)]
 pub struct SkinnedRefit {
     shapes: Vec<SkinnedShape>,
@@ -69,12 +72,12 @@ pub struct SkinnedRefit {
 }
 
 impl SkinnedRefit {
-    // How this frame's skinned BLAS should be updated, recording the choice so
-    // the refit run stays bounded and the shapes so the next frame can compare.
-    // `storage_changed` must be set when the structures or the buffer they trace
-    // were (re)allocated this frame, which leaves no tree to refit. Call once the
-    // frame's fallible work has passed: recording a build the backend never
-    // encodes would leave the slot claiming a tree a later refit cannot update.
+    /// How this frame's skinned BLAS should be updated, recording the choice so
+    /// the refit run stays bounded and the shapes so the next frame can compare.
+    /// `storage_changed` must be set when the structures or the buffer they trace
+    /// were (re)allocated this frame, which leaves no tree to refit. Call once the
+    /// frame's fallible work has passed: recording a build the backend never
+    /// encodes would leave the slot claiming a tree a later refit cannot update.
     pub fn plan(&mut self, shapes: &[SkinnedShape], storage_changed: bool) -> BlasUpdate {
         let changed = storage_changed || self.shapes != shapes;
         let update = blas_update(changed, self.built, self.refits, REFIT_LIMIT);
@@ -92,9 +95,9 @@ impl SkinnedRefit {
         update
     }
 
-    // Forget the tree this slot's BLAS hold, so the next update rebuilds rather
-    // than refitting. Called when the slot stops publishing (no skinned object is
-    // visible) or its structures are otherwise invalidated.
+    /// Forget the tree this slot's BLAS hold, so the next update rebuilds rather
+    /// than refitting. Called when the slot stops publishing (no skinned object is
+    /// visible) or its structures are otherwise invalidated.
     pub fn reset(&mut self) {
         self.shapes.clear();
         self.built = false;

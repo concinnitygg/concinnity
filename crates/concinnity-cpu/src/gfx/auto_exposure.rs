@@ -1,59 +1,57 @@
-// src/gfx/auto_exposure.rs
-//
-// Auto-exposure (EV adaptation) state. The per-frame exponential-moving-average
-// update takes a GPU-measured average log-luminance and produces the next
-// frame's exposure multiplier. The histogram itself is built in the backend's
-// compute shader; this module owns only the reduction and the EMA so both can
-// be unit-tested without a GPU. The resolved settings the EMA reads live in
-// concinnity-core, re-exported here under their historical path.
+//! Auto-exposure (EV adaptation) state. The per-frame exponential-moving-average
+//! update takes a GPU-measured average log-luminance and produces the next
+//! frame's exposure multiplier. The histogram itself is built in the backend's
+//! compute shader; this module owns only the reduction and the EMA so both can
+//! be unit-tested without a GPU. The resolved settings the EMA reads live in
+//! concinnity-core, re-exported here under their historical path.
 
-// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
-// in bin 0. Roughly matches a moonlit interior at the dim end.
+/// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
+/// in bin 0. Roughly matches a moonlit interior at the dim end.
 pub const LUM_LOG2_MIN: f32 = -10.0;
 
-// Highest log2(luminance) the histogram bins span. Pixels brighter than this
-// fall in the last bin. Roughly matches a direct sun reflection at the bright
-// end. The shader uses `(LUM_LOG2_MAX - LUM_LOG2_MIN)` to convert a bin index
-// back to a log-luminance value during the average pass.
+/// Highest log2(luminance) the histogram bins span. Pixels brighter than this
+/// fall in the last bin. Roughly matches a direct sun reflection at the bright
+/// end. The shader uses `(LUM_LOG2_MAX - LUM_LOG2_MIN)` to convert a bin index
+/// back to a log-luminance value during the average pass.
 pub const LUM_LOG2_MAX: f32 = 12.0;
 
-// Number of histogram bins the build kernel writes into and the average kernel
-// reduces. 256 is small enough to fit in threadgroup memory on every Apple GPU
-// (1 KiB at u32) and big enough that the per-bin log-luminance step is fine.
+/// Number of histogram bins the build kernel writes into and the average kernel
+/// reduces. 256 is small enough to fit in threadgroup memory on every Apple GPU
+/// (1 KiB at u32) and big enough that the per-bin log-luminance step is fine.
 pub const HISTOGRAM_BINS: usize = 256;
 
 pub use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, HDR_MIDDLE_GREY_LOG2};
 
-// Running auto-exposure state. The current adapted EV moves toward the target
-// EV (derived from the GPU-measured average log-luminance) via an exponential
-// moving average so a sudden brightness change ramps in over a fraction of a
-// second rather than snapping. One instance lives on each backend that runs
-// auto-exposure.
+/// Running auto-exposure state. The current adapted EV moves toward the target
+/// EV (derived from the GPU-measured average log-luminance) via an exponential
+/// moving average so a sudden brightness change ramps in over a fraction of a
+/// second rather than snapping. One instance lives on each backend that runs
+/// auto-exposure.
 #[derive(Debug, Clone, Copy)]
 pub struct AutoExposureState {
-    // EV currently applied to the scene. Updated each frame by
-    // [`AutoExposureState::update`]; the backend reads it back out to set the
-    // exposure multiplier the post passes push to the GPU.
+    /// EV currently applied to the scene. Updated each frame by
+    /// [`AutoExposureState::update`]; the backend reads it back out to set the
+    /// exposure multiplier the post passes push to the GPU.
     pub current_ev: f32,
 }
 
 impl AutoExposureState {
-    // Initial state. The current EV is the midpoint of the settings' clamp
-    // range: a neutral starting point before the first GPU measurement
-    // arrives. The first `update` call snaps it toward the real scene EV.
+    /// Initial state. The current EV is the midpoint of the settings' clamp
+    /// range: a neutral starting point before the first GPU measurement
+    /// arrives. The first `update` call snaps it toward the real scene EV.
     pub fn new(settings: &AutoExposureSettings) -> Self {
         Self {
             current_ev: (settings.min_ev + settings.max_ev) * 0.5,
         }
     }
 
-    // Step the EMA one frame: take the GPU-measured average log-luminance
-    // (base-2), turn it into a target EV (the offset that maps the scene
-    // mean onto `settings.target_log_lum` plus the authored `ev_bias`),
-    // then move `current_ev` toward it by the clamped EMA rate. Returns
-    // the new clamped EV. `dt` is the frame time in seconds; non-finite or
-    // non-positive values short-circuit (the EV stays where it was, no
-    // NaN propagation into the post pass).
+    /// Step the EMA one frame: take the GPU-measured average log-luminance
+    /// (base-2), turn it into a target EV (the offset that maps the scene
+    /// mean onto `settings.target_log_lum` plus the authored `ev_bias`),
+    /// then move `current_ev` toward it by the clamped EMA rate. Returns
+    /// the new clamped EV. `dt` is the frame time in seconds; non-finite or
+    /// non-positive values short-circuit (the EV stays where it was, no
+    /// NaN propagation into the post pass).
     pub fn update(
         &mut self,
         avg_log_lum: f32,
@@ -86,7 +84,8 @@ impl AutoExposureState {
 // `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
 // "below sensor floor" and weighted-in only when every other bin is empty,
 // so a mostly-black frame still produces a finite EV.
-pub fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
+#[cfg(test)]
+pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
     let mut weighted_sum = 0.0f64;
     let mut count = 0u64;

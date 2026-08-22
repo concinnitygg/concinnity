@@ -13,7 +13,7 @@
 // injection pass adds one only if no asset of the companion's `asset_type` is
 // already present (case-insensitive, underscores stripped).
 #[derive(Debug, Clone)]
-pub struct CompanionSpec {
+pub(crate) struct CompanionSpec {
     // Default name for the injected asset (e.g. "GraphicsConfig").
     pub name: &'static str,
     // The asset type to inject.

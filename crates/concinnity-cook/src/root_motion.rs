@@ -14,7 +14,7 @@ use concinnity_core::gfx::root_motion::RootKey;
 // done, so re-running a build pass is a no-op). The root joint is joint 0
 // (skeletons are parents-before-children); a clip with no track on it gains
 // an empty curve and a warning upstream.
-pub fn bake_root_motion(anim: &mut Animation) {
+pub(crate) fn bake_root_motion(anim: &mut Animation) {
     if !anim.root_motion || !anim.root_track.is_empty() {
         return;
     }

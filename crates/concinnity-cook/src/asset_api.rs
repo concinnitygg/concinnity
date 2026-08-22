@@ -1,19 +1,19 @@
-// Shared asset construction API.
-//
-// This module is the single place where "type name + JSON args → BlobAssetDef"
-// is implemented.
+//! Shared asset construction API.
+//!
+//! This module is the single place where "type name + JSON args → BlobAssetDef"
+//! is implemented.
 use crate::ecs::{AssetKind, AssetOrigin, BlobAssetDef};
 use crate::registry::ComponentType;
 use crate::registry::Registration;
 use crate::result::CnResult;
 
-// Incoming request to construct an asset from an external caller
+/// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AssetRequest {
-    // type name as it appears in the world declaration ("Mesh", "Material", ...)
-    // case-insensitive; underscores ignored
+    /// type name as it appears in the world declaration ("Mesh", "Material", ...)
+    /// case-insensitive; underscores ignored
     pub asset_type: String,
-    // constructor args. If None, the type's default_args are used
+    /// constructor args. If None, the type's default_args are used
     #[serde(default)]
     pub args: Option<serde_json::Value>,
 }
@@ -22,23 +22,24 @@ pub struct AssetRequest {
 // metadata a caller needs to construct one. The summary is the first line of the
 // type's reference documentation, so a picker can say what an asset does rather
 // than only naming it.
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct AssetTypeEntry {
+pub(crate) struct AssetTypeEntry {
     pub asset_type: String,
     pub summary: String,
     pub registration: Registration,
 }
 
-// Validate an AssetRequest and produce a BlobAssetDef
-//
-// Returns Err if:
-// - The type name is unknown
-// - The type's origin is not External (not addable)
-// - The resolved args cannot be serialized
-//
-// Does not perform payload compilation (shaders, images, etc.). The build
-// step calls this first, then runs its compilation pass over the resulting
-// defs. The HTTP API follows the same two-step pattern
+/// Validate an AssetRequest and produce a BlobAssetDef
+///
+/// Returns Err if:
+/// - The type name is unknown
+/// - The type's origin is not External (not addable)
+/// - The resolved args cannot be serialized
+///
+/// Does not perform payload compilation (shaders, images, etc.). The build
+/// step calls this first, then runs its compilation pass over the resulting
+/// defs. The HTTP API follows the same two-step pattern
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
     if let Some(ct) = ComponentType::parse(&req.asset_type) {
         let reg = ct.registration();
@@ -67,7 +68,8 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnResult> {
 }
 
 // List every externally-addable component type with its registration metadata.
-pub fn list_addable_types() -> Vec<AssetTypeEntry> {
+#[cfg(test)]
+pub(crate) fn list_addable_types() -> Vec<AssetTypeEntry> {
     let mut entries: Vec<AssetTypeEntry> = ComponentType::addable_types()
         .map(|(ct, reg)| AssetTypeEntry {
             asset_type: ct.as_str().to_string(),

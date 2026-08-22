@@ -8,8 +8,8 @@ use crate::error::BlobError;
 use crate::schema::BlobMeta;
 use crate::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH};
 
-// Encode a blob image: the 16-byte header, the postcard-serialized metadata
-// block, then the raw payload section.
+/// Encode a blob image: the 16-byte header, the postcard-serialized metadata
+/// block, then the raw payload section.
 pub fn encode_cnb(meta: &BlobMeta, payload: &[u8]) -> Result<Vec<u8>, BlobError> {
     let meta_bytes: Vec<u8> = postcard::to_allocvec(meta).map_err(|_| BlobError::Encode)?;
 

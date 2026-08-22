@@ -45,7 +45,7 @@ impl VkContext {
     // bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in the
     // bin).
     #[allow(dead_code)]
-    pub fn rebuild_static_geometry(
+    pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<DrawGeometryUpdate>,
     ) -> Result<(), String> {
@@ -286,7 +286,7 @@ impl VkContext {
     // through the bin's `cn debug` runtime-mutation path (dead in the FFI lib,
     // live in the bin).
     #[allow(dead_code)]
-    pub fn rebuild_skinned_geometry(
+    pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
     ) -> Result<Vec<SkinnedSlotLayout>, String> {

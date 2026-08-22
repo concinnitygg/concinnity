@@ -36,6 +36,7 @@ impl PoolHandle {
     }
 }
 
+/// A fixed-capacity slot pool handing out generation-checked handles.
 pub struct Pool<T> {
     slots: Vec<Slot<T>>,
     // Vacant slots, most recently vacated first.
@@ -44,8 +45,8 @@ pub struct Pool<T> {
 }
 
 impl<T> Pool<T> {
-    // Reserve room for `capacity` objects. The pool never allocates again: it
-    // hands out `None` when full rather than growing.
+    /// Reserve room for `capacity` objects. The pool never allocates again: it
+    /// hands out `None` when full rather than growing.
     pub fn with_capacity(capacity: usize) -> Self {
         let mut slots = Vec::with_capacity(capacity);
         let mut free = Vec::with_capacity(capacity);
@@ -65,30 +66,34 @@ impl<T> Pool<T> {
         }
     }
 
+    /// Slots the pool reserved.
     pub fn capacity(&self) -> usize {
         self.slots.len()
     }
 
+    /// Live objects.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether the pool holds no live objects.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    pub fn is_full(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_full(&self) -> bool {
         self.free.is_empty()
     }
 
-    // Bytes the pool reserved, occupied or not: what it costs the process
-    // whatever its occupancy, and so what it reports to a byte budget.
+    /// Bytes the pool reserved, occupied or not: what it costs the process
+    /// whatever its occupancy, and so what it reports to a byte budget.
     pub fn reserved_bytes(&self) -> u64 {
         (self.capacity() * size_of::<Slot<T>>()) as u64
     }
 
-    // Place `value` in a free slot. `None` when the pool is full, which is the
-    // caller's cue to drop the request or widen the pool at setup.
+    /// Place `value` in a free slot. `None` when the pool is full, which is the
+    /// caller's cue to drop the request or widen the pool at setup.
     pub fn insert(&mut self, value: T) -> Option<PoolHandle> {
         let index = self.free.pop()?;
         let slot = &mut self.slots[index as usize];
@@ -100,8 +105,8 @@ impl<T> Pool<T> {
         })
     }
 
-    // Take the object back out, freeing its slot. `None` when the handle is
-    // stale or already removed.
+    /// Take the object back out, freeing its slot. `None` when the handle is
+    /// stale or already removed.
     pub fn remove(&mut self, handle: PoolHandle) -> Option<T> {
         let slot = self.slots.get_mut(handle.index as usize)?;
         if slot.generation != handle.generation {
@@ -114,11 +119,13 @@ impl<T> Pool<T> {
         Some(value)
     }
 
+    /// Borrow the object a handle names, if the handle is still live.
     pub fn get(&self, handle: PoolHandle) -> Option<&T> {
         let slot = self.slots.get(handle.index as usize)?;
         (slot.generation == handle.generation).then_some(slot.value.as_ref()?)
     }
 
+    /// Mutably borrow the object a handle names, if it is still live.
     pub fn get_mut(&mut self, handle: PoolHandle) -> Option<&mut T> {
         let slot = self.slots.get_mut(handle.index as usize)?;
         if slot.generation != handle.generation {
@@ -127,11 +134,12 @@ impl<T> Pool<T> {
         slot.value.as_mut()
     }
 
+    /// Whether a handle still names a live object.
     pub fn contains(&self, handle: PoolHandle) -> bool {
         self.get(handle).is_some()
     }
 
-    // Every live object with its handle, in slot order.
+    /// Every live object with its handle, in slot order.
     pub fn iter(&self) -> impl Iterator<Item = (PoolHandle, &T)> {
         self.slots.iter().enumerate().filter_map(|(index, slot)| {
             let value = slot.value.as_ref()?;
@@ -145,6 +153,7 @@ impl<T> Pool<T> {
         })
     }
 
+    /// Every live object with its handle, mutably, in slot order.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (PoolHandle, &mut T)> {
         self.slots
             .iter_mut()
@@ -162,8 +171,8 @@ impl<T> Pool<T> {
             })
     }
 
-    // Drop every occupant, keeping the reserved storage. Outstanding handles go
-    // stale, as they would if each object were removed individually.
+    /// Drop every occupant, keeping the reserved storage. Outstanding handles go
+    /// stale, as they would if each object were removed individually.
     pub fn clear(&mut self) {
         self.free.clear();
         for (index, slot) in self.slots.iter_mut().enumerate().rev() {

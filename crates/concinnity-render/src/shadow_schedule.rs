@@ -1,20 +1,18 @@
-// src/shadow_schedule.rs
-//
-// Cross-backend cascade re-render scheduling for the cascaded shadow map. The
-// shadow pass re-rasterizes all scene geometry into every cascade slice, so it
-// is one of the heaviest passes; `ShadowUpdate::Hybrid` amortizes the far
-// cascades across frames (near cascade every frame, one far cascade round-robin)
-// while keeping each slice primed before it is sampled. Shared by all three
-// backends so the policy lives once next to the CSM math in `csm.rs`.
+//! Cross-backend cascade re-render scheduling for the cascaded shadow map. The
+//! shadow pass re-rasterizes all scene geometry into every cascade slice, so it
+//! is one of the heaviest passes; `ShadowUpdate::Hybrid` amortizes the far
+//! cascades across frames (near cascade every frame, one far cascade round-robin)
+//! while keeping each slice primed before it is sampled. Shared by all three
+//! backends so the policy lives once next to the CSM math in `csm.rs`.
 
 use crate::assets::ShadowUpdate;
 use crate::render_types::NUM_SHADOW_CASCADES;
 
-// Round-robin clock + primed-set state for the cascade re-render schedule. One
-// per renderer; `next_mask` advances it once per frame and returns which
-// cascades to re-render. The caller refreshes only those cascades' light VPs and
-// re-rasterizes only those slices, so skipped cascades keep the depth + VP they
-// were last rendered with.
+/// Round-robin clock + primed-set state for the cascade re-render schedule. One
+/// per renderer; `next_mask` advances it once per frame and returns which
+/// cascades to re-render. The caller refreshes only those cascades' light VPs and
+/// re-rasterizes only those slices, so skipped cascades keep the depth + VP they
+/// were last rendered with.
 #[derive(Debug, Default)]
 pub struct ShadowCascadeScheduler {
     // Advances once per shadow update; selects which far cascade Hybrid mode
@@ -27,10 +25,10 @@ pub struct ShadowCascadeScheduler {
 }
 
 impl ShadowCascadeScheduler {
-    // Choose which cascades to re-render this frame and advance the round-robin
-    // clock. Delegates the selection to the pure `select_cascade_mask` and
-    // applies its side effects: advance the clock and record the newly primed
-    // set. Bit `i` set in the result means cascade `i` re-renders this frame.
+    /// Choose which cascades to re-render this frame and advance the round-robin
+    /// clock. Delegates the selection to the pure `select_cascade_mask` and
+    /// applies its side effects: advance the clock and record the newly primed
+    /// set. Bit `i` set in the result means cascade `i` re-renders this frame.
     pub fn next_mask(&mut self, update: ShadowUpdate, active_cascades: u32) -> u32 {
         let (mask, primed) =
             select_cascade_mask(update, self.clock, self.primed_mask, active_cascades);

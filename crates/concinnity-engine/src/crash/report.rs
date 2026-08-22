@@ -37,9 +37,9 @@ pub(crate) struct CrashReport {
     pub message: String,
     pub thread: Option<String>,
     pub location: Option<String>,
-    pub backtrace: Option<String>,
+    pub(crate) backtrace: Option<String>,
     pub notes: Vec<(String, String)>,
-    pub recent_logs: Vec<String>,
+    pub(crate) recent_logs: Vec<String>,
     pub memory: MemorySnapshot,
 }
 
@@ -176,10 +176,10 @@ fn truncated(s: &str, cap: usize) -> &str {
 // report needs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct UtcTime {
-    pub year: i64,
-    pub month: u32,
+    pub(crate) year: i64,
+    pub(crate) month: u32,
     pub day: u32,
-    pub hour: u32,
+    pub(crate) hour: u32,
     pub minute: u32,
     pub second: u32,
 }

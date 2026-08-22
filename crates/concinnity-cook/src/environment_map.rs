@@ -1,38 +1,36 @@
-// src/environment_map.rs
-//
-// Compiles an EnvironmentMap component's args into a payload bundling two
-// precomputed IBL cubemaps:
-//
-//   - **Irradiance cubemap.** Low-resolution (8x8 per face by default)
-//     cosine-weighted hemisphere integral of the source. Used by the shader's
-//     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
-//   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
-//     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
-//     Used with the Karis env-BRDF analytic fit (already in every fragment shader
-//     as `env_brdf_approx`) for the specular ambient term.
-//
-// A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-// (`env_brdf_approx` in main.metal / main_frag.hlsl / main.frag) replaces
-// it analytically. That keeps one binding slot free and dodges a build step.
-//
-// Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
-// Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
-// (phi, theta) grid for irradiance.
-//
-// Payload format (little-endian):
-//   u32  magic              = b"ENVM" = 0x4D564E45
-//   u32  format_id          = 0  (RGBA32F)
-//   u32  irradiance_face    (e.g. 8)
-//   u32  prefilter_face     (mip 0 size, e.g. 512)
-//   u32  prefilter_mips     (e.g. 5)
-//   u32  _pad
-//   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
-//   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
-//   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
-//   ...
-//   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
-//
-// Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
+//! Compiles an EnvironmentMap component's args into a payload bundling two
+//! precomputed IBL cubemaps:
+//!
+//!   - **Irradiance cubemap.** Low-resolution (8x8 per face by default)
+//!     cosine-weighted hemisphere integral of the source. Used by the shader's
+//!     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
+//!   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
+//!     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
+//!     Used with the Karis env-BRDF analytic fit (already in every fragment shader
+//!     as `env_brdf_approx`) for the specular ambient term.
+//!
+//! A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
+//! (`env_brdf_approx` in main.metal / main_frag.hlsl / main.frag) replaces
+//! it analytically. That keeps one binding slot free and dodges a build step.
+//!
+//! Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
+//! Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
+//! (phi, theta) grid for irradiance.
+//!
+//! Payload format (little-endian):
+//!   u32  magic              = b"ENVM" = 0x4D564E45
+//!   u32  format_id          = 0  (RGBA32F)
+//!   u32  irradiance_face    (e.g. 8)
+//!   u32  prefilter_face     (mip 0 size, e.g. 512)
+//!   u32  prefilter_mips     (e.g. 5)
+//!   u32  _pad
+//!   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
+//!   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
+//!   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
+//!   ...
+//!   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
+//!
+//! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
 use serde::Deserialize;
 
@@ -96,7 +94,7 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
     Ok(params)
 }
 
-pub fn validate_environment_map_args(args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn validate_environment_map_args(args: &serde_json::Value) -> Result<(), String> {
     resolve_args(args).map(|_| ())
 }
 
@@ -119,7 +117,7 @@ fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
     }
 }
 
-pub fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_environment_map_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let params = resolve_args(args)?;
     let prefilter_face = params.prefilter_face_size;
     let irradiance_face = params.irradiance_face_size;
@@ -184,15 +182,15 @@ fn bake_payload(
     )
 }
 
-// Decode an EnvironmentMap source path the same way
-// `compile_environment_map_payload` does at build time, returning the
-// serialised payload (header + irradiance + prefilter mips). Exposed for the
-// asset hot-reload path (`cn debug` only), which the editor drives; production
-// reads the compiled payload from a blob locator instead. `prefilter_face`,
-// `irradiance_face`, and `prefilter_samples` should be the values from the
-// declared `EnvironmentMap` asset so the decode produces the same texture sizes
-// as the build pass. The convolutions are CPU-bound and take seconds at default
-// sizes: the caller pays this on the render thread.
+/// Decode an EnvironmentMap source path the same way
+/// `compile_environment_map_payload` does at build time, returning the
+/// serialised payload (header + irradiance + prefilter mips). Exposed for the
+/// asset hot-reload path (`cn debug` only), which the editor drives; production
+/// reads the compiled payload from a blob locator instead. `prefilter_face`,
+/// `irradiance_face`, and `prefilter_samples` should be the values from the
+/// declared `EnvironmentMap` asset so the decode produces the same texture sizes
+/// as the build pass. The convolutions are CPU-bound and take seconds at default
+/// sizes: the caller pays this on the render thread.
 pub fn decode_source(
     source: &str,
     prefilter_face: u32,

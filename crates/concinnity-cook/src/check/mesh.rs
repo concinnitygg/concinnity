@@ -1,4 +1,4 @@
-pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     // A `.glb`-sourced Mesh has no inline vertices yet: the build's desugar
     // pass fills them in later. Skip the compile-time check; full validation
     // happens when desugar reads the GLB.

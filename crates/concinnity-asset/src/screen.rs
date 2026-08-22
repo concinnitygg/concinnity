@@ -46,6 +46,7 @@ pub enum ScreenInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Screen {
+    /// Assigned by the loader; not authored.
     #[serde(skip)]
     pub asset_id: AssetId,
     /// When true, this screen is shown as soon as the world loads.

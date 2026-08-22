@@ -1,79 +1,97 @@
-// src/app/anim_runtime.rs
-//
-// Process-wide command queue for runtime animation control (crossfades,
-// graph parameter writes, graph state queries). Mirrors the shape of
-// `crate::debug::runtime_spawn`, but separate so the AnimationSystem can
-// drain its own commands without contending with GraphicsSystem's decal /
-// particle queue.
-//
-// The debug WebSocket server (binary-only, off the engine thread) pushes
-// commands here; the editor's per-frame debug drive drains them via
-// `AnimationSystem::apply_runtime_commands` every frame -- including while a
-// menu pauses playback, so a blocked WS client always gets its reply. Each
-// command carries a reply channel the drain fulfils synchronously.
+//! Process-wide command queue for runtime animation control (crossfades,
+//! graph parameter writes, graph state queries). Mirrors the shape of
+//! `crate::debug::runtime_spawn`, but separate so the AnimationSystem can
+//! drain its own commands without contending with GraphicsSystem's decal /
+//! particle queue.
+//!
+//! The debug WebSocket server (binary-only, off the engine thread) pushes
+//! commands here; the editor's per-frame debug drive drains them via
+//! `AnimationSystem::apply_runtime_commands` every frame -- including while a
+//! menu pauses playback, so a blocked WS client always gets its reply. Each
+//! command carries a reply channel the drain fulfils synchronously.
 
 use std::sync::Mutex;
 
 use crate::ecs::asset_id::AssetId;
 
-// One queued crossfade request. `target` is the `SkinnedMesh` asset id the
-// command applies to; `weights` must match the clip count registered for
-// that target. `duration_secs == 0` snaps to the new weights on the next
-// frame. Rejected when the target is graph-driven (use `SetParam`).
-//
-// `dead_code` allow: the only constructor is the binary-only debug module,
-// so `cargo check --lib` sees the struct as unconstructed.
+/// One queued crossfade request. `target` is the `SkinnedMesh` asset id the
+/// command applies to; `weights` must match the clip count registered for
+/// that target. `duration_secs == 0` snaps to the new weights on the next
+/// frame. Rejected when the target is graph-driven (use `SetParam`).
+///
+/// `dead_code` allow: the only constructor is the binary-only debug module,
+/// so `cargo check --lib` sees the struct as unconstructed.
 #[derive(Debug)]
 pub struct CrossfadeRequest {
+    /// The `SkinnedMesh` the crossfade applies to.
     pub target: AssetId,
+    /// One weight per registered clip on the target.
     pub weights: Vec<f32>,
+    /// Duration in seconds.
     pub duration_secs: f32,
 }
 
-// One queued graph parameter write. `target` is the `SkinnedMesh` whose
-// graph declares the parameter; the value lands in the target's `AnimParams`
-// component on the next animation step.
-//
-// `dead_code` allow: same rationale as `CrossfadeRequest` above.
+/// One queued graph parameter write. `target` is the `SkinnedMesh` whose
+/// graph declares the parameter; the value lands in the target's `AnimParams`
+/// component on the next animation step.
+///
+/// `dead_code` allow: same rationale as `CrossfadeRequest` above.
 #[derive(Debug)]
 pub struct SetParamRequest {
+    /// The `SkinnedMesh` whose graph declares the parameter.
     pub target: AssetId,
+    /// The parameter's authored name.
     pub name: String,
+    /// The value to write.
     pub value: f32,
 }
 
-// Snapshot of a graph target's live state, answered synchronously to the
-// `anim-state` debug command. Parameter values are as of the last completed
-// animation step (a pending `SetParam` shows up after the next step).
+/// Snapshot of a graph target's live state, answered synchronously to the
+/// `anim-state` debug command. Parameter values are as of the last completed
+/// animation step (a pending `SetParam` shows up after the next step).
 #[derive(Debug, Clone)]
 pub struct GraphStateReport {
+    /// Name of the state the target is in.
     pub state: String,
+    /// The state's clock, in seconds.
     pub clock_secs: f32,
+    /// Name of the state being faded out of, when a fade is in flight.
     pub fading_from: Option<String>,
+    /// Fade progress in `[0, 1]`, when a fade is in flight.
     pub fade_progress: Option<f32>,
-    // One weight per blendspace member (point / grid order); None when the
-    // active state plays a single clip.
+    /// One weight per blendspace member (point / grid order); None when the
+    /// active state plays a single clip.
     pub blend_weights: Option<Vec<f32>>,
+    /// Every graph parameter with its value, as of the last step.
     pub params: Vec<(String, f32)>,
 }
 
-// One runtime command pushed onto [`enqueue`] by the debug WS server and
-// drained by `AnimationSystem::apply_runtime_commands`.
-//
-// `dead_code` allow: the only producer is the binary-only `crate::debug`
-// module (declared by main.rs, not lib.rs), so `cargo check --lib` sees the
-// variants as unconstructed.
+/// One runtime command pushed onto [`enqueue`] by the debug WS server and
+/// drained by `AnimationSystem::apply_runtime_commands`.
+///
+/// `dead_code` allow: the only producer is the binary-only `crate::debug`
+/// module (declared by main.rs, not lib.rs), so `cargo check --lib` sees the
+/// variants as unconstructed.
 pub enum AnimCommand {
+    /// Crossfade a target's clip weights.
     Crossfade {
+        /// The requested crossfade.
         req: CrossfadeRequest,
+        /// Where the outcome is sent.
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
+    /// Write one graph parameter.
     SetParam {
+        /// The requested write.
         req: SetParamRequest,
+        /// Where the outcome is sent.
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
+    /// Report a target's live graph state.
     QueryState {
+        /// The \`SkinnedMesh\` to report on.
         target: AssetId,
+        /// Where the report is sent.
         reply: std::sync::mpsc::SyncSender<Result<GraphStateReport, String>>,
     },
 }
@@ -86,11 +104,11 @@ static QUEUE: Mutex<Vec<AnimCommand>> = Mutex::new(Vec::new());
 #[cfg(test)]
 pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-// Push a command onto the animation runtime queue. The caller blocks on its
-// own reply receiver to get the result. A poisoned mutex is recovered and
-// used regardless (an unrelated panic must not silently drop commands).
-//
-// `dead_code` allow: the only producer is the binary-only debug module.
+/// Push a command onto the animation runtime queue. The caller blocks on its
+/// own reply receiver to get the result. A poisoned mutex is recovered and
+/// used regardless (an unrelated panic must not silently drop commands).
+///
+/// `dead_code` allow: the only producer is the binary-only debug module.
 pub fn enqueue(cmd: AnimCommand) {
     let mut q = match QUEUE.lock() {
         Ok(g) => g,

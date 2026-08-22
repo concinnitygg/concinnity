@@ -1,3 +1,5 @@
+//! The smallest runnable world: a window and one text label.
+
 use concinnity::assets::{GraphicsConfig, TextLabel};
 use concinnity::{App, World};
 

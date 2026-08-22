@@ -2,12 +2,14 @@
 
 use crate::assets::Target;
 
-// Runtime-only event requesting that an entity (and its descendants)
-// be hidden or shown without despawning it. SpawnSystem drains these each
-// step, toggling the subtree's Hidden tags and its draw slots' visibility.
-// World authors never declare this type directly.
+/// Runtime-only event requesting that an entity (and its descendants)
+/// be hidden or shown without despawning it. SpawnSystem drains these each
+/// step, toggling the subtree's Hidden tags and its draw slots' visibility.
+/// World authors never declare this type directly.
 #[derive(Debug, Clone, Copy)]
 pub struct VisibilityRequest {
+    /// The entity whose subtree is toggled.
     pub target: Target,
+    /// `true` to show the subtree, `false` to hide it.
     pub visible: bool,
 }

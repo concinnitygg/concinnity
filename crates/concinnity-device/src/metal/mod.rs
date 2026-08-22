@@ -1,5 +1,5 @@
-// Metal rendering backend. Gated by #[cfg(backend_metal)] on the mod
-// declaration in lib.rs; compiled on macOS only.
+//! Metal rendering backend. Gated by #[cfg(backend_metal)] on the mod
+//! declaration in lib.rs; compiled on macOS only.
 
 mod allocator;
 mod auto_exposure;
@@ -55,12 +55,16 @@ mod world_shaders;
 // GPU-free host-side pieces live in the concinnity-render crate (compiled
 // unconditionally so their unit tests count toward coverage); re-exported here
 // so the backend keeps its `super::{math,uniforms}` / `crate::metal::shader_layout`
-// paths. The `shader_layout` re-export is `pub` so the concinnity-editor
-// shader-reflection adapter can drive `validate_stage` against the engine layouts.
+// paths. The `shader_layout` re-export is `pub` so the out-of-tree Swift app's
+// FFI crate can drive `validate_stage` against the engine layouts.
 pub use concinnity_render::metal::shader_layout;
 pub(crate) use concinnity_render::metal::{math, uniforms};
 
-pub use context::{MtlContext, set_embedded_pump_events, set_preview_view};
+// `set_preview_view` / `set_embedded_pump_events` are the play-in-view
+// embedding hooks the out-of-tree Swift app drives through its FFI crate; no
+// crate in this workspace calls them.
+pub(crate) use context::MtlContext;
+pub use context::{set_embedded_pump_events, set_preview_view};
 pub(crate) use gpu_profile::probe_gpu_profile;
 // Build-time Metal shader-layout reflection, driven by the cook pipeline through
 // the thin `ShaderBuildValidator` bridge in concinnity-editor.

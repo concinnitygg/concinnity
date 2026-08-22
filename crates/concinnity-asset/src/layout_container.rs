@@ -97,17 +97,24 @@ impl Default for LayoutContainer {
 /// the box hugs the visible glyphs, which sit below the text origin.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LabelBox {
+    /// Background-box width in pixels.
     pub w: f32,
+    /// Background-box height in pixels.
     pub h: f32,
+    /// Horizontal inset from the box's left edge to the text origin.
     pub pad: f32,
+    /// Vertical inset from the box's top edge down to the text origin.
     pub top_inset: f32,
 }
 
 /// The resolved top-left text origin for one label.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placement {
+    /// The label this placement is for.
     pub id: AssetId,
+    /// Text-origin x in pixels from the window's top-left.
     pub x: f32,
+    /// Text-origin y in pixels from the window's top-left.
     pub y: f32,
 }
 

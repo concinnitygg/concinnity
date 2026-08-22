@@ -1,11 +1,9 @@
-// src/snapshot.rs
-//
-// The owned per-frame snapshot the extraction phase fills from world state
-// and the submission phase consumes. Self-contained by construction: no
-// borrows into component storage, resources, or the backend, so a frame's
-// draw inputs can outlive the world borrow that produced them and later
-// cross a thread boundary. Buffers keep their capacity across frames; a
-// steady-state extraction allocates nothing.
+//! The owned per-frame snapshot the extraction phase fills from world state
+//! and the submission phase consumes. Self-contained by construction: no
+//! borrows into component storage, resources, or the backend, so a frame's
+//! draw inputs can outlive the world borrow that produced them and later
+//! cross a thread boundary. Buffers keep their capacity across frames; a
+//! steady-state extraction allocates nothing.
 
 use crate::render_types::{LineVertex, TextDrawCall};
 use crate::scene_flow::SceneControl;
@@ -16,17 +14,25 @@ type Mat4 = [[f32; 4]; 4];
 /// Camera and frame-wide flags for one frame's draw.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameScalars {
+    /// Seconds since the world started.
     pub elapsed: f32,
+    /// Vertical field of view in radians.
     pub fov_y_radians: f32,
+    /// Near clip distance in world units.
     pub near: f32,
+    /// Far clip distance in world units.
     pub far: f32,
     /// View matrix the frame draws with (rebased when a chunk world streams).
     pub view: Mat4,
     /// Camera position in the space the frame renders in.
     pub cam_pos: [f32; 3],
+    /// What the composite presents this frame.
     pub view_mode: ViewMode,
+    /// Feature passes to run this frame.
     pub show: ShowFlags,
+    /// `true` when an opaque menu backdrop covers the scene.
     pub world_hidden: bool,
+    /// `true` while any world-pausing screen is open.
     pub menu_active: bool,
 }
 
@@ -53,7 +59,9 @@ impl Default for FrameScalars {
 pub struct UiIntents {
     /// Hide the OS cursor while an in-engine cursor sprite is shown.
     pub cursor_hidden: bool,
+    /// Enter or leave menu mode, or `None` to leave it as is.
     pub menu_mode: Option<bool>,
+    /// Capture or release the cursor, or `None` to leave it as is.
     pub camera_capture: Option<bool>,
 }
 
@@ -67,11 +75,13 @@ pub struct SpanBuffer<T> {
 }
 
 impl<T: Copy> SpanBuffer<T> {
+    /// Drop every recorded span, keeping the buffers' capacity.
     pub fn clear(&mut self) {
         self.values.clear();
         self.spans.clear();
     }
 
+    /// Whether no span has been pushed.
     pub fn is_empty(&self) -> bool {
         self.spans.is_empty()
     }
@@ -95,8 +105,15 @@ impl<T: Copy> SpanBuffer<T> {
 /// submission in record order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SceneOp {
+    /// Set the scene-transition fade, 0 (clear) to 1 (black).
     SetFade(f32),
-    Visibility { draw_idx: usize, visible: bool },
+    /// Show or hide one draw slot.
+    Visibility {
+        /// The draw slot whose visibility changes.
+        draw_idx: usize,
+        /// `true` to show the slot, `false` to hide it.
+        visible: bool,
+    },
 }
 
 /// A [`SceneControl`] that records calls as [`SceneOp`]s instead of driving a
@@ -116,7 +133,9 @@ impl SceneControl for SceneOpRecorder<'_> {
 /// Everything one frame's draw consumes, extracted from world state.
 #[derive(Default)]
 pub struct RenderSnapshot {
+    /// Camera and frame-wide scalars.
     pub frame: FrameScalars,
+    /// Window-interaction intents.
     pub ui: UiIntents,
     /// Backend effects recorded by the simulation systems this tick (spawn
     /// slot ops, settings appliers, streaming uploads), replayed in record

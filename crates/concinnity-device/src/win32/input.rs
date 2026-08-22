@@ -9,7 +9,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 // The previously-duplicated InputState collapsed into the shared
 // crate::gfx::input::RenderInput; this alias keeps the historical name.
-pub use crate::gfx::input::RenderInput as InputState;
+pub(crate) use crate::gfx::input::RenderInput as InputState;
 
 // One frame's accumulated mouse input, owned by `WindowState` and handed to
 // [`KeyState::take`] so the drained snapshot carries pointer motion, position,

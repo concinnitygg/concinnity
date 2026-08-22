@@ -1,11 +1,11 @@
-// src/geometry/glass_quad.rs: flat rectangular quad for a GlassPanel.
-//
-// Builds a single 4-vertex / 6-index quad centred at `centre`, facing
-// `normal`, sized by `half_size` (half-width along the panel tangent,
-// half-height along its bitangent). The tangent frame is derived from the
-// normal so the panel can face any direction. Per-vertex normals are the
-// (constant) panel normal; the fragment shader flips it toward the viewer so
-// the panel is two-sided.
+//! src/geometry/glass_quad.rs: flat rectangular quad for a GlassPanel.
+//!
+//! Builds a single 4-vertex / 6-index quad centred at `centre`, facing
+//! `normal`, sized by `half_size` (half-width along the panel tangent,
+//! half-height along its bitangent). The tangent frame is derived from the
+//! normal so the panel can face any direction. Per-vertex normals are the
+//! (constant) panel normal; the fragment shader flips it toward the viewer so
+//! the panel is two-sided.
 
 use crate::geometry::vec3::cross;
 
@@ -20,13 +20,13 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
-// Build the quad geometry for one glass panel. Returns 4 vertices (in the
-// shared `(pos, normal, color, uv)` layout the mesh builders use) and 6
-// indices (two triangles). `color` is a white placeholder; the glass
-// fragment shader ignores per-vertex colour.
-// Orthonormal (width, height) axes spanning the plane of `n`, which must be
-// unit length. Shared with the rectangular area light so a panel and a light
-// with the same normal agree on which way is "across".
+/// Build the quad geometry for one glass panel. Returns 4 vertices (in the
+/// shared `(pos, normal, color, uv)` layout the mesh builders use) and 6
+/// indices (two triangles). `color` is a white placeholder; the glass
+/// fragment shader ignores per-vertex colour.
+/// Orthonormal (width, height) axes spanning the plane of `n`, which must be
+/// unit length. Shared with the rectangular area light so a panel and a light
+/// with the same normal agree on which way is "across".
 pub fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     // A world up reference that is not parallel to the normal.
     let up_ref = if n[1].abs() > 0.99 {
@@ -39,6 +39,7 @@ pub fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     (tangent, bitangent)
 }
 
+/// Build the quad for a glass panel: its vertices and triangle indices.
 pub fn build_glass_quad(
     centre: [f32; 3],
     normal: [f32; 3],

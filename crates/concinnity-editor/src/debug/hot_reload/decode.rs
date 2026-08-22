@@ -19,7 +19,7 @@ use super::state::*;
 // + [`poll_pending_envmap`] drain the workers' results on a later frame and
 // dispatch them through the matching backend `update_*` calls (those are
 // fast, single MTL buffer / texture swaps).
-pub fn reload_assets(state: &AssetHotReloadState) {
+pub(crate) fn reload_assets(state: &AssetHotReloadState) {
     spawn_asset_decode_worker(state);
     spawn_envmap_worker(state);
 }
@@ -393,7 +393,7 @@ pub(super) fn apply_skinned_layouts_to_entries(
 //
 // Returns `true` when a batch was applied (success or failure), `false`
 // when still waiting or nothing scheduled.
-pub fn poll_pending_assets(
+pub(crate) fn poll_pending_assets(
     state: &mut AssetHotReloadState,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> bool {
@@ -721,7 +721,7 @@ pub fn poll_pending_assets(
 // `true` when something was consumed (success or failure) so the caller can
 // log a single line per result; `false` when still waiting or nothing
 // scheduled.
-pub fn poll_pending_envmap(
+pub(crate) fn poll_pending_envmap(
     state: &AssetHotReloadState,
     backend: &mut dyn crate::gfx::backend::RenderBackend,
 ) -> bool {

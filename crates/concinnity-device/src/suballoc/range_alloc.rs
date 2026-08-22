@@ -43,7 +43,7 @@ struct Pending {
 }
 
 // Byte-range sub-allocator -- see the module comment.
-pub struct RangeAllocator {
+pub(crate) struct RangeAllocator {
     // free blocks, kept sorted by offset and coalesced
     free: Vec<Block>,
     // frees not yet safe to hand back out
@@ -52,7 +52,7 @@ pub struct RangeAllocator {
 
 impl RangeAllocator {
     // An empty allocator: no free space until regions are added.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             free: Vec::new(),
             pending: Vec::new(),
@@ -64,7 +64,7 @@ impl RangeAllocator {
     //
     // Best-fit: the smallest sufficient block is chosen, so a block matching
     // the request exactly is consumed whole with no fragmentation.
-    pub fn alloc(&mut self, size: u64) -> Option<u64> {
+    pub(crate) fn alloc(&mut self, size: u64) -> Option<u64> {
         self.alloc_aligned(size, 1)
     }
 
@@ -75,7 +75,7 @@ impl RangeAllocator {
     // against a candidate block rather than being invisible to the choice. Any
     // padding skipped ahead of the returned offset stays on the free list, so
     // `free` takes back exactly the `[offset, offset + size)` handed out here.
-    pub fn alloc_aligned(&mut self, size: u64, align: u64) -> Option<u64> {
+    pub(crate) fn alloc_aligned(&mut self, size: u64, align: u64) -> Option<u64> {
         if size == 0 {
             return Some(0);
         }
@@ -136,7 +136,7 @@ impl RangeAllocator {
 
     // Queue `[offset, offset + size)` for release. It becomes allocatable once
     // `reclaim` runs for a frame at or past `retire_frame`.
-    pub fn free(&mut self, offset: u64, size: u64, retire_frame: u64) {
+    pub(crate) fn free(&mut self, offset: u64, size: u64, retire_frame: u64) {
         if size == 0 {
             return;
         }
@@ -149,7 +149,7 @@ impl RangeAllocator {
 
     // Move every pending free whose `retire_frame <= current_frame` into the
     // free list. Call once before allocating in a frame.
-    pub fn reclaim(&mut self, current_frame: u64) {
+    pub(crate) fn reclaim(&mut self, current_frame: u64) {
         let mut i = 0;
         while i < self.pending.len() {
             if self.pending[i].retire_frame <= current_frame {
@@ -165,14 +165,14 @@ impl RangeAllocator {
     }
 
     // Total bytes available for allocation right now (pending frees excluded).
-    pub fn free_bytes(&self) -> u64 {
+    pub(crate) fn free_bytes(&self) -> u64 {
         self.free.iter().map(|b| b.size).sum()
     }
 
     // Number of distinct free blocks -- a fragmentation gauge for diagnostics.
     // Observes coalescing, which no caller acts on but the tests assert.
     #[cfg(test)]
-    pub fn free_block_count(&self) -> usize {
+    pub(crate) fn free_block_count(&self) -> usize {
         self.free.len()
     }
 

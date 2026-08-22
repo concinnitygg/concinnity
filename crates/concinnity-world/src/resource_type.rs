@@ -1,9 +1,9 @@
-// The resource-asset vocabulary: `ResourceAssetType`, the enum of asset types
-// that live in the blob's resource stream (not the component registry), plus
-// the classifiers that decide which resource kind an authored asset is. The
-// per-type compile dispatch lives in concinnity-cook (each type compiles
-// differently and the compilers live there); this module owns only naming,
-// parsing, kind mapping, and authoring metadata.
+//! The resource-asset vocabulary: `ResourceAssetType`, the enum of asset types
+//! that live in the blob's resource stream (not the component registry), plus
+//! the classifiers that decide which resource kind an authored asset is. The
+//! per-type compile dispatch lives in concinnity-cook (each type compiles
+//! differently and the compilers live there); this module owns only naming,
+//! parsing, kind mapping, and authoring metadata.
 
 // The resource kinds (and their `resource_kind` blob tag) are defined with the
 // blob format; re-exported here for the classifiers and the cook-side handle
@@ -34,10 +34,10 @@ fn file_is_mesh(args: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-// The mesh-source block an asset belongs to, or `None` if it is not a geometry
-// producer. The blocks are the fixed order the runtime enumerates mesh sources
-// in (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind File), so a
-// handle assigned in block order equals the runtime's mesh-source index.
+/// The mesh-source block an asset belongs to, or `None` if it is not a geometry
+/// producer. The blocks are the fixed order the runtime enumerates mesh sources
+/// in (Mesh, then ProceduralMesh, then VoxelChunk, then mesh-kind File), so a
+/// handle assigned in block order equals the runtime's mesh-source index.
 pub fn mesh_source_block(asset_type: &str, args: &serde_json::Value) -> Option<u8> {
     match norm_type(asset_type).as_str() {
         "mesh" => Some(0),
@@ -48,16 +48,16 @@ pub fn mesh_source_block(asset_type: &str, args: &serde_json::Value) -> Option<u
     }
 }
 
-// Whether an asset produces geometry addressable by a mesh handle. The single
-// classifier the cross-reference checker and the handle assigner share.
+/// Whether an asset produces geometry addressable by a mesh handle. The single
+/// classifier the cross-reference checker and the handle assigner share.
 pub fn is_mesh_source(asset_type: &str, args: &serde_json::Value) -> bool {
     mesh_source_block(asset_type, args).is_some()
 }
 
-// The resource kind a declarable asset type name maps to, or `None` for a
-// non-resource type. Every resource lives in the resource-asset registry (the
-// two registries share no names), so this is the single classifier the build
-// uses to assign handles over the world's assets.
+/// The resource kind a declarable asset type name maps to, or `None` for a
+/// non-resource type. Every resource lives in the resource-asset registry (the
+/// two registries share no names), so this is the single classifier the build
+/// uses to assign handles over the world's assets.
 pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
     let rt = ResourceAssetType::parse(asset_type)?;
     // Mesh draws from the shared mesh-source handle space (assigned by cook's
@@ -76,25 +76,29 @@ pub fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
 // dispatch is hand-written in concinnity-cook (each type compiles differently).
 macro_rules! define_resource_asset_type {
     ( $( $variant:ident => $ty:path { resource: $kind:ident $($meta:tt)* } ),+ $(,)? ) => {
+        // One variant per resource asset type, named for that type.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[allow(missing_docs)]
         pub enum ResourceAssetType {
             $( $variant ),+
         }
 
         impl ResourceAssetType {
+            /// The resource type's registry name.
             pub fn as_str(self) -> &'static str {
                 match self { $( Self::$variant => stringify!($variant) ),+ }
             }
+            /// The type a registry name selects, or `None` if unknown.
             pub fn parse(s: &str) -> Option<Self> {
                 $( if s == stringify!($variant) { return Some(Self::$variant); } )+
                 None
             }
-            // The dense per-kind handle space this asset is assigned into.
+            /// The dense per-kind handle space this asset is assigned into.
             pub fn resource_kind(self) -> ResourceKind {
                 match self { $( Self::$variant => ResourceKind::$kind ),+ }
             }
-            // Authoring metadata: a resource asset is External with a compiled
-            // payload; its default args come from the schema struct's `Default`.
+            /// Authoring metadata: a resource asset is External with a compiled
+            /// payload; its default args come from the schema struct's `Default`.
             pub fn registration(self) -> crate::registry::Registration {
                 match self {
                     $( Self::$variant => crate::registry::Registration {
@@ -105,14 +109,15 @@ macro_rules! define_resource_asset_type {
                     } ),+
                 }
             }
+            /// Every resource asset type, in list order.
             pub fn all() -> &'static [ResourceAssetType] {
                 &[ $( Self::$variant ),+ ]
             }
-            // Round-trip authored args through the schema struct, the resource
-            // analogue of `ComponentType::reserialize_args`. It rejects what the
-            // typed schema cannot hold (a negative count, a string where a
-            // number belongs) without compiling the payload, so authoring tools
-            // can check a resource's args as cheaply as a component's.
+            /// Round-trip authored args through the schema struct, the resource
+            /// analogue of `ComponentType::reserialize_args`. It rejects what the
+            /// typed schema cannot hold (a negative count, a string where a
+            /// number belongs) without compiling the payload, so authoring tools
+            /// can check a resource's args as cheaply as a component's.
             pub fn reserialize_args(
                 self,
                 args: &serde_json::Value,
@@ -128,14 +133,15 @@ macro_rules! define_resource_asset_type {
                     ),+
                 }
             }
-            // The structural flags shared with the component registry: see
-            // `ComponentType::{useful_blank, renders}`. Resource assets are
-            // never singletons.
+            /// The structural flags shared with the component registry: see
+            /// `ComponentType::{useful_blank, renders}`. Resource assets are
+            /// never singletons.
             pub fn useful_blank(self) -> bool {
                 match self {
                     $( Self::$variant => crate::registry::__meta_useful_blank!($($meta)*) ),+
                 }
             }
+            /// Whether declaring the type implies the world renders.
             pub fn renders(self) -> bool {
                 match self {
                     $( Self::$variant => crate::registry::__meta_renders!($($meta)*) ),+
@@ -148,19 +154,19 @@ macro_rules! define_resource_asset_type {
 concinnity_core::for_each_resource_asset!(define_resource_asset_type);
 
 impl ResourceAssetType {
-    // Whether this resource is a DATA resource: its compiled bytes are the
-    // record's inline `data_bytes`, not a blob payload the record points at.
-    // Material (small, per-object surface params) is the only one today; every
-    // other kind is a `compiled` payload resource.
+    /// Whether this resource is a DATA resource: its compiled bytes are the
+    /// record's inline `data_bytes`, not a blob payload the record points at.
+    /// Material (small, per-object surface params) is the only one today; every
+    /// other kind is a `compiled` payload resource.
     pub fn is_data(self) -> bool {
         matches!(self, Self::Material)
     }
 
-    // The asset-reference fields this resource declares, as `(field, target type)`.
-    // Mirrors `ComponentType::ref_fields`: the editor add-form turns each into a
-    // name picker over the world's assets of that type. Material carries its
-    // texture references here now that it has left the component registry (which
-    // used to supply this via the `refs:` metadata).
+    /// The asset-reference fields this resource declares, as `(field, target type)`.
+    /// Mirrors `ComponentType::ref_fields`: the editor add-form turns each into a
+    /// name picker over the world's assets of that type. Material carries its
+    /// texture references here now that it has left the component registry (which
+    /// used to supply this via the `refs:` metadata).
     pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::Material => &[

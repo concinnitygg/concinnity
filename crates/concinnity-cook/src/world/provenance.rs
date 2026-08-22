@@ -7,26 +7,35 @@
 
 use super::LoadedWorld;
 
-// The origin of one expanded-world asset.
+/// The origin of one expanded-world asset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provenance {
-    // A world.jsonl line.
+    /// A world.jsonl line.
     Authored,
-    // A world.jsonl line that replaces what an expansion would have produced;
-    // the named source no longer drives this asset.
-    AuthoredShadowing { generated_by: String },
-    // Added by an injection pass (a companion, an engine default).
-    Injected { by: String },
-    // Produced by the expansion of the named authored asset.
-    Generated { by: String },
-    // Produced by a build-time macro expansion that does not record its output
-    // (menus, stories, prefabs, and the other primitive-emitting passes).
+    /// A world.jsonl line that replaces what an expansion would have produced;
+    /// the named source no longer drives this asset.
+    AuthoredShadowing {
+        /// The authored asset whose expansion it replaces.
+        generated_by: String,
+    },
+    /// Added by an injection pass (a companion, an engine default).
+    Injected {
+        /// The injection pass that added it.
+        by: String,
+    },
+    /// Produced by the expansion of the named authored asset.
+    Generated {
+        /// The authored asset whose expansion produced it.
+        by: String,
+    },
+    /// Produced by a build-time macro expansion that does not record its output
+    /// (menus, stories, prefabs, and the other primitive-emitting passes).
     Expanded,
 }
 
 impl Provenance {
-    // The authored asset or pass this came from, for grouping a listing by
-    // source. `None` for a plain authored line and the unattributed expansions.
+    /// The authored asset or pass this came from, for grouping a listing by
+    /// source. `None` for a plain authored line and the unattributed expansions.
     pub fn source(&self) -> Option<&str> {
         match self {
             Provenance::AuthoredShadowing { generated_by } => Some(generated_by),
@@ -36,7 +45,7 @@ impl Provenance {
         }
     }
 
-    // Whether the asset has a world.jsonl line of its own.
+    /// Whether the asset has a world.jsonl line of its own.
     pub fn is_authored(&self) -> bool {
         matches!(
             self,
@@ -44,11 +53,11 @@ impl Provenance {
         )
     }
 
-    // Whether copying this asset's entry into world.jsonl overrides it rather
-    // than duplicating it: only the passes that skip a name the world claims
-    // (scene imports, injections) can be overridden this way. The macro
-    // expansions emit their primitives unconditionally, so a copy of one would
-    // land beside the generated asset, not replace it.
+    /// Whether copying this asset's entry into world.jsonl overrides it rather
+    /// than duplicating it: only the passes that skip a name the world claims
+    /// (scene imports, injections) can be overridden this way. The macro
+    /// expansions emit their primitives unconditionally, so a copy of one would
+    /// land beside the generated asset, not replace it.
     pub fn is_overridable(&self) -> bool {
         matches!(
             self,
@@ -72,7 +81,7 @@ impl std::fmt::Display for Provenance {
 }
 
 impl LoadedWorld {
-    // Where the asset called `name` in this expanded world came from.
+    /// Where the asset called `name` in this expanded world came from.
     pub fn provenance(&self, name: &str) -> Provenance {
         if self.authored.iter().any(|n| n == name) {
             return match self.shadowed.iter().find(|s| s.name == name) {

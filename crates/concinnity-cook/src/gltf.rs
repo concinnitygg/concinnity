@@ -1,14 +1,12 @@
-// src/gltf.rs
-//
-// Imports a skinned mesh + skeleton from a glTF file (binary `.glb` or text
-// `.gltf` with external / data-URI buffers) into the inline `SkinnedMesh`
-// asset fields. glTF animations are not imported here: the mesh lands in its
-// bind pose.
-//
-// glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
-// list requires parents before children. Joints are therefore topologically
-// reordered and a remap table rewrites both each joint's parent index and
-// every vertex's `JOINTS_0` binding into the new index space.
+//! Imports a skinned mesh + skeleton from a glTF file (binary `.glb` or text
+//! `.gltf` with external / data-URI buffers) into the inline `SkinnedMesh`
+//! asset fields. glTF animations are not imported here: the mesh lands in its
+//! bind pose.
+//!
+//! glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
+//! list requires parents before children. Joints are therefore topologically
+//! reordered and a remap table rewrites both each joint's parent index and
+//! every vertex's `JOINTS_0` binding into the new index space.
 
 // The `.glb` container decode lives in `crate::glb`; the asset-level desugar
 // wrappers here call into it for parsing, shared geometry reads, and the
@@ -22,7 +20,10 @@ use crate::glb::{
 // parents-before-children skeleton. `skin_index` selects among the file's
 // skinned nodes in declaration order; other nodes, materials, cameras, and
 // animations are ignored.
-pub fn import_skinned_glb(source: &str, skin_index: u32) -> Result<ImportedSkinnedMesh, String> {
+pub(crate) fn import_skinned_glb(
+    source: &str,
+    skin_index: u32,
+) -> Result<ImportedSkinnedMesh, String> {
     let doc = parse_glb(source)?;
     import_skinned_from_doc(&doc, source, skin_index)
 }
@@ -30,7 +31,8 @@ pub fn import_skinned_glb(source: &str, skin_index: u32) -> Result<ImportedSkinn
 // Vertex count for the indexed primitive without reading any vertex data,
 // used by `cn add` to decide whether a primitive fits Concinnity's u16 index
 // limit or needs splitting.
-pub fn primitive_vertex_count(
+#[cfg(test)]
+pub(crate) fn primitive_vertex_count(
     doc: &crate::gltf_source::GltfDoc,
     primitive_index: u32,
 ) -> Option<usize> {
@@ -48,7 +50,7 @@ pub fn primitive_vertex_count(
 // joint, or whose interpolation method we cannot honour, are dropped
 // silently; per-clip warnings would spam build output for files that mix
 // joint and non-joint animations (e.g. character + camera).
-pub fn import_glb_animations(
+pub(crate) fn import_glb_animations(
     source: &str,
     skin_index: u32,
 ) -> Result<Vec<ImportedAnimation>, String> {
@@ -58,7 +60,7 @@ pub fn import_glb_animations(
 
 // Import a single animation by its glTF index. Index out of range is a hard
 // error; the user authored an animation entry the file does not contain.
-pub fn import_glb_animation(
+pub(crate) fn import_glb_animation(
     source: &str,
     index: usize,
     skin_index: u32,
@@ -79,7 +81,7 @@ pub fn import_glb_animation(
 // Names of every animation in a `.glb`, in file declaration order. Useful
 // for the desugar pass when the user authored `animation_name` instead of
 // `animation_index` and we need to look up the index.
-pub fn glb_animation_names(source: &str) -> Result<Vec<String>, String> {
+pub(crate) fn glb_animation_names(source: &str) -> Result<Vec<String>, String> {
     Ok(crate::glb::parse_glb(source)?
         .doc
         .document

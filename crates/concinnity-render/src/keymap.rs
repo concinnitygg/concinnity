@@ -1,31 +1,36 @@
-// src/keymap.rs
-//
-// The runtime, rebindable key map for the gameplay movement keys. Each backend
-// decodes physical keys into the same semantic booleans (forward, jump, ...);
-// this map says which canonical Key drives each action, so the settings menu can
-// remap them at runtime. The map is canonical (backend-agnostic Key values); a
-// backend resolves it to its own native key codes when it is pushed via
-// `RenderBackend::set_keymap`.
+//! The runtime, rebindable key map for the gameplay movement keys. Each backend
+//! decodes physical keys into the same semantic booleans (forward, jump, ...);
+//! this map says which canonical Key drives each action, so the settings menu can
+//! remap them at runtime. The map is canonical (backend-agnostic Key values); a
+//! backend resolves it to its own native key codes when it is pushed via
+//! `RenderBackend::set_keymap`.
 
 use crate::assets::Key;
 use serde::{Deserialize, Serialize};
 
-// A rebindable gameplay action. The four movement directions, sprint, jump, and
-// interact. Pause (Escape) is deliberately not here: it carries cursor-release /
-// menu semantics that are fixed per-backend.
+/// A rebindable gameplay action. The four movement directions, sprint, jump, and
+/// interact. Pause (Escape) is deliberately not here: it carries cursor-release /
+/// menu semantics that are fixed per-backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bindable {
+    /// Move forward.
     Forward,
+    /// Move backward.
     Backward,
+    /// Strafe left.
     Left,
+    /// Strafe right.
     Right,
+    /// Hold to move faster.
     Sprint,
+    /// Jump.
     Jump,
+    /// Interact with the entity under the cursor.
     Interact,
 }
 
 impl Bindable {
-    // Every rebindable action, in Controls-tab row order.
+    /// Every rebindable action, in Controls-tab row order.
     pub const ALL: [Bindable; 7] = [
         Bindable::Forward,
         Bindable::Backward,
@@ -36,8 +41,8 @@ impl Bindable {
         Bindable::Interact,
     ];
 
-    // The settings key string used in `setting:<key>:rebind` actions and the
-    // engine settings registry.
+    /// The settings key string used in `setting:<key>:rebind` actions and the
+    /// engine settings registry.
     pub fn setting_key(self) -> &'static str {
         match self {
             Bindable::Forward => "key_forward",
@@ -50,36 +55,43 @@ impl Bindable {
         }
     }
 
-    // The action for a settings key string, or `None` if it is not a rebind key.
+    /// The action for a settings key string, or `None` if it is not a rebind key.
     pub fn from_setting_key(key: &str) -> Option<Bindable> {
         Bindable::ALL.into_iter().find(|b| b.setting_key() == key)
     }
 }
 
-// The canonical action -> key map. Persisted in `ControlsSettings` and pushed to
-// the active backend. Each field is `#[serde(default)]` so adding an action in a
-// future build never invalidates an existing settings file (a missing field
-// falls back to its default rather than failing the whole load).
+/// The canonical action -> key map. Persisted in `ControlsSettings` and pushed to
+/// the active backend. Each field is `#[serde(default)]` so adding an action in a
+/// future build never invalidates an existing settings file (a missing field
+/// falls back to its default rather than failing the whole load).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyMap {
     #[serde(default = "def_forward")]
+    /// Key bound to [`Bindable::Forward`].
     pub forward: Key,
     #[serde(default = "def_backward")]
+    /// Key bound to [`Bindable::Backward`].
     pub backward: Key,
     #[serde(default = "def_left")]
+    /// Key bound to [`Bindable::Left`].
     pub left: Key,
     #[serde(default = "def_right")]
+    /// Key bound to [`Bindable::Right`].
     pub right: Key,
     #[serde(default = "def_sprint")]
+    /// Key bound to [`Bindable::Sprint`].
     pub sprint: Key,
     #[serde(default = "def_jump")]
+    /// Key bound to [`Bindable::Jump`].
     pub jump: Key,
     #[serde(default = "def_interact")]
+    /// Key bound to [`Bindable::Interact`].
     pub interact: Key,
 }
 
 impl KeyMap {
-    // The default bindings: the keys that were hardcoded before rebinding.
+    /// The default bindings: the keys that were hardcoded before rebinding.
     pub const DEFAULT: KeyMap = KeyMap {
         forward: Key::W,
         backward: Key::S,
@@ -90,7 +102,7 @@ impl KeyMap {
         interact: Key::E,
     };
 
-    // The key currently bound to an action.
+    /// The key currently bound to an action.
     pub fn get(self, action: Bindable) -> Key {
         match action {
             Bindable::Forward => self.forward,
@@ -103,7 +115,7 @@ impl KeyMap {
         }
     }
 
-    // Bind an action to a key directly (no conflict handling).
+    /// Bind an action to a key directly (no conflict handling).
     pub fn set(&mut self, action: Bindable, key: Key) {
         match action {
             Bindable::Forward => self.forward = key,
@@ -116,16 +128,16 @@ impl KeyMap {
         }
     }
 
-    // The action a key is bound to, or `None` if unbound. The map keeps each key
-    // bound to at most one action (the invariant `rebind` maintains), so this is
-    // the unique holder.
+    /// The action a key is bound to, or `None` if unbound. The map keeps each key
+    /// bound to at most one action (the invariant `rebind` maintains), so this is
+    /// the unique holder.
     pub fn action_for_key(self, key: Key) -> Option<Bindable> {
         Bindable::ALL.into_iter().find(|&b| self.get(b) == key)
     }
 
-    // Bind `action` to `new_key`, swapping with whichever action already holds
-    // `new_key` so every action stays bound. Rebinding an action to its own key
-    // is a no-op.
+    /// Bind `action` to `new_key`, swapping with whichever action already holds
+    /// `new_key` so every action stays bound. Rebinding an action to its own key
+    /// is a no-op.
     pub fn rebind(&mut self, action: Bindable, new_key: Key) {
         let old_key = self.get(action);
         if old_key == new_key {

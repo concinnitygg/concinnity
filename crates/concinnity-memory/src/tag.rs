@@ -9,27 +9,30 @@
 // neighbourhood; it also keeps a readout's rows stable frame to frame instead of
 // appearing and reordering as strings are interned.
 
-// Which memory a report is about. The two are counted separately because they
-// are separately budgeted and separately exhausted: a host allocation and a
-// device allocation for the same texture are two different costs.
+/// Which memory a report is about. The two are counted separately because they
+/// are separately budgeted and separately exhausted: a host allocation and a
+/// device allocation for the same texture are two different costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Realm {
-    // Process memory: what the CPU allocates and the Rust heap holds.
+    /// Process memory: what the CPU allocates and the Rust heap holds.
     Host,
-    // Device memory: what a GPU backend allocates, whether that is discrete
-    // VRAM or a unified-memory working set.
+    /// Device memory: what a GPU backend allocates, whether that is discrete
+    /// VRAM or a unified-memory working set.
     Device,
 }
 
 impl Realm {
+    /// Number of realms.
     pub const COUNT: usize = 2;
+    /// Every realm, in readout order.
     pub const ALL: [Realm; Self::COUNT] = [Realm::Host, Realm::Device];
 
+    /// The realm's position in a per-realm table.
     pub const fn index(self) -> usize {
         self as usize
     }
 
-    // How a readout names the realm.
+    /// How a readout names the realm.
     pub const fn name(self) -> &'static str {
         match self {
             Realm::Host => "RAM",
@@ -38,28 +41,37 @@ impl Realm {
     }
 }
 
-// What a block of memory is for. `Other` is the honest bucket for a reporter
-// that has no better answer; it is not a catch-all for everything unreported,
-// since the ledger only ever holds what someone reports into it.
+/// What a block of memory is for. `Other` is the honest bucket for a reporter
+/// that has no better answer; it is not a catch-all for everything unreported,
+/// since the ledger only ever holds what someone reports into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemTag {
+    /// Texture images.
     Textures,
+    /// Mesh geometry.
     Meshes,
+    /// Streamed world chunks.
     Chunks,
+    /// Compiled shader binaries and pipeline state.
     Shaders,
+    /// Decoded audio clips and mixer buffers.
     Audio,
+    /// Physics bodies, colliders, and broad-phase structures.
     Physics,
+    /// Overlay and HUD geometry.
     Ui,
-    // Per-frame working memory: arenas and pools that are reset or reused
-    // rather than freed.
+    /// Per-frame working memory: arenas and pools that are reset or reused
+    /// rather than freed.
     Scratch,
+    /// Anything with no better bucket.
     Other,
 }
 
 impl MemTag {
+    /// Number of tags.
     pub const COUNT: usize = 9;
-    // Every tag, in the order a readout lists them. Fixed, so rows never
-    // reorder under a reader as the numbers move.
+    /// Every tag, in the order a readout lists them. Fixed, so rows never
+    /// reorder under a reader as the numbers move.
     pub const ALL: [MemTag; Self::COUNT] = [
         MemTag::Textures,
         MemTag::Meshes,
@@ -72,10 +84,12 @@ impl MemTag {
         MemTag::Other,
     ];
 
+    /// The tag's position in a per-tag table.
     pub const fn index(self) -> usize {
         self as usize
     }
 
+    /// How a readout names the tag.
     pub const fn name(self) -> &'static str {
         match self {
             MemTag::Textures => "Textures",

@@ -33,10 +33,13 @@ macro_rules! resource_handles {
                 Serialize, Deserialize,
             )]
             #[serde(transparent)]
-            pub struct $name(pub u32);
+            pub struct $name(
+                /// The handle's index into its per-kind resource table.
+                pub u32,
+            );
 
             impl $name {
-                // The handle's index into its per-kind resource table.
+                /// The handle's index into its per-kind resource table.
                 pub fn index(self) -> usize {
                     self.0 as usize
                 }
@@ -46,15 +49,25 @@ macro_rules! resource_handles {
 }
 
 resource_handles! {
+    /// Index into the runtime mesh table.
     MeshHandle,
+    /// Index into the runtime texture table.
     TextureHandle,
+    /// Index into the runtime material table.
     MaterialHandle,
+    /// Index into the runtime font table.
     FontHandle,
+    /// Index into the runtime audio-clip table.
     AudioClipHandle,
+    /// Index into the runtime cubemap-texture table.
     CubemapTextureHandle,
+    /// Index into the runtime environment-map table.
     EnvironmentMapHandle,
+    /// Index into the runtime colour-LUT table.
     ColorLutHandle,
+    /// Index into the runtime skinned-mesh table.
     SkinnedMeshHandle,
+    /// Index into the runtime shader table.
     ShaderHandle,
 }
 

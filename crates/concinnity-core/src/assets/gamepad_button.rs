@@ -25,6 +25,9 @@ macro_rules! define_buttons {
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
         )]
+        // Each variant is one button name; the vocabulary is described above
+        // rather than restated per variant.
+        #[allow(missing_docs)]
         pub enum GamepadButton {
             $($variant),*
         }

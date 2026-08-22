@@ -556,19 +556,19 @@ pub(super) struct SpotShadowState {
 impl SpotShadowState {
     // Slices actually handed out; the array, the DSV list, and the data buffer
     // all carry exactly this many entries.
-    pub fn count(&self) -> u32 {
+    pub(crate) fn count(&self) -> u32 {
         self.dsvs.len() as u32
     }
 
     // Advance the round-robin clock and record which slices re-render this
     // frame. A no-op (mask stays 0) when the world has no shadowed spot.
-    pub fn advance(&mut self, every_frame: bool) {
+    pub(crate) fn advance(&mut self, every_frame: bool) {
         let count = self.dsvs.len();
         self.render_mask = self.scheduler.next_mask(every_frame, count);
     }
 
     // GPU address of slice `slice`'s baked `ShadowUniforms`.
-    pub fn slice_ubo_gva(&self, slice: u32) -> u64 {
+    pub(crate) fn slice_ubo_gva(&self, slice: u32) -> u64 {
         debug_assert!(slice < self.count());
         let base = com::gpu_va(&self.ubo);
         base + slice as u64 * self.ubo_stride
@@ -994,7 +994,7 @@ pub(super) struct Diagnostics {
     pub info_queue: Option<ID3D12InfoQueue>,
 }
 
-pub struct DxContext {
+pub(crate) struct DxContext {
     // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
     // window (and its live cursor / menu / keymap state) into the rebuilt
     // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
@@ -1340,7 +1340,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
-    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()> {
+    pub(crate) fn draw_frame(
+        &mut self,
+        params: FrameParams<'_>,
+    ) -> crate::gfx::error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1898,14 +1901,14 @@ impl DxContext {
         }
     }
 
-    pub fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
+    pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
         self.view.matrix = matrix;
     }
 
     // Update the model matrices of the given draw objects, one
     // `(slot, matrix)` entry per changed object. Out-of-range slots have no
     // effect.
-    pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
             if let Some(obj) = self.draw.objects.get_mut(index as usize) {
                 obj.model = model;
@@ -1913,7 +1916,7 @@ impl DxContext {
         }
     }
 
-    pub fn update_visibility(&mut self, index: usize, visible: bool) {
+    pub(crate) fn update_visibility(&mut self, index: usize, visible: bool) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = visible;
         }
@@ -1927,7 +1930,7 @@ impl DxContext {
     // the slot held a runtime clone, its descriptor-pool offset is freed too so
     // a steady spawn/despawn cadence does not exhaust the clone pool. No-op if
     // the index is out of range.
-    pub fn retire_draw_object(&mut self, index: usize) {
+    pub(crate) fn retire_draw_object(&mut self, index: usize) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
@@ -1953,7 +1956,7 @@ impl DxContext {
         }
     }
 
-    pub fn set_fade(&mut self, fade: f32) {
+    pub(crate) fn set_fade(&mut self, fade: f32) {
         self.view.scene_fade = fade.clamp(0.0, 1.0);
     }
 
@@ -1962,7 +1965,7 @@ impl DxContext {
     // the timestamp pair this slot resolved on its previous trip through the
     // ring (so a `FRAMES`-stale window, matching Metal's "frame or two
     // stale" reading).
-    pub fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
         self.diagnostics.frame_stats.get()
     }
 
@@ -1970,7 +1973,9 @@ impl DxContext {
     // context was built without hot-reload. Surfaced through the
     // `RenderBackend` trait so the debug WebSocket server's
     // `reload-shaders` command can flip it from a non-render thread.
-    pub fn shader_reload_pending(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+    pub(crate) fn shader_reload_pending(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
         self.hot_reload
             .reload_pending
             .as_ref()
@@ -2092,7 +2097,7 @@ impl DxContext {
             .expect("DxContext window state present")
     }
 
-    pub fn window_closed(&mut self) -> bool {
+    pub(crate) fn window_closed(&mut self) -> bool {
         // Message pump + cursor window-exit / fullscreen-confinement refresh +
         // the Resolution-mode reconcile, shared with the Vulkan Windows window.
         // Partial field borrow (not `win_mut`) so `fullscreen_display` can be
@@ -2105,7 +2110,7 @@ impl DxContext {
         )
     }
 
-    pub fn wait_idle(&self) {
+    pub(crate) fn wait_idle(&self) {
         // Signal a new fence value and wait until the GPU reaches it.
         let val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(val + 1);
@@ -2128,7 +2133,7 @@ impl DxContext {
         }
     }
 
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         // Don't grab the cursor immediately. A freshly spawned window may not be
         // focused yet, and clipping + hiding the system cursor before the user
         // has interacted with the window is jarring; it also diverges from the
@@ -2141,14 +2146,14 @@ impl DxContext {
     }
 
     #[allow(dead_code)]
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         do_release_cursor(self.win_mut());
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the helper, so calling
     // it every frame with the same value is cheap.
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         do_set_ui_cursor_hidden(self.win_mut(), hidden);
     }
 
@@ -2156,14 +2161,14 @@ impl DxContext {
     // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
     // frame by `update_ui_cursor_confinement` in `window_closed`; false while
     // captured or in fullscreen (which confines the cursor instead).
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.win().cursor_outside_window
     }
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.win_mut().menu_mode = on;
     }
 
@@ -2171,7 +2176,7 @@ impl DxContext {
     // is open. GraphicsSystem calls this each frame in menu mode. Unlike the
     // startup `capture_cursor` (which arms click-to-capture), closing the menu
     // recaptures immediately so the camera resumes without an extra click.
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         if capture == self.win().cursor_captured {
             return;
         }
@@ -2190,30 +2195,30 @@ impl DxContext {
     // swapchain was created with vsync off; turning vsync off later still
     // presents uncapped (interval 0) but without the tearing flag if the
     // swapchain lacks it.
-    pub fn set_vsync(&mut self, on: bool) {
+    pub(crate) fn set_vsync(&mut self, on: bool) {
         self.swapchain.present_sync_interval = if on { 1 } else { 0 };
     }
 
     // Switch window mode / resize at runtime (windowed / borderless / fullscreen
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
     // path picks up the resulting WM_SIZE.
-    pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
         do_set_window_mode(self.win_mut(), mode);
     }
 
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         do_set_window_size(self.win_mut(), width, height);
     }
 
     // The display modes (resolution + refresh rate) of the monitor the window
     // sits on, feeding the Resolution settings row (the caller dedups + sorts).
-    pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
         crate::win32::display_mode::enumerate(self.win().hwnd)
     }
 
     // The mode the window's monitor is currently running (what the Resolution
     // row shows before the user ever picks one).
-    pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
         crate::win32::display_mode::current(self.win().hwnd)
     }
 
@@ -2221,13 +2226,16 @@ impl DxContext {
     // Applied by the per-frame reconcile in `window_closed` (which also
     // restores the desktop mode on leaving fullscreen), so a choice made in
     // any window mode takes effect when fullscreen is (or becomes) active.
-    pub fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
         self.fullscreen_display.set_desired(mode);
     }
 
     // Replace the live post-process parameters, pushed to the bloom + composite
     // shaders each frame.
-    pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
+    pub(crate) fn update_post_process(
+        &mut self,
+        params: crate::gfx::render_types::PostProcessParams,
+    ) {
         self.post_process = params;
     }
 
@@ -2240,7 +2248,7 @@ impl DxContext {
     // the stall is rare. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override), so a steady scene never
     // stalls.
-    pub fn set_ambient_intensity(&mut self, value: f32) {
+    pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         if self.uniforms.light_uniforms.ambient_intensity == value {
             return;
         }
@@ -2257,7 +2265,7 @@ impl DxContext {
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw_frame), so a
     // change takes effect on the next frame with no rebuild or allocation.
-    pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -2265,7 +2273,7 @@ impl DxContext {
     // computation reads `shadow.distance` each draw (capped at the camera far
     // plane), so a change takes effect on the next frame with no allocation (it
     // sizes no GPU resource).
-    pub fn set_shadow_distance(&mut self, distance: u32) {
+    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
         self.shadow.distance = distance;
     }
 
@@ -2273,7 +2281,7 @@ impl DxContext {
     // read `shadow.cascades` each draw; only the first `count` of the four slots
     // are rendered + sampled, so a change takes effect on the next frame with no
     // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub fn set_shadow_cascades(&mut self, count: u32) {
+    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
         self.shadow.cascades = count;
     }
 
@@ -2288,7 +2296,7 @@ impl DxContext {
     // ride `apply_quality_settings`), so only its scalar intensity / distance are
     // updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
-    pub fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
         if let (Some(live), Some(res)) = (q.ssao, self.ssao.resources.as_mut()) {
             res.settings = live;
         }
@@ -2308,11 +2316,11 @@ impl DxContext {
 
     // Replace the runtime movement key map. The window message loop decodes
     // key events through it, so a settings-menu rebind takes effect immediately.
-    pub fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
         self.win_mut().key.set_keymap(keymap);
     }
 
-    pub fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> InputState {
         take_input_snapshot(self.win_mut())
     }
 
@@ -2321,7 +2329,7 @@ impl DxContext {
     // attachment the composite + text pass writes and the space the UI shader
     // divides vertices by; WM_MOUSEMOVE reports the cursor in the same client
     // pixels, so the overlay forward / inverse transforms stay consistent.
-    pub fn logical_size(&self) -> (f32, f32) {
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
         (
             self.extent.output_width as f32,
             self.extent.output_height as f32,
@@ -2330,7 +2338,7 @@ impl DxContext {
 
     // Device capability flags for the settings menu. RT reflects the DXR-tier
     // query made at init (`rt_capable`).
-    pub fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
             selectable_upscaler: true,
@@ -2344,7 +2352,7 @@ impl DxContext {
     // Coarse GPU performance profile for default-quality selection, read live
     // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
     // the adapter does not expose the v3 interface or the desc query fails.
-    pub fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
         use crate::gfx::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
         let Some(adapter) = self.adapter.as_ref() else {
             return GpuProfile::UNKNOWN;

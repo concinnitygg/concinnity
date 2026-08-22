@@ -38,9 +38,9 @@ pub(crate) struct EmitterId(pub(crate) usize);
 // Authored acoustics for one emitter, resolved by the system from the
 // AudioEmitter schema.
 pub(crate) struct EmitterParams {
-    pub min_distance: f32,
+    pub(crate) min_distance: f32,
     pub max_distance: f32,
-    pub rolloff: Rolloff,
+    pub(crate) rolloff: Rolloff,
     pub bus: AudioBus,
 }
 
@@ -338,6 +338,7 @@ impl<B: Backend> AudioEngine<B> {
     }
 
     // One-shot voices currently playing (or queued behind a decode).
+    #[cfg(test)]
     pub(crate) fn playing_sounds(&self) -> usize {
         self.active.as_ref().map_or(0, |a| a.voices.len())
     }

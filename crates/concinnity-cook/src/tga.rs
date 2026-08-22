@@ -1,16 +1,14 @@
-// src/build/tga.rs
-//
-// Decodes a Targa (.tga) image into RGBA8. Handles the variants the asset set
-// uses: uncompressed and RLE true-colour (24/32-bit, stored BGRA) and 8-bit
-// grayscale. Colour-mapped images are not supported. The image-descriptor origin
-// bit is honoured so bottom-left-origin files are flipped to top-row-first.
+//! Decodes a Targa (.tga) image into RGBA8. Handles the variants the asset set
+//! uses: uncompressed and RLE true-colour (24/32-bit, stored BGRA) and 8-bit
+//! grayscale. Colour-mapped images are not supported. The image-descriptor origin
+//! bit is honoured so bottom-left-origin files are flipped to top-row-first.
 
 use concinnity_cpu::decode::checked_product;
 
 const HEADER_LEN: usize = 18;
 
 // Decode a TGA byte buffer into (width, height, RGBA8 pixels).
-pub fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     if bytes.len() < HEADER_LEN {
         return Err(format!("TGA too short: {} bytes", bytes.len()));
     }

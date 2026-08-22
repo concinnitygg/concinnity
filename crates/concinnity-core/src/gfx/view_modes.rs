@@ -1,10 +1,8 @@
-// src/gfx/view_modes.rs
-//
-// Viewport view-mode and show-flag state: backend-agnostic per-frame render
-// selection. The mode picks what the final image shows (the lit scene, a flat
-// shading, or one G-buffer channel); the flags switch individual feature
-// passes off for the frame without touching their resources. Consumed by the
-// render graph (masking pass gates) and each backend's composite.
+//! Viewport view-mode and show-flag state: backend-agnostic per-frame render
+//! selection. The mode picks what the final image shows (the lit scene, a flat
+//! shading, or one G-buffer channel); the flags switch individual feature
+//! passes off for the frame without touching their resources. Consumed by the
+//! render graph (masking pass gates) and each backend's composite.
 
 /// What the viewport's final image shows. `Lit` is the shipping path; the
 /// other modes visualize one stage of the frame.
@@ -12,6 +10,7 @@
 #[repr(u32)]
 pub enum ViewMode {
     #[default]
+    /// The fully lit shipping image.
     Lit = 0,
     /// Surface base color with no lighting.
     Unlit = 1,
@@ -76,11 +75,17 @@ impl ViewMode {
 pub struct ShowFlags(pub u32);
 
 impl ShowFlags {
+    /// Directional and local shadow passes.
     pub const SHADOWS: ShowFlags = ShowFlags(1 << 0);
+    /// Volumetric fog.
     pub const FOG: ShowFlags = ShowFlags(1 << 1);
+    /// Bloom.
     pub const BLOOM: ShowFlags = ShowFlags(1 << 2);
+    /// Screen-space global illumination.
     pub const SSGI: ShowFlags = ShowFlags(1 << 3);
+    /// Screen-space reflections.
     pub const SSR: ShowFlags = ShowFlags(1 << 4);
+    /// The debug line pass.
     pub const LINES: ShowFlags = ShowFlags(1 << 5);
 
     /// Every flag, paired with its display label, in UI order.
@@ -93,6 +98,7 @@ impl ShowFlags {
         (ShowFlags::LINES, "Lines"),
     ];
 
+    /// Every flag set.
     pub const fn all() -> ShowFlags {
         ShowFlags(
             ShowFlags::SHADOWS.0
@@ -104,11 +110,13 @@ impl ShowFlags {
         )
     }
 
+    /// Whether every bit in `other` is set here.
     pub const fn contains(self, other: ShowFlags) -> bool {
         self.0 & other.0 == other.0
     }
 
     #[must_use]
+    /// This set with `other`'s bits flipped.
     pub const fn toggled(self, other: ShowFlags) -> ShowFlags {
         ShowFlags(self.0 ^ other.0)
     }

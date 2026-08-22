@@ -8,23 +8,24 @@
 
 use concinnity_core::assets::PhysicsConfig;
 
-pub const LAYER_WORLD: &str = "world";
-pub const LAYER_PROP: &str = "prop";
-pub const LAYER_CHARACTER: &str = "character";
-pub const LAYER_TRIGGER: &str = "trigger";
+pub(crate) const LAYER_WORLD: &str = "world";
+pub(crate) const LAYER_PROP: &str = "prop";
+pub(crate) const LAYER_CHARACTER: &str = "character";
+pub(crate) const LAYER_TRIGGER: &str = "trigger";
 
 const BUILTIN_LAYERS: [&str; 4] = [LAYER_WORLD, LAYER_PROP, LAYER_CHARACTER, LAYER_TRIGGER];
 
-// Membership and filter bits applied to a collider or query. Two colliders
-// interact only when each one's memberships intersect the other's filter.
+/// Membership and filter bits applied to a collider or query. Two colliders
+/// interact only when each one's memberships intersect the other's filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayerMask {
-    pub memberships: u32,
+    pub(crate) memberships: u32,
+    /// Layers this collider or query interacts with.
     pub filter: u32,
 }
 
 impl LayerMask {
-    // Member of every layer, interacting with everything.
+    /// Member of every layer, interacting with everything.
     pub const ALL: LayerMask = LayerMask {
         memberships: u32::MAX,
         filter: u32::MAX,
@@ -42,7 +43,7 @@ pub(crate) struct LayerTable {
 }
 
 impl LayerTable {
-    pub fn new(config: &PhysicsConfig) -> Self {
+    pub(crate) fn new(config: &PhysicsConfig) -> Self {
         let mut names: Vec<String> = BUILTIN_LAYERS.iter().map(|s| s.to_string()).collect();
         for layer in &config.layers {
             if names.len() >= 32 || names.iter().any(|n| n == layer) {
@@ -69,7 +70,7 @@ impl LayerTable {
 
     // The mask a collider on `layer` carries: its own bit plus the filter row
     // the collide matrix left it. Unknown names fall back to `world`.
-    pub fn mask(&self, layer: &str) -> LayerMask {
+    pub(crate) fn mask(&self, layer: &str) -> LayerMask {
         let bit = self
             .names
             .iter()
@@ -82,7 +83,7 @@ impl LayerTable {
     }
 
     // A query mask: cast as a member of `layer`, hitting only `targets`.
-    pub fn query_mask(&self, layer: &str, targets: &[&str]) -> LayerMask {
+    pub(crate) fn query_mask(&self, layer: &str, targets: &[&str]) -> LayerMask {
         let mut filter = 0u32;
         for target in targets {
             if let Some(bit) = self.names.iter().position(|n| n == target) {

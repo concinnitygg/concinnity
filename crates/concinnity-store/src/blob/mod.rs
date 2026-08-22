@@ -1,9 +1,9 @@
-// Runtime blob access: the `.concinnity/data/` path layout, the payload
-// residency store, and all blob file I/O. The concinnity-blob crate owns the
-// format contract (schema, header, version, bytes <-> metadata) and is
-// deliberately I/O-free, so every read below is `fs` here plus a pure parse
-// there. Blob data is read-only at runtime; concinnity-cook writes what
-// `concinnity_blob::encode_cnb` returns.
+//! Runtime blob access: the `.concinnity/data/` path layout, the payload
+//! residency store, and all blob file I/O. The concinnity-blob crate owns the
+//! format contract (schema, header, version, bytes <-> metadata) and is
+//! deliberately I/O-free, so every read below is `fs` here plus a pure parse
+//! there. Blob data is read-only at runtime; concinnity-cook writes what
+//! `concinnity_blob::encode_cnb` returns.
 use std::fs;
 use std::io::Read;
 
@@ -16,10 +16,10 @@ pub use concinnity_blob::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH, WorldManifest};
 pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
-// Format a blob file path for a given index under `.concinnity/data/`. Blob 0
-// is the primary blob (the metadata block plus the first payload section);
-// higher indices are overflow payload blobs. The format crate is path-agnostic;
-// this layout knowledge stays here.
+/// Format a blob file path for a given index under `.concinnity/data/`. Blob 0
+/// is the primary blob (the metadata block plus the first payload section);
+/// higher indices are overflow payload blobs. The format crate is path-agnostic;
+/// this layout knowledge stays here.
 pub fn blob_path(index: u32) -> String {
     crate::paths::data_dir()
         .join(index.to_string())
@@ -27,18 +27,18 @@ pub fn blob_path(index: u32) -> String {
         .into_owned()
 }
 
-// Read and deserialize a blob's metadata section (component defs + resource
-// records). Returns (meta, payload_start_offset).
+/// Read and deserialize a blob's metadata section (component defs + resource
+/// records). Returns (meta, payload_start_offset).
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnResult> {
     let data = read_file(path)?;
     concinnity_blob::parse_cnb(&data).map_err(|e| report(path, e))
 }
 
-// Byte offset within a blob file at which its payload section begins. Reads
-// only the header; the disk-backed streaming source uses it to turn a
-// `PayloadLocator` offset into an absolute file offset.
-// Used only by the Metal-driven disk-backed streaming source for now
-// (Vulkan/DirectX streaming catch-up is a follow-up).
+/// Byte offset within a blob file at which its payload section begins. Reads
+/// only the header; the disk-backed streaming source uses it to turn a
+/// `PayloadLocator` offset into an absolute file offset.
+/// Used only by the Metal-driven disk-backed streaming source for now
+/// (Vulkan/DirectX streaming catch-up is a follow-up).
 pub fn payload_section_start(path: &str) -> Result<u64, CnResult> {
     let mut file = fs::File::open(path).map_err(|e| {
         tracing::error!("Failed to open {}: {}", path, e);
@@ -82,14 +82,14 @@ fn report(path: &str, e: BlobError) -> CnResult {
     CnResult::FileIo
 }
 
-// Load the primary blob's metadata and the `BlobData` payload store from the
-// `.concinnity/data/` layout, without resolving defs into runtime `Asset`s
-// (that resolution depends on the client runtime registry, so it lives in the
-// client `blob::load` shim).
-//
-// Only blob 0's payload section is read here; overflow blobs (named by the
-// manifest's `max_blob_index`) start unloaded and `BlobData::read()` pulls
-// each from disk the first time a locator needs it.
+/// Load the primary blob's metadata and the `BlobData` payload store from the
+/// `.concinnity/data/` layout, without resolving defs into runtime `Asset`s
+/// (that resolution depends on the client runtime registry, so it lives in the
+/// client `blob::load` shim).
+///
+/// Only blob 0's payload section is read here; overflow blobs (named by the
+/// manifest's `max_blob_index`) start unloaded and `BlobData::read()` pulls
+/// each from disk the first time a locator needs it.
 pub fn load_raw() -> Result<(BlobMeta, BlobData), CnResult> {
     load_raw_from(blob_path)
 }
@@ -115,10 +115,10 @@ fn load_raw_from(blob_path: impl Fn(u32) -> String) -> Result<(BlobMeta, BlobDat
     Ok((meta, blob_data))
 }
 
-// Number of Texture resource records in the primary blob's metadata, read
-// without loading any payload. This is the compiled world's texture-table
-// length; `cn export` uses it to precompile the built-in shaders whose bindless
-// texture pool is sized per world.
+/// Number of Texture resource records in the primary blob's metadata, read
+/// without loading any payload. This is the compiled world's texture-table
+/// length; `cn export` uses it to precompile the built-in shaders whose bindless
+/// texture pool is sized per world.
 pub fn texture_resource_count() -> Result<usize, CnResult> {
     let (meta, _) = read_cnb(&blob_path(0))?;
     let tag = concinnity_core::ecs::ResourceKind::Texture as u8;
@@ -129,7 +129,7 @@ pub fn texture_resource_count() -> Result<usize, CnResult> {
         .count())
 }
 
-// Load defs without resolving (for callers that apply overlays first)
+/// Load defs without resolving (for callers that apply overlays first)
 pub fn load_defs() -> Result<Vec<BlobAssetDef>, CnResult> {
     read_cnb(&blob_path(0)).map(|(meta, _)| meta.defs)
 }

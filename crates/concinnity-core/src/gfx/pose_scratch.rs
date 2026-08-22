@@ -1,4 +1,4 @@
-// src/gfx/pose_scratch.rs
+//! Reusable per-target scratch buffers for the pose sampling chain.
 
 use alloc::vec::Vec;
 

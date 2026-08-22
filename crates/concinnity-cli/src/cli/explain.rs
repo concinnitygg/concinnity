@@ -6,7 +6,7 @@
 
 use super::list::{provenance, resolve_world_path};
 
-pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     let content = std::fs::read_to_string(&json_path)?;
 

@@ -1,5 +1,5 @@
-// Physics authoring checks: collider shape strings, and the collision-layer
-// names a world's PhysicsConfig declares against every reference to them.
+//! Physics authoring checks: collider shape strings, and the collision-layer
+//! names a world's PhysicsConfig declares against every reference to them.
 
 use crate::world::WorldJsonlAsset;
 
@@ -10,7 +10,7 @@ const MAX_USER_LAYERS: usize = 32 - BUILTIN_LAYERS.len();
 
 // A `collider` object's `shape`, when present, must be a recognized shape
 // name. Shared by the Prop and TriggerVolume checks.
-pub fn check_collider_shape(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let Some(shape) = args
         .get("collider")
         .and_then(|c| c.get("shape"))
@@ -29,6 +29,7 @@ pub fn check_collider_shape(name: &str, args: &serde_json::Value) -> Result<(), 
     ))
 }
 
+/// Check a physics asset's authored args.
 pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_collider_shape(name, args)
 }

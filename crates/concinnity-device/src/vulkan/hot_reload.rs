@@ -612,7 +612,7 @@ impl VkContext {
     // from the FFI lib crate's roots, live in the concinnity binary), like the
     // other runtime-mutation methods on `VkContext`.
     #[allow(dead_code)]
-    pub fn update_world_shader_pipelines(
+    pub(crate) fn update_world_shader_pipelines(
         &mut self,
         vert_bytes: Option<&[u8]>,
         frag_bytes: Option<&[u8]>,

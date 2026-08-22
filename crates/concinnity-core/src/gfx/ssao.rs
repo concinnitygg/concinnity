@@ -1,10 +1,8 @@
-// src/gfx/ssao.rs
-//
-// Screen-space ambient occlusion (GTAO) configuration. Backend-agnostic
-// resolve of the authored `PostProcessConfig` SSAO fields into clamped
-// settings, plus the per-frame GPU uniform. The horizon-search arc integral
-// itself lives in each backend's shader; this module owns only the parameter
-// math so it can be unit-tested without a GPU.
+//! Screen-space ambient occlusion (GTAO) configuration. Backend-agnostic
+//! resolve of the authored `PostProcessConfig` SSAO fields into clamped
+//! settings, plus the per-frame GPU uniform. The horizon-search arc integral
+//! itself lives in each backend's shader; this module owns only the parameter
+//! math so it can be unit-tested without a GPU.
 
 use crate::gfx::camera::view_ray_scale;
 
@@ -18,18 +16,18 @@ const MAX_INTENSITY: f32 = 4.0;
 // search degenerate, so the authored value is floored here.
 const MIN_RADIUS: f32 = 1.0e-3;
 
-// Clamped SSAO tunables resolved from the authored asset fields. Held by the
-// backend and turned into a per-frame [`SsaoParams`] once the camera is known.
+/// Clamped SSAO tunables resolved from the authored asset fields. Held by the
+/// backend and turned into a per-frame [`SsaoParams`] once the camera is known.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SsaoSettings {
-    // World-space hemisphere radius the horizon search covers.
+    /// World-space hemisphere radius the horizon search covers.
     pub radius: f32,
-    // Occlusion strength multiplier applied to the integrated visibility.
+    /// Occlusion strength multiplier applied to the integrated visibility.
     pub intensity: f32,
 }
 
 impl SsaoSettings {
-    // Clamp the authored radius / intensity into a safe range.
+    /// Clamp the authored radius / intensity into a safe range.
     pub fn resolve(radius: f32, intensity: f32) -> Self {
         Self {
             radius: radius.max(MIN_RADIUS),
@@ -37,10 +35,10 @@ impl SsaoSettings {
         }
     }
 
-    // Build the per-frame GPU uniform from these settings and the active
-    // camera. `fov_y_radians` is the vertical field of view and `aspect` the
-    // viewport width / height ratio: together they give the view-ray scale
-    // the kernel needs to rebuild view-space positions from linear depth.
+    /// Build the per-frame GPU uniform from these settings and the active
+    /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
+    /// viewport width / height ratio: together they give the view-ray scale
+    /// the kernel needs to rebuild view-space positions from linear depth.
     pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsaoParams {
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsaoParams {

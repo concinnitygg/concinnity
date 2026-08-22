@@ -294,9 +294,9 @@ pub(crate) mod test_fixtures {
     pub(crate) struct PanoramaShape {
         pub segments: usize,
         pub rings: usize,
-        pub base_color: [f32; 4],
-        pub emissive_factor: [f32; 3],
-        pub uv_scale: f32,
+        pub(crate) base_color: [f32; 4],
+        pub(crate) emissive_factor: [f32; 3],
+        pub(crate) uv_scale: f32,
         pub png: Vec<u8>,
     }
 

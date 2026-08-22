@@ -1,37 +1,49 @@
-// src/scene_flow.rs
-//
-// Platform-agnostic active-scene state and transition logic. Scenes are pure
-// content groupings; changes are imperative jumps (UI actions, Behaviors), so
-// this module tracks only which scene is active and drives fade transitions.
-// The SceneControl trait decouples this module from any specific backend;
-// callers supply a concrete backend that implements the two mutation methods.
+//! Platform-agnostic active-scene state and transition logic. Scenes are pure
+//! content groupings; changes are imperative jumps (UI actions, Behaviors), so
+//! this module tracks only which scene is active and drives fade transitions.
+//! The SceneControl trait decouples this module from any specific backend;
+//! callers supply a concrete backend that implements the two mutation methods.
 
 use crate::ecs::asset_id::AssetId;
 
 const FADE_HALF_SECS: f32 = 0.3;
 
+/// The active scene and any transition in flight.
 pub struct SceneFlow {
-    // Every Scene declared in the world, in declaration order.
+    /// Every Scene declared in the world, in declaration order.
     pub scenes: Vec<AssetId>,
+    /// The scene currently active.
     pub current: AssetId,
+    /// Where the transition fade stands.
     pub fade: FadePhase,
 }
 
+/// A scene transition's fade phase.
 pub enum FadePhase {
+    /// No transition in flight.
     None,
-    // Fading the composited image toward black; next is the scene to activate
-    // mid-fade.
-    ToBlack { started_at: f32, next: AssetId },
-    // New scene is active; fading the composited image back from black.
-    FromBlack { started_at: f32 },
+    /// Fading the composited image toward black; next is the scene to activate
+    /// mid-fade.
+    ToBlack {
+        /// When the fade-out started, in world seconds.
+        started_at: f32,
+        /// The scene being faded to.
+        next: AssetId,
+    },
+    /// New scene is active; fading the composited image back from black.
+    FromBlack {
+        /// When the fade-in started, in world seconds.
+        started_at: f32,
+    },
 }
 
-// Backend operations required to drive scene visibility and fade transitions.
+/// Backend operations required to drive scene visibility and fade transitions.
 pub trait SceneControl {
+    /// Show or hide one draw slot.
     fn update_visibility(&mut self, draw_idx: usize, visible: bool);
-    // Fade the composited image to black by `fade` in `[0, 1]`: 0 leaves the
-    // frame untouched, 1 renders it fully black. Applied in the composite pass
-    // so the whole image fades, not just the pixels no geometry covers.
+    /// Fade the composited image to black by `fade` in `[0, 1]`: 0 leaves the
+    /// frame untouched, 1 renders it fully black. Applied in the composite pass
+    /// so the whole image fades, not just the pixels no geometry covers.
     fn set_fade(&mut self, fade: f32);
 }
 
@@ -81,8 +93,8 @@ impl SceneVisibility {
     }
 }
 
-// Set draw-object visibility according to which scene is currently active.
-// Props with no scene association (scene == None) are always visible.
+/// Set draw-object visibility according to which scene is currently active.
+/// Props with no scene association (scene == None) are always visible.
 pub fn set_scene_visibility<B: SceneControl + ?Sized>(
     visibility: &SceneVisibility,
     active_scene: AssetId,
@@ -99,8 +111,8 @@ pub fn set_scene_visibility<B: SceneControl + ?Sized>(
     }
 }
 
-// Advance any in-flight fade transition, updating the composite fade and
-// switching visibility to the target scene mid-fade.
+/// Advance any in-flight fade transition, updating the composite fade and
+/// switching visibility to the target scene mid-fade.
 pub fn tick_transitions<B: SceneControl + ?Sized>(
     flow_opt: &mut Option<SceneFlow>,
     visibility: &SceneVisibility,
@@ -136,8 +148,8 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
     }
 }
 
-// Imperatively jump to a named scene. Ignored with a warning if the target
-// scene is not declared, or no scenes exist.
+/// Imperatively jump to a named scene. Ignored with a warning if the target
+/// scene is not declared, or no scenes exist.
 pub fn jump_to_scene<B: SceneControl + ?Sized>(
     flow_opt: &mut Option<SceneFlow>,
     visibility: &SceneVisibility,

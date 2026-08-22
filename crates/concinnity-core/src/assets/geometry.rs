@@ -6,11 +6,11 @@
 // line. Exposed as extension traits so call sites keep method syntax
 // (`prop.model_matrix()`).
 
-use crate::assets::{GlassPanel, InstancedProp, Prop, RectAreaLight, SpotLight};
+use crate::assets::{GlassPanel, InstancedProp, RectAreaLight, SpotLight};
 use crate::math::{cos, sqrt};
 
-// Widest half-angle a spot cone may open to. Past this the cone degenerates
-// toward a hemisphere and the clustered sphere bound stops being useful.
+/// Widest half-angle a spot cone may open to. Past this the cone degenerates
+/// toward a hemisphere and the clustered sphere bound stops being useful.
 pub const SPOT_MAX_ANGLE_DEG: f32 = 89.9;
 
 // `v` scaled to unit length, or `fallback` when it is too short to have a
@@ -25,19 +25,10 @@ fn normalize_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// Column-major model matrix for a [Prop].
-pub trait PropGeometry {
-    fn model_matrix(&self) -> [[f32; 4]; 4];
-}
-
-impl PropGeometry for Prop {
-    fn model_matrix(&self) -> [[f32; 4]; 4] {
-        crate::gfx::transform::trs_matrix(self.position, self.rotation_deg, self.scale)
-    }
-}
-
 /// Per-instance model matrices for an [InstancedProp].
 pub trait InstancedPropGeometry {
+    /// Column-major model matrix for the i-th instance, or `None` when the
+    /// index is past the instance list.
     fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]>;
 }
 
@@ -56,8 +47,12 @@ impl InstancedPropGeometry for InstancedProp {
 
 /// Cone direction and angular falloff cosines for a [SpotLight].
 pub trait SpotLightGeometry {
+    /// Unit-length cone axis.
     fn unit_direction(&self) -> [f32; 3];
+    /// Cosine of the inner half-angle: the widest angle still at full
+    /// brightness.
     fn cos_inner(&self) -> f32;
+    /// Cosine of the outer half-angle: the angle at which the cone is black.
     fn cos_outer(&self) -> f32;
 }
 
@@ -81,6 +76,7 @@ impl SpotLightGeometry for SpotLight {
 
 /// Unit-length facing normal for a [GlassPanel].
 pub trait GlassPanelGeometry {
+    /// Unit-length facing direction.
     fn unit_normal(&self) -> [f32; 3];
 }
 
@@ -95,6 +91,7 @@ impl GlassPanelGeometry for GlassPanel {
 
 /// Unit-length emission normal for a [RectAreaLight].
 pub trait RectAreaLightGeometry {
+    /// Unit-length emission direction.
     fn unit_normal(&self) -> [f32; 3];
 }
 

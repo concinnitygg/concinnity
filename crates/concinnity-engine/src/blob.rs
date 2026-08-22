@@ -1,8 +1,6 @@
-// src/blob.rs
-//
-// Blob file reading and lazy payload residency live in concinnity-store;
-// re-export them under the historical crate::blob::* paths. `pub` so the editor
-// crate's in-memory build path can construct `BlobData`.
+//! Blob file reading and lazy payload residency live in concinnity-store;
+//! re-export them under the historical crate::blob::* paths. `pub` so the editor
+//! crate's in-memory build path can construct `BlobData`.
 pub use concinnity_store::blob::*;
 
 use crate::ecs::ComponentAsset;

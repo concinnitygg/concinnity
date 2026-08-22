@@ -23,7 +23,7 @@ use crate::build::texture::TextureImage;
 
 // A texture payload decoded to a GPU-ready image (RGBA8 or block-compressed
 // with its mip chain).
-pub struct DecodedTexture {
+pub(crate) struct DecodedTexture {
     pub image: TextureImage,
 }
 
@@ -32,7 +32,7 @@ pub struct DecodedTexture {
 // `Send + Sync` so the background worker thread can own one. Implementors do
 // the slow part of streaming (disk read, decompression); the renderer only
 // ever sees the finished [`DecodedTexture`].
-pub trait PayloadSource: Send + Sync {
+pub(crate) trait PayloadSource: Send + Sync {
     // Decode item `id` into GPU-ready pixels, or return a human-readable
     // error. Called off the main thread.
     fn fetch(&self, id: usize) -> Result<DecodedTexture, String>;
@@ -44,13 +44,13 @@ pub trait PayloadSource: Send + Sync {
 // `cn debug` builds payloads in memory with no blob files on disk, so it
 // cannot use [`DiskPayloadSource`]; the bytes stay RAM-resident and this
 // streams the *GPU upload* only. `cn run` uses [`DiskPayloadSource`] instead.
-pub struct MemPayloadSource {
+pub(crate) struct MemPayloadSource {
     payloads: Vec<Vec<u8>>,
 }
 
 impl MemPayloadSource {
     // `payloads[id]` is the compiled texture payload for streamable item `id`.
-    pub fn new(payloads: Vec<Vec<u8>>) -> Self {
+    pub(crate) fn new(payloads: Vec<Vec<u8>>) -> Self {
         Self { payloads }
     }
 }
@@ -72,9 +72,9 @@ impl PayloadSource for MemPayloadSource {
 // the blob header and defs) is already folded in by the caller, so the
 // background worker only seeks and reads.
 #[derive(Clone)]
-pub struct DiskTextureLocator {
+pub(crate) struct DiskTextureLocator {
     pub path: String,
-    pub file_offset: u64,
+    pub(crate) file_offset: u64,
     pub len: u64,
 }
 
@@ -85,14 +85,14 @@ pub struct DiskTextureLocator {
 // where the world was loaded from blob files that are still on disk. The
 // `cn debug` path builds payloads in memory with no blob files, so it must
 // keep using [`MemPayloadSource`].
-pub struct DiskPayloadSource {
+pub(crate) struct DiskPayloadSource {
     // locators[id] points streamed item `id` at its bytes in a blob file.
     locators: Vec<DiskTextureLocator>,
 }
 
 impl DiskPayloadSource {
     // `locators[id]` locates the compiled payload for streamable item `id`.
-    pub fn new(locators: Vec<DiskTextureLocator>) -> Self {
+    pub(crate) fn new(locators: Vec<DiskTextureLocator>) -> Self {
         Self { locators }
     }
 }
@@ -128,7 +128,7 @@ struct LoadResult {
 // [`update_scores`]: TextureStreamer::update_scores
 // [`plan_and_dispatch`]: TextureStreamer::plan_and_dispatch
 // [`drain_completed`]: TextureStreamer::drain_completed
-pub struct TextureStreamer {
+pub(crate) struct TextureStreamer {
     planner: StreamPlanner,
     // centers[id] holds the world-space positions of every draw object that
     // samples texture slot `id`; the streaming priority is the squared
@@ -145,7 +145,7 @@ impl TextureStreamer {
     // `centers[id]` lists the draw-object positions that reference slot `id`.
     // `load_budget` caps loads dispatched per frame; `resident_cap` caps how
     // many textures stay resident at once before LRU eviction kicks in.
-    pub fn new(
+    pub(crate) fn new(
         source: Arc<dyn PayloadSource>,
         centers: Vec<Vec<[f32; 3]>>,
         load_budget: usize,
@@ -169,37 +169,37 @@ impl TextureStreamer {
     }
 
     // Number of streamed texture slots.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.planner.len()
     }
 
     // Set (or clear with `None`) the resident-byte budget for this pool. When
     // set, the planner evicts farther-from-camera textures to hold resident
     // bytes at or under the budget, on top of the item-count cap.
-    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.planner.set_byte_budget(budget);
     }
 
     // Total resident texture bytes, for diagnostics.
-    pub fn resident_bytes(&self) -> u64 {
+    pub(crate) fn resident_bytes(&self) -> u64 {
         self.planner.resident_bytes()
     }
 
     // Block or unblock a slot for scene residency: a blocked slot never loads
     // and is evicted by the next plan if resident.
-    pub fn set_blocked(&mut self, slot: usize, blocked: bool) {
+    pub(crate) fn set_blocked(&mut self, slot: usize, blocked: bool) {
         self.planner.set_blocked(slot, blocked);
     }
 
     // The active resident-byte budget, or `None` when byte accounting is off.
-    pub fn byte_budget(&self) -> Option<u64> {
+    pub(crate) fn byte_budget(&self) -> Option<u64> {
         self.planner.byte_budget()
     }
 
     // Re-score every slot from the camera position and refresh the LRU
     // timestamp of resident slots. Call once per frame before
     // [`plan_and_dispatch`](Self::plan_and_dispatch).
-    pub fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
+    pub(crate) fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
         for id in 0..self.planner.len() {
             self.planner
                 .set_score(id, nearest_sq_distance(&self.centers[id], camera));
@@ -211,7 +211,7 @@ impl TextureStreamer {
 
     // Run the planner: dispatch this frame's loads to the worker and return
     // the slots the caller must evict from the GPU.
-    pub fn plan_and_dispatch(&mut self) -> Vec<usize> {
+    pub(crate) fn plan_and_dispatch(&mut self) -> Vec<usize> {
         let plan = self.planner.plan();
         for &id in &plan.to_load {
             let sent = self.worker.send(id);
@@ -227,7 +227,7 @@ impl TextureStreamer {
     // Apply every completed background load via `upload`, which receives the
     // decoded image by value so it can carry it into a recorded backend op.
     // Returns the number of slots brought resident this call.
-    pub fn drain_completed(
+    pub(crate) fn drain_completed(
         &mut self,
         frame: u64,
         mut upload: impl FnMut(usize, TextureImage),
@@ -255,7 +255,7 @@ impl TextureStreamer {
     }
 
     // `(resident, pending, unloaded)` slot counts, for diagnostics.
-    pub fn stats(&self) -> (usize, usize, usize) {
+    pub(crate) fn stats(&self) -> (usize, usize, usize) {
         self.planner.counts()
     }
 }

@@ -28,8 +28,8 @@ const SNAP_THRESHOLD: f32 = 0.45;
 pub(super) struct IkChainRuntime {
     pub chain: TwoBoneChain,
     // Index into the graph's parameter block, or `None` for full strength.
-    pub weight_param: Option<usize>,
-    pub foot_height: f32,
+    pub(crate) weight_param: Option<usize>,
+    pub(crate) foot_height: f32,
 }
 
 // Resolve the authored chains against the target's skeleton and parameter

@@ -1,14 +1,12 @@
-// concinnity-physics/src/lib.rs
-//
-// A thin wrapper around the Rapier rigid-body simulation. Rapier (and its
-// glam-based math) is confined to this crate: callers work entirely in the
-// engine's `[f32; 3]` / Euler-degree representation and only ever see the
-// opaque `BodyHandle`.
-//
-// `PhysicsWorld` owns one Rapier simulation. `PhysicsSystem` builds it once at
-// init from the world's Props / bodies and steps it every frame. The engine
-// depends on this crate and constructs `PhysicsSystem` through its system
-// registry; the dependency arrow is concinnity-physics <- concinnity-engine.
+//! A thin wrapper around the Rapier rigid-body simulation. Rapier (and its
+//! glam-based math) is confined to this crate: callers work entirely in the
+//! engine's `[f32; 3]` / Euler-degree representation and only ever see the
+//! opaque `BodyHandle`.
+//!
+//! `PhysicsWorld` owns one Rapier simulation. `PhysicsSystem` builds it once at
+//! init from the world's Props / bodies and steps it every frame. The engine
+//! depends on this crate and constructs `PhysicsSystem` through its system
+//! registry; the dependency arrow is concinnity-physics <- concinnity-engine.
 
 // The cached capsule a character move is resolved against.
 mod character;
@@ -31,7 +29,7 @@ mod system;
 
 pub use character::CharacterShape;
 pub use contacts::ContactHit;
-pub use layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerMask};
+pub use layers::LayerMask;
 // The physics system the engine registry wraps, plus the shared gravity
 // constant the third-person controller matches its jump takeoff against.
 pub use system::{GRAVITY, PhysicsSystem};
@@ -47,17 +45,17 @@ use rapier3d::parry::query::DefaultQueryDispatcher;
 use rapier3d::parry::utils::Array2;
 use rapier3d::prelude::*;
 
-// Opaque handle to a body inside a [`PhysicsWorld`].
+/// Opaque handle to a body inside a [`PhysicsWorld`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BodyHandle(RigidBodyHandle);
 
 // Opaque handle to a joint inside a [`PhysicsWorld`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct JointHandle(ImpulseJointHandle);
+pub(crate) struct JointHandle(ImpulseJointHandle);
 
 // Constraint shape connecting two bodies.
 #[derive(Debug, Clone, Copy)]
-pub enum JointSpec {
+pub(crate) enum JointSpec {
     // All six degrees of freedom locked: bodies move and rotate as one rigid
     // assembly relative to their anchors.
     Fixed,
@@ -83,79 +81,98 @@ pub enum JointSpec {
 
 // Velocity-driven motor parameters for a revolute / prismatic joint.
 #[derive(Debug, Clone, Copy)]
-pub struct JointMotor {
+pub(crate) struct JointMotor {
     // Target velocity (radians/second for revolute, units/second for prismatic).
-    pub target_velocity: f32,
+    pub(crate) target_velocity: f32,
     // Maximum force the motor may apply to reach the target.
-    pub max_force: f32,
+    pub(crate) max_force: f32,
 }
 
-// A collision shape, in the body's local space.
+/// A collision shape, in the body's local space.
 #[derive(Debug, Clone, Copy)]
 pub enum ColliderShape {
-    // Box with the given half-extents along x, y, z.
-    Cuboid { half_extents: [f32; 3] },
-    // Sphere of the given radius.
-    Ball { radius: f32 },
-    // Y-axis capsule: a cylinder of `2 * half_height` capped by hemispheres.
-    Capsule { half_height: f32, radius: f32 },
+    /// Box with the given half-extents along x, y, z.
+    Cuboid {
+        /// Half-extents along each axis.
+        half_extents: [f32; 3],
+    },
+    /// Sphere of the given radius.
+    Ball {
+        /// Sphere radius.
+        radius: f32,
+    },
+    /// Y-axis capsule: a cylinder of `2 * half_height` capped by hemispheres.
+    Capsule {
+        /// Half the cylindrical section's height.
+        half_height: f32,
+        /// Cap and cylinder radius.
+        radius: f32,
+    },
 }
 
-// Physical parameters for a dynamic (freely simulated) body.
+/// Physical parameters for a dynamic (freely simulated) body.
 #[derive(Debug, Clone, Copy)]
 pub struct DynamicParams {
-    // Mass in kilograms. `0.0` lets Rapier derive mass from shape volume.
+    /// Mass in kilograms. `0.0` lets Rapier derive mass from shape volume.
     pub mass: f32,
-    // Coulomb friction coefficient.
+    /// Coulomb friction coefficient.
     pub friction: f32,
-    // Bounciness in `[0, 1]`.
+    /// Bounciness in `[0, 1]`.
     pub restitution: f32,
-    // Multiplier on the world gravity for this body.
+    /// Multiplier on the world gravity for this body.
     pub gravity_scale: f32,
-    // Linear velocity damping (air drag).
+    /// Linear velocity damping (air drag).
     pub linear_damping: f32,
 }
 
-// One character-capsule move request, resolved against the scene by
-// [`PhysicsWorld::move_character`].
+/// One character-capsule move request, resolved against the scene by
+/// [`PhysicsWorld::move_character`].
 #[derive(Debug, Clone, Copy)]
 pub struct CharacterMoveInput {
-    // World-space capsule centre before the move.
+    /// World-space capsule centre before the move.
     pub center: [f32; 3],
-    // Desired translation for this tick.
+    /// Desired translation for this tick.
     pub desired: [f32; 3],
+    /// Seconds this move covers.
     pub dt: f32,
-    // The moving capsule's own body, left out of the collision query.
+    /// The moving capsule's own body, left out of the collision query.
     pub exclude: BodyHandle,
+    /// Which layers the collision query considers.
     pub mask: LayerMask,
 }
 
-// Result of moving the character capsule for one frame.
+/// Result of moving the character capsule for one frame.
 #[derive(Debug, Clone, Copy)]
 pub struct CharacterMove {
-    // The translation actually applied after collision resolution.
+    /// The translation actually applied after collision resolution.
     pub translation: [f32; 3],
-    // True when the capsule is resting on a surface after the move.
+    /// True when the capsule is resting on a surface after the move.
     pub grounded: bool,
 }
 
-// One raycast hit: the surface point, its outward normal, and the distance
-// from the ray origin.
+/// One raycast hit: the surface point, its outward normal, and the distance
+/// from the ray origin.
 #[derive(Debug, Clone, Copy)]
 pub struct RayHit {
+    /// World-space surface point the ray hit.
     pub point: [f32; 3],
+    /// Unit-length normal.
     pub normal: [f32; 3],
+    /// Distance from the ray origin to the hit.
     pub distance: f32,
 }
 
-// One boundary crossing of a sensor region recorded during a step: something
-// began or stopped overlapping the sensor tagged `tag` (the caller's value
-// from [`PhysicsWorld::add_sensor`]). `other` is the crossing body, `None`
-// when it was removed from the simulation in the same step.
+/// One boundary crossing of a sensor region recorded during a step: something
+/// began or stopped overlapping the sensor tagged `tag` (the caller's value
+/// from `PhysicsWorld::add_sensor`). `other` is the crossing body, `None`
+/// when it was removed from the simulation in the same step.
 #[derive(Debug, Clone, Copy)]
 pub struct SensorCrossing {
+    /// The caller's tag for the crossed sensor.
     pub tag: u64,
+    /// The crossing body, `None` when it left the simulation this step.
     pub other: Option<BodyHandle>,
+    /// `true` on the way in, `false` on the way out.
     pub entered: bool,
 }
 
@@ -220,7 +237,7 @@ impl EventHandler for EventSink {
     }
 }
 
-// One Rapier rigid-body simulation.
+/// One Rapier rigid-body simulation.
 pub struct PhysicsWorld {
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -250,8 +267,8 @@ impl std::fmt::Debug for PhysicsWorld {
 }
 
 impl PhysicsWorld {
-    // Create an empty world. `gravity` is the downward acceleration magnitude
-    // in world units per second squared.
+    /// Create an empty world. `gravity` is the downward acceleration magnitude
+    /// in world units per second squared.
     pub fn new(gravity: f32) -> Self {
         Self {
             bodies: RigidBodySet::new(),
@@ -274,7 +291,7 @@ impl PhysicsWorld {
     // Set the minimum contact impulse for contact events, converted to the
     // total-force threshold Rapier gates on at `tick_dt`. Applies to dynamic
     // bodies added afterwards, so call before populating the world.
-    pub fn set_contact_min_impulse(&mut self, min_impulse: f32, tick_dt: f32) {
+    pub(crate) fn set_contact_min_impulse(&mut self, min_impulse: f32, tick_dt: f32) {
         self.contact_force_threshold = min_impulse.max(0.0) / tick_dt.max(1.0e-6);
     }
 
@@ -282,7 +299,12 @@ impl PhysicsWorld {
     // character (auto-steps, snaps to the ground) and false for a free-flying
     // camera (no auto-step, no ground snap). A slope of `0` disables the
     // climb limit.
-    pub fn configure_character(&mut self, max_slope_deg: f32, step_height: f32, grounded: bool) {
+    pub(crate) fn configure_character(
+        &mut self,
+        max_slope_deg: f32,
+        step_height: f32,
+        grounded: bool,
+    ) {
         if max_slope_deg > 0.0 {
             self.character.max_slope_climb_angle = max_slope_deg.to_radians();
             self.character.min_slope_slide_angle = max_slope_deg.to_radians();
@@ -322,7 +344,7 @@ impl PhysicsWorld {
         )
     }
 
-    // Add an immovable body (terrain, walls, static props).
+    /// Add an immovable body (terrain, walls, static props).
     pub fn add_fixed(
         &mut self,
         shape: &ColliderShape,
@@ -346,9 +368,9 @@ impl PhysicsWorld {
         BodyHandle(handle)
     }
 
-    // Add a freely simulated dynamic body. Dynamic bodies are the contact
-    // event sources: any pair whose total force passes the world's threshold
-    // records a `ContactHit`.
+    /// Add a freely simulated dynamic body. Dynamic bodies are the contact
+    /// event sources: any pair whose total force passes the world's threshold
+    /// records a `ContactHit`.
     pub fn add_dynamic(
         &mut self,
         shape: &ColliderShape,
@@ -385,7 +407,7 @@ impl PhysicsWorld {
     // kinematic-vs-fixed pair is enabled explicitly so the position-kinematic
     // character capsules set it off; rapier excludes fixed-vs-fixed pairs, so
     // static geometry never does.
-    pub fn add_sensor(
+    pub(crate) fn add_sensor(
         &mut self,
         shape: &ColliderShape,
         pos: [f32; 3],
@@ -411,7 +433,7 @@ impl PhysicsWorld {
         BodyHandle(handle)
     }
 
-    // The sensor boundary crossings recorded by the last `step`, oldest first.
+    /// The sensor boundary crossings recorded by the last `step`, oldest first.
     pub fn drain_sensor_crossings(&mut self) -> Vec<SensorCrossing> {
         let mut out = Vec::new();
         self.drain_sensor_crossings_into(&mut out);
@@ -421,13 +443,13 @@ impl PhysicsWorld {
     // `drain_sensor_crossings`, moved into `out` (cleared first). Both the
     // queue and `out` keep their capacity, so a per-tick drain never
     // reallocates.
-    pub fn drain_sensor_crossings_into(&mut self, out: &mut Vec<SensorCrossing>) {
+    pub(crate) fn drain_sensor_crossings_into(&mut self, out: &mut Vec<SensorCrossing>) {
         out.clear();
         out.append(&mut self.events.crossings.lock().unwrap());
     }
 
-    // The contact hits recorded by the last `step`, oldest first. Only pairs
-    // whose total force passed the world's contact threshold appear.
+    /// The contact hits recorded by the last `step`, oldest first. Only pairs
+    /// whose total force passed the world's contact threshold appear.
     pub fn drain_contact_hits(&mut self) -> Vec<ContactHit> {
         let mut out = Vec::new();
         self.drain_contact_hits_into(&mut out);
@@ -436,13 +458,13 @@ impl PhysicsWorld {
 
     // `drain_contact_hits`, moved into `out` (cleared first) with both
     // capacities retained.
-    pub fn drain_contact_hits_into(&mut self, out: &mut Vec<ContactHit>) {
+    pub(crate) fn drain_contact_hits_into(&mut self, out: &mut Vec<ContactHit>) {
         out.clear();
         out.append(&mut self.events.contacts.lock().unwrap());
     }
 
-    // Add the player character capsule as a position-kinematic body. `center`
-    // is the world-space position of the capsule centre.
+    /// Add the player character capsule as a position-kinematic body. `center`
+    /// is the world-space position of the capsule centre.
     pub fn add_character(
         &mut self,
         half_height: f32,
@@ -466,7 +488,7 @@ impl PhysicsWorld {
 
     // Add a static heightfield. `heights` is a `rows * cols` row-major grid of
     // world-space Y values; `scale` is the full extent `[width, 1, depth]`.
-    pub fn add_heightfield(
+    pub(crate) fn add_heightfield(
         &mut self,
         rows: usize,
         cols: usize,
@@ -490,7 +512,7 @@ impl PhysicsWorld {
 
     // Constrain two bodies with a joint. Anchors are in each body's local
     // frame. Returns a handle for future inspection / removal.
-    pub fn add_joint(
+    pub(crate) fn add_joint(
         &mut self,
         body_a: BodyHandle,
         body_b: BodyHandle,
@@ -556,7 +578,7 @@ impl PhysicsWorld {
         JointHandle(handle)
     }
 
-    // Advance the simulation by `dt` seconds.
+    /// Advance the simulation by `dt` seconds.
     pub fn step(&mut self, dt: f32) {
         self.integration_parameters.dt = dt;
         self.pipeline.step(
@@ -575,14 +597,14 @@ impl PhysicsWorld {
         );
     }
 
-    // Resolve a desired move of a character capsule against the world without
-    // mutating it. Apply the result with [`Self::set_kinematic_translation`].
-    // `shape` is the mover's capsule, owned by the caller so the fixed tick
-    // reuses one per character instead of building a fresh one per call.
-    // `input.exclude` is the moving capsule's own body (from
-    // [`Self::add_character`]), left out of the query so the character does
-    // not collide with itself; other characters' capsules stay solid to it.
-    // Sensors never block the move.
+    /// Resolve a desired move of a character capsule against the world without
+    /// mutating it. Apply the result with `set_kinematic_translation`.
+    /// `shape` is the mover's capsule, owned by the caller so the fixed tick
+    /// reuses one per character instead of building a fresh one per call.
+    /// `input.exclude` is the moving capsule's own body (from
+    /// [`Self::add_character`]), left out of the query so the character does
+    /// not collide with itself; other characters' capsules stay solid to it.
+    /// Sensors never block the move.
     pub fn move_character(
         &self,
         shape: &CharacterShape,
@@ -610,11 +632,11 @@ impl PhysicsWorld {
         }
     }
 
-    // Cast a ray into the scene, returning the nearest hit within
-    // `max_dist`. `dir` need not be unit length (a zero direction misses).
-    // `exclude` leaves one body out of the query -- pass the probing
-    // character's own capsule so a ray from inside it reaches the world.
-    // `mask` restricts the hit set to compatible layers; sensors never hit.
+    /// Cast a ray into the scene, returning the nearest hit within
+    /// `max_dist`. `dir` need not be unit length (a zero direction misses).
+    /// `exclude` leaves one body out of the query -- pass the probing
+    /// character's own capsule so a ray from inside it reaches the world.
+    /// `mask` restricts the hit set to compatible layers; sensors never hit.
     pub fn raycast(
         &self,
         origin: [f32; 3],
@@ -652,30 +674,30 @@ impl PhysicsWorld {
     }
 
     // Set the next-frame target position of a kinematic body.
-    pub fn set_kinematic_translation(&mut self, handle: BodyHandle, pos: [f32; 3]) {
+    pub(crate) fn set_kinematic_translation(&mut self, handle: BodyHandle, pos: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(handle.0) {
             body.set_next_kinematic_translation(to_vec(pos));
         }
     }
 
     // Switch a body to position-kinematic control (used while a prop is held).
-    pub fn make_kinematic(&mut self, handle: BodyHandle) {
+    pub(crate) fn make_kinematic(&mut self, handle: BodyHandle) {
         if let Some(body) = self.bodies.get_mut(handle.0) {
             body.set_body_type(RigidBodyType::KinematicPositionBased, true);
         }
     }
 
     // Switch a body back to dynamic simulation and give it a launch velocity.
-    pub fn make_dynamic(&mut self, handle: BodyHandle, linear_velocity: [f32; 3]) {
+    pub(crate) fn make_dynamic(&mut self, handle: BodyHandle, linear_velocity: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(handle.0) {
             body.set_body_type(RigidBodyType::Dynamic, true);
             body.set_linvel(to_vec(linear_velocity), true);
         }
     }
 
-    // Remove a body and its colliders from the world (used when its owning
-    // entity is despawned). Rapier purges any joints incident on the body as
-    // part of the removal, so no separate joint cleanup is needed.
+    /// Remove a body and its colliders from the world (used when its owning
+    /// entity is despawned). Rapier purges any joints incident on the body as
+    /// part of the removal, so no separate joint cleanup is needed.
     pub fn remove_body(&mut self, handle: BodyHandle) {
         self.bodies.remove(
             handle.0,
@@ -690,18 +712,18 @@ impl PhysicsWorld {
     // Number of rigid bodies currently in the world (player, props, anchors).
     // Test-only observable for the body-reaping path.
     #[cfg(test)]
-    pub fn body_count(&self) -> usize {
+    pub(crate) fn body_count(&self) -> usize {
         self.bodies.len()
     }
 
     // Number of colliders currently in the world. Test-only observable for
     // the spawn/despawn leak checks.
     #[cfg(test)]
-    pub fn collider_count(&self) -> usize {
+    pub(crate) fn collider_count(&self) -> usize {
         self.colliders.len()
     }
 
-    // Read a body's current world-space position and Euler rotation.
+    /// Read a body's current world-space position and Euler rotation.
     pub fn body_pose(&self, handle: BodyHandle) -> ([f32; 3], [f32; 3]) {
         match self.bodies.get(handle.0) {
             Some(body) => (
@@ -714,7 +736,7 @@ impl PhysicsWorld {
 
     // Read a body's current world-space position and `[x, y, z, w]` rotation
     // quaternion, for pose interpolation (which blends in quaternion space).
-    pub fn body_pose_quat(&self, handle: BodyHandle) -> ([f32; 3], [f32; 4]) {
+    pub(crate) fn body_pose_quat(&self, handle: BodyHandle) -> ([f32; 3], [f32; 4]) {
         match self.bodies.get(handle.0) {
             Some(body) => (from_vec(body.translation()), to_quat(*body.rotation())),
             None => ([0.0; 3], [0.0, 0.0, 0.0, 1.0]),

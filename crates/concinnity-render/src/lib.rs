@@ -1,12 +1,10 @@
-// src/lib.rs
-//
-// The backend-agnostic, GPU-free render-prep layer. Holds the
-// `RenderBackend`/`SceneControl` trait seam the device backends implement, plus
-// the record builders, render graph, and CPU-side math that turn asset
-// components into GPU-ready data. Depends on the vocabulary (concinnity-core)
-// and the CPU compute over it (concinnity-cpu); owns no device or window
-// handle. The device backends (concinnity-device) and the runtime driver
-// (concinnity-engine) both build on top of this crate.
+//! The backend-agnostic, GPU-free render-prep layer. Holds the
+//! `RenderBackend`/`SceneControl` trait seam the device backends implement, plus
+//! the record builders, render graph, and CPU-side math that turn asset
+//! components into GPU-ready data. Depends on the vocabulary (concinnity-core)
+//! and the CPU compute over it (concinnity-cpu); owns no device or window
+//! handle. The device backends (concinnity-device) and the runtime driver
+//! (concinnity-engine) both build on top of this crate.
 
 // GPU-layout + render-math vocabulary, re-exported at the crate root so the
 // render-prep modules reach them as `crate::<type>`.
@@ -69,23 +67,23 @@ pub mod streaming;
 pub mod text;
 pub mod transparent;
 
-// The `#[repr(C)]` blocks the CPU uploads into the single-source `.slang`
-// shaders, declared once for every backend (see `uniforms/mod.rs`).
+/// The `#[repr(C)]` blocks the CPU uploads into the single-source `.slang`
+/// shaders, declared once for every backend (see `uniforms/mod.rs`).
 pub mod uniforms;
 
 pub mod volumetric_fog;
 
-// GPU-free host-side layout contract for the Metal backend's shader structs
-// (uniform structs, math, shader-layout asserts). Metal-specific but device-free,
-// so it is compiled unconditionally and its layout tests run on every platform's
-// CI. The Metal backend (concinnity-device) re-exports it under its own `metal`.
+/// GPU-free host-side layout contract for the Metal backend's shader structs
+/// (uniform structs, math, shader-layout asserts). Metal-specific but device-free,
+/// so it is compiled unconditionally and its layout tests run on every platform's
+/// CI. The Metal backend (concinnity-device) re-exports it under its own `metal`.
 pub mod metal;
 
-// The same for the DirectX and Vulkan backends: their repr(C) uniform / probe
-// structs + GPU-timing slot arithmetic (mirrored in the HLSL / GLSL shaders).
-// Backend-specific but device-free (plain repr(C), no windows/ash types), so
-// they compile unconditionally and their layout tests count toward coverage.
-// The DirectX / Vulkan backends (concinnity-device) re-export them under their
-// own `directx` / `vulkan`.
+/// The same for the DirectX and Vulkan backends: their repr(C) uniform / probe
+/// structs + GPU-timing slot arithmetic (mirrored in the HLSL / GLSL shaders).
+/// Backend-specific but device-free (plain repr(C), no windows/ash types), so
+/// they compile unconditionally and their layout tests count toward coverage.
+/// The DirectX / Vulkan backends (concinnity-device) re-export them under their
+/// own `directx` / `vulkan`.
 pub mod directx;
 pub mod vulkan;

@@ -18,15 +18,15 @@ const PIXELDATA_OFFSET: usize = 4 + HEADER_LEN;
 
 // Block-compressed mip chain read straight from a DDS file: the fourCC-derived
 // format plus one entry per stored mip level, level 0 first.
-pub struct DdsBlocks {
+pub(crate) struct DdsBlocks {
     pub format: TextureFormat,
-    pub mips: Vec<TextureMip>,
+    pub(crate) mips: Vec<TextureMip>,
 }
 
 // Read a legacy DDS's block data and mip chain without decoding. Returns the
 // BCn format and every stored mip level's blocks. A DX10 header or an
 // unsupported fourCC is rejected the same way `decode_dds` rejects them.
-pub fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
+pub(crate) fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
     let DdsHeader {
         width,
         height,
@@ -63,7 +63,7 @@ pub fn decode_dds_blocks(bytes: &[u8]) -> Result<DdsBlocks, String> {
 }
 
 // Decode the top mip of a DDS file into (width, height, RGBA8 pixels).
-pub fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn decode_dds(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let DdsHeader {
         width,
         height,

@@ -1,11 +1,10 @@
-// src/mat.rs
-//
-// Small column-major matrix and vector helpers shared by the shadow projection
-// builders (`csm.rs` for the directional cascades, `spot_shadow.rs` for the spot
-// slices). All projections are right-handed with depth mapped to [0, 1], which
-// is what Metal, Vulkan, and DirectX shadow sampling all expect, so the matrices
-// built here are valid for every backend.
+//! Small column-major matrix and vector helpers shared by the shadow projection
+//! builders (`csm.rs` for the directional cascades, `spot_shadow.rs` for the spot
+//! slices). All projections are right-handed with depth mapped to [0, 1], which
+//! is what Metal, Vulkan, and DirectX shadow sampling all expect, so the matrices
+//! built here are valid for every backend.
 
+/// The 4x4 identity, column-major.
 pub const IDENTITY4: [[f32; 4]; 4] = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
@@ -13,7 +12,7 @@ pub const IDENTITY4: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-pub fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
+pub(crate) fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
     let f = normalize3(sub3(centre, eye));
     let r = normalize3(cross3(f, up));
     let u = cross3(r, f);
@@ -26,7 +25,7 @@ pub fn look_at(eye: [f32; 3], centre: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
 }
 
 // Right-handed orthographic projection with depth mapped to [0, 1].
-pub fn ortho_rh(
+pub(crate) fn ortho_rh(
     left: f32,
     right: f32,
     bottom: f32,
@@ -52,7 +51,7 @@ pub fn ortho_rh(
 
 // Right-handed perspective projection with depth mapped to [0, 1]. `fov_y_rad`
 // is the full vertical field of view.
-pub fn perspective_rh(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
+pub(crate) fn perspective_rh(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
     let t = (fov_y_rad * 0.5).tan().max(1e-6);
     let fmn = far - near;
     [
@@ -63,6 +62,7 @@ pub fn perspective_rh(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> [[f32
     ]
 }
 
+/// Matrix product `a * b`, column-major.
 pub fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0_f32; 4]; 4];
     for col in 0..4 {
@@ -75,23 +75,25 @@ pub fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
+/// Component-wise sum, `a + b`.
 pub fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-pub fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(crate) fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Every component scaled by `s`.
 pub fn scale3(v: [f32; 3], s: f32) -> [f32; 3] {
     [v[0] * s, v[1] * s, v[2] * s]
 }
 
-pub fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub(crate) fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-pub fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -99,14 +101,14 @@ pub fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-pub fn normalize3(v: [f32; 3]) -> [f32; 3] {
+pub(crate) fn normalize3(v: [f32; 3]) -> [f32; 3] {
     let len = dot3(v, v).sqrt().max(1e-6);
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
 // An axis not parallel to `dir`, for building a look-at basis. Cone axes are
 // commonly straight up or down, where the usual +Y up vector is degenerate.
-pub fn up_for(dir: [f32; 3]) -> [f32; 3] {
+pub(crate) fn up_for(dir: [f32; 3]) -> [f32; 3] {
     if dir[1].abs() > 0.99 {
         [0.0, 0.0, 1.0]
     } else {

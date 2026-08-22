@@ -1,10 +1,8 @@
-// src/validate.rs
-//
-// Named bake-time validators for the data-only assets. Each function clamps or
-// normalizes an asset's authored value into a self-consistent runtime value.
-// The registry entry names the function via `validate: <fn>`; the build-side
-// `ComponentType::reserialize_args` applies it while baking the blob record.
-// The runtime never runs these -- a baked record is already validated.
+//! Named bake-time validators for the data-only assets. Each function clamps or
+//! normalizes an asset's authored value into a self-consistent runtime value.
+//! The registry entry names the function via `validate: <fn>`; the build-side
+//! `ComponentType::reserialize_args` applies it while baking the blob record.
+//! The runtime never runs these -- a baked record is already validated.
 
 use crate::assets::{
     Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
@@ -41,12 +39,12 @@ fn sdf_current_platform_source(v: &SdfVolume) -> Option<String> {
     }
 }
 
-// Normalize an authored volume for the runtime: clamp the raymarch knobs to
-// sane bounds, force shadows off for translucent volumetrics (they write no
-// depth), and collapse the per-backend `fragment_shaders` map to the current
-// backend's `fragment_shader` (the DirectX raymarch pass filters volumes by
-// that path's extension). The step-count bounds stay in core: they double as
-// the runtime kernel's loop bound.
+/// Normalize an authored volume for the runtime: clamp the raymarch knobs to
+/// sane bounds, force shadows off for translucent volumetrics (they write no
+/// depth), and collapse the per-backend `fragment_shaders` map to the current
+/// backend's `fragment_shader` (the DirectX raymarch pass filters volumes by
+/// that path's extension). The step-count bounds stay in core: they double as
+/// the runtime kernel's loop bound.
 pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
     use crate::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
     // Extents must be positive: a zero or negative extent would produce an
@@ -74,13 +72,14 @@ pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
     v
 }
 
+/// Clamp a `PointLight`'s authored fields into their valid ranges.
 pub fn point_light(mut args: PointLight) -> PointLight {
     args.intensity = args.intensity.max(0.0);
     args.range = args.range.max(0.0);
     args
 }
 
-pub fn spot_light(mut args: SpotLight) -> SpotLight {
+pub(crate) fn spot_light(mut args: SpotLight) -> SpotLight {
     args.intensity = args.intensity.max(0.0);
     args.range = args.range.max(0.0);
     args.direction = args.unit_direction();
@@ -89,7 +88,7 @@ pub fn spot_light(mut args: SpotLight) -> SpotLight {
     args
 }
 
-pub fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
+pub(crate) fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
     args.intensity = args.intensity.max(0.0);
     args.range = args.range.max(0.0);
     // A degenerate normal would collapse the panel's tangent frame; a zero
@@ -106,15 +105,15 @@ pub fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
     args
 }
 
-pub fn directional_light(mut args: DirectionalLight) -> DirectionalLight {
+pub(crate) fn directional_light(mut args: DirectionalLight) -> DirectionalLight {
     args.intensity = args.intensity.max(0.0);
     args
 }
 
-// Public so the cook-side Material data-resource compiler can apply the same
-// clamps: Material left the component registry, so its generated `from_args` (the
-// usual caller of this validator) no longer runs -- cook must call it explicitly
-// before baking the material into its `data_bytes`.
+/// Public so the cook-side Material data-resource compiler can apply the same
+/// clamps: Material left the component registry, so its generated `from_args` (the
+/// usual caller of this validator) no longer runs -- cook must call it explicitly
+/// before baking the material into its `data_bytes`.
 pub fn material(mut args: Material) -> Material {
     args.roughness = args.roughness.clamp(0.0, 1.0);
     args.metallic = args.metallic.clamp(0.0, 1.0);
@@ -131,7 +130,7 @@ pub fn material(mut args: Material) -> Material {
     args
 }
 
-pub fn glass_panel(mut args: GlassPanel) -> GlassPanel {
+pub(crate) fn glass_panel(mut args: GlassPanel) -> GlassPanel {
     args.normal = args.unit_normal();
     args.half_size[0] = args.half_size[0].max(1e-3);
     args.half_size[1] = args.half_size[1].max(1e-3);
@@ -141,7 +140,7 @@ pub fn glass_panel(mut args: GlassPanel) -> GlassPanel {
     args
 }
 
-pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
+pub(crate) fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.subdivisions = args.subdivisions.clamp(8, 255);
     if args.waves.len() > MAX_WATER_WAVES {
         args.waves.truncate(MAX_WATER_WAVES);
@@ -152,6 +151,7 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args
 }
 
+/// Clamp a `Joint`'s authored fields into their valid ranges.
 pub fn joint(mut args: Joint) -> Joint {
     // Normalise the kind string so `to_args` round-trips cleanly.
     if let Some(k) = JointKind::from_str_norm(&args.kind) {
@@ -160,6 +160,7 @@ pub fn joint(mut args: Joint) -> Joint {
     args
 }
 
+/// Clamp a `Decal`'s authored fields into their valid ranges.
 pub fn decal(mut args: Decal) -> Decal {
     // Clamp the alpha to [0, 1] so a stray > 1 doesn't blow out the
     // composite. The size components are left as-authored: a non-positive
@@ -168,7 +169,7 @@ pub fn decal(mut args: Decal) -> Decal {
     args
 }
 
-pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
+pub(crate) fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     // Half-extents are sizes: keep them non-negative so the influence box is
     // never inverted.
     for e in &mut args.half_extents {
@@ -177,19 +178,20 @@ pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     args
 }
 
-pub fn rigid_body(mut args: RigidBody) -> RigidBody {
+pub(crate) fn rigid_body(mut args: RigidBody) -> RigidBody {
     // Runtime state is always reset on construction.
     args.is_grounded = true;
     args
 }
 
+/// Clamp a `Prop`'s authored fields into their valid ranges.
 pub fn prop(mut args: Prop) -> Prop {
     args.cull_distance = args.cull_distance.max(0.0);
     args.is_held = false;
     args
 }
 
-pub fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
+pub(crate) fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
     // Asset-side floor: keep every authored field in a self-consistent
     // range. The gfx-side `build_particle_records` adds its own clamps
     // for fields that affect GPU buffer sizing.
@@ -216,6 +218,7 @@ pub fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
     args
 }
 
+/// Clamp a `VolumetricFog`'s authored fields into their valid ranges.
 pub fn volumetric_fog(mut args: VolumetricFog) -> VolumetricFog {
     // Density / falloff / ambient floor at 0; max_distance must stay
     // positive so the gfx-side resolver does not divide by zero when
@@ -232,11 +235,12 @@ pub fn volumetric_fog(mut args: VolumetricFog) -> VolumetricFog {
     args
 }
 
-pub fn instanced_prop(mut args: InstancedProp) -> InstancedProp {
+pub(crate) fn instanced_prop(mut args: InstancedProp) -> InstancedProp {
     args.cull_distance = args.cull_distance.max(0.0);
     args
 }
 
+/// Clamp a `VoxelChunk`'s authored fields into their valid ranges.
 pub fn voxel_chunk(mut args: VoxelChunk) -> VoxelChunk {
     args.block_size = args.block_size.max(0.0);
     if args.lod_levels == 0 {

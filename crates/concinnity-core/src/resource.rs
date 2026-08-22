@@ -1,14 +1,12 @@
-// src/resource.rs
-//
-// Runtime resource tables: per-kind, handle-indexed views of a compiled blob's
-// resource stream. A resource (an audio clip, a texture, a mesh, a material, ...)
-// is compiled by cook and addressed at runtime by its dense per-kind handle. The
-// owning system reads the table by that handle instead of querying an ECS column
-// or scanning names, so a resource lives in a table it owns rather than as a
-// component. Renderer-free (the tables are plain handle-indexed data), so they
-// live here where the physics / audio subsystem crates can reach them; the
-// client re-exports them under `crate::resource::*`, alongside the engine-side
-// `install_resource_tables` that inserts them as World resources.
+//! Runtime resource tables: per-kind, handle-indexed views of a compiled blob's
+//! resource stream. A resource (an audio clip, a texture, a mesh, a material, ...)
+//! is compiled by cook and addressed at runtime by its dense per-kind handle. The
+//! owning system reads the table by that handle instead of querying an ECS column
+//! or scanning names, so a resource lives in a table it owns rather than as a
+//! component. Renderer-free (the tables are plain handle-indexed data), so they
+//! live here where the physics / audio subsystem crates can reach them; the
+//! client re-exports them under `crate::resource::*`, alongside the engine-side
+//! `install_resource_tables` that inserts them as World resources.
 
 use alloc::collections::BTreeSet;
 use alloc::vec;
@@ -16,12 +14,14 @@ use alloc::vec::Vec;
 
 use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord};
 
-// One loaded resource's runtime form. A payload resource (audio clip, and later
-// meshes / textures) carries a `PayloadLocator` into the blob payload section; a
-// data resource (a baked Material) carries its runtime bytes in `data_bytes`.
+/// One loaded resource's runtime form. A payload resource (audio clip, and later
+/// meshes / textures) carries a `PayloadLocator` into the blob payload section; a
+/// data resource (a baked Material) carries its runtime bytes in `data_bytes`.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceEntry {
+    /// Where the compiled payload lives, for a payload resource.
     pub payload: Option<PayloadLocator>,
+    /// The runtime bytes, for a data resource.
     pub data_bytes: Vec<u8>,
 }
 
@@ -31,7 +31,10 @@ pub struct ResourceEntry {
 // range never panics. Each record's data bytes are MOVED into its entry (a
 // record belongs to exactly one kind, so the per-kind builders never contend);
 // the records are spent scaffolding once every table is built.
-pub fn resource_table(records: &mut [ResourceRecord], kind: ResourceKind) -> Vec<ResourceEntry> {
+pub(crate) fn resource_table(
+    records: &mut [ResourceRecord],
+    kind: ResourceKind,
+) -> Vec<ResourceEntry> {
     let tag = kind as u8;
     let Some(max_handle) = records
         .iter()
@@ -59,32 +62,34 @@ macro_rules! resource_tables {
     ($($name:ident => $kind:ident),* $(,)?) => {
         $(
             #[derive(Debug, Clone, Default)]
+            /// A handle-indexed table of one resource kind.
             pub struct $name(pub Vec<ResourceEntry>);
 
             impl $name {
-                // Build the table from the blob's resource stream.
+                /// Build the table from the blob's resource stream.
                 pub fn from_records(records: &mut [ResourceRecord]) -> Self {
                     Self(resource_table(records, ResourceKind::$kind))
                 }
 
-                // Number of resources of this kind; a handle is in range when
-                // its index is below this.
+                /// Number of resources of this kind; a handle is in range when
+                /// its index is below this.
                 pub fn len(&self) -> usize {
                     self.0.len()
                 }
 
+                /// Whether the table holds no resources.
                 pub fn is_empty(&self) -> bool {
                     self.0.is_empty()
                 }
 
-                // The payload locator for a handle, if the handle is in range
-                // and the resource has a compiled payload.
+                /// The payload locator for a handle, if the handle is in range
+                /// and the resource has a compiled payload.
                 pub fn locator(&self, handle: usize) -> Option<PayloadLocator> {
                     self.0.get(handle).and_then(|e| e.payload.clone())
                 }
 
-                // Every locator in handle order (index == the resource's
-                // handle), skipping entries with no payload.
+                /// Every locator in handle order (index == the resource's
+                /// handle), skipping entries with no payload.
                 pub fn locators(&self) -> impl Iterator<Item = (usize, PayloadLocator)> + '_ {
                     self.0
                         .iter()
@@ -92,9 +97,9 @@ macro_rules! resource_tables {
                         .filter_map(|(i, e)| e.payload.clone().map(|l| (i, l)))
                 }
 
-                // Blob indices holding a payload of this kind. The graphics
-                // systems consult this to keep those blobs resident for the
-                // system that inits after them.
+                /// Blob indices holding a payload of this kind. The graphics
+                /// systems consult this to keep those blobs resident for the
+                /// system that inits after them.
                 pub fn blob_indices(&self) -> BTreeSet<u32> {
                     self.0
                         .iter()
@@ -143,8 +148,8 @@ resource_tables! {
 }
 
 impl SkinnedMeshTable {
-    // Whether any skinned mesh declares a character capsule; gates whether the
-    // world needs a PhysicsSystem.
+    /// Whether any skinned mesh declares a character capsule; gates whether the
+    /// world needs a PhysicsSystem.
     pub fn has_capsule(&self) -> bool {
         self.0.iter().any(|e| {
             postcard::from_bytes::<(u32, crate::assets::SkinnedMesh)>(&e.data_bytes)
@@ -154,7 +159,7 @@ impl SkinnedMeshTable {
 }
 
 impl MaterialTable {
-    // The baked material bytes for a handle, if the handle is in range.
+    /// The baked material bytes for a handle, if the handle is in range.
     pub fn data_bytes(&self, handle: usize) -> Option<&[u8]> {
         self.0.get(handle).map(|e| e.data_bytes.as_slice())
     }

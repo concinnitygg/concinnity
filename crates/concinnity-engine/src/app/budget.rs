@@ -23,15 +23,15 @@ const DEFAULT_FRACTION_PCT: u64 = 70;
 // cannot ask for more memory than the machine can safely give.
 const MAX_FRACTION_PCT: u64 = 85;
 
-// How many threads the runtime plans to run, computed from the machine's core
-// count and the optional `Application` override. Advisory: it sizes the shared
-// job pool (`jobs::configure`) and is reported, but does not cap the streaming
-// workers or the audio thread.
+/// How many threads the runtime plans to run, computed from the machine's core
+/// count and the optional `Application` override. Advisory: it sizes the shared
+/// job pool (`jobs::configure`) and is reported, but does not cap the streaming
+/// workers or the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThreadBudget {
-    // Logical cores the machine reports.
+    /// Logical cores the machine reports.
     pub total_cores: usize,
-    // Worker threads for the shared rayon job pool.
+    /// Worker threads for the shared rayon job pool.
     pub job_threads: usize,
 }
 
@@ -39,7 +39,7 @@ impl ThreadBudget {
     // `job_threads_override` of 0 means "auto": one worker per core, less one
     // for the main thread (the historical `available_parallelism() - 1`). A
     // non-zero override is honored but never exceeds the core count.
-    pub fn compute(job_threads_override: u32) -> Self {
+    pub(crate) fn compute(job_threads_override: u32) -> Self {
         let total_cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
@@ -55,16 +55,16 @@ impl ThreadBudget {
     }
 }
 
-// A soft ceiling on host memory the runtime aims to stay under, computed from
-// total RAM and the optional `Application` override.
+/// A soft ceiling on host memory the runtime aims to stay under, computed from
+/// total RAM and the optional `Application` override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryBudget {
-    // Total physical RAM, or `None` when the platform query failed (the budget
-    // then falls back to the hard ceiling, or a bare override).
+    /// Total physical RAM, or `None` when the platform query failed (the budget
+    /// then falls back to the hard ceiling, or a bare override).
     pub total_ram_bytes: Option<u64>,
-    // The effective budget in bytes.
+    /// The effective budget in bytes.
     pub budget_bytes: u64,
-    // Whether an `Application` override set the budget (vs. the computed default).
+    /// Whether an `Application` override set the budget (vs. the computed default).
     pub overridden: bool,
 }
 
@@ -73,7 +73,7 @@ impl MemoryBudget {
     // RAM)`. A non-zero override is honored but clamped to 85% of RAM so a game
     // cannot budget past what the machine can safely give. When total RAM is
     // unknown, the default is the hard ceiling and an override passes through.
-    pub fn compute(total_ram_bytes: Option<u64>, max_memory_mb_override: u32) -> Self {
+    pub(crate) fn compute(total_ram_bytes: Option<u64>, max_memory_mb_override: u32) -> Self {
         let override_bytes =
             (max_memory_mb_override > 0).then(|| (max_memory_mb_override as u64) * 1024 * 1024);
         let budget_bytes = match (total_ram_bytes, override_bytes) {
@@ -89,7 +89,7 @@ impl MemoryBudget {
         }
     }
 
-    // The budget in whole mebibytes, for logging and reporting.
+    /// The budget in whole mebibytes, for logging and reporting.
     pub fn budget_mib(&self) -> u64 {
         self.budget_bytes / (1024 * 1024)
     }

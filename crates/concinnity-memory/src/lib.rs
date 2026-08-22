@@ -1,35 +1,33 @@
-// concinnity-memory/src/lib.rs
-//
-// The engine's allocation layer: what the process is holding, who is holding it,
-// and the allocators that hand memory out in bulk instead of one block at a
-// time.
-//
-// Five things live here, in files that do not depend on each other:
-//
-//   counters   the global heap's live / peak / churn, sharded per thread and
-//              driven by `TrackingAlloc` (`tracking`)
-//   ledger     tagged byte accounting -- textures, meshes, audio, scratch --
-//              in host and device memory, against optional budgets
-//   arena      a bump allocator for per-frame working memory
-//   pool       fixed-capacity storage for a population that churns
-//   inline_vec a sequence that keeps its first element inline, for the many
-//              per-entity collections that hold exactly one thing
-//
-// The counters measure the Rust heap, not "the engine". They see every
-// allocation the process makes through Rust -- engine, tools, and third-party
-// crates alike -- and none of the memory Rust never allocated: GPU driver
-// allocations, mapped asset files, thread stacks, and the binary image itself.
-// The gap between `MemStats::live_bytes` and the process resident size is that
-// non-Rust remainder, not untracked engine waste. The ledger is the other half
-// of that story: it explains a portion of both realms by name, and what it
-// explains is always a floor, since it holds only what someone reports.
-//
-// GPU memory is accounted here and allocated elsewhere, deliberately. A device
-// allocator returns a heap and an offset rather than a pointer, its frees must
-// wait for frames in flight to retire, and its placement rules differ per
-// backend; that belongs behind concinnity-device. What both sides share is the
-// vocabulary they report into, which is what lets one readout show RAM and VRAM
-// through the same lens.
+//! The engine's allocation layer: what the process is holding, who is holding it,
+//! and the allocators that hand memory out in bulk instead of one block at a
+//! time.
+//!
+//! Five things live here, in files that do not depend on each other:
+//!
+//!   counters   the global heap's live / peak / churn, sharded per thread and
+//!              driven by `TrackingAlloc` (`tracking`)
+//!   ledger     tagged byte accounting -- textures, meshes, audio, scratch --
+//!              in host and device memory, against optional budgets
+//!   arena      a bump allocator for per-frame working memory
+//!   pool       fixed-capacity storage for a population that churns
+//!   inline_vec a sequence that keeps its first element inline, for the many
+//!              per-entity collections that hold exactly one thing
+//!
+//! The counters measure the Rust heap, not "the engine". They see every
+//! allocation the process makes through Rust -- engine, tools, and third-party
+//! crates alike -- and none of the memory Rust never allocated: GPU driver
+//! allocations, mapped asset files, thread stacks, and the binary image itself.
+//! The gap between `MemStats::live_bytes` and the process resident size is that
+//! non-Rust remainder, not untracked engine waste. The ledger is the other half
+//! of that story: it explains a portion of both realms by name, and what it
+//! explains is always a floor, since it holds only what someone reports.
+//!
+//! GPU memory is accounted here and allocated elsewhere, deliberately. A device
+//! allocator returns a heap and an offset rather than a pointer, its frees must
+//! wait for frames in flight to retire, and its placement rules differ per
+//! backend; that belongs behind concinnity-device. What both sides share is the
+//! vocabulary they report into, which is what lets one readout show RAM and VRAM
+//! through the same lens.
 
 #![no_std]
 
@@ -48,32 +46,32 @@ mod tag;
 mod tracking;
 
 pub use arena::{Arena, ArenaVec};
-pub use counters::{Counters, MemStats};
-pub use detail::{CLASS_COUNT, SizeClass, SizeClasses, size_classes};
+pub use counters::MemStats;
+pub use detail::{SizeClass, size_classes};
 pub use inline_vec::{InlineVec, IntoIter as InlineVecIntoIter};
-pub use ledger::{Ledger, LedgerSnapshot, TagUsage};
-pub use pool::{Pool, PoolHandle};
+pub use ledger::{Ledger, LedgerSnapshot};
+pub use pool::Pool;
 pub use tag::{MemTag, Realm};
 pub use tracking::TrackingAlloc;
 
 static LEDGER: Ledger = Ledger::new();
 
-// The tracked heap as of now, or `None` when no binary installed
-// `TrackingAlloc` as its `#[global_allocator]`.
+/// The tracked heap as of now, or `None` when no binary installed
+/// `TrackingAlloc` as its `#[global_allocator]`.
 pub fn stats() -> Option<MemStats> {
     tracking::COUNTERS.snapshot()
 }
 
-// Allocations made since process start, or `None` under the same condition as
-// `stats`. Cheaper than a full `stats` read; the frame loop samples this around
-// every system step in dev builds to attribute per-frame allocation churn.
+/// Allocations made since process start, or `None` under the same condition as
+/// `stats`. Cheaper than a full `stats` read; the frame loop samples this around
+/// every system step in dev builds to attribute per-frame allocation churn.
 pub fn alloc_count() -> Option<u64> {
     tracking::COUNTERS.alloc_count()
 }
 
-// The process-wide tagged accounting. Subsystems report what they hold into it
-// and readouts break the process down by tag; unlike `stats`, it is live
-// whether or not a binary installed the tracking allocator.
+/// The process-wide tagged accounting. Subsystems report what they hold into it
+/// and readouts break the process down by tag; unlike `stats`, it is live
+/// whether or not a binary installed the tracking allocator.
 pub fn ledger() -> &'static Ledger {
     &LEDGER
 }

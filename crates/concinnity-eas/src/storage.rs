@@ -21,6 +21,13 @@
 // one definition, and so the engine's component set stays the only thing that
 // names concrete component types.
 
+/// Generate a component storage for a fixed set of component types: one
+/// `Column<T>` per type, the entity allocator, the shared change tick, the join
+/// index, and the `slot` access trait that resolves a type to its column at
+/// compile time.
+///
+/// The expanding crate names the concrete component types; this crate stays
+/// engine-agnostic.
 #[macro_export]
 macro_rules! define_component_storage {
     (
@@ -28,23 +35,30 @@ macro_rules! define_component_storage {
         slot: $slot:ident,
         $( $field:ident => $ty:path, $disc:expr ),+ $(,)?
     ) => {
-        // One `Column<T>` per registered component type, the entity allocator
-        // that stamps each row's id, the change tick stamped on every structural
-        // edit, and the join index that maps an entity to its row in each
-        // column. Field columns are the caller's field idents, reached through
-        // the `$slot` trait; callers never name them directly.
-        #[allow(non_snake_case)]
+        /// One `Column<T>` per registered component type, the entity allocator
+        /// that stamps each row's id, the change tick stamped on every structural
+        /// edit, and the join index that maps an entity to its row in each
+        /// column. Field columns are the caller's field idents, reached through
+        /// the `$slot` trait; callers never name them directly.
+        //
+        // `unreachable_pub`: the expansion is `pub` because the lib that expands
+        // it re-exports the storage; in-crate test expansions are not.
+        #[allow(non_snake_case, unreachable_pub)]
         #[derive(Default, Debug)]
         pub struct $storage {
-            $( pub $field: $crate::Column<$ty>, )+
+            $(
+                /// The column holding every row of one registered component type.
+                pub $field: $crate::Column<$ty>,
+            )+
             entities: $crate::Entities,
             change_tick: $crate::AtomicTick,
             join: $crate::JoinIndex,
         }
 
+        #[allow(unreachable_pub)]
         impl $storage {
-            // Push a statically-typed component into its column, minting a fresh
-            // Entity for the new row and recording it in the join index.
+            /// Push a statically-typed component into its column, minting a fresh
+            /// Entity for the new row and recording it in the join index.
             pub fn push_typed<C: $slot>(&mut self, c: C) -> $crate::Entity {
                 let entity = self.entities.alloc();
                 let tick = self.change_tick.bump();
@@ -55,8 +69,8 @@ macro_rules! define_component_storage {
                 entity
             }
 
-            // Pre-size a component's column ahead of a bulk load (e.g. from a
-            // blob manifest's per-type counts). Unknown ids are ignored.
+            /// Pre-size a component's column ahead of a bulk load (e.g. from a
+            /// blob manifest's per-type counts). Unknown ids are ignored.
             pub fn reserve(&mut self, component: $crate::ComponentId, additional: usize) {
                 $(
                     if component == $crate::ComponentId::new($disc) {
@@ -66,21 +80,21 @@ macro_rules! define_component_storage {
                 )+
             }
 
-            // Allocate a bare entity that owns no components yet. Useful for
-            // gameplay-only entities and as the target of later `insert_typed`.
+            /// Allocate a bare entity that owns no components yet. Useful for
+            /// gameplay-only entities and as the target of later `insert_typed`.
             pub fn spawn(&mut self) -> $crate::Entity {
                 self.entities.alloc()
             }
 
-            // Whether a handle refers to a currently-live entity.
+            /// Whether a handle refers to a currently-live entity.
             pub fn is_alive(&self, entity: $crate::Entity) -> bool {
                 self.entities.is_alive(entity)
             }
 
-            // Add component C to an existing entity. Unlike `push_typed` this does
-            // not mint an entity: it is how an entity comes to own more than one
-            // component. The entity must be alive and must not already have C
-            // (a second row for the same (entity, C) would desync the join).
+            /// Add component C to an existing entity. Unlike `push_typed` this does
+            /// not mint an entity: it is how an entity comes to own more than one
+            /// component. The entity must be alive and must not already have C
+            /// (a second row for the same (entity, C) would desync the join).
             pub fn insert_typed<C: $slot>(&mut self, entity: $crate::Entity, c: C) {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 debug_assert!(
@@ -98,10 +112,10 @@ macro_rules! define_component_storage {
                 self.join.set(entity, id, row);
             }
 
-            // Remove component C from an entity (leaving the entity alive and any
-            // other components intact), returning the value if present. Swap-
-            // remove moves the column's last row into the freed slot, so the
-            // moved row's owner has its recorded row patched.
+            /// Remove component C from an entity (leaving the entity alive and any
+            /// other components intact), returning the value if present. Swap-
+            /// remove moves the column's last row into the freed slot, so the
+            /// moved row's owner has its recorded row patched.
             pub fn remove_typed<C: $slot>(&mut self, entity: $crate::Entity) -> Option<C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
@@ -117,9 +131,9 @@ macro_rules! define_component_storage {
                 Some(value)
             }
 
-            // Despawn an entity: swap-remove its row from every column it has,
-            // patching each moved tail row, then recycle the entity id. This is
-            // the structural-change primitive runtime despawn is built on.
+            /// Despawn an entity: swap-remove its row from every column it has,
+            /// patching each moved tail row, then recycle the entity id. This is
+            /// the structural-change primitive runtime despawn is built on.
             pub fn despawn(&mut self, entity: $crate::Entity) {
                 if !self.entities.is_alive(entity) {
                     return;
@@ -145,12 +159,12 @@ macro_rules! define_component_storage {
                 self.entities.despawn(entity);
             }
 
-            // Remove and return every component of type C. Each owner loses
-            // only its C component; an owner that has no other component left is
-            // despawned so its Entity recycles. An owner that still has other
-            // components stays alive with those intact and join-reachable. The
-            // whole C column empties at once, so no per-row tail patch is needed
-            // for C; only each owner's C entry in the join is cleared.
+            /// Remove and return every component of type C. Each owner loses
+            /// only its C component; an owner that has no other component left is
+            /// despawned so its Entity recycles. An owner that still has other
+            /// components stays alive with those intact and join-reachable. The
+            /// whole C column empties at once, so no per-row tail patch is needed
+            /// for C; only each owner's C entry in the join is cleared.
             pub fn drain<C: $slot>(&mut self) -> ::alloc::vec::Vec<C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let owners = C::slot(self).entities().to_vec();
@@ -165,16 +179,16 @@ macro_rules! define_component_storage {
                 drained
             }
 
-            // Mutable slice of every component of type C, stamping the change
-            // tick because any element may be written.
+            /// Mutable slice of every component of type C, stamping the change
+            /// tick because any element may be written.
             pub fn values_mut<C: $slot>(&mut self) -> &mut [C] {
                 let tick = self.change_tick.bump();
                 C::slot_mut(self).values_mut(tick)
             }
 
-            // Mutable iteration over every component of type C paired with its
-            // owning entity, stamping the change tick because any element may be
-            // written. The mutable counterpart of the read-only column scan.
+            /// Mutable iteration over every component of type C paired with its
+            /// owning entity, stamping the change tick because any element may be
+            /// written. The mutable counterpart of the read-only column scan.
             pub fn values_mut_with_entities<C: $slot>(
                 &mut self,
             ) -> impl Iterator<Item = ($crate::Entity, &mut C)> {
@@ -182,27 +196,27 @@ macro_rules! define_component_storage {
                 C::slot_mut(self).iter_mut_with_entities(tick)
             }
 
-            // The change tick of C's column: the tick at which any C was last
-            // inserted, removed, or mutably accessed. Read-only, so it never
-            // bumps the tick itself.
+            /// The change tick of C's column: the tick at which any C was last
+            /// inserted, removed, or mutably accessed. Read-only, so it never
+            /// bumps the tick itself.
             pub fn changed_tick<C: $slot>(&self) -> $crate::Tick {
                 C::slot(self).changed_tick()
             }
 
-            // Every tick stamp of C's column at once. A consumer that tracks
-            // rows individually needs `bulk` and `structural` alongside
-            // `changed` to know whether the per-row stamps still describe the
-            // whole change.
+            /// Every tick stamp of C's column at once. A consumer that tracks
+            /// rows individually needs `bulk` and `structural` alongside
+            /// `changed` to know whether the per-row stamps still describe the
+            /// whole change.
             pub fn column_ticks<C: $slot>(&self) -> $crate::ColumnTicks {
                 C::slot(self).ticks()
             }
 
-            // Rows of C written since `since`, paired with their owning entity.
-            // Only the rows a targeted `get_mut` touched are reported, so this
-            // is the dirty set a per-frame pass re-examines instead of the whole
-            // column. Meaningful only while C's `bulk` and `structural` ticks
-            // have not moved since `since`; past either, every row must be
-            // treated as changed.
+            /// Rows of C written since `since`, paired with their owning entity.
+            /// Only the rows a targeted `get_mut` touched are reported, so this
+            /// is the dirty set a per-frame pass re-examines instead of the whole
+            /// column. Meaningful only while C's `bulk` and `structural` ticks
+            /// have not moved since `since`; past either, every row must be
+            /// treated as changed.
             pub fn changed_rows<C: $slot>(
                 &self,
                 since: $crate::Tick,
@@ -210,15 +224,15 @@ macro_rules! define_component_storage {
                 C::slot(self).changed_rows(since.clamp_to(self.change_tick.get()))
             }
 
-            // Borrow one entity's component C, if it has one.
+            /// Borrow one entity's component C, if it has one.
             pub fn get<C: $slot>(&self, entity: $crate::Entity) -> Option<&C> {
                 let row = self.join.row(entity, $crate::ComponentId::new(C::DISCRIMINANT))?;
                 C::slot(self).get(row as usize)
             }
 
-            // Mutably borrow one entity's component C, stamping that row's
-            // change tick (and the column's) but not the bulk tick, so
-            // `changed_rows` can report exactly this entity.
+            /// Mutably borrow one entity's component C, stamping that row's
+            /// change tick (and the column's) but not the bulk tick, so
+            /// `changed_rows` can report exactly this entity.
             pub fn get_mut<C: $slot>(&mut self, entity: $crate::Entity) -> Option<&mut C> {
                 let id = $crate::ComponentId::new(C::DISCRIMINANT);
                 let row = self.join.row(entity, id)? as usize;
@@ -226,11 +240,11 @@ macro_rules! define_component_storage {
                 C::slot_mut(self).value_mut(row, tick)
             }
 
-            // Read-only join over two component types. Iterates the first type's
-            // rows and, for each owning entity that also has the second type,
-            // yields both component refs. This is the multi-component query for
-            // read paths (the draw-list push, scene visibility): one column scan
-            // plus a join probe per row, no allocation.
+            /// Read-only join over two component types. Iterates the first type's
+            /// rows and, for each owning entity that also has the second type,
+            /// yields both component refs. This is the multi-component query for
+            /// read paths (the draw-list push, scene visibility): one column scan
+            /// plus a join probe per row, no allocation.
             pub fn join2<'s, A: $slot, B: $slot>(
                 &'s self,
             ) -> impl Iterator<Item = ($crate::Entity, &'s A, &'s B)> + 's {
@@ -249,7 +263,7 @@ macro_rules! define_component_storage {
                     })
             }
 
-            // Read-only join over three component types, lead on the first.
+            /// Read-only join over three component types, lead on the first.
             pub fn join3<'s, A: $slot, B: $slot, C: $slot>(
                 &'s self,
             ) -> impl Iterator<Item = ($crate::Entity, &'s A, &'s B, &'s C)> + 's {
@@ -272,25 +286,30 @@ macro_rules! define_component_storage {
                     })
             }
 
-            // Total number of components across all typed columns.
+            /// Total number of components across all typed columns.
             pub fn len(&self) -> usize {
                 0 $( + self.$field.len() )+
             }
 
+            /// Whether every typed column is empty.
             pub fn is_empty(&self) -> bool {
                 true $( && self.$field.is_empty() )+
             }
         }
 
-        // Resolves a component type to its column inside the storage at compile
-        // time, so the generic storage operations above need no runtime
-        // dispatch. A registered component is exactly a type with a `$slot` impl,
-        // and `DISCRIMINANT` is its stable id, used as its `ComponentId` in the
-        // join index. `'static`: components own their data, and the generic ops
-        // hand out borrows of (and owned vectors of) the type.
+        /// Resolves a component type to its column inside the storage at compile
+        /// time, so the generic storage operations above need no runtime
+        /// dispatch. A registered component is exactly a type with a `$slot` impl,
+        /// and `DISCRIMINANT` is its stable id, used as its `ComponentId` in the
+        /// join index. `'static`: components own their data, and the generic ops
+        /// hand out borrows of (and owned vectors of) the type.
+        #[allow(unreachable_pub)]
         pub trait $slot: Sized + 'static {
+            /// The component type's stable id, used as its `ComponentId`.
             const DISCRIMINANT: u8;
+            /// Borrow this type's column out of the storage.
             fn slot(s: &$storage) -> &$crate::Column<Self>;
+            /// Mutably borrow this type's column out of the storage.
             fn slot_mut(s: &mut $storage) -> &mut $crate::Column<Self>;
         }
 
@@ -336,12 +355,15 @@ mod tests {
     // `pub` so the generated `pub` columns don't expose a more-private type
     // (the real engine's component types are `pub`, so this never bites there).
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
+    #[allow(unreachable_pub)]
     pub struct Position(u32);
 
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
+    #[allow(unreachable_pub)]
     pub struct Velocity(i32);
 
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
+    #[allow(unreachable_pub)]
     pub struct Tag;
 
     define_component_storage! {

@@ -7,21 +7,28 @@
 // `clamp_to` keeps a stored tick from drifting more than half the range behind
 // the current tick over a long session.
 
-// Half the u32 range. A tick older than this relative to the current tick is
-// clamped forward so the signed-window comparison never aliases.
+/// Half the u32 range. A tick older than this relative to the current tick is
+/// clamped forward so the signed-window comparison never aliases.
 pub const MAX_CHANGE_AGE: u32 = u32::MAX / 2;
 
+/// A change-detection stamp. Wraps; comparisons use a signed window bounded
+/// by [`MAX_CHANGE_AGE`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Tick(pub u32);
+pub struct Tick(
+    /// The raw counter value.
+    pub u32,
+);
 
 impl Tick {
+    /// The tick a freshly created column starts at.
     pub const ZERO: Tick = Tick(0);
 
+    /// The raw counter value.
     pub fn get(self) -> u32 {
         self.0
     }
 
-    // Advance to the next tick (wrapping) and return the new value.
+    /// Advance to the next tick (wrapping) and return the new value.
     pub fn bump(&mut self) -> Tick {
         self.0 = self.0.wrapping_add(1);
         *self
@@ -30,13 +37,13 @@ impl Tick {
     // Whether `self` is strictly newer than `other`, robust to u32 wraparound.
     // The difference is interpreted as signed: positive means ahead, within the
     // half-range window the clamp guarantees.
-    pub fn is_newer_than(self, other: Tick) -> bool {
+    pub(crate) fn is_newer_than(self, other: Tick) -> bool {
         (self.0.wrapping_sub(other.0) as i32) > 0
     }
 
-    // Pull a stored tick forward if it has fallen more than MAX_CHANGE_AGE
-    // behind `now`, so the signed-window comparison stays valid no matter how
-    // long the world runs. Recent ticks are returned unchanged.
+    /// Pull a stored tick forward if it has fallen more than MAX_CHANGE_AGE
+    /// behind `now`, so the signed-window comparison stays valid no matter how
+    /// long the world runs. Recent ticks are returned unchanged.
     pub fn clamp_to(self, now: Tick) -> Tick {
         if now.0.wrapping_sub(self.0) > MAX_CHANGE_AGE {
             Tick(now.0.wrapping_sub(MAX_CHANGE_AGE))
@@ -46,24 +53,24 @@ impl Tick {
     }
 }
 
-// The change-tick counter shared across a storage's columns, atomic so writers
-// of disjoint columns can stamp edits concurrently without sharing `&mut`.
-// Relaxed ordering: the counter only supplies monotonic values; the column
-// data it stamps is synchronized by the scheduler (join/channel edges), never
-// by the counter itself. Values stay globally monotonic but their exact
-// assignment is interleaving-dependent under concurrency, so tick values must
-// never be hashed, persisted, or compared across columns.
+/// The change-tick counter shared across a storage's columns, atomic so writers
+/// of disjoint columns can stamp edits concurrently without sharing `&mut`.
+/// Relaxed ordering: the counter only supplies monotonic values; the column
+/// data it stamps is synchronized by the scheduler (join/channel edges), never
+/// by the counter itself. Values stay globally monotonic but their exact
+/// assignment is interleaving-dependent under concurrency, so tick values must
+/// never be hashed, persisted, or compared across columns.
 #[derive(Debug, Default)]
 pub struct AtomicTick(core::sync::atomic::AtomicU32);
 
 impl AtomicTick {
-    // Advance to the next tick (wrapping) and return the new value.
+    /// Advance to the next tick (wrapping) and return the new value.
     pub fn bump(&self) -> Tick {
         use core::sync::atomic::Ordering;
         Tick(self.0.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
     }
 
-    // The most recently issued tick.
+    /// The most recently issued tick.
     pub fn get(&self) -> Tick {
         Tick(self.0.load(core::sync::atomic::Ordering::Relaxed))
     }

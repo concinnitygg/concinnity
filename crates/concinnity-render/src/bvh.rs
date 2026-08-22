@@ -1,20 +1,18 @@
-// src/bvh.rs
-//
-// Top-down median-split bounding volume hierarchy over a set of AABBs.
-//
-// The renderer builds one BVH at GraphicsSystem init time from every cullable
-// DrawObject (objects without a finite AABB go into a separate fallback list).
-// Each frame the main pass traverses the BVH with the camera's frustum and
-// optional distance cutoff, producing a list of DrawObject indices to render.
-//
-// The BVH is static after construction: it does not refit when leaf AABBs
-// change.  Props that move at runtime (held items, animated transforms) must
-// opt out of culling by setting a non-finite AABB (UNCULLED_BB in draw_list).
-//
-// Construction is O(N log N) (sort + recurse); query is O(log N + V) where V
-// is the number of visible leaves.  Single-item scenes degenerate to a leaf
-// at the root; an empty scene produces no nodes and trivially answers "no
-// visible objects".
+//! Top-down median-split bounding volume hierarchy over a set of AABBs.
+//!
+//! The renderer builds one BVH at GraphicsSystem init time from every cullable
+//! DrawObject (objects without a finite AABB go into a separate fallback list).
+//! Each frame the main pass traverses the BVH with the camera's frustum and
+//! optional distance cutoff, producing a list of DrawObject indices to render.
+//!
+//! The BVH is static after construction: it does not refit when leaf AABBs
+//! change.  Props that move at runtime (held items, animated transforms) must
+//! opt out of culling by setting a non-finite AABB (UNCULLED_BB in draw_list).
+//!
+//! Construction is O(N log N) (sort + recurse); query is O(log N + V) where V
+//! is the number of visible leaves.  Single-item scenes degenerate to a leaf
+//! at the root; an empty scene produces no nodes and trivially answers "no
+//! visible objects".
 
 use crate::render_types::DrawObject;
 
@@ -75,22 +73,27 @@ enum Node {
 }
 
 #[derive(Debug, Default)]
+/// A bounding-volume hierarchy over cullable draw records.
 pub struct Bvh {
     nodes: Vec<Node>,
     root: Option<u32>,
 }
 
-// One leaf input as supplied to [`Bvh::build`].
+/// One leaf input as supplied to [`Bvh::build`].
 #[derive(Copy, Clone, Debug)]
 pub struct BvhItem {
+    /// Lower corner of the leaf's world AABB.
     pub bb_min: [f32; 3],
+    /// Upper corner of the leaf's world AABB.
     pub bb_max: [f32; 3],
+    /// View-distance cutoff for this leaf; 0 means no cutoff.
     pub cull_distance: f32,
-    // Caller-side index passed through unchanged to the traversal callback.
+    /// Caller-side index passed through unchanged to the traversal callback.
     pub index: u32,
 }
 
 impl Bvh {
+    /// Build a hierarchy over `items`. An empty input yields an empty tree.
     pub fn build(items: &[BvhItem]) -> Self {
         let mut bvh = Bvh::default();
         if items.is_empty() {
@@ -102,9 +105,9 @@ impl Bvh {
         bvh
     }
 
-    // Walk the BVH and call `visit` with every leaf index whose AABB is not
-    // fully outside the frustum and whose distance to `cam_pos` is within
-    // the leaf's `cull_distance` (0 = always inside).
+    /// Walk the BVH and call `visit` with every leaf index whose AABB is not
+    /// fully outside the frustum and whose distance to `cam_pos` is within
+    /// the leaf's `cull_distance` (0 = always inside).
     pub fn query<F: FnMut(u32)>(&self, frustum: &Frustum, cam_pos: [f32; 3], mut visit: F) {
         let root = match self.root {
             Some(r) => r,
@@ -268,10 +271,10 @@ fn item_aabb(it: &BvhItem) -> Aabb {
     }
 }
 
-// Partition the draw list into cullable leaves (suitable for BVH insertion)
-// and an always-drawn fallback list. Objects that opt out of culling (skybox,
-// rooms, held props) keep their original draw order via the returned index
-// list; the BVH owns everything else.
+/// Partition the draw list into cullable leaves (suitable for BVH insertion)
+/// and an always-drawn fallback list. Objects that opt out of culling (skybox,
+/// rooms, held props) keep their original draw order via the returned index
+/// list; the BVH owns everything else.
 pub fn partition_draw_objects(draw_objects: &[DrawObject]) -> (Bvh, Vec<u32>) {
     let mut items: Vec<BvhItem> = Vec::new();
     let mut always_draw: Vec<u32> = Vec::new();

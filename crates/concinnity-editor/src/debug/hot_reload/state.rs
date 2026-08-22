@@ -26,7 +26,7 @@ type Inflight<T> = Mutex<Option<std::sync::mpsc::Receiver<T>>>;
 // `cn-asset-reload` worker so the (sometimes seconds-long) decode never blocks
 // the render loop.
 #[derive(Debug)]
-pub struct DecodedTexture {
+pub(crate) struct DecodedTexture {
     pub slot: usize,
     pub width: u32,
     pub height: u32,
@@ -38,7 +38,7 @@ pub struct DecodedTexture {
 // One decoded `ColorLut` ready for the render thread to push through
 // `update_color_lut`.
 #[derive(Debug)]
-pub struct DecodedColorLut {
+pub(crate) struct DecodedColorLut {
     pub size: u32,
     pub data: Vec<u8>,
     pub source: String,
@@ -52,7 +52,7 @@ pub struct DecodedColorLut {
 // `state.meshes.entries` so the applier can look up `draw_indices` for
 // fan-out to every `Prop` that shares the mesh.
 #[derive(Debug)]
-pub struct DecodedMesh {
+pub(crate) struct DecodedMesh {
     pub entry_idx: usize,
     pub vertices: Vec<crate::gfx::mesh_payload::Vertex>,
     pub indices: Vec<u16>,
@@ -65,7 +65,7 @@ pub struct DecodedMesh {
 // init-time `vertex_base` / `vertex_count` / `index_count` / `joint_count`
 // and reject shape changes that need a pipeline rebuild.
 #[derive(Debug)]
-pub struct DecodedSkinnedMesh {
+pub(crate) struct DecodedSkinnedMesh {
     pub entry_idx: usize,
     pub vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
     pub indices: Vec<u16>,
@@ -78,7 +78,7 @@ pub struct DecodedSkinnedMesh {
 // [`poll_pending_assets`] and dispatches each item through the matching
 // backend call.
 #[derive(Debug, Default)]
-pub struct DecodedAssetBatch {
+pub(crate) struct DecodedAssetBatch {
     pub textures: Vec<DecodedTexture>,
     pub color_lut: Option<DecodedColorLut>,
     pub meshes: Vec<DecodedMesh>,
@@ -93,7 +93,7 @@ pub struct DecodedAssetBatch {
 // atomic the engine polls at frame start, and the live watcher handle. The
 // watcher pushes events straight into the atomic; `GraphicsSystem` reads +
 // clears it each step.
-pub struct AssetHotReloadState {
+pub(crate) struct AssetHotReloadState {
     pub map: TextureSourceMap,
     // Singleton `ColorLut`, when the world declared one with a `source` path.
     // Reloaded alongside the texture map by [`reload_assets`].
@@ -178,7 +178,7 @@ pub struct AssetHotReloadState {
 // `SkeletonPose` component in the ECS so `AnimationSystem` produces the
 // right-sized output going forward.
 #[derive(Debug)]
-pub struct PendingSkeletonUpdate {
+pub(crate) struct PendingSkeletonUpdate {
     // Backend slot the new skeleton belongs to. Used to find the matching
     // `SkeletonPose` (which carries the same `skinned_index`).
     pub skinned_index: usize,
@@ -270,18 +270,18 @@ impl AssetHotReloadState {
     // recent [`poll_pending_assets`] pass. Drained by
     // `GraphicsSystem::step` so the ECS-owned `SkeletonPose` components
     // can be rebuilt with the new joint hierarchy.
-    pub fn drain_pending_skeleton_updates(&mut self) -> Vec<PendingSkeletonUpdate> {
+    pub(crate) fn drain_pending_skeleton_updates(&mut self) -> Vec<PendingSkeletonUpdate> {
         std::mem::take(&mut self.pending_skeleton_updates)
     }
 
     // Cheap atomic load; called at the top of `GraphicsSystem::step`.
-    pub fn reload_requested(&self) -> bool {
+    pub(crate) fn reload_requested(&self) -> bool {
         self.pending.load(Ordering::SeqCst)
     }
 
     // Clear the flag after a reload pass (success or failure) so a bad source
     // file does not loop forever.
-    pub fn clear_flag(&self) {
+    pub(crate) fn clear_flag(&self) {
         self.pending.store(false, Ordering::SeqCst);
     }
 }

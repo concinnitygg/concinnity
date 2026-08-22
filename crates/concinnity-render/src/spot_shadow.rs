@@ -1,17 +1,15 @@
-// src/spot_shadow.rs
-//
-// Slice assignment and light-space projections for the spot shadow map array.
-//
-// Local lights are static, so both the slice each shadowed spot owns and the
-// matrix it renders with are decided once per scene and never recomputed. Only
-// the depth contents need refreshing, and only when a caster moves -- that
-// schedule is `SpotShadowScheduler` below, which mirrors the prime-then-
-// round-robin policy the CSM cascades use.
-//
-// A spot's projection is a perspective frustum whose vertical FOV is the full
-// cone angle (2x the outer half-angle), so the cone inscribes the shadow slice's
-// square footprint. Right-handed with [0, 1] depth, matching `csm.rs`, so the
-// same matrices are valid on all three backends.
+//! Slice assignment and light-space projections for the spot shadow map array.
+//!
+//! Local lights are static, so both the slice each shadowed spot owns and the
+//! matrix it renders with are decided once per scene and never recomputed. Only
+//! the depth contents need refreshing, and only when a caster moves -- that
+//! schedule is `SpotShadowScheduler` below, which mirrors the prime-then-
+//! round-robin policy the CSM cascades use.
+//!
+//! A spot's projection is a perspective frustum whose vertical FOV is the full
+//! cone angle (2x the outer half-angle), so the cone inscribes the shadow slice's
+//! square footprint. Right-handed with [0, 1] depth, matching `csm.rs`, so the
+//! same matrices are valid on all three backends.
 
 use crate::assets::{SpotLight, SpotLightGeometry};
 use crate::mat::{add3, look_at, mat4_mul, perspective_rh, scale3, up_for};
@@ -35,7 +33,7 @@ const MIN_SHADOW_RANGE: f32 = 0.1;
 // Per-spot slice assignment: `slices[i]` is the shadow map array slice spot `i`
 // owns, or -1 when it casts no shadow (either `cast_shadows` is false or the
 // slices ran out). The value is what `GpuLight.shadow_index` carries.
-pub fn assign_spot_shadow_slices(spot_lights: &[SpotLight]) -> Vec<i32> {
+pub(crate) fn assign_spot_shadow_slices(spot_lights: &[SpotLight]) -> Vec<i32> {
     let mut next = 0_i32;
     let mut wanted = 0_usize;
     let slices: Vec<i32> = spot_lights
@@ -67,7 +65,10 @@ pub fn assign_spot_shadow_slices(spot_lights: &[SpotLight]) -> Vec<i32> {
 // The `SpotShadowData` for each assigned slice, ordered by slice index. Pair
 // with `assign_spot_shadow_slices` over the same slice: entry `slices[i]` of the
 // result describes spot `i`.
-pub fn build_spot_shadow_data(spot_lights: &[SpotLight], slices: &[i32]) -> Vec<SpotShadowData> {
+pub(crate) fn build_spot_shadow_data(
+    spot_lights: &[SpotLight],
+    slices: &[i32],
+) -> Vec<SpotShadowData> {
     let mut out = vec![SpotShadowData::ZERO; count_shadowed(slices)];
     for (light, &slice) in spot_lights.iter().zip(slices) {
         if slice >= 0 {
@@ -78,7 +79,7 @@ pub fn build_spot_shadow_data(spot_lights: &[SpotLight], slices: &[i32]) -> Vec<
 }
 
 // How many slices `assign_spot_shadow_slices` handed out.
-pub fn count_shadowed(slices: &[i32]) -> usize {
+pub(crate) fn count_shadowed(slices: &[i32]) -> usize {
     slices.iter().filter(|s| **s >= 0).count()
 }
 
@@ -103,10 +104,10 @@ fn spot_shadow_data(light: &SpotLight) -> SpotShadowData {
     }
 }
 
-// Prime-then-round-robin refresh schedule over the assigned slices, mirroring
-// `ShadowCascadeScheduler`. Every slice renders once before it can be sampled;
-// after that `Hybrid` refreshes one slice per frame so N shadowed spots cost one
-// extra depth render per frame rather than N.
+/// Prime-then-round-robin refresh schedule over the assigned slices, mirroring
+/// `ShadowCascadeScheduler`. Every slice renders once before it can be sampled;
+/// after that `Hybrid` refreshes one slice per frame so N shadowed spots cost one
+/// extra depth render per frame rather than N.
 #[derive(Debug, Default)]
 pub struct SpotShadowScheduler {
     clock: u32,
@@ -114,7 +115,7 @@ pub struct SpotShadowScheduler {
 }
 
 impl SpotShadowScheduler {
-    // Bit `i` set means slice `i` re-renders this frame. Advances the clock.
+    /// Bit `i` set means slice `i` re-renders this frame. Advances the clock.
     pub fn next_mask(&mut self, every_frame: bool, shadowed: usize) -> u32 {
         let (mask, primed) = select_slice_mask(every_frame, self.clock, self.primed, shadowed);
         self.clock = self.clock.wrapping_add(1);

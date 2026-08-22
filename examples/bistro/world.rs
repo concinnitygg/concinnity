@@ -18,7 +18,7 @@ use concinnity::cook::WorldBuilder;
 
 use crate::{FBX_REL, HDR_REL};
 
-pub fn declare(world: &mut WorldBuilder) {
+pub(crate) fn declare(world: &mut WorldBuilder) {
     world
         .add("menu", Scene::default())
         .add("bistro", Scene::default())

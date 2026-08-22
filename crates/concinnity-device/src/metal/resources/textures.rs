@@ -33,7 +33,7 @@ impl MtlContext {
     // after init. Both the bindless pool bind and the per-draw fallback bind
     // read `self.textures` fresh each frame, so the swapped texture is picked
     // up on the next `draw_frame` with no pipeline rebuild.
-    pub fn update_texture_slot(
+    pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
         image: &concinnity_cpu::build::texture::TextureImage,
@@ -55,7 +55,7 @@ impl MtlContext {
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The grey is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         if slot >= self.textures.len() {
             return Err(format!(
                 "evict_texture_slot: slot {} out of range (pool size {})",
@@ -71,7 +71,7 @@ impl MtlContext {
     // asset hot-reload (`cn debug` only). The composite pass binds
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
-    pub fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         let tex = crate::metal::texture::upload_color_lut(&self.allocator, size, data)?;
         self.color_lut = tex;
         Ok(())
@@ -83,7 +83,7 @@ impl MtlContext {
     // the new cubes are sampled on the next `draw_frame` with no pipeline
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
-    pub fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
         let new_env = crate::metal::texture::upload_environment_map(

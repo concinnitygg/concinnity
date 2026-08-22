@@ -46,7 +46,7 @@ mod upload_ring;
 mod wireframe;
 mod world_shaders;
 
-pub use context::DxContext;
+pub(crate) use context::DxContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
 
 // GPU-free host structs live in concinnity-render (counted for coverage); the

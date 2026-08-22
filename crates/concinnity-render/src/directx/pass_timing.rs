@@ -1,63 +1,61 @@
-// src/directx/pass_timing.rs
-//
-// Per-pass GPU timing on D3D12 via TIMESTAMP queries. The whole-frame timer
-// lives in slots [0, 1] of each frame's block; one pair per `PassId` follows
-// (start at slot 2 + 2*i, end at slot 3 + 2*i). The shared query heap is
-// sized for `FRAMES` such blocks; `execute_graph` issues an `EndQuery`
-// before and after each pass's `encode_*`, and the resolve at the end of
-// the command list copies the whole block into the persistently-mapped
-// readback buffer. The CPU reads the previous frame's block at the top of
-// `draw_frame` (after the matching fence wait gates the GPU writes) and
-// publishes the per-pass microseconds into `RenderStats.pass_times_us`.
-//
-// Layout reasoning. Keeping the whole-frame pair at the front of each
-// block preserves the legacy `gpu_frame_us` indexing: the existing
-// readback reads the first u64 pair of the frame's block, exactly as
-// before; only the per-frame stride changes. SsaoPrepass / SsaoKernel /
-// ParticlesSim are bundled inside their parent encoders (see
-// graph_exec.rs) so the sub-pass slots stay zero; the FogFroxel /
-// Upscale / Transparent / Raymarch arms are no-ops on DirectX so their
-// slots also stay zero. The shared `StatHud.passes_text` helper picks
-// the top six non-zero entries by descending microseconds, so zero
-// slots are naturally filtered out of the on-screen chip.
-//
-// This is GPU-free slot-index arithmetic (no D3D12 types), so it lives in
-// concinnity-render and its layout tests count toward coverage; the DirectX
-// backend re-exports it under `crate::directx::pass_timing`.
+//! Per-pass GPU timing on D3D12 via TIMESTAMP queries. The whole-frame timer
+//! lives in slots [0, 1] of each frame's block; one pair per `PassId` follows
+//! (start at slot 2 + 2*i, end at slot 3 + 2*i). The shared query heap is
+//! sized for `FRAMES` such blocks; `execute_graph` issues an `EndQuery`
+//! before and after each pass's `encode_*`, and the resolve at the end of
+//! the command list copies the whole block into the persistently-mapped
+//! readback buffer. The CPU reads the previous frame's block at the top of
+//! `draw_frame` (after the matching fence wait gates the GPU writes) and
+//! publishes the per-pass microseconds into `RenderStats.pass_times_us`.
+//!
+//! Layout reasoning. Keeping the whole-frame pair at the front of each
+//! block preserves the legacy `gpu_frame_us` indexing: the existing
+//! readback reads the first u64 pair of the frame's block, exactly as
+//! before; only the per-frame stride changes. SsaoPrepass / SsaoKernel /
+//! ParticlesSim are bundled inside their parent encoders (see
+//! graph_exec.rs) so the sub-pass slots stay zero; the FogFroxel /
+//! Upscale / Transparent / Raymarch arms are no-ops on DirectX so their
+//! slots also stay zero. The shared `StatHud.passes_text` helper picks
+//! the top six non-zero entries by descending microseconds, so zero
+//! slots are naturally filtered out of the on-screen chip.
+//!
+//! This is GPU-free slot-index arithmetic (no D3D12 types), so it lives in
+//! concinnity-render and its layout tests count toward coverage; the DirectX
+//! backend re-exports it under `crate::directx::pass_timing`.
 
 use crate::render_graph::{PASS_COUNT, PassId};
 
-// Per-frame block: [whole_frame_start, whole_frame_end, pass0_start,
-// pass0_end, ..., pass(PASS_COUNT-1)_start, pass(PASS_COUNT-1)_end].
-// 2 * (PASS_COUNT + 1) u64 slots.
+/// Per-frame block: [whole_frame_start, whole_frame_end, pass0_start,
+/// pass0_end, ..., pass(PASS_COUNT-1)_start, pass(PASS_COUNT-1)_end].
+/// 2 * (PASS_COUNT + 1) u64 slots.
 pub const SLOTS_PER_FRAME: usize = 2 * (PASS_COUNT + 1);
 
-// Bytes consumed by one frame's block in the readback buffer. Each slot
-// is a u64 timestamp.
+/// Bytes consumed by one frame's block in the readback buffer. Each slot
+/// is a u64 timestamp.
 pub const FRAME_BLOCK_BYTES: u64 = (SLOTS_PER_FRAME * 8) as u64;
 
-// Slot indices for the whole-frame timestamp pair within the heap. Matches
-// the legacy layout (whole-frame still at the first pair of each frame's
-// block) so the existing `gpu_frame_us` readback only needs a stride
-// adjustment.
+/// Slot indices for the whole-frame timestamp pair within the heap. Matches
+/// the legacy layout (whole-frame still at the first pair of each frame's
+/// block) so the existing `gpu_frame_us` readback only needs a stride
+/// adjustment.
 pub const fn whole_frame_pair(frame: usize) -> (u32, u32) {
     let base = (frame * SLOTS_PER_FRAME) as u32;
     (base, base + 1)
 }
 
-// Slot indices for `pass`'s start + end timestamps within the heap.
+/// Slot indices for `pass`'s start + end timestamps within the heap.
 pub const fn pass_pair(frame: usize, pass: PassId) -> (u32, u32) {
     let base = (frame * SLOTS_PER_FRAME + 2 + 2 * (pass as usize)) as u32;
     (base, base + 1)
 }
 
-// First heap slot the per-frame ResolveQueryData should walk. Pair this
-// with `SLOTS_PER_FRAME` as the count.
+/// First heap slot the per-frame ResolveQueryData should walk. Pair this
+/// with `SLOTS_PER_FRAME` as the count.
 pub const fn frame_resolve_start(frame: usize) -> u32 {
     (frame * SLOTS_PER_FRAME) as u32
 }
 
-// Byte offset into the readback buffer where this frame's block begins.
+/// Byte offset into the readback buffer where this frame's block begins.
 pub const fn frame_readback_byte_offset(frame: usize) -> u64 {
     (frame * SLOTS_PER_FRAME * 8) as u64
 }

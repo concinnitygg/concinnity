@@ -1,37 +1,41 @@
-// Shader compilation seam. Dispatches on the source file extension to the
-// registered toolchain:
-//   .metal -> MSL   .hlsl -> HLSL   anything else -> GLSL
-//
-// This crate produces no shader bytecode itself: every backend's compiler needs
-// a platform toolchain (xcrun, the Direct3D compiler, shaderc), and the cook
-// runs on build hosts that have none of them. The concrete compilers live in
-// concinnity-shader and are installed here by the binary before a build.
-//
-// Every source this crate compiles is world-authored: the engine's own pipeline
-// shaders are compiled by the backend, not cooked into a world. Source is read
-// from disk and handed to the toolchain in memory; no shader source file is
-// written back out.
+//! Shader compilation seam. Dispatches on the source file extension to the
+//! registered toolchain:
+//!   .metal -> MSL   .hlsl -> HLSL   anything else -> GLSL
+//!
+//! This crate produces no shader bytecode itself: every backend's compiler needs
+//! a platform toolchain (xcrun, the Direct3D compiler, shaderc), and the cook
+//! runs on build hosts that have none of them. The concrete compilers live in
+//! concinnity-shader and are installed here by the binary before a build.
+//!
+//! Every source this crate compiles is world-authored: the engine's own pipeline
+//! shaders are compiled by the backend, not cooked into a world. Source is read
+//! from disk and handed to the toolchain in memory; no shader source file is
+//! written back out.
 
 #[derive(Debug, Clone, Default)]
+/// Inputs for compiling one world-authored shader stage.
 pub struct ShaderCompileArgs {
+    /// Path to the stage's source file.
     pub source_path: String,
+    /// Name of the `Shader` asset the stage belongs to.
     pub asset_name: String,
+    /// Which stage to compile, as its authored kind name.
     pub kind: String,
-    // An entry point this stage must define, when its role in the world forces
-    // one. A world declaring more than one Shader routes every draw through the
-    // GPU-driven bindless main pass, so each fragment stage has to expose
-    // `fragment_main_bindless`; checking it here fails `cn build` instead of the
-    // pipeline build, which for a scene-owned shader happens mid-session.
+    /// An entry point this stage must define, when its role in the world forces
+    /// one. A world declaring more than one Shader routes every draw through the
+    /// GPU-driven bindless main pass, so each fragment stage has to expose
+    /// `fragment_main_bindless`; checking it here fails `cn build` instead of the
+    /// pipeline build, which for a scene-owned shader happens mid-session.
     pub required_entry: Option<String>,
 }
 
-// The platform shader compilers for the backend this build targets, installed
-// by the binary through [`set_shader_toolchain`]. A toolchain implements only
-// the source languages its backend consumes; the rest report `Unsupported`
-// through the defaults, so a world authored for another backend fails the build
-// with a clear message rather than emitting bytecode nothing can load.
+/// The platform shader compilers for the backend this build targets, installed
+/// by the binary through [`set_shader_toolchain`]. A toolchain implements only
+/// the source languages its backend consumes; the rest report `Unsupported`
+/// through the defaults, so a world authored for another backend fails the build
+/// with a clear message rather than emitting bytecode nothing can load.
 pub trait ShaderToolchain: Send + Sync {
-    // Compile Metal Shading Language source to a `.metallib`.
+    /// Compile Metal Shading Language source to a `.metallib`.
     fn compile_metal(
         &self,
         _source: &str,
@@ -40,7 +44,7 @@ pub trait ShaderToolchain: Send + Sync {
         Err(unsupported_language(".metal", args))
     }
 
-    // Compile HLSL source to shader bytecode.
+    /// Compile HLSL source to shader bytecode.
     fn compile_hlsl(
         &self,
         _source: &str,
@@ -49,9 +53,9 @@ pub trait ShaderToolchain: Send + Sync {
         Err(unsupported_language(".hlsl", args))
     }
 
-    // Compile the GLSL source at `args.source_path` to SPIR-V. Takes the path
-    // rather than the source text: a GLSL source is never an engine built-in,
-    // and the GLSL compilers resolve `#include` relative to the source file.
+    /// Compile the GLSL source at `args.source_path` to SPIR-V. Takes the path
+    /// rather than the source text: a GLSL source is never an engine built-in,
+    /// and the GLSL compilers resolve `#include` relative to the source file.
     fn compile_glsl(&self, args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
         Err(unsupported_language("GLSL", args))
     }
@@ -71,8 +75,8 @@ fn unsupported_language(language: &str, args: &ShaderCompileArgs) -> std::io::Er
 
 static SHADER_TOOLCHAIN: std::sync::OnceLock<Box<dyn ShaderToolchain>> = std::sync::OnceLock::new();
 
-// Register the process-wide shader toolchain. The first registration wins, so
-// build entry points can call this unconditionally.
+/// Register the process-wide shader toolchain. The first registration wins, so
+/// build entry points can call this unconditionally.
 pub fn set_shader_toolchain(toolchain: Box<dyn ShaderToolchain>) {
     let _ = SHADER_TOOLCHAIN.set(toolchain);
 }
@@ -95,28 +99,28 @@ fn require<'a>(
     })
 }
 
-// Backend hook the build pipeline calls after a user shader compiles, so a
-// render backend can validate that the shader's engine-provided buffer structs
-// (per-frame uniforms, object data, lights, ...) have the same memory layout
-// as the engine's `#[repr(C)]` Rust structs. Catches CPU/GPU layout mismatches
-// at `cn build` with a clear message instead of as a GPU page fault at `cn run`.
-//
-// The build pipeline (this crate) is backend-agnostic and never links a GPU
-// API, so the actual reflection lives in the client's render backend, which
-// installs an implementation via [`set_shader_build_validator`]. When none is
-// registered (a core-only build, a non-macOS host, the server) the call is a
-// no-op and the build is unaffected.
+/// Backend hook the build pipeline calls after a user shader compiles, so a
+/// render backend can validate that the shader's engine-provided buffer structs
+/// (per-frame uniforms, object data, lights, ...) have the same memory layout
+/// as the engine's `#[repr(C)]` Rust structs. Catches CPU/GPU layout mismatches
+/// at `cn build` with a clear message instead of as a GPU page fault at `cn run`.
+///
+/// The build pipeline (this crate) is backend-agnostic and never links a GPU
+/// API, so the actual reflection lives in the client's render backend, which
+/// installs an implementation via [`set_shader_build_validator`]. When none is
+/// registered (a core-only build, a non-macOS host, the server) the call is a
+/// no-op and the build is unaffected.
 pub trait ShaderBuildValidator: Send + Sync {
-    // Validate one compiled shader stage. `source` is the shader source text,
-    // `kind` the compile kind (`"vertex"` or `"fragment"`; a shadow stage
-    // compiles as `"vertex"` and is told apart by its entry-point name),
-    // `asset_name` the declaring asset. Return `Err(msg)` to fail the build.
+    /// Validate one compiled shader stage. `source` is the shader source text,
+    /// `kind` the compile kind (`"vertex"` or `"fragment"`; a shadow stage
+    /// compiles as `"vertex"` and is told apart by its entry-point name),
+    /// `asset_name` the declaring asset. Return `Err(msg)` to fail the build.
     fn validate_metal(&self, source: &str, kind: &str, asset_name: &str) -> Result<(), String>;
 
-    // Confirm the source defines `entry`. Called only when the world's shader
-    // set forces an entry point (see `ShaderCompileArgs::required_entry`).
-    // Default `Ok`: a backend without reflection cannot check, and a missing
-    // entry point still fails when the pipeline is built.
+    /// Confirm the source defines `entry`. Called only when the world's shader
+    /// set forces an entry point (see `ShaderCompileArgs::required_entry`).
+    /// Default `Ok`: a backend without reflection cannot check, and a missing
+    /// entry point still fails when the pipeline is built.
     fn validate_metal_entry(
         &self,
         source: &str,
@@ -131,9 +135,9 @@ pub trait ShaderBuildValidator: Send + Sync {
 static SHADER_BUILD_VALIDATOR: std::sync::OnceLock<Box<dyn ShaderBuildValidator>> =
     std::sync::OnceLock::new();
 
-// Register the process-wide shader build validator. The first registration
-// wins; later calls are ignored, so build entry points can call this
-// unconditionally (the backend installs exactly one validator).
+/// Register the process-wide shader build validator. The first registration
+/// wins; later calls are ignored, so build entry points can call this
+/// unconditionally (the backend installs exactly one validator).
 pub fn set_shader_build_validator(validator: Box<dyn ShaderBuildValidator>) {
     let _ = SHADER_BUILD_VALIDATOR.set(validator);
 }
@@ -157,6 +161,7 @@ fn validate_compiled_metal(source: &str, args: &ShaderCompileArgs) -> Result<(),
     Ok(())
 }
 
+/// Compile one world-authored shader stage to the backend's binary format.
 pub fn compile_shader(args: ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     compile_with(SHADER_TOOLCHAIN.get().map(|t| t.as_ref()), &args)
 }

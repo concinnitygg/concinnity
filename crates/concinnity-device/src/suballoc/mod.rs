@@ -8,5 +8,5 @@
 // Pure policy: no device handles, no API calls. The backend owns the blocks and
 // performs the bind, which is why frees are keyed on a retire frame rather than
 // released here.
-pub mod block_alloc;
-pub mod range_alloc;
+pub(crate) mod block_alloc;
+pub(crate) mod range_alloc;

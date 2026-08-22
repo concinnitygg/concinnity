@@ -1,31 +1,31 @@
-// src/draw_slot.rs
-//
-// Free-list allocator for backend draw-object slots. A backend appends draw
-// objects into a single `Vec` and stores raw indices into it on each entity's
-// RenderHandle, so a despawned object's slot cannot be compacted away without
-// invalidating every later index. Instead the allocator hands out a vacated
-// slot before growing the vec: `retire` pushes a freed index, the next runtime
-// spawn pops it. Streamed chunks were the first consumer (one freed chunk's
-// slot reused by the next); runtime entity spawn/despawn is the second. All
-// three backends (Metal, DirectX, Vulkan) route their draw-slot allocation
-// through this.
+//! Free-list allocator for backend draw-object slots. A backend appends draw
+//! objects into a single `Vec` and stores raw indices into it on each entity's
+//! RenderHandle, so a despawned object's slot cannot be compacted away without
+//! invalidating every later index. Instead the allocator hands out a vacated
+//! slot before growing the vec: `retire` pushes a freed index, the next runtime
+//! spawn pops it. Streamed chunks were the first consumer (one freed chunk's
+//! slot reused by the next); runtime entity spawn/despawn is the second. All
+//! three backends (Metal, DirectX, Vulkan) route their draw-slot allocation
+//! through this.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a newly allocated draw record lands.
 pub enum SlotAlloc {
-    // Reuse this vacated slot: overwrite the existing draw_objects entry.
+    /// Reuse this vacated slot: overwrite the existing draw_objects entry.
     Reuse(usize),
-    // No free slot was available: append at this index (== the prior length).
+    /// No free slot was available: append at this index (== the prior length).
     Append(usize),
 }
 
 #[derive(Debug, Default)]
+/// Hands out draw-record slots, reusing vacated ones before growing.
 pub struct DrawSlotAllocator {
     free: Vec<usize>,
     len: usize,
 }
 
 impl DrawSlotAllocator {
-    // Start with `len` slots already in use (the draw objects built at init).
+    /// Start with `len` slots already in use (the draw objects built at init).
     pub fn with_len(len: usize) -> Self {
         Self {
             free: Vec::new(),
@@ -33,9 +33,9 @@ impl DrawSlotAllocator {
         }
     }
 
-    // Hand out a slot: a vacated one if any is free, else the next new index.
-    // The caller writes its draw object at the returned slot and, on Append,
-    // grows whatever side tables run parallel to draw_objects.
+    /// Hand out a slot: a vacated one if any is free, else the next new index.
+    /// The caller writes its draw object at the returned slot and, on Append,
+    /// grows whatever side tables run parallel to draw_objects.
     pub fn allocate(&mut self) -> SlotAlloc {
         if let Some(slot) = self.free.pop() {
             SlotAlloc::Reuse(slot)
@@ -46,7 +46,7 @@ impl DrawSlotAllocator {
         }
     }
 
-    // Return a slot to the free list for a later allocate to reuse.
+    /// Return a slot to the free list for a later allocate to reuse.
     pub fn free(&mut self, slot: usize) {
         self.free.push(slot);
     }

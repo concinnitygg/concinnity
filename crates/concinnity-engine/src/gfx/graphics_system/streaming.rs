@@ -185,9 +185,9 @@ pub(super) struct MeshStreamSetup {
     pub payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
     pub centers: Vec<Vec<[f32; 3]>>,
     pub draw_indices: Vec<usize>,
-    pub disk_backed: bool,
-    pub seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion>,
-    pub deferred_payloads:
+    pub(crate) disk_backed: bool,
+    pub(crate) seed_region: Option<crate::gfx::mesh_seed::MeshSeedRegion>,
+    pub(crate) deferred_payloads:
         std::collections::HashMap<usize, crate::gfx::streaming::mesh::DeferredMeshPayload>,
 }
 

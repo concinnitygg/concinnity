@@ -14,22 +14,22 @@ use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 // The most option rows a dropdown list shows at once; a longer list scrolls
 // (the wheel moves the window while it is open).
-pub const MAX_VISIBLE: usize = 8;
+pub(crate) const MAX_VISIBLE: usize = 8;
 
 // How many rows a `count`-option list actually shows.
-pub fn visible_count(count: usize) -> usize {
+pub(crate) fn visible_count(count: usize) -> usize {
     count.min(MAX_VISIBLE)
 }
 
 // The largest valid `first` (top shown option) for a `count`-option list, so
 // the window never runs past the last option.
-pub fn max_first(count: usize) -> usize {
+pub(crate) fn max_first(count: usize) -> usize {
     count.saturating_sub(MAX_VISIBLE)
 }
 
 // The `first` that shows `selected` near the middle of the window when the
 // list opens, clamped to the scrollable range.
-pub fn first_for_selected(selected: usize, count: usize) -> usize {
+pub(crate) fn first_for_selected(selected: usize, count: usize) -> usize {
     selected
         .saturating_sub(MAX_VISIBLE / 2)
         .min(max_first(count))
@@ -39,7 +39,7 @@ pub fn first_for_selected(selected: usize, count: usize) -> usize {
 // reference-space `[x, y, width, height]`. `items` has one entry per SHOWN row
 // (at most `MAX_VISIBLE`), top to bottom; row `i` displays option `first + i`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DropdownLayout {
+pub(crate) struct DropdownLayout {
     pub list: [f32; 4],
     pub items: Vec<[f32; 4]>,
 }
@@ -51,7 +51,7 @@ pub struct DropdownLayout {
 // below the anchor, flipping to open upward when opening down would overflow the
 // reference canvas bottom, and clamps onto the canvas if it is taller than the
 // space either way. A zero `count` yields an empty list.
-pub fn layout(anchor: [f32; 4], count: usize) -> DropdownLayout {
+pub(crate) fn layout(anchor: [f32; 4], count: usize) -> DropdownLayout {
     let [ax, ay, aw, ah] = anchor;
     let count = visible_count(count);
     let item_h = ah;
@@ -82,7 +82,7 @@ pub fn layout(anchor: [f32; 4], count: usize) -> DropdownLayout {
 
 // The index of the option row containing reference-space point `(px, py)`, or
 // `None` if the point is outside every row.
-pub fn item_at(layout: &DropdownLayout, px: f32, py: f32) -> Option<usize> {
+pub(crate) fn item_at(layout: &DropdownLayout, px: f32, py: f32) -> Option<usize> {
     layout
         .items
         .iter()
@@ -107,7 +107,7 @@ fn thumb_height(list_h: f32, count: usize) -> f32 {
 // The thumb's position mirrors the shown window's scroll position, like the
 // settings ScrollPanel's thumb; a drag maps back through
 // `first_for_thumb_top`.
-pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
+pub(crate) fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
     let visible = visible_count(count);
     if count <= visible || visible == 0 {
         return None;
@@ -128,7 +128,7 @@ pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option
 // for a scrolled list, or `None` when every option fits. A press inside it is
 // scrollbar input (a thumb grab, or a jump to the pressed spot), never an
 // option pick.
-pub fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
+pub(crate) fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
     if count <= visible_count(count) {
         return None;
     }
@@ -140,7 +140,7 @@ pub fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
 // Map a dragged thumb-top y back to the window's first shown option, as the
 // fractional row offset the caller accumulates (its scroll position). Clamps
 // to the scrollable range, so any cursor y is safe.
-pub fn first_for_thumb_top(layout: &DropdownLayout, count: usize, top: f32) -> f32 {
+pub(crate) fn first_for_thumb_top(layout: &DropdownLayout, count: usize, top: f32) -> f32 {
     let [_, ly, _, lh] = layout.list;
     let travel = lh - thumb_height(lh, count);
     if travel <= 0.0 {

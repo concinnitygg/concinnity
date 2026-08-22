@@ -33,7 +33,7 @@ use concinnity_cpu::decode::ByteReader;
 // rebases the indices onto that region rather than the payload baking in a
 // fixed base.
 #[derive(Clone)]
-pub struct DecodedMesh {
+pub(crate) struct DecodedMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,
 }
@@ -43,7 +43,7 @@ pub struct DecodedMesh {
 // `Send + Sync` so the background worker thread can own one. Implementors do
 // the slow part of streaming (disk read, decompression); the renderer only
 // ever sees the finished [`DecodedMesh`].
-pub trait MeshPayloadSource: Send + Sync {
+pub(crate) trait MeshPayloadSource: Send + Sync {
     // Decode item `id` into GPU-ready geometry, or return a human-readable
     // error. Called off the main thread.
     fn fetch(&self, id: usize) -> Result<DecodedMesh, String>;
@@ -54,13 +54,13 @@ pub trait MeshPayloadSource: Send + Sync {
 // `cn debug` builds geometry in memory with no disk artifacts, so it cannot
 // re-read from a scratch file; the geometry stays RAM-resident and this
 // streams the *GPU upload* only. `cn run` uses [`DiskMeshSource`] instead.
-pub struct MemMeshSource {
+pub(crate) struct MemMeshSource {
     meshes: Vec<DecodedMesh>,
 }
 
 impl MemMeshSource {
     // `meshes[id]` is the geometry for streamable mesh `id`.
-    pub fn new(meshes: Vec<DecodedMesh>) -> Self {
+    pub(crate) fn new(meshes: Vec<DecodedMesh>) -> Self {
         Self { meshes }
     }
 }
@@ -76,8 +76,8 @@ impl MeshPayloadSource for MemMeshSource {
 
 // Locates one streamed mesh's geometry record inside the scratch file.
 #[derive(Clone)]
-pub struct DiskMeshLocator {
-    pub file_offset: u64,
+pub(crate) struct DiskMeshLocator {
+    pub(crate) file_offset: u64,
     pub len: u64,
 }
 
@@ -92,7 +92,7 @@ pub struct DiskMeshLocator {
 // The file is removed when the source is dropped (world rebuild or shutdown).
 //
 // `cn debug`, which has no disk artifacts, keeps using [`MemMeshSource`].
-pub struct DiskMeshSource {
+pub(crate) struct DiskMeshSource {
     path: String,
     // locators[id] points streamed mesh `id` at its record in the scratch file
     locators: Vec<DiskMeshLocator>,
@@ -120,7 +120,7 @@ impl Drop for DiskMeshSource {
 // One deferred streamed mesh's compiled payload: init skipped its decode
 // (owned by a scene other than the start scene), so no geometry copy exists
 // in the scratch/RAM source and the worker decodes the blob payload instead.
-pub enum DeferredMeshPayload {
+pub(crate) enum DeferredMeshPayload {
     // RAM-backed world: the raw compiled payload bytes.
     Bytes(Vec<u8>),
     // Disk-backed world: the payload's absolute byte range in its blob file.
@@ -128,13 +128,13 @@ pub enum DeferredMeshPayload {
 }
 
 // Wraps a base mesh source with per-id deferred payload overrides.
-pub struct SceneDeferredMeshSource {
+pub(crate) struct SceneDeferredMeshSource {
     base: std::sync::Arc<dyn MeshPayloadSource>,
     deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
 }
 
 impl SceneDeferredMeshSource {
-    pub fn new(
+    pub(crate) fn new(
         base: std::sync::Arc<dyn MeshPayloadSource>,
         deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
     ) -> Self {
@@ -168,7 +168,10 @@ fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
 // Lets the caller drop the RAM-resident [`DecodedMesh`] payloads: under
 // `cn run` the geometry then lives only in the GPU buffers and this scratch
 // file, not in a second CPU-side copy.
-pub fn write_mesh_scratch(path: String, meshes: &[DecodedMesh]) -> Result<DiskMeshSource, String> {
+pub(crate) fn write_mesh_scratch(
+    path: String,
+    meshes: &[DecodedMesh],
+) -> Result<DiskMeshSource, String> {
     let mut file = File::create(&path).map_err(|e| format!("create {}: {}", path, e))?;
     let mut locators = Vec::with_capacity(meshes.len());
     let mut offset: u64 = 0;
@@ -191,7 +194,7 @@ pub fn write_mesh_scratch(path: String, meshes: &[DecodedMesh]) -> Result<DiskMe
 // Each call returns a distinct path so a world rebuild's new source does not
 // collide with the old one's file (the old [`DiskMeshSource`] removes its own
 // file on drop).
-pub fn default_scratch_path() -> String {
+pub(crate) fn default_scratch_path() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
@@ -274,7 +277,7 @@ struct LoadResult {
 // [`update_scores`]: MeshStreamer::update_scores
 // [`plan_and_dispatch`]: MeshStreamer::plan_and_dispatch
 // [`drain_completed`]: MeshStreamer::drain_completed
-pub struct MeshStreamer {
+pub(crate) struct MeshStreamer {
     planner: StreamPlanner,
     // centers[id] holds the world-space position(s) used to score streamed
     // mesh `id`; the streaming priority is the squared distance from the
@@ -291,7 +294,7 @@ impl MeshStreamer {
     // `centers[id]` lists the world-space position(s) used to score mesh
     // `id`. `load_budget` caps loads dispatched per frame; `resident_cap`
     // caps how many meshes stay resident at once before LRU eviction.
-    pub fn new(
+    pub(crate) fn new(
         source: Arc<dyn MeshPayloadSource>,
         centers: Vec<Vec<[f32; 3]>>,
         load_budget: usize,
@@ -315,37 +318,37 @@ impl MeshStreamer {
     }
 
     // Number of streamed meshes.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.planner.len()
     }
 
     // Set (or clear with `None`) the resident-byte budget for this pool. When
     // set, the planner evicts farther-from-camera meshes to hold resident bytes
     // at or under the budget, on top of the item-count cap.
-    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.planner.set_byte_budget(budget);
     }
 
     // Total resident mesh bytes, for diagnostics.
-    pub fn resident_bytes(&self) -> u64 {
+    pub(crate) fn resident_bytes(&self) -> u64 {
         self.planner.resident_bytes()
     }
 
     // Block or unblock a streamed mesh for scene residency: a blocked mesh
     // never loads and is evicted by the next plan if resident.
-    pub fn set_blocked(&mut self, stream_id: usize, blocked: bool) {
+    pub(crate) fn set_blocked(&mut self, stream_id: usize, blocked: bool) {
         self.planner.set_blocked(stream_id, blocked);
     }
 
     // The active resident-byte budget, or `None` when byte accounting is off.
-    pub fn byte_budget(&self) -> Option<u64> {
+    pub(crate) fn byte_budget(&self) -> Option<u64> {
         self.planner.byte_budget()
     }
 
     // Re-score every mesh from the camera position and refresh the LRU
     // timestamp of resident meshes. Call once per frame before
     // [`plan_and_dispatch`](Self::plan_and_dispatch).
-    pub fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
+    pub(crate) fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
         for id in 0..self.planner.len() {
             self.planner
                 .set_score(id, nearest_sq_distance(&self.centers[id], camera));
@@ -357,7 +360,7 @@ impl MeshStreamer {
 
     // Run the planner: dispatch this frame's loads to the worker and return
     // the meshes the caller must evict from the GPU.
-    pub fn plan_and_dispatch(&mut self) -> Vec<usize> {
+    pub(crate) fn plan_and_dispatch(&mut self) -> Vec<usize> {
         let plan = self.planner.plan();
         for &id in &plan.to_load {
             let sent = self.worker.send(id);
@@ -380,7 +383,7 @@ impl MeshStreamer {
     // `Unloaded` so the planner retries once freed space reclaims. A failed
     // *fetch* (decode / disk error) is terminal and marked resident so the
     // planner stops retrying a payload that will never decode.
-    pub fn drain_completed(
+    pub(crate) fn drain_completed(
         &mut self,
         frame: u64,
         mut upload: impl FnMut(usize, Vec<Vertex>, Vec<u16>),
@@ -413,13 +416,13 @@ impl MeshStreamer {
     // exhaustion) back to `Unloaded`, so the planner re-dispatches it once an
     // eviction's space reclaims. Unloading removes its bytes from the
     // resident sum (`resident_bytes` counts Resident items only).
-    pub fn note_upload_failed(&mut self, id: usize) {
+    pub(crate) fn note_upload_failed(&mut self, id: usize) {
         tracing::debug!("mesh stream: upload of mesh {} deferred, will retry", id);
         self.planner.mark_unloaded(id);
     }
 
     // `(resident, pending, unloaded)` mesh counts -- for diagnostics.
-    pub fn stats(&self) -> (usize, usize, usize) {
+    pub(crate) fn stats(&self) -> (usize, usize, usize) {
         self.planner.counts()
     }
 }

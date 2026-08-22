@@ -52,29 +52,30 @@ impl std::fmt::Display for BarrierGap {
 
 // Every declared access in `graph` that no barrier covers, in execution order.
 // Empty for a correctly compiled graph.
-pub fn barrier_coverage_gaps(graph: &CompiledGraph) -> Vec<BarrierGap> {
+#[cfg(test)]
+pub(crate) fn barrier_coverage_gaps(graph: &CompiledGraph) -> Vec<BarrierGap> {
     gaps_over(graph, &|_| true)
 }
 
-// The same check restricted to the resources `driven[resource_index]` marks, i.e.
-// the ones a backend executor resolves to a native target and emits transitions
-// for. A backend calls this on the graphs a real session builds, so it covers the
-// input combinations a headless sweep does not reach, and it asserts specifically
-// that everything the backend claims to drive is fully covered. Resources outside
-// the driven set keep whatever synchronisation their encoder owns and are skipped.
+/// The same check restricted to the resources `driven[resource_index]` marks, i.e.
+/// the ones a backend executor resolves to a native target and emits transitions
+/// for. A backend calls this on the graphs a real session builds, so it covers the
+/// input combinations a headless sweep does not reach, and it asserts specifically
+/// that everything the backend claims to drive is fully covered. Resources outside
+/// the driven set keep whatever synchronisation their encoder owns and are skipped.
 pub fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) -> Vec<BarrierGap> {
     gaps_over(graph, &|i| driven.get(i).copied().unwrap_or(false))
 }
 
-// The access each resource is left in once the graph's last barrier for it has
-// run, indexed by resource id: the state plus the stage union that barrier
-// carried, since a `Read`'s native state can depend on its consuming stages.
-// `(Undefined, empty)` for a resource no barrier touches.
-//
-// A backend pairs this with its own state translation to check the cross-frame
-// contract: a resource whose first-use transition names a resting state must
-// actually end the frame in it, or the next frame's producer barrier declares a
-// source state the resource is not in.
+/// The access each resource is left in once the graph's last barrier for it has
+/// run, indexed by resource id: the state plus the stage union that barrier
+/// carried, since a `Read`'s native state can depend on its consuming stages.
+/// `(Undefined, empty)` for a resource no barrier touches.
+///
+/// A backend pairs this with its own state translation to check the cross-frame
+/// contract: a resource whose first-use transition names a resting state must
+/// actually end the frame in it, or the next frame's producer barrier declares a
+/// source state the resource is not in.
 pub fn final_states(graph: &CompiledGraph) -> Vec<(ResourceState, ReadStages)> {
     let mut state = vec![(ResourceState::Undefined, ReadStages::empty()); graph.resources.len()];
     for pass in &graph.passes {

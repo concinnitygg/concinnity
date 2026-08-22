@@ -6,21 +6,35 @@ use alloc::string::String;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FileKind {
+    /// Wavefront OBJ geometry.
     Obj,
+    /// PNG image.
     Png,
+    /// JPEG image, `.jpg`.
     Jpg,
+    /// JPEG image, `.jpeg`.
     Jpeg,
+    /// Windows bitmap image.
     Bmp,
+    /// Truevision TGA image.
     Tga,
+    /// GIF image.
     Gif,
+    /// TrueType font.
     Ttf,
+    /// OpenType font.
     Otf,
+    /// Plain text.
     Txt,
+    /// Markdown text, the medium the story importer reads.
     Md,
+    /// Wavefront material library accompanying an OBJ.
     Mtl,
 }
 
 impl FileKind {
+    /// The kind an extension names, case-insensitively. `None` for an
+    /// extension the engine does not read.
     pub fn from_ext(ext: &str) -> Option<Self> {
         match ext.to_lowercase().as_str() {
             "obj" => Some(Self::Obj),

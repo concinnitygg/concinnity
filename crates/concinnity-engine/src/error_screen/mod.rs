@@ -32,7 +32,7 @@ const IDENTITY_VIEW: [[f32; 4]; 4] = [
 ///
 /// Blocks the calling thread until dismissed, and must run on the main thread:
 /// it creates the process's window.
-pub fn show(title: &str, message: &str) -> bool {
+pub(crate) fn show(title: &str, message: &str) -> bool {
     let Some(embedded) = font::load() else {
         return false;
     };

@@ -10,7 +10,7 @@ use crate::ecs::{EventCursor, PipelineContext};
 // The look values a controller carries, borrowed for the duration of an update.
 pub(crate) struct Look<'a> {
     pub mouse_sensitivity: &'a mut f32,
-    pub gamepad_look_sensitivity: &'a mut f32,
+    pub(crate) gamepad_look_sensitivity: &'a mut f32,
 }
 
 // Override the authored look values with the persisted settings-menu choices;

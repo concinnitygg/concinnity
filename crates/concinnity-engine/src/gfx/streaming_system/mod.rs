@@ -49,7 +49,7 @@ const PRESSURE_SAMPLE_INTERVAL: u64 = 30;
 // to the absolute `Camera3D` values if this resource is absent (a unit test
 // driving GraphicsSystem without StreamingSystem).
 #[derive(Debug, Clone, Copy)]
-pub struct CameraRelativeView {
+pub(crate) struct CameraRelativeView {
     pub view: [[f32; 4]; 4],
     pub cam_pos: [f32; 3],
 }
@@ -74,36 +74,41 @@ pub(crate) struct ChunkStreamState {
     pub(crate) material: crate::gfx::render_types::MaterialUniforms,
 }
 
-// `(resident, pending, unloaded)` counts for each streaming pool, or `None`
-// when that pool is not streaming. Read by the debug server's `streaming`
-// command for headless verification. Only the `cn debug` binary consumes it,
-// so it reads as dead code in a plain library build.
+/// `(resident, pending, unloaded)` counts for each streaming pool, or `None`
+/// when that pool is not streaming. Read by the debug server's `streaming`
+/// command for headless verification. Only the `cn debug` binary consumes it,
+/// so it reads as dead code in a plain library build.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingStats {
+    /// `(resident, pending, budget)` texture counts when streaming.
     pub texture: Option<(usize, usize, usize)>,
+    /// `(resident, pending, budget)` mesh counts when streaming.
     pub mesh: Option<(usize, usize, usize)>,
-    // `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
+    /// `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
     pub chunk: Option<(usize, usize)>,
-    // `(resident_bytes, byte_budget)` for the texture pool when streaming;
-    // `byte_budget` is 0 when the pool runs count-only (no byte budget).
+    /// `(resident_bytes, byte_budget)` for the texture pool when streaming;
+    /// `byte_budget` is 0 when the pool runs count-only (no byte budget).
     pub texture_bytes: Option<(u64, u64)>,
-    // `(resident_bytes, byte_budget)` for the mesh pool when streaming.
+    /// `(resident_bytes, byte_budget)` for the mesh pool when streaming.
     pub mesh_bytes: Option<(u64, u64)>,
-    // `(resident_bytes, byte_budget)` for the chunk pool when a VoxelWorld is
-    // streaming; `byte_budget` is 0 when the GPU reported no memory figure.
+    /// `(resident_bytes, byte_budget)` for the chunk pool when a VoxelWorld is
+    /// streaming; `byte_budget` is 0 when the GPU reported no memory figure.
     pub chunk_bytes: Option<(u64, u64)>,
 }
 
-// Live process-RAM pressure on streaming, published by StreamingSystem on each
-// throttled sample when a `MemoryBudget` is present. `under_pressure` is true
-// whenever the back-off valve is engaged (gating loads or evicting). Read by the
-// debug server's `streaming` command for headless verification; harmless (and
-// unread) in a plain `cn run`. Absent entirely when no `MemoryBudget` is
-// published or RSS cannot be queried, in which case the valve is inert.
+/// Live process-RAM pressure on streaming, published by StreamingSystem on each
+/// throttled sample when a `MemoryBudget` is present. `under_pressure` is true
+/// whenever the back-off valve is engaged (gating loads or evicting). Read by the
+/// debug server's `streaming` command for headless verification; harmless (and
+/// unread) in a plain `cn run`. Absent entirely when no `MemoryBudget` is
+/// published or RSS cannot be queried, in which case the valve is inert.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamingPressure {
+    /// Process resident-set size at the sample.
     pub rss_bytes: u64,
+    /// The published memory budget.
     pub budget_bytes: u64,
+    /// Whether the back-off valve is engaged.
     pub under_pressure: bool,
 }
 
@@ -176,6 +181,7 @@ impl std::fmt::Debug for StreamingState {
 }
 
 #[derive(Debug, Default)]
+/// Drives texture / mesh / chunk residency against the streaming budgets.
 pub struct StreamingSystem {
     // Scene-status scratch reused across frames, compared against the
     // published `SceneResidencyStatus` before republishing.
@@ -183,6 +189,7 @@ pub struct StreamingSystem {
 }
 
 impl StreamingSystem {
+    /// A system with empty scratch.
     pub fn new() -> Self {
         Self::default()
     }

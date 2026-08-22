@@ -1,10 +1,8 @@
-// src/gfx/root_motion.rs
-//
-// Root-motion track: the character-displacement curve stripped out of a
-// clip's root joint at build time. The pose keeps the root anchored in
-// place; the runtime samples this track's frame-to-frame delta instead and
-// feeds it to whatever moves the character (a physics capsule, or the mesh
-// transform directly). Pure math, unit-tested here.
+//! Root-motion track: the character-displacement curve stripped out of a
+//! clip's root joint at build time. The pose keeps the root anchored in
+//! place; the runtime samples this track's frame-to-frame delta instead and
+//! feeds it to whatever moves the character (a physics capsule, or the mesh
+//! transform directly). Pure math, unit-tested here.
 
 use alloc::vec::Vec;
 
@@ -14,21 +12,24 @@ use crate::math::{floor, rem_euclid};
 /// `time` seconds from the clip start.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RootKey {
+    /// Seconds from the clip start.
     pub time: f32,
+    /// The root joint's stripped translation at `time`.
     pub translation: [f32; 3],
 }
 
-// The displacement curve of one clip, in the mesh's model space. Keys are in
-// ascending time order (the build bakes them from the root joint's keyframe
-// track, so they inherit its ordering).
+/// The displacement curve of one clip, in the mesh's model space. Keys are in
+/// ascending time order (the build bakes them from the root joint's keyframe
+/// track, so they inherit its ordering).
 #[derive(Debug, Clone, Default)]
 pub struct RootTrack {
+    /// Curve keys, in ascending time order.
     pub keys: Vec<RootKey>,
 }
 
 impl RootTrack {
-    // The curve's translation at clip-local time `t`, clamped to the key
-    // range; between keys the translation lerps.
+    /// The curve's translation at clip-local time `t`, clamped to the key
+    /// range; between keys the translation lerps.
     pub fn sample(&self, t: f32) -> [f32; 3] {
         match self.keys.as_slice() {
             [] => [0.0; 3],
@@ -54,11 +55,11 @@ impl RootTrack {
         }
     }
 
-    // The displacement covered between two *unwrapped* clip times
-    // (`t0 <= t1`, in the same seconds the clip clock runs on). A looping
-    // clip adds one full per-cycle displacement for every wrap crossed, so a
-    // multi-loop frame (or a long hitch) loses no ground; a non-looping clip
-    // clamps both ends.
+    /// The displacement covered between two *unwrapped* clip times
+    /// (`t0 <= t1`, in the same seconds the clip clock runs on). A looping
+    /// clip adds one full per-cycle displacement for every wrap crossed, so a
+    /// multi-loop frame (or a long hitch) loses no ground; a non-looping clip
+    /// clamps both ends.
     pub fn delta(&self, t0: f32, t1: f32, duration: f32, looping: bool) -> [f32; 3] {
         if !looping || duration <= 1e-6 {
             return sub3(self.sample(t1), self.sample(t0));
@@ -77,6 +78,7 @@ impl RootTrack {
     }
 }
 
+/// Component-wise linear interpolation from `a` to `b`.
 pub fn lerp3(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
     [
         a[0] + (b[0] - a[0]) * f,
@@ -85,14 +87,17 @@ pub fn lerp3(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
     ]
 }
 
+/// Component-wise difference, `a - b`.
 pub fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Component-wise sum, `a + b`.
 pub fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
+/// Every component scaled by `s`.
 pub fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
     [a[0] * s, a[1] * s, a[2] * s]
 }

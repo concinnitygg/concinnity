@@ -60,7 +60,7 @@ pub(crate) struct Ctx {
 
 impl Ctx {
     // For programs whose assembly needs no MSAA state, pool size, or probe count.
-    pub fn plain(hot_reload: bool) -> Self {
+    pub(crate) fn plain(hot_reload: bool) -> Self {
         Self {
             hot_reload,
             msaa: false,
@@ -86,7 +86,7 @@ pub(crate) struct GlslProgram {
 
 impl GlslProgram {
     // Assemble the exact source text this program compiles under `ctx`.
-    pub fn source(&self, ctx: &Ctx) -> String {
+    pub(crate) fn source(&self, ctx: &Ctx) -> String {
         let mut src = shader_source(ctx.hot_reload, self.file, self.embedded).into_owned();
         if let Some(define) = self.assembly.define {
             src = inject_define(&src, define);
@@ -102,7 +102,7 @@ impl GlslProgram {
         src
     }
 
-    pub fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
+    pub(crate) fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
         let source = self.source(ctx);
         if self.rt {
             compile_glsl_rt(&source, self.kind, self.label)

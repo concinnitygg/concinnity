@@ -65,7 +65,7 @@ impl MtlContext {
     // Main-shader entry points must be named "vertex_main" and
     // "fragment_main"; the shadow pass is engine-internal (compiled from
     // `shadow.metal`) and enabled whenever `shadows.map_size > 0`.
-    pub fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: crate::gfx::backend_init::BackendInit<'_>) -> Result<Self, String> {
         Self::build(init, None)
     }
 

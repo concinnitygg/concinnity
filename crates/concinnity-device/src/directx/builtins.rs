@@ -51,7 +51,7 @@ impl HlslProgram {
     }
 
     // Assemble the exact source text this program compiles.
-    pub fn source(&self, hot_reload: bool) -> String {
+    pub(crate) fn source(&self, hot_reload: bool) -> String {
         let mut src = self.body(hot_reload).into_owned();
         if self.object_data {
             let object_common = shader_source(hot_reload, "object_common.hlsl", OBJECT_COMMON_HLSL);
@@ -60,7 +60,7 @@ impl HlslProgram {
         src
     }
 
-    pub fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
+    pub(crate) fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
         let source = self.source(hot_reload);
         match self.compiler {
             Compiler::Fxc => super::pipeline::compile_hlsl(&source, self.entry, self.target),

@@ -1,31 +1,33 @@
-// src/gfx/frustum.rs
-//
-// Backend-agnostic frustum culling.
-//
-// Given a column-major view-projection matrix the six clip-space planes are
-// extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
-// `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
-// box is fully outside at least one plane.  False positives are acceptable for
-// culling (a few extra draws), false negatives are not, so the test treats
-// the box as visible whenever it overlaps any plane.
+//! Backend-agnostic frustum culling.
+//!
+//! Given a column-major view-projection matrix the six clip-space planes are
+//! extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
+//! `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
+//! box is fully outside at least one plane.  False positives are acceptable for
+//! culling (a few extra draws), false negatives are not, so the test treats
+//! the box as visible whenever it overlaps any plane.
 
 use crate::math::sqrt;
 
+/// One frustum plane in clip space.
 #[derive(Copy, Clone, Debug)]
 pub struct Plane {
-    // Plane equation in clip space: dot(normal, p) + d >= 0 == inside.
+    /// Plane equation in clip space: dot(normal, p) + d >= 0 == inside.
     pub normal: [f32; 3],
+    /// Plane constant: the signed distance from the origin along `normal`.
     pub d: f32,
 }
 
+/// The six clip-space planes of a view frustum.
 #[derive(Copy, Clone, Debug)]
 pub struct Frustum {
+    /// Left, right, bottom, top, near, far.
     pub planes: [Plane; 6],
 }
 
 impl Frustum {
-    // Build a frustum from a column-major view-projection matrix.
-    // `vp[col][row]`: same layout used by the renderer's ViewUniforms.
+    /// Build a frustum from a column-major view-projection matrix.
+    /// `vp[col][row]`: same layout used by the renderer's ViewUniforms.
     pub fn from_view_projection(vp: [[f32; 4]; 4]) -> Self {
         // Row r of vp = [vp[0][r], vp[1][r], vp[2][r], vp[3][r]].
         let row = |r: usize| -> [f32; 4] { [vp[0][r], vp[1][r], vp[2][r], vp[3][r]] };
@@ -56,7 +58,7 @@ impl Frustum {
         }
     }
 
-    // True when the AABB is not entirely outside any plane.
+    /// True when the AABB is not entirely outside any plane.
     pub fn intersects_aabb(&self, bb_min: [f32; 3], bb_max: [f32; 3]) -> bool {
         for plane in &self.planes {
             // Pick the AABB corner furthest along the plane normal ("p-vertex"
@@ -87,9 +89,9 @@ fn normalise_plane(p: [f32; 4]) -> Plane {
     }
 }
 
-// Compute the world-space AABB enclosing a local-space AABB transformed by
-// a column-major model matrix.  All eight corners are transformed and
-// min/max'd component-wise.
+/// Compute the world-space AABB enclosing a local-space AABB transformed by
+/// a column-major model matrix.  All eight corners are transformed and
+/// min/max'd component-wise.
 pub fn transform_aabb(
     bb_min: [f32; 3],
     bb_max: [f32; 3],
@@ -122,8 +124,8 @@ pub fn transform_aabb(
     (out_min, out_max)
 }
 
-// Squared distance from `cam` to the closest point on the AABB.
-// Returns 0 if `cam` is inside.
+/// Squared distance from `cam` to the closest point on the AABB.
+/// Returns 0 if `cam` is inside.
 pub fn aabb_distance_sq(cam: [f32; 3], bb_min: [f32; 3], bb_max: [f32; 3]) -> f32 {
     let mut sq = 0.0f32;
     for i in 0..3 {

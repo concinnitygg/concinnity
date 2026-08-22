@@ -80,44 +80,50 @@ impl std::fmt::Display for GraphError {
 
 impl std::error::Error for GraphError {}
 
-// One pass in execution order. Carries the declared reads / writes, the
-// barriers the executor must emit before running this pass, and the
-// `PassKind` + `PassId` the backend dispatches on.
+/// One pass in execution order. Carries the declared reads / writes, the
+/// barriers the executor must emit before running this pass, and the
+/// `PassKind` + `PassId` the backend dispatches on.
 #[derive(Debug, Clone)]
 pub struct CompiledPass {
+    /// The pass's stable identity.
     pub id: PassId,
+    /// Whether the executor encodes a render or a compute pass.
     pub kind: PassKind,
+    /// Resource versions this pass reads.
     pub reads: Vec<ResourceVersion>,
+    /// Resource versions this pass writes.
     pub writes: Vec<ResourceVersion>,
+    /// Whether this pass writes the swapchain image.
     pub presents: bool,
+    /// Barriers the executor emits before the pass.
     pub barriers_before: Vec<BarrierOp>,
 }
 
-// One resource in the compiled graph. Carries the lifetime interval
-// (in compiled-pass-index space) and the origin distinction the
-// aliaser will care about.
+/// One resource in the compiled graph. Carries the lifetime interval
+/// (in compiled-pass-index space) and the origin distinction the
+/// aliaser will care about.
 #[derive(Debug, Clone)]
 pub struct CompiledResource {
+    /// The resource's stable label, the executor's join key.
     pub label: &'static str,
+    /// Whether the resource is imported or graph-declared.
     pub origin: ResourceOrigin,
+    /// The pass range over which the resource must stay live.
     pub lifetime: PassRange,
-    // `true` for textures, `false` for buffers. The executor branches
-    // on this when resolving handles to backend objects.
-    pub is_texture: bool,
-    // Texture shape (format / size / sample count / layers), `None` for a
-    // buffer. The aliasing planner uses it to size each transient resource;
-    // the backend will use it to allocate the realised resource.
+    /// Texture shape (format / size / sample count / layers), `None` for a
+    /// buffer. The aliasing planner uses it to size each transient resource;
+    /// the backend will use it to allocate the realised resource.
     pub tex_desc: Option<TextureDesc>,
     // Buffer shape (size / usage), `None` for a texture. Carried so a backend can
     // derive the resource's barrier class from its declared usage.
-    pub buf_desc: Option<BufferDesc>,
+    pub(crate) buf_desc: Option<BufferDesc>,
 }
 
 impl CompiledResource {
-    // The barrier class this resource's declared usage puts it in. The graph is
-    // the single source of truth for it: a backend executor resolves a label to
-    // its GPU object but never restates what kind of resource it is, so the
-    // executors cannot disagree. `None` for a resource carrying neither desc.
+    /// The barrier class this resource's declared usage puts it in. The graph is
+    /// the single source of truth for it: a backend executor resolves a label to
+    /// its GPU object but never restates what kind of resource it is, so the
+    /// executors cannot disagree. `None` for a resource carrying neither desc.
     pub fn class(&self) -> Option<GraphResourceClass> {
         if let Some(desc) = self.tex_desc {
             return Some(GraphResourceClass::for_texture_usage(desc.usage));
@@ -127,12 +133,14 @@ impl CompiledResource {
     }
 }
 
-// Frozen graph the per-backend executor consumes. Passes are in
-// execution order; barriers are pre-derived; resource lifetimes are
-// ready for a future aliaser.
+/// Frozen graph the per-backend executor consumes. Passes are in
+/// execution order; barriers are pre-derived; resource lifetimes are
+/// ready for a future aliaser.
 #[derive(Debug, Clone)]
 pub struct CompiledGraph {
+    /// Passes in execution order.
     pub passes: Vec<CompiledPass>,
+    /// Resources, indexed by [`ResourceId`].
     pub resources: Vec<CompiledResource>,
 }
 
@@ -143,7 +151,8 @@ impl CompiledGraph {
     // have moved off hand-written inline barriers, while every other resource
     // keeps its existing inline / render-pass-driven path. The label is the
     // stable join key the backend resolves to its GPU object.
-    pub fn pass_barriers_for(
+    #[cfg(test)]
+    pub(crate) fn pass_barriers_for(
         &self,
         pass: &CompiledPass,
         allow: &[&str],
@@ -163,7 +172,7 @@ impl GraphBuilder {
     // Returns the frozen graph the executor consumes. The graph must
     // declare exactly one `presents()` pass: the terminal swapchain
     // write that ends the frame.
-    pub fn compile(self) -> Result<CompiledGraph, GraphError> {
+    pub(crate) fn compile(self) -> Result<CompiledGraph, GraphError> {
         let GraphBuilder { resources, passes } = self;
         let n_passes = passes.len();
         let n_resources = resources.len();
@@ -349,7 +358,6 @@ impl GraphBuilder {
                     label: decl.label(),
                     origin: decl.origin(),
                     lifetime,
-                    is_texture: decl.is_texture(),
                     tex_desc: decl.texture_desc(),
                     buf_desc: decl.buffer_desc(),
                 }

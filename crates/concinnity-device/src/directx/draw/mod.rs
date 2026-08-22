@@ -591,21 +591,21 @@ pub(in crate::directx) struct LocalLightParams {
 
 impl LocalLightParams {
     // Legacy static main root signature.
-    pub const MAIN: Self = Self {
+    pub(crate) const MAIN: Self = Self {
         spot_buffer: 12,
         spot_table: 13,
         area_buffer: 14,
         ltc_table: 15,
     };
     // Shared instanced + skinned root signature.
-    pub const INSTANCED: Self = Self {
+    pub(crate) const INSTANCED: Self = Self {
         spot_buffer: 13,
         spot_table: 14,
         area_buffer: 15,
         ltc_table: 16,
     };
     // Bindless main root signature.
-    pub const BINDLESS: Self = Self {
+    pub(crate) const BINDLESS: Self = Self {
         spot_buffer: 15,
         spot_table: 16,
         area_buffer: 17,

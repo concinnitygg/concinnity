@@ -1,22 +1,29 @@
-// src/result.rs
+//! The engine's flat result code, shared by every crate that reports a
+//! recoverable failure across an API or FFI seam.
+
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
+/// The engine's flat result code, returned across the API and FFI seams.
 pub enum CnResult {
     #[error("Success")]
+    /// The call succeeded.
     Success = 0,
 
     #[error("Invalid asset type")]
+    /// The asset type name is not in the registry.
     AssetInvalidType,
 
-    // Generic
+    /// Generic
     #[error("Invalid state")]
     InvalidState,
     #[error("Invalid argument")]
+    /// An argument was outside its accepted range.
     InvalidArgument,
 
     #[error("File I/O error")]
+    /// A file could not be read or written.
     FileIo,
 }
 

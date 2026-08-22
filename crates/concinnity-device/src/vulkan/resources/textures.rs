@@ -233,7 +233,7 @@ impl VkContext {
     // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
     // drains the device and rewrites everything in place, matching the
     // hot-reload paths below.
-    pub fn update_texture_slot(
+    pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
         image: &crate::build::texture::TextureImage,
@@ -286,7 +286,7 @@ impl VkContext {
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-grey placeholder.
-    pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         Ok(self.update_texture_slot(slot, &grey)?)
     }
@@ -345,7 +345,7 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     #[allow(dead_code)]
-    pub fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
             &GpuUploadContext {
@@ -398,7 +398,7 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     #[allow(dead_code)]
-    pub fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
@@ -515,7 +515,7 @@ impl VkContext {
     // `DxContext::clone_static_draw_object`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
     #[allow(dead_code)]
-    pub fn clone_static_draw_object(
+    pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],

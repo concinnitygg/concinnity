@@ -9,7 +9,7 @@ use concinnity_cook::world::WORLD_JSONL;
 const INIT_WORLD_JSONL: &str = r#"{"name":"hello_world","type":"TextLabel","args":{"content":"Hello, world!"}}
 "#;
 
-pub fn new(path: &str) -> std::io::Result<()> {
+pub(crate) fn new(path: &str) -> std::io::Result<()> {
     if std::path::Path::new(path).exists() {
         // allow creating a project in a pre-existing empty directory,
         // but refuse if it already has a world.jsonl
@@ -26,7 +26,7 @@ pub fn new(path: &str) -> std::io::Result<()> {
     init_in_dir(path)
 }
 
-pub fn init() -> std::io::Result<()> {
+pub(crate) fn init() -> std::io::Result<()> {
     init_in_dir(".")
 }
 

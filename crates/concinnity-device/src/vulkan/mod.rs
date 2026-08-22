@@ -70,7 +70,7 @@ pub(crate) use win32_window::Win32Window as PlatformWindow;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) use window::GlfwWindow as PlatformWindow;
 
-pub use context::VkContext;
+pub(crate) use context::VkContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
 
 // GPU-free host structs live in concinnity-render (counted for coverage); the

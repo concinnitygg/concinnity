@@ -28,6 +28,9 @@ macro_rules! define_keys {
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
         )]
+        // Each variant is one key name; the vocabulary is described above
+        // rather than restated per variant.
+        #[allow(missing_docs)]
         pub enum Key {
             $($variant),*
         }

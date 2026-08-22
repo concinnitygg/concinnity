@@ -16,7 +16,7 @@ pub(crate) struct SettingsWriter {
 }
 
 impl SettingsWriter {
-    pub fn spawn() -> Self {
+    pub(crate) fn spawn() -> Self {
         Self::with_sink(|cfg| cfg.save())
     }
 
@@ -47,7 +47,7 @@ impl SettingsWriter {
     }
 
     // Queue a snapshot for persistence. Never blocks on disk I/O.
-    pub fn save(&self, cfg: Settings) {
+    pub(crate) fn save(&self, cfg: Settings) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(cfg);
         }

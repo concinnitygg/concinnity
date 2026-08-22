@@ -1,11 +1,11 @@
-// Typed asset specs: the struct form of a world.jsonl line.
-//
-// An `AssetSpec` is a `{name, type, args}` entry described as data rather than a
-// JSON string. `args` is an ordered list of `(key, ArgValue)` pairs, where
-// `ArgValue` is a small JSON-shaped value tree. Builders in `asset` assemble
-// these; `json` converts one into the engine's `serde_json::Value` so a consumer
-// never parses a JSON string. This is the substrate both the asset builders and
-// the world templates in `crate::template` are expressed in.
+//! Typed asset specs: the struct form of a world.jsonl line.
+//!
+//! An `AssetSpec` is a `{name, type, args}` entry described as data rather than a
+//! JSON string. `args` is an ordered list of `(key, ArgValue)` pairs, where
+//! `ArgValue` is a small JSON-shaped value tree. Builders in `asset` assemble
+//! these; `json` converts one into the engine's `serde_json::Value` so a consumer
+//! never parses a JSON string. This is the substrate both the asset builders and
+//! the world templates in `crate::template` are expressed in.
 
 pub mod asset;
 
@@ -13,24 +13,30 @@ mod json;
 
 pub use json::{arg_value_to_json, spec_args, spec_to_value};
 
-// A JSON-shaped value: exactly the shapes an asset's `args` object can hold. Kept
-// deliberately small so it maps one-to-one onto the engine's accept path
-// (`serde_json::from_value` with `#[serde(default)]`), where an omitted field
-// falls back to its default.
+/// A JSON-shaped value: exactly the shapes an asset's `args` object can hold. Kept
+/// deliberately small so it maps one-to-one onto the engine's accept path
+/// (`serde_json::from_value` with `#[serde(default)]`), where an omitted field
+/// falls back to its default.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ArgValue {
+    /// A JSON null.
     Null,
+    /// A boolean.
     Bool(bool),
+    /// An integer.
     Int(i64),
+    /// A floating-point number.
     Float(f64),
+    /// A string.
     Str(String),
+    /// An array of values.
     Array(Vec<ArgValue>),
-    // An object, in insertion order (nested args reuse the same ordered shape).
+    /// An object, in insertion order (nested args reuse the same ordered shape).
     Object(Vec<(String, ArgValue)>),
 }
 
 impl ArgValue {
-    // A numeric array from float components (colours, positions, sizes).
+    /// A numeric array from float components (colours, positions, sizes).
     pub fn floats(vals: &[f32]) -> ArgValue {
         ArgValue::Array(vals.iter().map(|&v| ArgValue::Float(v as f64)).collect())
     }
@@ -82,21 +88,21 @@ impl<const N: usize> From<[f32; N]> for ArgValue {
     }
 }
 
-// A named asset entry: the `{name, type, args}` of one world.jsonl line, as data.
+/// A named asset entry: the `{name, type, args}` of one world.jsonl line, as data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssetSpec {
-    // The readable asset name (the world-line key). Ignored when a spec is
-    // materialized straight into a live component, which carries no name field.
+    /// The readable asset name (the world-line key). Ignored when a spec is
+    /// materialized straight into a live component, which carries no name field.
     pub name: String,
-    // The registered asset type string (`"Sprite"`, `"DirectionalLight"`, ...).
+    /// The registered asset type string (`"Sprite"`, `"DirectionalLight"`, ...).
     pub asset_type: &'static str,
-    // The `args` object, in insertion order.
+    /// The `args` object, in insertion order.
     pub fields: Vec<(String, ArgValue)>,
 }
 
 impl AssetSpec {
-    // An entry of `asset_type` named `name`, with no args set yet (each unset
-    // field takes the type's serde default when materialized).
+    /// An entry of `asset_type` named `name`, with no args set yet (each unset
+    /// field takes the type's serde default when materialized).
     pub fn new(name: impl Into<String>, asset_type: &'static str) -> Self {
         AssetSpec {
             name: name.into(),
@@ -105,14 +111,14 @@ impl AssetSpec {
         }
     }
 
-    // Set one arg, chainable. A later `set` of the same key appends a second
-    // entry; builders set each key once.
+    /// Set one arg, chainable. A later `set` of the same key appends a second
+    /// entry; builders set each key once.
     pub fn set(mut self, key: impl Into<String>, value: impl Into<ArgValue>) -> Self {
         self.fields.push((key.into(), value.into()));
         self
     }
 
-    // The `args` object as a single `ArgValue`.
+    /// The `args` object as a single `ArgValue`.
     pub fn args(&self) -> ArgValue {
         ArgValue::Object(self.fields.clone())
     }

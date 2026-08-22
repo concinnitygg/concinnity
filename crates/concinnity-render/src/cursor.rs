@@ -1,11 +1,9 @@
-// src/cursor.rs
-//
-// In-engine mouse cursor geometry. A `follow_cursor` Sprite is drawn as a
-// classic arrow pointer rather than a plain quad: a filled polygon with a
-// contrasting outline so it stays legible over any scene. Like the rest of the
-// UI overlay, it rides the text pass's sentinel-UV solid-fill path (u < 0), so
-// it needs no new pipeline and renders on every backend. The arrow's diagonal
-// edges are real geometry, not a stair-stepped stack of quads.
+//! In-engine mouse cursor geometry. A `follow_cursor` Sprite is drawn as a
+//! classic arrow pointer rather than a plain quad: a filled polygon with a
+//! contrasting outline so it stays legible over any scene. Like the rest of the
+//! UI overlay, it rides the text pass's sentinel-UV solid-fill path (u < 0), so
+//! it needs no new pipeline and renders on every backend. The arrow's diagonal
+//! edges are real geometry, not a stair-stepped stack of quads.
 
 use crate::assets::Sprite;
 use crate::ecs::CursorShape;
@@ -82,7 +80,8 @@ const CURSOR_LAYER: i32 = i32::MAX;
 // by the overlay factor for `viewport` to stay proportional with the menu it
 // belongs to; the pointer stays at the live cursor position. Returns empty when
 // no font atlas is loaded (the text pipeline is inactive then).
-pub fn build_cursor_calls(
+#[cfg(test)]
+pub(crate) fn build_cursor_calls(
     sprites: &[Sprite],
     pointer: (f32, f32),
     shape: CursorShape,
@@ -101,8 +100,8 @@ pub fn build_cursor_calls(
     out.take()
 }
 
-// `build_cursor_calls`, appending onto an existing draw list. Sprites without
-// `follow_cursor` are skipped, so the caller can pass its whole sprite slice.
+/// `build_cursor_calls`, appending onto an existing draw list. Sprites without
+/// `follow_cursor` are skipped, so the caller can pass its whole sprite slice.
 pub fn build_cursor_calls_into(
     out: &mut crate::call_buffer::TextCallBuffer,
     sprites: &[Sprite],

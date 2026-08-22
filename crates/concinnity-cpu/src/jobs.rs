@@ -1,22 +1,20 @@
-// src/jobs.rs
-//
-// Backend-agnostic job pool for parallelising expensive per-frame CPU work.
-//
-// Systems run serially in the frame loop, each holding `&mut PipelineContext`.
-// This pool does not change that: it lets a single system fan its own
-// data-parallel work (per-skeleton pose sampling, particle update, ...) across
-// worker threads and join before `step` returns. It is not a way to run whole
-// systems concurrently.
-//
-// The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
-// pool so the worker count and thread names are controlled. It is process-wide
-// and lazily built on first use via `pool()`.
+//! Backend-agnostic job pool for parallelising expensive per-frame CPU work.
+//!
+//! Systems run serially in the frame loop, each holding `&mut PipelineContext`.
+//! This pool does not change that: it lets a single system fan its own
+//! data-parallel work (per-skeleton pose sampling, particle update, ...) across
+//! worker threads and join before `step` returns. It is not a way to run whole
+//! systems concurrently.
+//!
+//! The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
+//! pool so the worker count and thread names are controlled. It is process-wide
+//! and lazily built on first use via `pool()`.
 
 use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-// A dedicated thread pool for per-frame data-parallel work.
+/// A dedicated thread pool for per-frame data-parallel work.
 pub struct JobPool {
     pool: rayon::ThreadPool,
 }
@@ -46,17 +44,17 @@ impl JobPool {
         JobPool { pool }
     }
 
-    // Number of worker threads in this pool.
+    /// Number of worker threads in this pool.
     #[allow(dead_code)]
     pub fn thread_count(&self) -> usize {
         self.pool.current_num_threads()
     }
 
-    // Apply `f` to every item in parallel, blocking until all are done.
-    //
-    // Each item must be independent: `f` runs concurrently across items in
-    // no defined order. Inputs shorter than two items skip the pool and run
-    // inline to avoid dispatch overhead.
+    /// Apply `f` to every item in parallel, blocking until all are done.
+    ///
+    /// Each item must be independent: `f` runs concurrently across items in
+    /// no defined order. Inputs shorter than two items skip the pool and run
+    /// inline to avoid dispatch overhead.
     pub fn parallel_for<T, F>(&self, items: &mut [T], f: F)
     where
         T: Send,
@@ -69,14 +67,14 @@ impl JobPool {
         self.pool.install(|| items.par_iter_mut().for_each(f));
     }
 
-    // Run a closure inside this pool's scope so any nested rayon
-    // `par_iter` / `par_iter_mut` calls dispatch to JobPool's bounded thread
-    // count (`available_parallelism() - 1`) instead of rayon's global pool
-    // (which defaults to every core and would starve the render thread when
-    // invoked from a worker that is itself competing for CPU).
-    //
-    // Used by the DirectX / Metal parallel command-buffer recording; the Vulkan
-    // backend records single-threaded, so it is unused under `backend_vk`.
+    /// Run a closure inside this pool's scope so any nested rayon
+    /// `par_iter` / `par_iter_mut` calls dispatch to JobPool's bounded thread
+    /// count (`available_parallelism() - 1`) instead of rayon's global pool
+    /// (which defaults to every core and would starve the render thread when
+    /// invoked from a worker that is itself competing for CPU).
+    ///
+    /// Used by the DirectX / Metal parallel command-buffer recording; the Vulkan
+    /// backend records single-threaded, so it is unused under `backend_vk`.
     #[allow(dead_code)]
     pub fn install<R, F>(&self, f: F) -> R
     where
@@ -98,24 +96,24 @@ fn default_threads() -> usize {
         .unwrap_or(1)
 }
 
-// Set the process-wide job pool's worker count. The App calls this from its
-// `ThreadBudget` at start, before any system uses the pool. It takes effect
-// only if called before the first `pool()` access (the pool is built once);
-// a later call, or a value below one, is ignored/clamped.
+/// Set the process-wide job pool's worker count. The App calls this from its
+/// `ThreadBudget` at start, before any system uses the pool. It takes effect
+/// only if called before the first `pool()` access (the pool is built once);
+/// a later call, or a value below one, is ignored/clamped.
 pub fn configure(threads: usize) {
     let _ = CONFIGURED_THREADS.set(threads.max(1));
 }
 
-// The process-wide job pool, built on first access.
+/// The process-wide job pool, built on first access.
 pub fn pool() -> &'static JobPool {
     static POOL: OnceLock<JobPool> = OnceLock::new();
     POOL.get_or_init(JobPool::build)
 }
 
-// A single-worker pool: the same execution shape as `pool()` with the jobs
-// run one at a time. The serial schedule installs solver work here so the
-// determinism oracle exercises the identical code path minus the
-// concurrency.
+/// A single-worker pool: the same execution shape as `pool()` with the jobs
+/// run one at a time. The serial schedule installs solver work here so the
+/// determinism oracle exercises the identical code path minus the
+/// concurrency.
 pub fn serial_pool() -> &'static JobPool {
     static POOL: OnceLock<JobPool> = OnceLock::new();
     POOL.get_or_init(|| JobPool::with_threads(1))

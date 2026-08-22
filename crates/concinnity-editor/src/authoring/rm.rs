@@ -4,10 +4,10 @@
 use crate::world::{WORLD_JSONL, known_names, patch_world_jsonl};
 use concinnity_cook::build_from_path;
 
-// Remove the asset named `name` from `world_path` and rebuild.
-//
-// Errors if `name` is not present. When it isn't, the error message includes
-// the known asset names from the world so the caller can suggest a fix.
+/// Remove the asset named `name` from `world_path` and rebuild.
+///
+/// Errors if `name` is not present. When it isn't, the error message includes
+/// the known asset names from the world so the caller can suggest a fix.
 pub fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     let mut removed = false;
 

@@ -68,14 +68,14 @@ static EMBEDDED_VIEW_PTR: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
 static EMBEDDED_PUMP_EVENTS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-// Called by cn_preview_start to register the NSView that MtlContext should embed into.
+/// Called by cn_preview_start to register the NSView that MtlContext should embed into.
 pub fn set_preview_view(ptr: *mut std::ffi::c_void) {
     EMBEDDED_VIEW_PTR.store(ptr, std::sync::atomic::Ordering::SeqCst);
 }
 
-// Called by cn_run_world_blocking_in_view to opt the next embedded MtlContext
-// into pumping NSEvents (so the world receives input). The flag is consumed
-// in MtlContext::new and reset to false, so subsequent previews stay quiet.
+/// Called by cn_run_world_blocking_in_view to opt the next embedded MtlContext
+/// into pumping NSEvents (so the world receives input). The flag is consumed
+/// in MtlContext::new and reset to false, so subsequent previews stay quiet.
 pub fn set_embedded_pump_events(v: bool) {
     EMBEDDED_PUMP_EVENTS.store(v, std::sync::atomic::Ordering::SeqCst);
 }
@@ -505,7 +505,7 @@ pub(super) struct HdrState {
 
 // Metal rendering context. Owns all GPU resources and the window.
 // Only ever accessed from the main thread.
-pub struct MtlContext {
+pub(crate) struct MtlContext {
     pub(super) device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
     // Block pool every persistent CPU-written, GPU-read-only buffer and texture
     // is placed in, so the world's resource count costs a handful of heaps
@@ -1143,16 +1143,9 @@ impl MtlContext {
         .ok_or_else(|| "failed to create indirect command buffer".to_string())
     }
 
-    // The overlay coordinate space, in points. Read from the shared AppKit
-    // window (which reports the cursor in the same units) rather than the
-    // `MTKView` directly, so both macOS backends resolve it identically.
-    pub fn logical_size(&self) -> (f32, f32) {
-        self.window.appkit.logical_size()
-    }
-
     // Device capability flags for the settings menu. Ray tracing is queried
     // from the live MTLDevice (cheap; the same check the RT pass gates on).
-    pub fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: super::raytrace::raytracing_supported(&self.device),
             // Upscaling always goes through MetalFX; there is no selector.
@@ -1165,14 +1158,14 @@ impl MtlContext {
 
     // Coarse GPU performance profile for default-quality selection, read live
     // from the MTLDevice (cheap; the same kind of device query as capabilities).
-    pub fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
         super::gpu_profile::device_profile(&self.device)
     }
 
     // Render statistics for the most recent `draw_frame`, for the profiler
     // overlay. The GPU frame time is the last value reported by a completed
     // command buffer, so it may lag the draw counts by a frame or two.
-    pub fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
         let mut stats = self.diagnostics.frame_stats;
         stats.gpu_frame_us = self
             .diagnostics
@@ -1199,14 +1192,14 @@ impl MtlContext {
     }
 
     // Push a new view matrix; takes effect on the next draw_frame call.
-    pub fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
+    pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
         self.view.matrix = matrix;
     }
 
     // Update the model matrices of the given draw objects, one
     // `(slot, matrix)` entry per changed object. Out-of-range slots have no
     // effect.
-    pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
             if let Some(obj) = self.draw.objects.get_mut(index as usize) {
                 obj.model = model;
@@ -1216,7 +1209,7 @@ impl MtlContext {
 
     // Show or hide a single draw object. Hidden objects are skipped in both
     // the shadow and main passes. Has no effect if the index is out of range.
-    pub fn update_visibility(&mut self, index: usize, visible: bool) {
+    pub(crate) fn update_visibility(&mut self, index: usize, visible: bool) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = visible;
         }
@@ -1227,7 +1220,7 @@ impl MtlContext {
     // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
     // any pass. The geometry buffers stay allocated; the engine's draw-slot
     // allocator recycles the index. Has no effect if the index is out of range.
-    pub fn retire_draw_object(&mut self, index: usize) {
+    pub(crate) fn retire_draw_object(&mut self, index: usize) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
@@ -1277,7 +1270,7 @@ impl MtlContext {
 
     // Set the scene-transition fade for the next draw_frame call. Applied in
     // the composite pass, so a FadeBlack fades the whole image.
-    pub fn set_fade(&mut self, fade: f32) {
+    pub(crate) fn set_fade(&mut self, fade: f32) {
         self.view.scene_fade = fade.clamp(0.0, 1.0);
     }
 
@@ -1289,7 +1282,7 @@ impl MtlContext {
     // allocator. The copy is marked non-cullable (sentinel AABB) and joins
     // `draw.always` since the init-time BVH cannot refit; it is drawn every
     // frame like a streamed chunk.
-    pub fn clone_static_draw_object(
+    pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
@@ -1332,7 +1325,7 @@ impl MtlContext {
     // Rewrite a draw slot's material parameters + texture/normal-map pool
     // indices in place. Driven by `world.jsonl` hot-reload (`cn debug` only).
     // Has no effect if the index is out of range.
-    pub fn set_draw_material(
+    pub(crate) fn set_draw_material(
         &mut self,
         draw_idx: usize,
         material: crate::gfx::render_types::MaterialUniforms,
@@ -1354,7 +1347,7 @@ impl MtlContext {
     // Rewrite a draw slot's `cull_distance` in place. Driven by
     // `world.jsonl` hot-reload (`cn debug` only). Has no effect if the index
     // is out of range.
-    pub fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
+    pub(crate) fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
         if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
             obj.cull_distance = cull_distance.max(0.0);
         }
@@ -1367,7 +1360,10 @@ impl MtlContext {
     // A vacated slot from [`Self::remove_decal`] is reused before growing
     // the vec so a steady-state spawn/despawn pattern (bullet holes,
     // footprints) does not grow `decals` without bound.
-    pub fn add_decal(&mut self, record: crate::gfx::decal::DecalRecord) -> Result<usize, String> {
+    pub(crate) fn add_decal(
+        &mut self,
+        record: crate::gfx::decal::DecalRecord,
+    ) -> Result<usize, String> {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) = super::init::effects::build_decal_resources_for_runtime(
                 &self.device,
@@ -1393,7 +1389,7 @@ impl MtlContext {
     // Returns an error when the index is out of range or already tombstoned.
     // The decal pipeline + unit-cube buffers are kept around so a later add
     // does not pay the rebuild cost.
-    pub fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
         let slot = self
             .decal
             .records
@@ -1413,7 +1409,7 @@ impl MtlContext {
     // pipelines on first use so a world that never declared an emitter
     // pays zero pipeline cost until the first add. Tombstoned slots from
     // [`Self::remove_emitter`] are reused before growing the vec.
-    pub fn add_emitter(
+    pub(crate) fn add_emitter(
         &mut self,
         record: crate::gfx::particles::ParticleEmitterRecord,
     ) -> Result<usize, String> {
@@ -1442,7 +1438,7 @@ impl MtlContext {
     // to call mid-frame between encode passes (the debug-WS path runs in
     // the `DebugHook::tick` window before the world step). Returns an error
     // when the index is out of range or already tombstoned.
-    pub fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
         let rec_slot = self
             .particle
             .records
@@ -1460,7 +1456,7 @@ impl MtlContext {
     }
 
     // Returns true if the window has been closed by the user.
-    pub fn window_closed(&self) -> bool {
+    pub(crate) fn window_closed(&self) -> bool {
         if self.window.appkit.closed() {
             return true;
         }
@@ -1472,7 +1468,7 @@ impl MtlContext {
     }
 
     // Block until the GPU has finished all in-flight work.
-    pub fn wait_idle(&self) {
+    pub(crate) fn wait_idle(&self) {
         if let Some(cmd_buf) = self.command_queue.commandBuffer() {
             cmd_buf.commit();
             cmd_buf.waitUntilCompleted();

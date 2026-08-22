@@ -7,7 +7,7 @@
 // budget without warning.
 pub(crate) const MAX_INSTANCES_PER_CLUSTER: usize = 16_384;
 
-pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let instances = args
         .get("instances")
         .and_then(|v| v.as_array())

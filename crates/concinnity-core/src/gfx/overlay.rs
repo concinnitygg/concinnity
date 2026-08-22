@@ -1,20 +1,18 @@
-// src/gfx/overlay.rs
-//
-// Screen-overlay scaling math shared by the cook pipeline (which lays menus
-// out against a fixed reference canvas) and the client renderer (which scales
-// that canvas to the live window). Screen-owned UI (menus, settings) is authored
-// in a fixed reference resolution; at runtime the whole overlay is uniformly
-// scaled to fit the window, preserving aspect and staying centered, so a menu
-// looks the same proportion of the screen at any window size.
+//! Screen-overlay scaling math shared by the cook pipeline (which lays menus
+//! out against a fixed reference canvas) and the client renderer (which scales
+//! that canvas to the live window). Screen-owned UI (menus, settings) is authored
+//! in a fixed reference resolution; at runtime the whole overlay is uniformly
+//! scaled to fit the window, preserving aspect and staying centered, so a menu
+//! looks the same proportion of the screen at any window size.
 
-// Reference resolution menus are authored against. Window-pixel coordinates of
-// screen-owned UI are interpreted in this space and scaled to the live window.
+/// Reference resolution menus are authored against. Window-pixel coordinates of
+/// screen-owned UI are interpreted in this space and scaled to the live window.
 pub const UI_REFERENCE_SIZE: [f32; 2] = [1280.0, 720.0];
 
-// A uniform similarity transform mapping the reference canvas to the live
-// window: a single scale plus a recentering. Built from the live viewport; an
-// invalid (zero) viewport yields the identity (overlay drawn at reference
-// pixels), which is what unit tests and the pre-backend init frames see.
+/// A uniform similarity transform mapping the reference canvas to the live
+/// window: a single scale plus a recentering. Built from the live viewport; an
+/// invalid (zero) viewport yields the identity (overlay drawn at reference
+/// pixels), which is what unit tests and the pre-backend init frames see.
 #[derive(Debug, Clone, Copy)]
 pub struct OverlayTransform {
     scale: f32,
@@ -27,8 +25,8 @@ pub struct OverlayTransform {
 }
 
 impl OverlayTransform {
-    // Build the transform for a live logical viewport `[width, height]`. A
-    // degenerate viewport gives the identity transform.
+    /// Build the transform for a live logical viewport `[width, height]`. A
+    /// degenerate viewport gives the identity transform.
     pub fn from_viewport(viewport: [f32; 2]) -> Self {
         let [rw, rh] = UI_REFERENCE_SIZE;
         let ref_cx = rw / 2.0;
@@ -55,12 +53,12 @@ impl OverlayTransform {
         }
     }
 
-    // Build the "cover" transform for a live logical viewport: the larger axis
-    // ratio, so the reference canvas always fills the window (the overflowing
-    // axis is cropped equally on both sides). Used by full-bleed stage imagery
-    // (scene backdrops, character portraits) that must reach the window edges
-    // without distorting; the canvas bottom maps at or below the window
-    // bottom, so bottom-anchored content stays flush at any aspect ratio.
+    /// Build the "cover" transform for a live logical viewport: the larger axis
+    /// ratio, so the reference canvas always fills the window (the overflowing
+    /// axis is cropped equally on both sides). Used by full-bleed stage imagery
+    /// (scene backdrops, character portraits) that must reach the window edges
+    /// without distorting; the canvas bottom maps at or below the window
+    /// bottom, so bottom-anchored content stays flush at any aspect ratio.
     pub fn cover_from_viewport(viewport: [f32; 2]) -> Self {
         let mut t = Self::from_viewport(viewport);
         let [rw, rh] = UI_REFERENCE_SIZE;
@@ -71,12 +69,12 @@ impl OverlayTransform {
         t
     }
 
-    // Build the "bottom-anchored" transform for a live logical viewport: the
-    // `fit` scale (no cropping, elements keep their proportions), but shifted
-    // vertically so the reference bottom edge (y = reference height) maps to the
-    // window bottom. Bottom-anchored overlay furniture (a dialog box and its
-    // controls) hugs the window bottom at any aspect ratio, where a plain `fit`
-    // would float it above the letterbox margin.
+    /// Build the "bottom-anchored" transform for a live logical viewport: the
+    /// `fit` scale (no cropping, elements keep their proportions), but shifted
+    /// vertically so the reference bottom edge (y = reference height) maps to the
+    /// window bottom. Bottom-anchored overlay furniture (a dialog box and its
+    /// controls) hugs the window bottom at any aspect ratio, where a plain `fit`
+    /// would float it above the letterbox margin.
     pub fn bottom_anchored_from_viewport(viewport: [f32; 2]) -> Self {
         let mut t = Self::from_viewport(viewport);
         let [_, rh] = UI_REFERENCE_SIZE;
@@ -88,12 +86,12 @@ impl OverlayTransform {
         t
     }
 
-    // The uniform scale factor applied to sizes (glyph scale, sprite extent).
+    /// The uniform scale factor applied to sizes (glyph scale, sprite extent).
     pub fn scale(&self) -> f32 {
         self.scale
     }
 
-    // Map a reference-space point to window space.
+    /// Map a reference-space point to window space.
     pub fn forward(&self, x: f32, y: f32) -> (f32, f32) {
         (
             self.screen_cx + (x - self.ref_cx) * self.scale,
@@ -101,9 +99,9 @@ impl OverlayTransform {
         )
     }
 
-    // Map a window-space point back to reference space (the inverse of
-    // `forward`). Used to hit-test the live cursor against reference-space UI
-    // rects.
+    /// Map a window-space point back to reference space (the inverse of
+    /// `forward`). Used to hit-test the live cursor against reference-space UI
+    /// rects.
     pub fn inverse(&self, x: f32, y: f32) -> (f32, f32) {
         let s = if self.scale != 0.0 { self.scale } else { 1.0 };
         (

@@ -1,5 +1,5 @@
-// Audio authoring checks: emitter attenuation ranges and the shared volume /
-// bus / rolloff fields on emitters and cues.
+//! Audio authoring checks: emitter attenuation ranges and the shared volume /
+//! bus / rolloff fields on emitters and cues.
 
 const BUS_NAMES: [&str; 3] = ["music", "sfx", "voice"];
 const ROLLOFF_NAMES: [&str; 3] = ["logarithmic", "linear", "none"];
@@ -33,7 +33,7 @@ fn check_bus(name: &str, args: &serde_json::Value) -> Result<(), String> {
 
 // AudioEmitter: min/max distance must form a positive, finite, non-empty
 // range, and the rolloff must be a known curve.
-pub fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_volume(name, args)?;
     check_bus(name, args)?;
     if let Some(rolloff) = args.get("rolloff").and_then(|v| v.as_str())
@@ -70,13 +70,13 @@ pub fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), String>
 }
 
 // AudioCue: volume and bus follow the shared rules.
-pub fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_volume(name, args)?;
     check_bus(name, args)
 }
 
 // PropBody: the impact gain must be a non-negative finite number.
-pub fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let Some(volume) = args.get("impact_volume").and_then(|v| v.as_f64()) else {
         return Ok(());
     };

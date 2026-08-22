@@ -14,27 +14,27 @@ mod new;
 mod rm;
 
 // Create and apply an asset to the current app
-pub use add::add;
+pub(crate) use add::add;
 
 // Analyze the current app and report errors, but don't build blob files
-pub use check::check;
+pub(crate) use check::check;
 
 // Regenerate the asset reference pages under docs/assets/
-pub use docs::docs;
+pub(crate) use docs::docs;
 
 // Print one asset's effective entry from the expanded world
-pub use explain::explain;
+pub(crate) use explain::explain;
 
 // Package a built world into a distributable game
-pub use export::export;
+pub(crate) use export::export;
 
 // List all declared assets
-pub use list::list;
+pub(crate) use list::list;
 
 // Create a new app (in the current directory, or a new one)
-pub use new::{init, new};
+pub(crate) use new::{init, new};
 
 // Delete an asset from the current app
-pub use rm::rm;
+pub(crate) use rm::rm;
 
-pub use build::build;
+pub(crate) use build::build;

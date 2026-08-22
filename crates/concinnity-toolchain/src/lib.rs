@@ -1,31 +1,31 @@
-// Shared build-script support for the workspace.
-//
-// Besides the Metal shader precompilation in `metal_shaders` and the source
-// hashing in `source_hash`, two responsibilities, both previously copy-pasted
-// between the runtime crate's build script and the editor crate's build script
-// (and missing entirely from the example binaries, which is why they failed to
-// link against the runtime's DLSS code on Windows):
-//
-// 1. Resolve the rendering backend once and emit it as a single cfg
-//    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
-//
-// 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
-//    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
-//    `ngx_sdk_bundled`, `dxc_bundled`). For a package that produces final
-//    binaries this also copies the runtime DLLs next to the .exe and links the
-//    NGX import lib; for a package that produces only an rlib and its own test
-//    binaries just the NGX link is needed. Which of the two, and where the
-//    binaries land, is `BinaryTargets`.
-//
-// The public entry points emit `cargo::` directives on stdout, which Cargo
-// attributes to the build script of whichever package called in. That is what
-// lets an example binary's build script pick up the same NGX link and DLL
-// bundling the CLI's does, without duplicating any of this logic.
-//
-// This file is the thin environment-reading layer: it snapshots everything the
-// setup needs from the process environment into an `SdkEnv` and prints the
-// directives. The probe/copy/directive logic itself lives in the `sdks`
-// module, which never touches the environment or stdout.
+//! Shared build-script support for the workspace.
+//!
+//! Besides the Metal shader precompilation in `metal_shaders` and the source
+//! hashing in `source_hash`, two responsibilities, both previously copy-pasted
+//! between the runtime crate's build script and the editor crate's build script
+//! (and missing entirely from the example binaries, which is why they failed to
+//! link against the runtime's DLSS code on Windows):
+//!
+//! 1. Resolve the rendering backend once and emit it as a single cfg
+//!    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
+//!
+//! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
+//!    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
+//!    `ngx_sdk_bundled`, `dxc_bundled`). For a package that produces final
+//!    binaries this also copies the runtime DLLs next to the .exe and links the
+//!    NGX import lib; for a package that produces only an rlib and its own test
+//!    binaries just the NGX link is needed. Which of the two, and where the
+//!    binaries land, is `BinaryTargets`.
+//!
+//! The public entry points emit `cargo::` directives on stdout, which Cargo
+//! attributes to the build script of whichever package called in. That is what
+//! lets an example binary's build script pick up the same NGX link and DLL
+//! bundling the CLI's does, without duplicating any of this logic.
+//!
+//! This file is the thin environment-reading layer: it snapshots everything the
+//! setup needs from the process environment into an `SdkEnv` and prints the
+//! directives. The probe/copy/directive logic itself lives in the `sdks`
+//! module, which never touches the environment or stdout.
 
 #[cfg(feature = "fetch")]
 pub mod fetch;
@@ -40,9 +40,13 @@ pub use metal_shaders::{SlangLibSpec, SlangShaders, precompile_metal_shaders};
 use sdks::SdkEnv;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The graphics backend a build targets.
 pub enum Backend {
+    /// Metal, on macOS.
     Metal,
+    /// DirectX 12, on Windows.
     Dx,
+    /// Vulkan, on Windows and Linux.
     Vk,
 }
 
@@ -56,21 +60,21 @@ impl Backend {
     }
 }
 
-// Which of the calling package's targets are the final binaries the graphics
-// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
-// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
-// Agility exports go out under and the directory the runtime DLLs are copied
-// into -- which has to be the one holding the .exe, since that is where Windows
-// looks for them.
+/// Which of the calling package's targets are the final binaries the graphics
+/// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
+/// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
+/// Agility exports go out under and the directory the runtime DLLs are copied
+/// into -- which has to be the one holding the .exe, since that is where Windows
+/// looks for them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryTargets {
-    // The package links no binary of its own. Its test and bench executables
-    // still resolve the NGX symbols through the plain `rustc-link-arg`, but
-    // nothing is placed beside them.
+    /// The package links no binary of its own. Its test and bench executables
+    /// still resolve the NGX symbols through the plain `rustc-link-arg`, but
+    /// nothing is placed beside them.
     None,
-    // `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
+    /// `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
     Bins,
-    // `examples/`, which land in `<target>/<profile>/examples/`.
+    /// `examples/`, which land in `<target>/<profile>/examples/`.
     Examples,
 }
 
@@ -101,7 +105,7 @@ impl BinaryTargets {
 // macOS defaults to Metal and Windows to DirectX; both opt into Vulkan with the
 // feature. Everything else (Linux) is Vulkan regardless. macOS Vulkan runs over
 // MoltenVK and exists for cross-backend testing, not for shipping.
-pub fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
+pub(crate) fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
     match (target_os, vulkan) {
         ("macos", false) => Backend::Metal,
         ("windows", false) => Backend::Dx,
@@ -109,33 +113,33 @@ pub fn resolve_backend(target_os: &str, vulkan: bool) -> Backend {
     }
 }
 
-// Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
-// A package only needs this if its own source references one of these cfgs.
+/// Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
+/// A package only needs this if its own source references one of these cfgs.
 pub fn emit_check_cfgs() {
     for line in sdks::check_cfg_directives() {
         println!("{line}");
     }
 }
 
-// Resolve the backend from the Cargo-provided environment, emitting nothing.
-// For a package that needs the backend only to pick its SDK setup and never
-// gates its own source on one, so has no reason to carry the cfg.
+/// Resolve the backend from the Cargo-provided environment, emitting nothing.
+/// For a package that needs the backend only to pick its SDK setup and never
+/// gates its own source on one, so has no reason to carry the cfg.
 pub fn backend_from_cargo() -> Backend {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let vulkan = std::env::var("CARGO_FEATURE_VULKAN").is_ok();
     resolve_backend(&target_os, vulkan)
 }
 
-// Resolve the backend from the Cargo-provided environment and emit the
-// `rustc-cfg` for it, returning the choice so the caller can branch.
+/// Resolve the backend from the Cargo-provided environment and emit the
+/// `rustc-cfg` for it, returning the choice so the caller can branch.
 pub fn emit_backend_cfg() -> Backend {
     let backend = backend_from_cargo();
     println!("{}", sdks::backend_cfg_directive(backend));
     backend
 }
 
-// Set up the optional graphics SDKs for the given backend. On a non-Windows
-// target (or the Metal backend) this is a no-op: none of these SDKs apply.
+/// Set up the optional graphics SDKs for the given backend. On a non-Windows
+/// target (or the Metal backend) this is a no-op: none of these SDKs apply.
 pub fn setup_graphics_sdks(backend: Backend, targets: BinaryTargets) {
     let env = sdk_env_from_cargo();
     for line in sdks::graphics_sdk_directives(backend, targets, &env) {
@@ -143,13 +147,13 @@ pub fn setup_graphics_sdks(backend: Backend, targets: BinaryTargets) {
     }
 }
 
-// Hash the Rust sources under `roots`, and emit the rerun directives that
-// re-run the calling build script when any of them change. Each root is either
-// a directory tree (every `.rs` under it participates) or a single file.
-//
-// The hash is what a content-addressed cache folds in so that a change to the
-// code producing its stored bytes evicts entries whose other inputs did not
-// move. See `source_hash` for the shape of the guarantee.
+/// Hash the Rust sources under `roots`, and emit the rerun directives that
+/// re-run the calling build script when any of them change. Each root is either
+/// a directory tree (every `.rs` under it participates) or a single file.
+///
+/// The hash is what a content-addressed cache folds in so that a change to the
+/// code producing its stored bytes evicts entries whose other inputs did not
+/// move. See `source_hash` for the shape of the guarantee.
 pub fn hash_sources(roots: &[PathBuf]) -> u32 {
     let workspace = workspace_root().expect("build script runs inside the workspace");
     let workspace = workspace.canonicalize().unwrap_or(workspace);

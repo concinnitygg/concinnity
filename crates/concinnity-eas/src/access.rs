@@ -13,6 +13,7 @@
 use crate::mask::{ComponentId, ComponentMask};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+/// A system's declared data access.
 pub struct Access {
     component_reads: ComponentMask,
     component_writes: ComponentMask,
@@ -22,45 +23,51 @@ pub struct Access {
 }
 
 impl Access {
+    /// An empty declaration: no components, no resources, not exclusive.
     pub fn new() -> Access {
         Access::default()
     }
 
+    /// Declare the components `step` reads.
     pub fn reads_components(mut self, components: ComponentMask) -> Access {
         self.component_reads = components;
         self
     }
 
+    /// Declare the components `step` writes.
     pub fn writes_components(mut self, components: ComponentMask) -> Access {
         self.component_writes = components;
         self
     }
 
+    /// Declare the resources `step` reads.
     pub fn reads_resources(mut self, resources: ComponentMask) -> Access {
         self.resource_reads = resources;
         self
     }
 
+    /// Declare the resources `step` writes.
     pub fn writes_resources(mut self, resources: ComponentMask) -> Access {
         self.resource_writes = resources;
         self
     }
 
-    // Mark the system as exclusive: it conflicts with every other system and so
-    // never runs concurrently. Used for a system that touches non-shareable
-    // state the access masks do not model (e.g. a main-thread-only backend).
+    /// Mark the system as exclusive: it conflicts with every other system and so
+    /// never runs concurrently. Used for a system that touches non-shareable
+    /// state the access masks do not model (e.g. a main-thread-only backend).
     pub fn exclusive(mut self) -> Access {
         self.exclusive = true;
         self
     }
 
+    /// Whether the system was marked exclusive.
     pub fn is_exclusive(self) -> bool {
         self.exclusive
     }
 
-    // The combined access of two declarations: reads, writes, and exclusivity
-    // union. Used to fold a data-dependent system's per-program accesses into
-    // its schedule-visible declaration.
+    /// The combined access of two declarations: reads, writes, and exclusivity
+    /// union. Used to fold a data-dependent system's per-program accesses into
+    /// its schedule-visible declaration.
     pub fn union(self, other: Access) -> Access {
         Access {
             component_reads: self.component_reads.merged(other.component_reads),
@@ -71,25 +78,29 @@ impl Access {
         }
     }
 
-    // Whether a read of this component id is within the declaration (a
-    // declared write implies read permission; exclusive allows everything).
+    /// Whether a read of this component id is within the declaration (a
+    /// declared write implies read permission; exclusive allows everything).
     pub fn may_read_component(self, id: ComponentId) -> bool {
         self.exclusive || self.component_reads.contains(id) || self.component_writes.contains(id)
     }
 
+    /// Whether a write of this component id is within the declaration.
     pub fn may_write_component(self, id: ComponentId) -> bool {
         self.exclusive || self.component_writes.contains(id)
     }
 
+    /// Whether a read of this resource id is within the declaration (a
+    /// declared write implies read permission).
     pub fn may_read_resource(self, id: ComponentId) -> bool {
         self.exclusive || self.resource_reads.contains(id) || self.resource_writes.contains(id)
     }
 
+    /// Whether a write of this resource id is within the declaration.
     pub fn may_write_resource(self, id: ComponentId) -> bool {
         self.exclusive || self.resource_writes.contains(id)
     }
 
-    // Whether this system can run concurrently with `other`.
+    /// Whether this system can run concurrently with `other`.
     pub fn conflicts_with(self, other: Access) -> bool {
         self.exclusive
             || other.exclusive

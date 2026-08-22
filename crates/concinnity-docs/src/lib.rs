@@ -1,14 +1,14 @@
-// The asset reference, embedded.
-//
-// `build.rs` reads the rustdoc off every authorable asset's schema struct,
-// pairs it with the args metadata in the authoring registry, and bakes the
-// result into a static table. The extraction happens once, at build time, from
-// the tree being built, so the prose and the registry can never disagree and
-// nothing here reads a source file at runtime.
-//
-// That makes the reference usable wherever an asset type needs explaining: the
-// cook pipeline's type discovery, `cn docs` writing the markdown pages, and any
-// authoring or agentic tool that wants a type's documentation on demand.
+//! The asset reference, embedded.
+//!
+//! `build.rs` reads the rustdoc off every authorable asset's schema struct,
+//! pairs it with the args metadata in the authoring registry, and bakes the
+//! result into a static table. The extraction happens once, at build time, from
+//! the tree being built, so the prose and the registry can never disagree and
+//! nothing here reads a source file at runtime.
+//!
+//! That makes the reference usable wherever an asset type needs explaining: the
+//! cook pipeline's type discovery, `cn docs` writing the markdown pages, and any
+//! authoring or agentic tool that wants a type's documentation on demand.
 
 #![no_std]
 
@@ -21,12 +21,12 @@ extern crate std;
 
 mod page;
 
-pub use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
-
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+pub use page::AUTOGEN_MARKER;
+pub(crate) use page::{IndexEntry, render_index, render_page};
 
 include!(concat!(env!("OUT_DIR"), "/assets_doc.rs"));
 

@@ -976,7 +976,7 @@ pub(super) struct SwapchainState {
 
 //  Public struct
 
-pub struct VkContext {
+pub(crate) struct VkContext {
     // Vulkan core
     pub(super) instance: ash::Instance,
     // Owns the logical device: the instance and the entry above it stay alive
@@ -1414,7 +1414,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 //  Public API
 
 impl VkContext {
-    pub fn draw_frame(&mut self, params: FrameParams<'_>) -> crate::gfx::error::RenderResult<()> {
+    pub(crate) fn draw_frame(
+        &mut self,
+        params: FrameParams<'_>,
+    ) -> crate::gfx::error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1755,14 +1758,14 @@ impl VkContext {
         Ok(())
     }
 
-    pub fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
+    pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
         self.view.matrix = matrix;
     }
 
     // Update the model matrices of the given draw objects, one
     // `(slot, matrix)` entry per changed object. Out-of-range slots have no
     // effect.
-    pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
             if let Some(obj) = self.draw.objects.get_mut(index as usize) {
                 obj.model = model;
@@ -1770,7 +1773,7 @@ impl VkContext {
         }
     }
 
-    pub fn update_visibility(&mut self, index: usize, visible: bool) {
+    pub(crate) fn update_visibility(&mut self, index: usize, visible: bool) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = visible;
         }
@@ -1786,7 +1789,7 @@ impl VkContext {
     // slot held a runtime clone, its descriptor-pool offset is freed too so a
     // steady spawn/despawn cadence does not exhaust the clone pool. No-op if
     // the index is out of range.
-    pub fn retire_draw_object(&mut self, index: usize) {
+    pub(crate) fn retire_draw_object(&mut self, index: usize) {
         if let Some(obj) = self.draw.objects.get_mut(index) {
             obj.visible = false;
             obj.resident = false;
@@ -1817,7 +1820,7 @@ impl VkContext {
         }
     }
 
-    pub fn set_fade(&mut self, fade: f32) {
+    pub(crate) fn set_fade(&mut self, fade: f32) {
         self.view.scene_fade = fade.clamp(0.0, 1.0);
     }
 
@@ -1874,11 +1877,11 @@ impl VkContext {
 
     // Re-point the combined-image-sampler at `binding` of `set` to `view`.
     // Shared by the texture-streaming descriptor rewrites below.
-    pub fn window_closed(&mut self) -> bool {
+    pub(crate) fn window_closed(&mut self) -> bool {
         self.window_mut().poll()
     }
 
-    pub fn wait_idle(&self) {
+    pub(crate) fn wait_idle(&self) {
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         let _ = unsafe { self.device.device_wait_idle() };
     }
@@ -1889,7 +1892,7 @@ impl VkContext {
     // through the ring (so the reading is `frames_in_flight`-stale by
     // construction, matching DirectX / Metal). Per-pass GPU timing is
     // still a follow-up.
-    pub fn render_stats(&self) -> crate::gfx::profile::RenderStats {
+    pub(crate) fn render_stats(&self) -> crate::gfx::profile::RenderStats {
         self.frame_stats.get()
     }
 
@@ -1928,20 +1931,20 @@ impl VkContext {
             .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn capture_cursor(&mut self) {
+    pub(crate) fn capture_cursor(&mut self) {
         self.window_mut().capture_cursor();
     }
 
     // Symmetric with `capture_cursor`; reached only through `set_camera_capture`
     // today, kept public so the cursor API stays complete.
     #[allow(dead_code)]
-    pub fn release_cursor(&mut self) {
+    pub(crate) fn release_cursor(&mut self) {
         self.window_mut().release_cursor();
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the window helper.
-    pub fn set_ui_cursor_hidden(&mut self, hidden: bool) {
+    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
         self.window_mut().set_ui_cursor_hidden(hidden);
     }
 
@@ -1949,19 +1952,19 @@ impl VkContext {
     // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
     // `poll` (in `window_closed`); false while captured or in fullscreen (which
     // confines the cursor instead).
-    pub fn cursor_outside_window(&self) -> bool {
+    pub(crate) fn cursor_outside_window(&self) -> bool {
         self.window().cursor_outside_window()
     }
 
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`.
-    pub fn set_menu_mode(&mut self, on: bool) {
+    pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.window_mut().set_menu_mode(on);
     }
 
     // Drive cursor capture from the menu state each frame: capture for camera
     // control, release while a menu is open. Edge-triggered in the window.
-    pub fn set_camera_capture(&mut self, capture: bool) {
+    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         self.window_mut().set_camera_capture(capture);
     }
 
@@ -1970,7 +1973,7 @@ impl VkContext {
     // a change recreates the swapchain, which re-selects the mode from
     // `self.vsync`. Edge-triggered: a redundant call (a swapchain rebuild is
     // expensive) is skipped.
-    pub fn set_vsync(&mut self, on: bool) {
+    pub(crate) fn set_vsync(&mut self, on: bool) {
         if on == self.vsync {
             return;
         }
@@ -1983,32 +1986,35 @@ impl VkContext {
     // Switch window mode / resize at runtime. The GLFW work lives in window.rs;
     // the framebuffer-size change drives a swapchain rebuild via the present
     // path's OUT_OF_DATE handling.
-    pub fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
+    pub(crate) fn set_window_mode(&mut self, mode: crate::assets::WindowMode) {
         self.window_mut().set_window_mode(mode);
     }
 
-    pub fn set_window_size(&mut self, width: u32, height: u32) {
+    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         self.window_mut().set_window_size(width, height);
     }
 
     // The display modes feeding the Resolution settings row; enumeration,
     // the fullscreen mode hold, and the desktop-mode restore all live in
     // window.rs (GLFW owns the video-mode switching).
-    pub fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn display_modes(&self) -> Vec<crate::gfx::display_mode::DisplayMode> {
         self.window().display_modes()
     }
 
-    pub fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
+    pub(crate) fn current_display_mode(&self) -> Option<crate::gfx::display_mode::DisplayMode> {
         self.window().current_display_mode()
     }
 
-    pub fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
+    pub(crate) fn set_display_mode(&mut self, mode: crate::gfx::display_mode::DisplayMode) {
         self.window_mut().set_display_mode(mode);
     }
 
     // Replace the live post-process parameters, pushed to the bloom + composite
     // shaders each frame.
-    pub fn update_post_process(&mut self, params: crate::gfx::render_types::PostProcessParams) {
+    pub(crate) fn update_post_process(
+        &mut self,
+        params: crate::gfx::render_types::PostProcessParams,
+    ) {
         self.post_process = params;
     }
 
@@ -2020,7 +2026,7 @@ impl VkContext {
     // ambient changes only on a slider drag, so the stall is rare. Edge-triggered:
     // a no-op when the value is unchanged (e.g. an init push with no persisted
     // override).
-    pub fn set_ambient_intensity(&mut self, value: f32) {
+    pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         if self.uniforms.light_uniforms.ambient_intensity == value {
             return;
         }
@@ -2032,7 +2038,7 @@ impl VkContext {
     // Set the live shadow cascade re-render cadence. The per-frame cascade split
     // reads `shadow.update` at the start of each draw (see draw.rs), so a change
     // takes effect on the next frame with no rebuild or allocation.
-    pub fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
+    pub(crate) fn set_shadow_update(&mut self, update: crate::assets::ShadowUpdate) {
         self.shadow.update = update;
     }
 
@@ -2040,7 +2046,7 @@ impl VkContext {
     // computation reads `shadow.distance` each draw (capped at the camera far
     // plane), so a change takes effect on the next frame with no allocation (it
     // sizes no GPU resource).
-    pub fn set_shadow_distance(&mut self, distance: u32) {
+    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
         self.shadow.distance = distance;
     }
 
@@ -2048,7 +2054,7 @@ impl VkContext {
     // read `shadow.cascades` each draw; only the first `count` of the four slots
     // are rendered + sampled, so a change takes effect on the next frame with no
     // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub fn set_shadow_cascades(&mut self, count: u32) {
+    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
         self.shadow.cascades = count;
     }
 
@@ -2063,7 +2069,7 @@ impl VkContext {
     // ride `apply_quality_settings`), so only its scalar intensity / distance are
     // updated. Auto-exposure settings live flat on the context here
     // (`auto_exposure.settings`), not inside a resources struct as on Metal.
-    pub fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
+    pub(crate) fn update_quality_params(&mut self, q: crate::gfx::backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
         }
@@ -2082,21 +2088,23 @@ impl VkContext {
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
     // lets the debug WebSocket server flip it from a non-render thread.
     // `None` outside `cn debug`. Mirrors `DxContext::shader_reload_pending`.
-    pub fn shader_reload_pending(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+    pub(crate) fn shader_reload_pending(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
         self.hot_reload
             .reload_pending
             .as_ref()
             .map(std::sync::Arc::clone)
     }
 
-    pub fn take_input(&mut self) -> InputState {
+    pub(crate) fn take_input(&mut self) -> InputState {
         // Both platform windows snapshot straight into the shared RenderInput.
         self.window_mut().take_input()
     }
 
     // Replace the runtime movement key map. The window's key decode routes
     // through it, so a settings-menu rebind takes effect immediately.
-    pub fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: &crate::gfx::keymap::KeyMap) {
         self.window_mut().set_keymap(keymap);
     }
 
@@ -2108,14 +2116,14 @@ impl VkContext {
     // larger (a retina drawable, a scaled Wayland surface) the difference is
     // absorbed by the UI shader's divide to NDC, and only the text scissor
     // converts back to pixels.
-    pub fn logical_size(&self) -> (f32, f32) {
+    pub(crate) fn logical_size(&self) -> (f32, f32) {
         self.window().logical_size()
     }
 
     // Device capability flags for the settings menu. RT reflects whether the
     // ray-query device extensions were enabled at device creation
     // (`rt_capable`).
-    pub fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
+    pub(crate) fn capabilities(&self) -> crate::gfx::backend::DeviceCapabilities {
         crate::gfx::backend::DeviceCapabilities {
             ray_tracing: self.rt_capable,
             selectable_upscaler: true,
@@ -2130,7 +2138,7 @@ impl VkContext {
     // from the physical device: vendor id, discrete / integrated device type,
     // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
     // size, unlike the residency chip which sums live usage).
-    pub fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
+    pub(crate) fn gpu_profile(&self) -> crate::gfx::backend::GpuProfile {
         use crate::gfx::backend::{
             GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
         };

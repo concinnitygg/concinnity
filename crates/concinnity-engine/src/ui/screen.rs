@@ -17,8 +17,8 @@ const LAYER_MAX: i32 = 1000;
 #[derive(Debug, Clone)]
 pub(crate) struct ScreenMeta {
     pub input: ScreenInput,
-    pub pauses_world: bool,
-    pub toggle_key: String,
+    pub(crate) pauses_world: bool,
+    pub(crate) toggle_key: String,
     pub focus: Option<AssetId>,
     pub layer: i32,
 }
@@ -45,9 +45,9 @@ pub(crate) struct ScreenTransition {
     pub shown: Vec<AssetId>,
     // The screen newly on top, when the top changed to one (a pop revealing a
     // lower screen announces it too, so e.g. its music cue re-fires).
-    pub new_top: Option<AssetId>,
+    pub(crate) new_top: Option<AssetId>,
     // True whenever the top changed, including to "no screen".
-    pub top_changed: bool,
+    pub(crate) top_changed: bool,
 }
 
 // Active-screen bookkeeping: every declared Screen's policies plus the active

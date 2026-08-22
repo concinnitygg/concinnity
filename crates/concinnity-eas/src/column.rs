@@ -19,32 +19,27 @@ use core::ops::Deref;
 use crate::entity::Entity;
 use crate::tick::Tick;
 
-// How a component type is stored. Table is the default dense column; SparseSet
-// is opt-in for high-churn types (see SparseColumn). The engine selects the
-// kind per component type.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum StorageKind {
-    #[default]
-    Table,
-    SparseSet,
-}
-
-// The tick stamps a column keeps. `changed` is the maximum over every kind of
-// write and drives whole-column change detection. `added` marks the last
-// appended row. `bulk` marks the last whole-column mutable access, after which
-// every row must be assumed written. `structural` marks the last row add or
-// removal, after which row positions and membership have moved. A consumer
-// that tracks rows individually reads `bulk` and `structural` to decide whether
-// the per-row stamps alone still describe what changed.
+/// The tick stamps a column keeps. `changed` is the maximum over every kind of
+/// write and drives whole-column change detection. `added` marks the last
+/// appended row. `bulk` marks the last whole-column mutable access, after which
+/// every row must be assumed written. `structural` marks the last row add or
+/// removal, after which row positions and membership have moved. A consumer
+/// that tracks rows individually reads `bulk` and `structural` to decide whether
+/// the per-row stamps alone still describe what changed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ColumnTicks {
+    /// Maximum over every kind of write.
     pub changed: Tick,
+    /// Last appended row.
     pub added: Tick,
+    /// Last whole-column mutable access.
     pub bulk: Tick,
+    /// Last row add or removal.
     pub structural: Tick,
 }
 
 #[derive(Debug)]
+/// A dense column of one component type, with its per-row change stamps.
 pub struct Column<T> {
     data: Vec<T>,
     entities: Vec<Entity>,
@@ -70,25 +65,28 @@ impl<T> Default for Column<T> {
 }
 
 impl<T> Column<T> {
+    /// An empty column.
     pub fn new() -> Column<T> {
         Column::default()
     }
 
-    // The Entity owning each row, aligned with the data slice.
+    /// The Entity owning each row, aligned with the data slice.
     pub fn entities(&self) -> &[Entity] {
         &self.entities
     }
 
+    /// The column's coarse change tick.
     pub fn changed_tick(&self) -> Tick {
         self.changed
     }
 
-    pub fn added_tick(&self) -> Tick {
+    #[cfg(test)]
+    pub(crate) fn added_tick(&self) -> Tick {
         self.added
     }
 
-    // Every tick stamp at once, for a consumer that needs more than the coarse
-    // change tick to decide how much of the column to re-examine.
+    /// Every tick stamp at once, for a consumer that needs more than the coarse
+    /// change tick to decide how much of the column to re-examine.
     pub fn ticks(&self) -> ColumnTicks {
         ColumnTicks {
             changed: self.changed,
@@ -99,25 +97,26 @@ impl<T> Column<T> {
     }
 
     // The change tick of each row, aligned with the data and entity slices.
-    pub fn row_ticks(&self) -> &[Tick] {
+    #[cfg(test)]
+    pub(crate) fn row_ticks(&self) -> &[Tick] {
         &self.row_changed
     }
 
-    // Pre-allocate capacity for `additional` more rows (data + entity ids),
-    // ahead of a bulk load.
+    /// Pre-allocate capacity for `additional` more rows (data + entity ids),
+    /// ahead of a bulk load.
     pub fn reserve(&mut self, additional: usize) {
         self.data.reserve(additional);
         self.entities.reserve(additional);
         self.row_changed.reserve(additional);
     }
 
-    // Rows the column can hold without reallocating.
+    /// Rows the column can hold without reallocating.
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
 
-    // Append a row. Stamps every tick: the row is newly added, the column grew,
-    // and the new row is (trivially) changed this tick.
+    /// Append a row. Stamps every tick: the row is newly added, the column grew,
+    /// and the new row is (trivially) changed this tick.
     pub fn push(&mut self, entity: Entity, value: T, tick: Tick) {
         self.data.push(value);
         self.entities.push(entity);
@@ -129,10 +128,10 @@ impl<T> Column<T> {
         debug_assert_eq!(self.data.len(), self.row_changed.len());
     }
 
-    // Remove row `index`, moving the last row into its place. Returns the
-    // removed value. O(1), but reorders the column: a caller that keys on a row
-    // position must treat that position as invalidated. The moved row keeps its
-    // own change tick, which travels with it.
+    /// Remove row `index`, moving the last row into its place. Returns the
+    /// removed value. O(1), but reorders the column: a caller that keys on a row
+    /// position must treat that position as invalidated. The moved row keeps its
+    /// own change tick, which travels with it.
     pub fn swap_remove(&mut self, index: usize, tick: Tick) -> T {
         let value = self.data.swap_remove(index);
         self.entities.swap_remove(index);
@@ -144,7 +143,7 @@ impl<T> Column<T> {
         value
     }
 
-    // Take all values, leaving the column empty. Stamps the change tick.
+    /// Take all values, leaving the column empty. Stamps the change tick.
     pub fn drain(&mut self, tick: Tick) -> Vec<T> {
         self.entities.clear();
         self.row_changed.clear();
@@ -153,7 +152,7 @@ impl<T> Column<T> {
         core::mem::take(&mut self.data)
     }
 
-    // Empty the column without returning the values.
+    /// Empty the column without returning the values.
     pub fn clear(&mut self, tick: Tick) {
         self.data.clear();
         self.entities.clear();
@@ -162,18 +161,18 @@ impl<T> Column<T> {
         self.structural = tick;
     }
 
-    // Mutable access to the values. Stamps the bulk tick because the caller may
-    // write any element, which leaves the per-row stamps unable to describe the
-    // change on their own.
+    /// Mutable access to the values. Stamps the bulk tick because the caller may
+    /// write any element, which leaves the per-row stamps unable to describe the
+    /// change on their own.
     pub fn values_mut(&mut self, tick: Tick) -> &mut [T] {
         self.changed = tick;
         self.bulk = tick;
         &mut self.data
     }
 
-    // Mutable access to one row, stamping only that row. The targeted
-    // counterpart of `values_mut`: a consumer comparing row ticks against its
-    // last run recovers exactly which entities were written.
+    /// Mutable access to one row, stamping only that row. The targeted
+    /// counterpart of `values_mut`: a consumer comparing row ticks against its
+    /// last run recovers exactly which entities were written.
     pub fn value_mut(&mut self, row: usize, tick: Tick) -> Option<&mut T> {
         let value = self.data.get_mut(row)?;
         self.row_changed[row] = tick;
@@ -181,23 +180,23 @@ impl<T> Column<T> {
         Some(value)
     }
 
-    // Iterate rows paired with their owning entity.
+    /// Iterate rows paired with their owning entity.
     pub fn iter_with_entities(&self) -> impl Iterator<Item = (Entity, &T)> {
         self.entities.iter().copied().zip(self.data.iter())
     }
 
-    // Iterate rows mutably, paired with their owning entity. Stamps the bulk
-    // tick because any element may be written.
+    /// Iterate rows mutably, paired with their owning entity. Stamps the bulk
+    /// tick because any element may be written.
     pub fn iter_mut_with_entities(&mut self, tick: Tick) -> impl Iterator<Item = (Entity, &mut T)> {
         self.changed = tick;
         self.bulk = tick;
         self.entities.iter().copied().zip(self.data.iter_mut())
     }
 
-    // Rows whose own change tick is newer than `last_run`, paired with their
-    // owning entity. Only meaningful when neither `bulk` nor `structural` moved
-    // since `last_run`; past either of those the per-row stamps no longer
-    // describe the whole change.
+    /// Rows whose own change tick is newer than `last_run`, paired with their
+    /// owning entity. Only meaningful when neither `bulk` nor `structural` moved
+    /// since `last_run`; past either of those the per-row stamps no longer
+    /// describe the whole change.
     pub fn changed_rows(&self, last_run: Tick) -> impl Iterator<Item = (Entity, &T)> {
         self.row_changed
             .iter()
@@ -206,13 +205,9 @@ impl<T> Column<T> {
     }
 
     // Whether the column changed since a system's last run, wrap-safe.
-    pub fn changed_since(&self, last_run: Tick) -> bool {
+    #[cfg(test)]
+    pub(crate) fn changed_since(&self, last_run: Tick) -> bool {
         self.changed.is_newer_than(last_run)
-    }
-
-    // Whether a row was added since a system's last run, wrap-safe.
-    pub fn added_since(&self, last_run: Tick) -> bool {
-        self.added.is_newer_than(last_run)
     }
 }
 

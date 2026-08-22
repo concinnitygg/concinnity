@@ -1,15 +1,13 @@
-// src/geometry/mod.rs
-//
-// The runtime geometry the engine builds on the fly: voxel-chunk streaming
-// (`build_chunk_mesh` / `build_chunk_impostor_mesh` regenerate a chunk's mesh as
-// it streams in), the glass/water quad generators the GPU backends call, and the
-// shared low-level mesh math (per-vertex tangents, face normals, the vertex
-// tuple type) that both this runtime path and the cook compile path use.
-//
-// The build-time payload compilers (`compile_mesh_payload` / `compile_room_payload`
-// / ... ) and the procedural generators they invoke (room, extrude, primitives,
-// terrain, skybox, heightfield) live in `concinnity-cook`; they call back into
-// the shared helpers exported here.
+//! The runtime geometry the engine builds on the fly: voxel-chunk streaming
+//! (`build_chunk_mesh` / `build_chunk_impostor_mesh` regenerate a chunk's mesh as
+//! it streams in), the glass/water quad generators the GPU backends call, and the
+//! shared low-level mesh math (per-vertex tangents, face normals, the vertex
+//! tuple type) that both this runtime path and the cook compile path use.
+//!
+//! The build-time payload compilers (`compile_mesh_payload` / `compile_room_payload`
+//! / ... ) and the procedural generators they invoke (room, extrude, primitives,
+//! terrain, skybox, heightfield) live in `concinnity-cook`; they call back into
+//! the shared helpers exported here.
 
 // Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
 // path.
@@ -26,10 +24,10 @@ pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
 // same palette the runtime `build_chunk_mesh` consumes.
 pub use voxel::{PaletteSlot, build_voxel_mesh};
 
-// Interleaved CPU vertex tuple the geometry generators produce before packing
-// into the GPU `Vertex`: position, normal, color, uv. Public so the cook crate's
-// generators and payload compilers can name the same shape the runtime tangent
-// pass consumes.
+/// Interleaved CPU vertex tuple the geometry generators produce before packing
+/// into the GPU `Vertex`: position, normal, color, uv. Public so the cook crate's
+/// generators and payload compilers can name the same shape the runtime tangent
+/// pass consumes.
 pub type Vert = ([f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 
 // Convert a payload-form joint back into the args-form `JointDef`.
@@ -45,21 +43,21 @@ fn payload_joint_to_def(
     }
 }
 
-// Convert a payload-joint vec to the args-form vec the runtime
-// `build_skeleton_from_joint_defs` consumes. Public so the client runtime
-// init path can call it without re-implementing the field mapping.
+/// Convert a payload-joint vec to the args-form vec the runtime
+/// `build_skeleton_from_joint_defs` consumes. Public so the client runtime
+/// init path can call it without re-implementing the field mapping.
 pub fn payload_joints_to_defs(
     joints: Vec<crate::gfx::mesh_payload::PayloadJoint>,
 ) -> Vec<concinnity_core::assets::JointDef> {
     joints.into_iter().map(payload_joint_to_def).collect()
 }
 
-// Build a renderable mesh for one procedurally generated chunk.
-//
-// The runtime counterpart of cook's `compile_voxel_chunk_payload`: it takes a
-// chunk's already-generated block array and resolved palette and returns
-// interleaved `Vertex` geometry directly, with no on-disk payload in between.
-// Chunk streaming (`app::chunk_stream`) calls this on its background thread.
+/// Build a renderable mesh for one procedurally generated chunk.
+///
+/// The runtime counterpart of cook's `compile_voxel_chunk_payload`: it takes a
+/// chunk's already-generated block array and resolved palette and returns
+/// interleaved `Vertex` geometry directly, with no on-disk payload in between.
+/// Chunk streaming (`app::chunk_stream`) calls this on its background thread.
 pub fn build_chunk_mesh(
     dim: [u32; 3],
     block_size: f32,
@@ -98,24 +96,24 @@ pub fn build_chunk_mesh(
     Ok((vertices, indices))
 }
 
-// Build a coarse "impostor" mesh for one distant chunk from its terrain
-// surface heights.
-//
-// Where [`build_chunk_mesh`] emits every visible voxel face, this stands a
-// far-away chunk in for a fraction of the triangles: the surface height
-// sampled on a coarse `step`-block grid becomes a low-poly top surface (one
-// quad per coarse cell), wrapped by a perimeter skirt that drops to the chunk
-// floor to hide the gap against a nearer full-detail neighbour or the world
-// edge. Side and subsurface geometry are dropped: invisible at impostor
-// distance.
-//
-// `heights[gz * (nx + 1) + gx]` is the surface block index at coarse corner
-// `(gx, gz)`, where `nx = ceil(dx / step)`, `nz = ceil(dz / step)`, and corner
-// `gx`'s local block column is `min(gx * step, dx)` (the last corner lands on
-// the chunk's far edge so adjacent impostors share it exactly). The caller
-// samples those heights from [`ChunkGenerator::surface_height_world`] at the
-// matching world columns, which keeps neighbouring impostors watertight.
-// `top_uv` / `side_uv` are the surface block's atlas rects.
+/// Build a coarse "impostor" mesh for one distant chunk from its terrain
+/// surface heights.
+///
+/// Where [`build_chunk_mesh`] emits every visible voxel face, this stands a
+/// far-away chunk in for a fraction of the triangles: the surface height
+/// sampled on a coarse `step`-block grid becomes a low-poly top surface (one
+/// quad per coarse cell), wrapped by a perimeter skirt that drops to the chunk
+/// floor to hide the gap against a nearer full-detail neighbour or the world
+/// edge. Side and subsurface geometry are dropped: invisible at impostor
+/// distance.
+///
+/// `heights[gz * (nx + 1) + gx]` is the surface block index at coarse corner
+/// `(gx, gz)`, where `nx = ceil(dx / step)`, `nz = ceil(dz / step)`, and corner
+/// `gx`'s local block column is `min(gx * step, dx)` (the last corner lands on
+/// the chunk's far edge so adjacent impostors share it exactly). The caller
+/// samples those heights from [`ChunkGenerator::surface_height_world`] at the
+/// matching world columns, which keeps neighbouring impostors watertight.
+/// `top_uv` / `side_uv` are the surface block's atlas rects.
 pub fn build_chunk_impostor_mesh(
     dim: [u32; 3],
     block_size: f32,
@@ -258,14 +256,14 @@ pub fn build_chunk_impostor_mesh(
     Ok((vertices, indices))
 }
 
-// Compute a per-vertex tangent vector for every vertex in the mesh.
-//
-// For each triangle the tangent is derived from the UV gradient. Contributions
-// are accumulated at each shared vertex and then Gram-Schmidt orthogonalized
-// against the existing normal. Degenerate UV triangles fall back to an
-// arbitrary perpendicular so the TBN matrix is always well-defined. Shared with
-// the cook payload compilers so baked meshes and streamed chunks derive
-// identical tangents.
+/// Compute a per-vertex tangent vector for every vertex in the mesh.
+///
+/// For each triangle the tangent is derived from the UV gradient. Contributions
+/// are accumulated at each shared vertex and then Gram-Schmidt orthogonalized
+/// against the existing normal. Degenerate UV triangles fall back to an
+/// arbitrary perpendicular so the TBN matrix is always well-defined. Shared with
+/// the cook payload compilers so baked meshes and streamed chunks derive
+/// identical tangents.
 pub fn compute_tangents(vertices: &[Vert], indices: &[u16]) -> Vec<[f32; 3]> {
     let n = vertices.len();
     let mut accum: Vec<[f32; 3]> = vec![[0.0; 3]; n];

@@ -8,8 +8,12 @@
 /// active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NavDirection {
+    /// Move focus up.
     Up,
+    /// Move focus down.
     Down,
+    /// Move focus left.
     Left,
+    /// Move focus right.
     Right,
 }

@@ -1,5 +1,6 @@
 use concinnity_core::assets::sdf_volume::SDF_PARAMS_LEN;
 
+/// Check an `SdfVolume`'s authored args.
 pub fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
 }

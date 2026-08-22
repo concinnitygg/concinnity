@@ -6,7 +6,7 @@
 use crate::spec::AssetSpec;
 use crate::spec::asset;
 
-pub fn assets() -> Vec<AssetSpec> {
+pub(super) fn assets() -> Vec<AssetSpec> {
     vec![
         asset::camera("world_camera", [0.0, 2.4, 9.0], 0.0, -0.12),
         asset::directional_light("world_sun", [1.0, 0.96, 0.86], [-0.35, 0.85, 0.35], 2.2),

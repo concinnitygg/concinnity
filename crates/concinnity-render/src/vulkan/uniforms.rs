@@ -1,134 +1,169 @@
-// src/vulkan/uniforms.rs
-//
-// repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
-// (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
-// in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
-// the one `.slang` block Vulkan alone declares.
-//
-// Blocks whose shader counterpart is a single-source `.slang` declaration are
-// declared once for every backend in `crate::uniforms`; what is left here is
-// what only this backend binds. Their layouts are checked by `shader_layout` in
-// concinnity-device, which reads the expected offsets out of slangc's
-// reflection per target. The hand-written asserts below are for the families
-// whose shaders are still per backend -- the cull kernel, the skinning and
-// morph kernels, the raymarch SDF templates, the legacy per-draw main and
-// velocity passes, and Metal's water / glass_mesh_rt.
+//! repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
+//! (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
+//! in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
+//! the one `.slang` block Vulkan alone declares.
+//!
+//! Blocks whose shader counterpart is a single-source `.slang` declaration are
+//! declared once for every backend in `crate::uniforms`; what is left here is
+//! what only this backend binds. Their layouts are checked by `shader_layout` in
+//! concinnity-device, which reads the expected offsets out of slangc's
+//! reflection per target. The hand-written asserts below are for the families
+//! whose shaders are still per backend -- the cull kernel, the skinning and
+//! morph kernels, the raymarch SDF templates, the legacy per-draw main and
+//! velocity passes, and Metal's water / glass_mesh_rt.
 
 use crate::assets::sdf_volume::SDF_PARAMS_LEN;
 
-// Byte size of the auto-exposure push-constant range. Pins the struct size to
-// what the pipeline layout declares.
+/// Byte size of the auto-exposure push-constant range. Pins the struct size to
+/// what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
-// The main-pass push constant (std430): the model matrix, roughness/metallic
-// with two pads, then tint and emissive vec3s each followed by a pad (112 B
-// total). Matches ModelUniforms(64) + MaterialUniforms(48) packed together.
+/// The main-pass push constant (std430): the model matrix, roughness/metallic
+/// with two pads, then tint and emissive vec3s each followed by a pad (112 B
+/// total). Matches ModelUniforms(64) + MaterialUniforms(48) packed together.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct MainPush {
+    /// Model matrix, column-major.
     pub model: [[f32; 4]; 4],
+    /// Perceptual roughness in `[0, 1]`.
     pub roughness: f32,
+    /// Metalness in `[0, 1]`.
     pub metallic: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _mpad0: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _mpad1: f32,
+    /// Linear RGB base-colour tint.
     pub tint: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _mpad2: f32,
+    /// Linear RGB emissive radiance.
     pub emissive: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _mpad3: f32,
 }
 
-// The GPU-cull push constant (cull.comp, std430): six already-normalised frustum
-// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
-// the build-time object count, then the shader-bucket routing (120 B total).
+/// The GPU-cull push constant (cull.comp, std430): six already-normalised frustum
+/// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
+/// the build-time object count, then the shader-bucket routing (120 B total).
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullParams {
+    /// Frustum planes, each `(normal.xyz, d)`.
     pub planes: [[f32; 4]; 6],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// Draw records the kernel iterates.
     pub object_count: u32,
-    // Shader-bucket command regions in the indirect buffer. The kernel writes
-    // every record's slot in all `bucket_count` regions (a draw in the record's
-    // own bucket, a no-op everywhere else); region `b` starts at command
-    // `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    /// Shader-bucket command regions in the indirect buffer. The kernel writes
+    /// every record's slot in all `bucket_count` regions (a draw in the record's
+    /// own bucket, a no-op everywhere else); region `b` starts at command
+    /// `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
     pub bucket_count: u32,
+    /// `u32` slots one bucket occupies in the output list.
     pub bucket_stride: u32,
 }
 
-// Cull-side Hi-Z uniforms (cull.comp, std140, 80 bytes): the previous frame's
-// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
-// enable flag. Mirrors the Metal / DirectX CullUniforms tail.
+/// Cull-side Hi-Z uniforms (cull.comp, std140, 80 bytes): the previous frame's
+/// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
+/// enable flag. Mirrors the Metal / DirectX CullUniforms tail.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullHizParams {
-    // Previous frame's un-jittered view-projection. Projects each AABB into the
-    // depth space the Hi-Z pyramid was reduced from (`M * v`).
+    /// Previous frame's un-jittered view-projection. Projects each AABB into the
+    /// depth space the Hi-Z pyramid was reduced from (`M * v`).
     pub prev_view_proj: [[f32; 4]; 4],
-    // Hi-Z mip-0 dimensions (in texels).
+    /// Hi-Z mip-0 dimensions (in texels).
     pub hiz_size: [f32; 2],
-    // How many mip levels live in the bound texture.
+    /// How many mip levels live in the bound texture.
     pub hiz_mip_count: u32,
-    // 0 skips the Hi-Z test entirely (first frame / after a resize, before a
-    // valid pyramid exists).
+    /// 0 skips the Hi-Z test entirely (first frame / after a resize, before a
+    /// valid pyramid exists).
     pub hiz_enabled: u32,
 }
 
-// The G-buffer pre-pass push constant (shared GLSL `PushBlock`): cur_model then
-// prev_model (two column-major mat4) then roughness, plus a trailing pad to
-// 16-byte alignment. The motion vector reads cur/prev model; the fragment reads
-// roughness.
+/// The G-buffer pre-pass push constant (shared GLSL `PushBlock`): cur_model then
+/// prev_model (two column-major mat4) then roughness, plus a trailing pad to
+/// 16-byte alignment. The motion vector reads cur/prev model; the fragment reads
+/// roughness.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct GbModelPush {
+    /// This frame's model matrix, column-major.
     pub cur_model: [[f32; 4]; 4],
+    /// The previous frame's model matrix, for velocity.
     pub prev_model: [[f32; 4]; 4],
+    /// Perceptual roughness in `[0, 1]`.
     pub roughness: f32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [f32; 3],
 }
 
-// Byte size of the G-buffer pre-pass push-constant range (cur_model 64 +
-// prev_model 64 + roughness 4 + 12 pad). Pins the struct size.
+/// Byte size of the G-buffer pre-pass push-constant range (cur_model 64 +
+/// prev_model 64 + roughness 4 + 12 pad). Pins the struct size.
 pub const GBUFFER_PREPASS_PUSH_BYTES: u32 = 144;
 
-// The raymarch pass per-frame view UBO (raymarch_helpers.glsl
-// `RaymarchViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
-// `RaymarchView`.
+/// The raymarch pass per-frame view UBO (raymarch_helpers.glsl
+/// `RaymarchViewBlock`, std140, 160 bytes). Mirrors the DirectX / Metal
+/// `RaymarchView`.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct RaymarchView {
+    /// View-projection matrix, column-major.
     pub vp: [[f32; 4]; 4],
+    /// Inverse view-projection matrix, column-major.
     pub inv_vp: [[f32; 4]; 4],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
+    /// Render-target size in pixels.
     pub viewport: [f32; 2],
+    /// Seconds since the world started.
     pub time: f32,
+    /// IBL cubemap mip count; 0 when there is no IBL.
     pub prefilter_mip_count: f32,
 }
 
-// The per-volume SDF raymarch UBO (`SdfVolumeBlock`, std140, 176 bytes). Mirrors
-// the DirectX `RaymarchVolumeUniforms`.
+/// The per-volume SDF raymarch UBO (`SdfVolumeBlock`, std140, 176 bytes). Mirrors
+/// the DirectX `RaymarchVolumeUniforms`.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct RaymarchVolumeUniforms {
+    /// World-space centre.
     pub centre: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
+    /// Half-extents from the centre, in world units.
     pub extent: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
+    /// Cone-tracing footprint growth per unit of march distance.
     pub cone_ratio: f32,
+    /// Furthest world distance the march travels.
     pub max_distance: f32,
+    /// Ray-march step cap.
     pub max_steps: i32,
+    /// Non-zero when the volume samples the shadow maps.
     pub receive_shadows: i32,
+    /// The volume's authored SDF parameters.
     pub params: [f32; SDF_PARAMS_LEN],
 }
 
-// The RT skinning compute push constant (rt_skin.comp `SkinParams`): four
-// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
-// the delta buffer (0 = no morphing).
+/// The RT skinning compute push constant (rt_skin.comp `SkinParams`): four
+/// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
+/// the delta buffer (0 = no morphing).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SkinParams {
+    /// First vertex of this slot's region in the shared vertex buffer.
     pub vertex_base: u32,
+    /// Vertices in this slot's region.
     pub vertex_count: u32,
+    /// Joints in the skeleton driving this slot.
     pub joint_count: u32,
+    /// Morph targets on this slot's mesh.
     pub target_count: u32,
 }
 

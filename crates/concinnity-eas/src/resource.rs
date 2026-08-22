@@ -14,18 +14,20 @@ use alloc::collections::BTreeMap;
 use core::any::{Any, TypeId};
 
 #[derive(Default)]
+/// Type-keyed singleton storage: one value per resource type.
 pub struct Resources {
     map: BTreeMap<TypeId, Box<dyn Any + Send>>,
 }
 
 impl Resources {
+    /// An empty store.
     pub fn new() -> Resources {
         Resources::default()
     }
 
-    // Insert a resource, returning the previous instance of the same type if
-    // one was present. Replaces in place when the type is already present, so
-    // a per-frame republish reuses the existing allocation.
+    /// Insert a resource, returning the previous instance of the same type if
+    /// one was present. Replaces in place when the type is already present, so
+    /// a per-frame republish reuses the existing allocation.
     pub fn insert<T: Any + Send>(&mut self, value: T) -> Option<T> {
         if let Some(slot) = self.map.get_mut(&TypeId::of::<T>()) {
             let existing = (slot.as_mut() as &mut dyn Any)
@@ -37,29 +39,33 @@ impl Resources {
         None
     }
 
+    /// Borrow the resource of type `T`, if one is present.
     pub fn get<T: Any>(&self) -> Option<&T> {
         self.map
             .get(&TypeId::of::<T>())
             .and_then(|boxed| (boxed.as_ref() as &dyn Any).downcast_ref::<T>())
     }
 
+    /// Mutably borrow the resource of type `T`, if one is present.
     pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.map
             .get_mut(&TypeId::of::<T>())
             .and_then(|boxed| (boxed.as_mut() as &mut dyn Any).downcast_mut::<T>())
     }
 
+    /// Remove and return the resource of type `T`, if one is present.
     pub fn remove<T: Any>(&mut self) -> Option<T> {
         self.map.remove(&TypeId::of::<T>()).and_then(downcast::<T>)
     }
 
-    // Take the resource value, leaving `T::default()` parked in its slot so a
-    // later `insert` republish reuses the allocation. `None` when the type was
-    // never inserted; a per-frame take/put cycle never re-boxes.
+    /// Take the resource value, leaving `T::default()` parked in its slot so a
+    /// later `insert` republish reuses the allocation. `None` when the type was
+    /// never inserted; a per-frame take/put cycle never re-boxes.
     pub fn take<T: Any + Send + Default>(&mut self) -> Option<T> {
         self.get_mut::<T>().map(core::mem::take)
     }
 
+    /// Whether a resource of type `T` is present.
     pub fn contains<T: Any>(&self) -> bool {
         self.map.contains_key(&TypeId::of::<T>())
     }

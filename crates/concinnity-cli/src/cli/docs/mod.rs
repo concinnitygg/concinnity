@@ -19,7 +19,7 @@ const PAGES_DIR: &str = "docs/assets";
 // Write the pages under `<root>/docs/assets`, defaulting to the current
 // directory. Unchanged pages are left alone, so running this on an up-to-date
 // tree touches nothing.
-pub fn docs(root: Option<&str>) -> io::Result<()> {
+pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
     let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
     fs::create_dir_all(&dir)?;
 

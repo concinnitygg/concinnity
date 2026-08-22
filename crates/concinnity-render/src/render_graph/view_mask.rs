@@ -9,10 +9,10 @@
 use super::frame::FrameGraphInputs;
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
-// The frame's effective graph inputs under the view state. Cleared show flags
-// gate their passes off; the flat modes (Unlit, Wireframe) additionally drop
-// the surface-effect stack; the G-buffer channel modes keep the prepass alive
-// and, for the occlusion view, route `ao_output` into the composite.
+/// The frame's effective graph inputs under the view state. Cleared show flags
+/// gate their passes off; the flat modes (Unlit, Wireframe) additionally drop
+/// the surface-effect stack; the G-buffer channel modes keep the prepass alive
+/// and, for the occlusion view, route `ao_output` into the composite.
 pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) -> FrameGraphInputs {
     let mut out = *inputs;
     out.composite_reads_ao = false;

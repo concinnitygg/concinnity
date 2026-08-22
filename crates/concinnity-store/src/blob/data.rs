@@ -22,17 +22,17 @@ enum BlobSlot {
     Released,
 }
 
-// Holds the raw payload sections of each blob file.
-//
-// Indexed by `PayloadLocator::blob_index`. Blob 0's payload section is loaded
-// eagerly by `load_raw()` -- it carries the defs and the primary payloads and
-// is needed immediately. Overflow blobs (1, 2, ...) start `Unloaded` and are
-// read from disk on demand the first time a locator references them, so a
-// large world does not pay the RAM (or I/O) cost of every overflow blob at
-// startup.
-//
-// Systems call `release(blob_index)` after consuming a blob's payloads (e.g.
-// after uploading SPIR-V to the GPU) so the memory is freed promptly.
+/// Holds the raw payload sections of each blob file.
+///
+/// Indexed by `PayloadLocator::blob_index`. Blob 0's payload section is loaded
+/// eagerly by `load_raw()` -- it carries the defs and the primary payloads and
+/// is needed immediately. Overflow blobs (1, 2, ...) start `Unloaded` and are
+/// read from disk on demand the first time a locator references them, so a
+/// large world does not pay the RAM (or I/O) cost of every overflow blob at
+/// startup.
+///
+/// Systems call `release(blob_index)` after consuming a blob's payloads (e.g.
+/// after uploading SPIR-V to the GPU) so the memory is freed promptly.
 pub struct BlobData {
     // slots[i] is the payload state of blob i
     slots: Vec<BlobSlot>,
@@ -45,10 +45,10 @@ pub struct BlobData {
 }
 
 impl BlobData {
-    // Build an in-memory store where every section is already resident. Used
-    // by the `cn debug` path, which compiles payloads in memory with no blob
-    // files, so there is nothing to lazily load. A `None` section is treated
-    // as already released.
+    /// Build an in-memory store where every section is already resident. Used
+    /// by the `cn debug` path, which compiles payloads in memory with no blob
+    /// files, so there is nothing to lazily load. A `None` section is treated
+    /// as already released.
     pub fn new(payload_sections: Vec<Option<Vec<u8>>>) -> Self {
         let slots = payload_sections
             .into_iter()
@@ -63,7 +63,7 @@ impl BlobData {
         }
     }
 
-    // empty store for worlds with no compiled payloads (tests, runtime-only worlds)
+    /// empty store for worlds with no compiled payloads (tests, runtime-only worlds)
     pub fn empty() -> Self {
         Self {
             slots: Vec::new(),
@@ -83,17 +83,17 @@ impl BlobData {
         }
     }
 
-    // true when the payloads were loaded from blob files on disk, so a
-    // streamed payload can be re-read from disk rather than kept in RAM
+    /// true when the payloads were loaded from blob files on disk, so a
+    /// streamed payload can be re-read from disk rather than kept in RAM
     pub fn disk_backed(&self) -> bool {
         self.disk_backed
     }
 
-    // read the bytes for a given locator
-    //
-    // An `Unloaded` overflow blob is read from its file on first access and
-    // becomes `Loaded`. Errors if the locator is out of range, the blob was
-    // released, or the on-demand load fails.
+    /// read the bytes for a given locator
+    ///
+    /// An `Unloaded` overflow blob is read from its file on first access and
+    /// becomes `Loaded`. Errors if the locator is out of range, the blob was
+    /// released, or the on-demand load fails.
     pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
         let idx = locator.blob_index as usize;
         let slot = self.slots.get_mut(idx).ok_or_else(|| {
@@ -141,12 +141,12 @@ impl BlobData {
         })
     }
 
-    // release a blob's in-memory payload once all systems that need it have
-    // finished consuming it (e.g. after GPU upload)
-    //
-    // subsequent `read()` calls for locators in this blob return an error
-    // rather than reloading -- the data is known to no longer be needed -- so
-    // only call this once you are sure no other system needs it
+    /// release a blob's in-memory payload once all systems that need it have
+    /// finished consuming it (e.g. after GPU upload)
+    ///
+    /// subsequent `read()` calls for locators in this blob return an error
+    /// rather than reloading -- the data is known to no longer be needed -- so
+    /// only call this once you are sure no other system needs it
     pub fn release(&mut self, blob_index: u32) {
         if let Some(slot) = self.slots.get_mut(blob_index as usize)
             && !matches!(slot, BlobSlot::Released)
@@ -156,14 +156,14 @@ impl BlobData {
         }
     }
 
-    // Release every payload section still resident, called once every system
-    // has finished init. Systems read compiled payloads only during init and
-    // cache what they keep (GPU uploads, decoded audio clips, streaming
-    // sources that own their extracted bytes or re-read from disk), so nothing
-    // consults `BlobData` again at runtime -- the resident sections are dead
-    // weight past `World::start`. Never-loaded overflow slots are left as they
-    // are: they hold only a file path and were needed by no system. Returns the
-    // number of bytes freed.
+    /// Release every payload section still resident, called once every system
+    /// has finished init. Systems read compiled payloads only during init and
+    /// cache what they keep (GPU uploads, decoded audio clips, streaming
+    /// sources that own their extracted bytes or re-read from disk), so nothing
+    /// consults `BlobData` again at runtime -- the resident sections are dead
+    /// weight past `World::start`. Never-loaded overflow slots are left as they
+    /// are: they hold only a file path and were needed by no system. Returns the
+    /// number of bytes freed.
     pub fn release_all_resident(&mut self) -> usize {
         let mut freed = 0;
         for slot in &mut self.slots {
@@ -177,7 +177,8 @@ impl BlobData {
 
     // true if the blob's payload is resident in memory right now; an
     // `Unloaded` overflow blob reports false until its first read
-    pub fn is_loaded(&self, blob_index: u32) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_loaded(&self, blob_index: u32) -> bool {
         matches!(
             self.slots.get(blob_index as usize),
             Some(BlobSlot::Loaded(_))

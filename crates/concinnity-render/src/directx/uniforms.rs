@@ -1,83 +1,110 @@
-// src/directx/uniforms.rs
-//
-// repr(C) uniform / root-constant structs only the DirectX frame encoders bind
-// (cbuffer / root-constant layouts). Each is mirrored field-for-field in an
-// `.hlsl` shader under `directx/shaders/`.
-//
-// Blocks whose shader counterpart is a single-source `.slang` declaration are
-// declared once for every backend in `crate::uniforms`; what is left here is
-// what only this backend binds. Their layouts are checked by `shader_layout` in
-// concinnity-device, which reads the expected offsets out of slangc's
-// reflection per target. The hand-written asserts below are for the families
-// whose shaders are still per backend -- the cull kernel, the skinning and
-// morph kernels, the raymarch SDF templates, the legacy per-draw main and
-// velocity passes, and Metal's water / glass_mesh_rt.
+//! repr(C) uniform / root-constant structs only the DirectX frame encoders bind
+//! (cbuffer / root-constant layouts). Each is mirrored field-for-field in an
+//! `.hlsl` shader under `directx/shaders/`.
+//!
+//! Blocks whose shader counterpart is a single-source `.slang` declaration are
+//! declared once for every backend in `crate::uniforms`; what is left here is
+//! what only this backend binds. Their layouts are checked by `shader_layout` in
+//! concinnity-device, which reads the expected offsets out of slangc's
+//! reflection per target. The hand-written asserts below are for the families
+//! whose shaders are still per backend -- the cull kernel, the skinning and
+//! morph kernels, the raymarch SDF templates, the legacy per-draw main and
+//! velocity passes, and Metal's water / glass_mesh_rt.
 
 use crate::assets::sdf_volume::SDF_PARAMS_LEN;
 
-// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
-// frustum planes, the camera position sharing its row with the object count, the
-// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
-// flag), then the shader-bucket routing. DirectX fuses the cull + Hi-Z uniforms
-// into one cbuffer.
+/// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalised
+/// frustum planes, the camera position sharing its row with the object count, the
+/// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
+/// flag), then the shader-bucket routing. DirectX fuses the cull + Hi-Z uniforms
+/// into one cbuffer.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullParams {
+    /// Frustum planes, each `(normal.xyz, d)`.
     pub planes: [[f32; 4]; 6],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// Draw records the kernel iterates.
     pub object_count: u32,
+    /// The previous frame's view-projection, for velocity and Hi-Z reprojection.
     pub prev_view_proj: [[f32; 4]; 4],
+    /// Hi-Z pyramid base size in pixels.
     pub hiz_size: [f32; 2],
+    /// Mip levels in the Hi-Z pyramid.
     pub hiz_mip_count: u32,
+    /// Non-zero when the Hi-Z occlusion test runs.
     pub hiz_enabled: u32,
-    // Shader-bucket command regions in the indirect buffer. The kernel writes
-    // every record's slot in all `bucket_count` regions (a draw in the record's
-    // own bucket, a no-op everywhere else); region `b` starts at command
-    // `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    /// Shader-bucket command regions in the indirect buffer. The kernel writes
+    /// every record's slot in all `bucket_count` regions (a draw in the record's
+    /// own bucket, a no-op everywhere else); region `b` starts at command
+    /// `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
     pub bucket_count: u32,
+    /// `u32` slots one bucket occupies in the output list.
     pub bucket_stride: u32,
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad: [u32; 2],
 }
 
-// The raymarch pass per-frame `RaymarchView` cbuffer (b0, 160 bytes; aligned to
-// 256 for the D3D12 cbuffer). Mirrors the Metal `RaymarchView`.
+/// The raymarch pass per-frame `RaymarchView` cbuffer (b0, 160 bytes; aligned to
+/// 256 for the D3D12 cbuffer). Mirrors the Metal `RaymarchView`.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct RaymarchView {
+    /// View-projection matrix, column-major.
     pub vp: [[f32; 4]; 4],
+    /// Inverse view-projection matrix, column-major.
     pub inv_vp: [[f32; 4]; 4],
+    /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
+    /// Render-target size in pixels.
     pub viewport: [f32; 2],
+    /// Seconds since the world started.
     pub time: f32,
+    /// IBL cubemap mip count; 0 when there is no IBL.
     pub prefilter_mip_count: f32,
 }
 
-// The per-volume `SdfVolumeUniforms` cbuffer (b1, 176 bytes; aligned to 256 in
-// the cbuffer allocation).
+/// The per-volume `SdfVolumeUniforms` cbuffer (b1, 176 bytes; aligned to 256 in
+/// the cbuffer allocation).
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct RaymarchVolumeUniforms {
+    /// World-space centre.
     pub centre: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad0: f32,
+    /// Half-extents from the centre, in world units.
     pub extent: [f32; 3],
+    /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
+    /// Cone-tracing footprint growth per unit of march distance.
     pub cone_ratio: f32,
+    /// Furthest world distance the march travels.
     pub max_distance: f32,
+    /// Ray-march step cap.
     pub max_steps: i32,
+    /// Non-zero when the volume samples the shadow maps.
     pub receive_shadows: i32,
+    /// The volume's authored SDF parameters.
     pub params: [f32; SDF_PARAMS_LEN],
 }
 
-// The RT skinning compute root-constant block (rt_skin.hlsl `SkinParams`): four
-// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
-// the delta buffer (0 = no morphing).
+/// The RT skinning compute root-constant block (rt_skin.hlsl `SkinParams`): four
+/// tightly-packed uints (16 bytes). `target_count` is the morph-target count in
+/// the delta buffer (0 = no morphing).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SkinParams {
+    /// First vertex of this slot's region in the shared vertex buffer.
     pub vertex_base: u32,
+    /// Vertices in this slot's region.
     pub vertex_count: u32,
+    /// Joints in the skeleton driving this slot.
     pub joint_count: u32,
+    /// Morph targets on this slot's mesh.
     pub target_count: u32,
 }
 

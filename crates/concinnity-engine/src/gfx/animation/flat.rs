@@ -15,7 +15,7 @@ pub(super) struct ClipEntry {
     pub clip: AnimationClip,
     // The declared steady-state weight from the asset. The bucket settles
     // on this once any initial fade-in or runtime crossfade completes.
-    pub declared_weight: f32,
+    pub(crate) declared_weight: f32,
     // Seconds the clip ramps from zero to `declared_weight` at world start.
     // Zero plays the clip at full strength from the first frame.
     pub fade_in_secs: f32,
@@ -25,10 +25,10 @@ pub(super) struct ClipEntry {
 // transition at a time; a new transition supersedes any in flight.
 #[derive(Debug)]
 pub(super) struct Transition {
-    pub source_weights: Vec<f32>,
-    pub target_weights: Vec<f32>,
+    pub(crate) source_weights: Vec<f32>,
+    pub(crate) target_weights: Vec<f32>,
     // Wall-clock seconds since the system's first step.
-    pub start_secs: f32,
+    pub(crate) start_secs: f32,
     // Length of the ramp. Zero snaps to `target_weights` on the next
     // `step`.
     pub duration_secs: f32,
@@ -38,7 +38,7 @@ pub(super) struct Transition {
 // in-flight ramp.
 #[derive(Default)]
 pub(super) struct FlatState {
-    pub current_weights: Vec<f32>,
+    pub(crate) current_weights: Vec<f32>,
     pub transition: Option<Transition>,
 }
 

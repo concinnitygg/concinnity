@@ -18,9 +18,9 @@ pub struct Application {
 }
 
 impl Application {
-    // Translate the authored args into the runtime component: keep only the
-    // resource budgets. Run by cook at build time (the baked blob record
-    // carries the result).
+    /// Translate the authored args into the runtime component: keep only the
+    /// resource budgets. Run by cook at build time (the baked blob record
+    /// carries the result).
     pub fn bake(args: ApplicationArgs) -> Self {
         Self {
             limits: args.limits,

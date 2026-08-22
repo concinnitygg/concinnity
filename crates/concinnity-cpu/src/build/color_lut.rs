@@ -1,45 +1,47 @@
-// src/build/color_lut.rs
-//
-// Compiles a ColorLut component's args into the binary payload the renderer
-// uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
-// composite (post-process) pass with the display-referred sRGB colour as the
-// texture coordinate, blending the graded result by `PostProcessConfig`'s
-// `lut_strength`.
-//
-// Two source formats are supported, picked by file extension:
-//   - `.cube`  Adobe Cube LUT (plain text): a `LUT_3D_SIZE n` line followed by
-//              n*n*n "r g b" float triplets with red varying fastest.
-//   - `.png`   A horizontal slice strip: an (n*n)-by-n image of n square
-//              slices. Blue selects the slice, red is the column within a
-//              slice, green is the row.
-//
-// Payload format (little-endian):
-//   u32  magic     = b"LUT3" = 0x3354554c
-//   u32  size      LUT edge length n; the runtime texture is n x n x n
-//   u32  format_id = 0  (RGBA8)
-//   n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
-//
-// The texel order matches both the Metal 3D-texture upload layout and the
-// `.cube` data-line order, so the `.cube` path appends triplets verbatim.
+//! Compiles a ColorLut component's args into the binary payload the renderer
+//! uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
+//! composite (post-process) pass with the display-referred sRGB colour as the
+//! texture coordinate, blending the graded result by `PostProcessConfig`'s
+//! `lut_strength`.
+//!
+//! Two source formats are supported, picked by file extension:
+//!
+//! - `.cube`: Adobe Cube LUT (plain text): a `LUT_3D_SIZE n` line followed by
+//!   n*n*n "r g b" float triplets with red varying fastest.
+//! - `.png`: a horizontal slice strip: an (n*n)-by-n image of n square slices.
+//!   Blue selects the slice, red is the column within a slice, green is the
+//!   row.
+//!
+//! Payload format (little-endian):
+//!   u32  magic     = b"LUT3" = 0x3354554c
+//!   u32  size      LUT edge length n; the runtime texture is n x n x n
+//!   u32  format_id = 0  (RGBA8)
+//!   n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
+//!
+//! The texel order matches both the Metal 3D-texture upload layout and the
+//! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
 use crate::decode::{ByteReader, checked_product};
 
-pub const LUT_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"LUT3");
-pub const LUT_FORMAT_RGBA8: u32 = 0;
-pub const LUT_PAYLOAD_HEADER_BYTES: usize = 12;
+pub(crate) const LUT_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"LUT3");
+pub(crate) const LUT_FORMAT_RGBA8: u32 = 0;
+pub(crate) const LUT_PAYLOAD_HEADER_BYTES: usize = 12;
 
 // Accepted LUT edge lengths. The lower bound keeps trilinear interpolation
 // meaningful; the upper bound caps the payload (128³ RGBA8 is 8 MiB).
 const MIN_LUT_SIZE: u32 = 2;
 const MAX_LUT_SIZE: u32 = 128;
 
-// Classify a `ColorLut` source path by extension.
+/// Classify a `ColorLut` source path by extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LutFormat {
+    /// A `.cube` lookup-table text file.
     Cube,
+    /// A PNG strip.
     Png,
 }
 
+/// Classify a `ColorLut` source path by extension.
 pub fn classify_source(source: &str) -> Result<LutFormat, String> {
     let lower = source.to_ascii_lowercase();
     if lower.ends_with(".cube") {
@@ -54,9 +56,9 @@ pub fn classify_source(source: &str) -> Result<LutFormat, String> {
     }
 }
 
-// Validate a LUT edge length against the accepted range. Shared by the
-// runtime [`deserialise`], the `.cube` parser, and the build crate's PNG-strip
-// parser so all three reject the same out-of-range sizes.
+/// Validate a LUT edge length against the accepted range. Shared by the
+/// runtime [`deserialise`], the `.cube` parser, and the build crate's PNG-strip
+/// parser so all three reject the same out-of-range sizes.
 pub fn validate_size(size: u32) -> Result<(), String> {
     if !(MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&size) {
         return Err(format!(
@@ -69,9 +71,9 @@ pub fn validate_size(size: u32) -> Result<(), String> {
 
 // .cube parsing
 
-// Parse an Adobe Cube LUT into `(size, RGBA8 data)`. Data lines list red,
-// green, blue floats in `[0, 1]` with red varying fastest: exactly the
-// payload texel order, so triplets are converted and appended verbatim.
+/// Parse an Adobe Cube LUT into `(size, RGBA8 data)`. Data lines list red,
+/// green, blue floats in `[0, 1]` with red varying fastest: exactly the
+/// payload texel order, so triplets are converted and appended verbatim.
 pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
     let mut size: Option<u32> = None;
     let mut data: Vec<u8> = Vec::new();
@@ -135,6 +137,7 @@ pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
 
 // (de)serialisation
 
+/// Pack a cube LUT of edge `size` into its blob payload.
 pub fn serialise(size: u32, data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(LUT_PAYLOAD_HEADER_BYTES + data.len());
     buf.extend_from_slice(&LUT_PAYLOAD_MAGIC.to_le_bytes());
@@ -144,9 +147,9 @@ pub fn serialise(size: u32, data: &[u8]) -> Vec<u8> {
     buf
 }
 
-// Deserialise a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
-// is borrowed from the input. Called by the Metal, Vulkan, and DirectX
-// backends at upload time.
+/// Deserialise a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
+/// is borrowed from the input. Called by the Metal, Vulkan, and DirectX
+/// backends at upload time.
 pub fn deserialise(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let mut r = ByteReader::open_payload(
         bytes,

@@ -6,9 +6,9 @@
 use crate::result::CnResult;
 use std::path::PathBuf;
 
-/// Why the runtime could not reach a playable state.
+// Why the runtime could not reach a playable state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StartupError {
+pub(crate) enum StartupError {
     /// No compiled world data where the runtime expected it. The usual causes
     /// are a build that never ran and an installation missing its data folder.
     MissingData { blob: PathBuf },
@@ -18,12 +18,12 @@ pub enum StartupError {
 }
 
 impl StartupError {
-    /// Classify a blob-load failure, distinguishing absent data from data that
-    /// is present but unusable, since only the first is the user's to fix.
-    /// `blob` is the primary blob's path (`concinnity_store::blob::blob_path(0)`),
-    /// passed in rather than resolved here so the classification stays a pure
-    /// function of its inputs.
-    pub fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {
+    // Classify a blob-load failure, distinguishing absent data from data that
+    // is present but unusable, since only the first is the user's to fix.
+    // `blob` is the primary blob's path (`concinnity_store::blob::blob_path(0)`),
+    // passed in rather than resolved here so the classification stays a pure
+    // function of its inputs.
+    pub(crate) fn from_blob_failure(blob: PathBuf, cause: CnResult) -> Self {
         if blob.exists() {
             StartupError::UnreadableData { blob, cause }
         } else {
@@ -31,9 +31,9 @@ impl StartupError {
         }
     }
 
-    /// The sentence shown on the error screen. Names the path, because the
-    /// path is the actionable part, and stays free of internal vocabulary.
-    pub fn user_message(&self) -> String {
+    // The sentence shown on the error screen. Names the path, because the
+    // path is the actionable part, and stays free of internal vocabulary.
+    pub(crate) fn user_message(&self) -> String {
         match self {
             StartupError::MissingData { blob } => {
                 format!("Failed to find the data blob:\n{}", blob.display())
@@ -44,8 +44,8 @@ impl StartupError {
         }
     }
 
-    /// The developer-facing line, carrying the status the user message omits.
-    pub fn log_line(&self) -> String {
+    // The developer-facing line, carrying the status the user message omits.
+    pub(crate) fn log_line(&self) -> String {
         match self {
             StartupError::MissingData { blob } => {
                 format!(

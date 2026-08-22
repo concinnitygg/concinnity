@@ -1,26 +1,28 @@
-// src/color_lut.rs
-//
-// Compiles a ColorLut component's args into the binary payload the renderer
-// uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
-// composite (post-process) pass with the display-referred sRGB colour as the
-// texture coordinate, blending the graded result by `PostProcessConfig`'s
-// `lut_strength`.
-//
-// Two source formats are supported, picked by file extension:
-//   - `.cube`  Adobe Cube LUT (plain text): a `LUT_3D_SIZE n` line followed by
-//              n*n*n "r g b" float triplets with red varying fastest.
-//   - `.png`   A horizontal slice strip: an (n*n)-by-n image of n square
-//              slices. Blue selects the slice, red is the column within a
-//              slice, green is the row.
-//
-// Payload format (little-endian):
-//   u32  magic     = b"LUT3" = 0x3354554c
-//   u32  size      LUT edge length n; the runtime texture is n x n x n
-//   u32  format_id = 0  (RGBA8)
-//   n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
-//
-// The texel order matches both the Metal 3D-texture upload layout and the
-// `.cube` data-line order, so the `.cube` path appends triplets verbatim.
+//! Compiles a ColorLut component's args into the binary payload the renderer
+//! uploads as a 3D colour-grading LUT. The runtime samples this LUT in the
+//! composite (post-process) pass with the display-referred sRGB colour as the
+//! texture coordinate, blending the graded result by `PostProcessConfig`'s
+//! `lut_strength`.
+//!
+//! Two source formats are supported, picked by file extension:
+//!
+//! - `.cube`: Adobe Cube LUT (plain text): a `LUT_3D_SIZE n` line followed by
+//!   n*n*n "r g b" float triplets with red varying fastest.
+//! - `.png`: a horizontal slice strip: an (n*n)-by-n image of n square slices.
+//!   Blue selects the slice, red is the column within a slice, green is the
+//!   row.
+//!
+//! Payload format (little-endian):
+//!
+//! ```text
+//! u32  magic     = b"LUT3" = 0x3354554c
+//! u32  size      LUT edge length n; the runtime texture is n x n x n
+//! u32  format_id = 0  (RGBA8)
+//! n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
+//! ```
+//!
+//! The texel order matches both the Metal 3D-texture upload layout and the
+//! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
 // The no-dependency `.cube` parse, the classifier, the (de)serialisers, and the
 // size validator stay in concinnity-cpu; the `.png` slice-strip decode below
@@ -40,13 +42,14 @@ fn color_lut_source(args: &serde_json::Value) -> Result<&str, String> {
 }
 
 // Validate that args specify a `ColorLut` source with a supported extension.
-pub fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), String> {
+#[cfg(test)]
+pub(crate) fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), String> {
     classify_source(color_lut_source(args)?)?;
     Ok(())
 }
 
 // Compile a `ColorLut` component's JSON args into a packed binary payload.
-pub fn compile_color_lut_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_color_lut_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let source = color_lut_source(args)?;
     let format = classify_source(source)?;
     let resolved = resolve_lut_source(source);
@@ -62,13 +65,13 @@ pub fn compile_color_lut_payload(args: &serde_json::Value) -> Result<Vec<u8>, St
     Ok(serialise(size, &data))
 }
 
-// Decode a ColorLut source path the same way `compile_color_lut_payload` does
-// at build time. Dispatches between `.cube` text parse and PNG-strip parse
-// based on the resolved file extension. Exposed for the runtime asset
-// hot-reload path (`cn debug` only); production reads the compiled payload via
-// `concinnity_cpu::build::color_lut::deserialise` instead. The `source`
-// argument is the raw string from the asset declaration; this function applies
-// the same asset-dir resolution the build pipeline uses.
+/// Decode a ColorLut source path the same way `compile_color_lut_payload` does
+/// at build time. Dispatches between `.cube` text parse and PNG-strip parse
+/// based on the resolved file extension. Exposed for the runtime asset
+/// hot-reload path (`cn debug` only); production reads the compiled payload via
+/// `concinnity_cpu::build::color_lut::deserialise` instead. The `source`
+/// argument is the raw string from the asset declaration; this function applies
+/// the same asset-dir resolution the build pipeline uses.
 pub fn decode_source(source: &str) -> Result<(u32, Vec<u8>), String> {
     let format = classify_source(source)?;
     let resolved = resolve_lut_source(source);
@@ -87,7 +90,7 @@ pub fn decode_source(source: &str) -> Result<(u32, Vec<u8>), String> {
 // Parse a horizontal LUT slice strip PNG into `(size, RGBA8 data)`. The image
 // is `(n*n)` wide by `n` tall: n square slices laid left-to-right where blue
 // selects the slice, red is the column within a slice and green is the row.
-pub fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
+pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
     let (width, height, pixels) = load_png_rgba8(path)?;
     let size = height;
     validate_size(size)?;

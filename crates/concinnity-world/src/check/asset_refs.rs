@@ -24,7 +24,7 @@ use crate::assets::{
 // Reference kinds are deliberately not 1:1 with asset types: `MeshSource`
 // accepts several types and `AnyAsset` accepts every declared name.
 #[derive(Debug, Clone, Copy)]
-pub enum RefKind {
+pub(crate) enum RefKind {
     // Mesh, ProceduralMesh, VoxelChunk, or a mesh-kind File.
     MeshSource,
     Material,
@@ -41,7 +41,7 @@ pub enum RefKind {
 }
 
 // One item produced by a referencing asset's `cross_refs`.
-pub enum CrossRef {
+pub(crate) enum CrossRef {
     // `target` must resolve to an asset in `kind`'s name-set; if it does not,
     // `error` is collected verbatim.
     Resolve {
@@ -57,7 +57,7 @@ pub enum CrossRef {
 // Implemented by every asset type that references other assets by name.
 // `cross_refs` extracts those references (and any structural problems) from
 // the asset's args; the resolver resolves each `Resolve` against the world.
-pub trait CrossReferenced {
+pub(crate) trait CrossReferenced {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef>;
 }
 

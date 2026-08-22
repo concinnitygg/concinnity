@@ -1,19 +1,17 @@
-// benches/cook.rs
-//
-// Benchmarks over the world cook and blob load path: the front half
-// (parse + expand + validate), the full in-memory compile, and the blob
-// encode / parse pair the shipped load path pays. The fixture is a
-// procedural prop world in the shape of the CPU stress worlds: one mesh,
-// one texture, one material, N props.
-//
-// The compile consults the on-disk payload cache for its two compiled
-// payloads (the mesh and the texture), so calibration warms it and the
-// measured passes see the steady state a rebuild sees. The per-prop work
-// that dominates the cook (def creation, arg reserialization, packing) is
-// never cached and runs whole every iteration. The cache lives under a
-// state root in target/ so bench runs never touch a real project's state.
-//
-// Run with `cargo bench -p concinnity-bench --bench cook`.
+//! Benchmarks over the world cook and blob load path: the front half
+//! (parse + expand + validate), the full in-memory compile, and the blob
+//! encode / parse pair the shipped load path pays. The fixture is a
+//! procedural prop world in the shape of the CPU stress worlds: one mesh,
+//! one texture, one material, N props.
+//!
+//! The compile consults the on-disk payload cache for its two compiled
+//! payloads (the mesh and the texture), so calibration warms it and the
+//! measured passes see the steady state a rebuild sees. The per-prop work
+//! that dominates the cook (def creation, arg reserialization, packing) is
+//! never cached and runs whole every iteration. The cache lives under a
+//! state root in target/ so bench runs never touch a real project's state.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench cook`.
 
 use concinnity_blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
 use concinnity_cook::{build_pipeline_from_str, prepare_world};

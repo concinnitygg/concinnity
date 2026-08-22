@@ -1,9 +1,9 @@
-// Asset reference-graph extraction: the names an asset references, from the
-// same two sources the cross-reference validator resolves — the registries'
-// flat `refs:` metadata and the structured `CrossReferenced` impls. Their
-// union is the complete reference set by construction (a hand impl never
-// re-checks a registry-declared field), so consumers (scene partitioning,
-// provenance tooling) get the full edge list without per-type knowledge.
+//! Asset reference-graph extraction: the names an asset references, from the
+//! same two sources the cross-reference validator resolves — the registries'
+//! flat `refs:` metadata and the structured `CrossReferenced` impls. Their
+//! union is the complete reference set by construction (a hand impl never
+//! re-checks a registry-declared field), so consumers (scene partitioning,
+//! provenance tooling) get the full edge list without per-type knowledge.
 
 use crate::check::asset_refs::CrossRef;
 use crate::check::cross_reference::cross_refs_for;

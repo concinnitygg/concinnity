@@ -519,7 +519,7 @@ fn shader_stage_source_map_round_trips_empty() {
 
 #[test]
 fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use crate::assets::shader::ShaderKind;
+    use crate::assets::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -544,7 +544,7 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
     // subscribe to "" which notify rejects. The debug-WS `reload-assets`
     // command still works for these.
-    use crate::assets::shader::ShaderKind;
+    use crate::assets::ShaderKind;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -663,7 +663,7 @@ fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
     // alive so `.metal` saves trigger the recompile pass.
-    use crate::assets::shader::ShaderKind;
+    use crate::assets::ShaderKind;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         kind: ShaderKind::Vertex,
@@ -2076,7 +2076,7 @@ fn reload_stories_ignores_worlds_without_stories() {
 
 #[test]
 fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use crate::assets::shader::ShaderKind;
+    use crate::assets::ShaderKind;
     let dir = tempfile::tempdir().unwrap();
     let mut map = ShaderStageSourceMap::new();
     map.entries.push(ShaderStageSourceEntry {

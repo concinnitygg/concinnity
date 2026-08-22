@@ -1,13 +1,11 @@
-// src/build/font.rs
-//
-// Runtime decode of the compiled font payload: a power-of-two RGBA atlas of
-// signed-distance-field glyphs plus their metrics, which GraphicsSystem uploads
-// and draws from. The rasteriser that produces the payload lives in the cook
-// crate; this half only reads bytes back off disk.
-//
-// Each atlas texel stores a normalised SDF value in [0, 1] where 0.5 = the glyph
-// outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment shader
-// uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
+//! Runtime decode of the compiled font payload: a power-of-two RGBA atlas of
+//! signed-distance-field glyphs plus their metrics, which GraphicsSystem uploads
+//! and draws from. The rasteriser that produces the payload lives in the cook
+//! crate; this half only reads bytes back off disk.
+//!
+//! Each atlas texel stores a normalised SDF value in [0, 1] where 0.5 = the glyph
+//! outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment shader
+//! uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
 
 use crate::decode::{ByteReader, checked_product};
 
@@ -15,25 +13,33 @@ use crate::decode::{ByteReader, checked_product};
 // coordinates, advance, and two bearings.
 const GLYPH_STRIDE: usize = 4 + 2 + 2 + 2 + 2 + 4 + 4 + 4;
 
-// Per-glyph metrics stored in the compiled payload.
+/// Per-glyph metrics stored in the compiled payload.
 #[derive(Debug, Clone, Copy)]
 pub struct GlyphMetrics {
+    /// The Unicode code point this glyph renders.
     pub char_code: u32,
+    /// Glyph's left edge in the atlas, in pixels.
     pub atlas_x: u16,
+    /// Glyph's top edge in the atlas, in pixels.
     pub atlas_y: u16,
+    /// Glyph width in the atlas, in pixels.
     pub atlas_w: u16,
+    /// Glyph height in the atlas, in pixels.
     pub atlas_h: u16,
+    /// Pen advance after this glyph, in pixels.
     pub advance_px: f32,
+    /// Horizontal offset from the pen to the glyph's left edge.
     pub bearing_x: f32,
+    /// Vertical offset from the baseline to the glyph's top edge.
     pub bearing_y: f32,
 }
 
 // Decoded font payload: atlas width, atlas height, supersample factor,
 // rasterisation size (px), RGBA atlas pixels, and per-glyph metrics.
-pub type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
+pub(crate) type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
 
-// Deserialise a font payload back into atlas dimensions, the atlas supersample
-// factor, the rasterisation size, RGBA pixels, and metrics.
+/// Deserialise a font payload back into atlas dimensions, the atlas supersample
+/// factor, the rasterisation size, RGBA pixels, and metrics.
 pub fn deserialise(bytes: &[u8]) -> Result<DecodedFont, String> {
     let mut r = ByteReader::new(bytes, "font payload");
     let atlas_w = r.u32()?;

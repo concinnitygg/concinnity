@@ -1,17 +1,15 @@
-// benches/engine.rs
-//
-// Benchmarks over the engine's public World surface: populating a world the
-// way a blob load does, iterating a component column, targeted lookups, and
-// draining a column. Unlike the `ecs` target -- which drives the storage
-// macro through a synthetic three-component set -- these run against the
-// engine's real registered component set, so per-entity costs carry the real
-// `ComponentAsset` dispatch and the real column count.
-//
-// `World::despawn` is `#[cfg(test)]`-gated and so is not reachable here; it
-// walks every registered column, which is exactly where the two component
-// sets diverge most. That measurement belongs to an in-crate bench.
-//
-// Run with `cargo bench -p concinnity-bench --bench engine`.
+//! Benchmarks over the engine's public World surface: populating a world the
+//! way a blob load does, iterating a component column, targeted lookups, and
+//! draining a column. Unlike the `ecs` target -- which drives the storage
+//! macro through a synthetic three-component set -- these run against the
+//! engine's real registered component set, so per-entity costs carry the real
+//! `ComponentAsset` dispatch and the real column count.
+//!
+//! `World::despawn` is `#[cfg(test)]`-gated and so is not reachable here; it
+//! walks every registered column, which is exactly where the two component
+//! sets diverge most. That measurement belongs to an in-crate bench.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench engine`.
 
 use concinnity_bench::{Bench, Rng};
 use concinnity_engine::assets::Prop;

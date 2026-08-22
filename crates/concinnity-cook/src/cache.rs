@@ -1,17 +1,17 @@
-// Content-addressed cache for compiled asset payloads.
-//
-// Some assets are expensive to compile -- the EnvironmentMap IBL convolution
-// alone is hundreds of millions of float ops per build. The compiled payload
-// is, however, a deterministic function of a small set of inputs: the code that
-// compiles it, the postcard-visible asset schema, the component discriminant,
-// the asset's args JSON, and the contents of any source files the args
-// reference. This module hashes those inputs into a key and stores the compiled
-// bytes under `.concinnity/cache/`. A later build that produces the same key
-// reuses the cached payload instead of recompiling.
-//
-// Every operation here is best-effort: a cache miss, a read error, or a write
-// error all fall back to a normal compile, so the cache can never break or
-// corrupt a build.
+//! Content-addressed cache for compiled asset payloads.
+//!
+//! Some assets are expensive to compile -- the EnvironmentMap IBL convolution
+//! alone is hundreds of millions of float ops per build. The compiled payload
+//! is, however, a deterministic function of a small set of inputs: the code that
+//! compiles it, the postcard-visible asset schema, the component discriminant,
+//! the asset's args JSON, and the contents of any source files the args
+//! reference. This module hashes those inputs into a key and stores the compiled
+//! bytes under `.concinnity/cache/`. A later build that produces the same key
+//! reuses the cached payload instead of recompiling.
+//!
+//! Every operation here is best-effort: a cache miss, a read error, or a write
+//! error all fall back to a normal compile, so the cache can never break or
+//! corrupt a build.
 
 use crate::asset::{BuildCtx, CacheInputs, SourceFiles};
 use crate::file_stamp::FileStamp;
@@ -71,7 +71,7 @@ include!(concat!(env!("OUT_DIR"), "/compile_source_hash.rs"));
 // Assets whose payload really does differ per backend separate themselves
 // through their inputs -- a differing source file, or the compile target when
 // `CacheInputs::target_dependent` is set.
-pub fn payload_key(
+pub(crate) fn payload_key(
     discriminant: u8,
     args: &serde_json::Value,
     ctx: &BuildCtx<'_>,
@@ -110,7 +110,7 @@ const EXPAND_FORMAT_VERSION: u32 = 4;
 // entries are plain JSON with no per-backend branching. `load` / `store` are
 // shared with the payload cache (same `.concinnity/cache/` directory); the two
 // key spaces stay distinct because they hash structurally different inputs.
-pub fn expand_key(source: &str, args: &serde_json::Value) -> String {
+pub(crate) fn expand_key(source: &str, args: &serde_json::Value) -> String {
     let mut hasher = Sha256::new();
     hasher.update(EXPAND_FORMAT_VERSION.to_le_bytes());
     if let Some(h) = file_content_hash(source) {
@@ -132,7 +132,7 @@ pub fn expand_key(source: &str, args: &serde_json::Value) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-// Read a cached payload for `key`, if one is present.
+/// Read a cached payload for `key`, if one is present.
 pub fn load(key: &str) -> Option<Vec<u8>> {
     // Disabled under `cargo test` so the suite neither creates stray cache
     // directories nor lets a stale entry mask a change to a compile path.
@@ -142,9 +142,9 @@ pub fn load(key: &str) -> Option<Vec<u8>> {
     std::fs::read(crate::paths::cache_dir().join(key)).ok()
 }
 
-// Store a compiled payload under `key`. Best-effort: any error is ignored.
-// The bytes are written to a temp file and renamed into place so a concurrent
-// reader never observes a half-written entry.
+/// Store a compiled payload under `key`. Best-effort: any error is ignored.
+/// The bytes are written to a temp file and renamed into place so a concurrent
+/// reader never observes a half-written entry.
 pub fn store(key: &str, bytes: &[u8]) {
     if cfg!(test) {
         return;

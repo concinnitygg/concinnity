@@ -8,7 +8,7 @@
 use concinnity_cook::world::{WORLD_JSONL, find_world_jsonl};
 use concinnity_editor::add_to_path;
 
-pub fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
     let world_path = match find_world_jsonl(None) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => WORLD_JSONL.to_string(),

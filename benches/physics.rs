@@ -1,16 +1,14 @@
-// benches/physics.rs
-//
-// Benchmarks over the physics wrapper and rapier: solver cost under
-// sustained contacts, the sleeping-island idle path, contact-free
-// integration, world construction, body churn, and the query paths
-// (raycast, character move). The whole-frame probe cannot hold this
-// number still -- an un-settled solver sees a different contact set every
-// session -- so the stepping benches rebuild the same world and step it
-// the same fixed count every iteration, making the measured work
-// bit-identical run to run. Fixtures mirror the CPU stress world's
-// physics axis: stacked columns of bouncing cuboids that never sleep.
-//
-// Run with `cargo bench -p concinnity-bench --bench physics`.
+//! Benchmarks over the physics wrapper and rapier: solver cost under
+//! sustained contacts, the sleeping-island idle path, contact-free
+//! integration, world construction, body churn, and the query paths
+//! (raycast, character move). The whole-frame probe cannot hold this
+//! number still -- an un-settled solver sees a different contact set every
+//! session -- so the stepping benches rebuild the same world and step it
+//! the same fixed count every iteration, making the measured work
+//! bit-identical run to run. Fixtures mirror the CPU stress world's
+//! physics axis: stacked columns of bouncing cuboids that never sleep.
+//!
+//! Run with `cargo bench -p concinnity-bench --bench physics`.
 
 use concinnity_bench::Bench;
 use concinnity_physics::{

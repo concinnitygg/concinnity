@@ -12,10 +12,10 @@ use std::sync::{Mutex, OnceLock};
 
 // Name of the state directory joined onto the resolved root in the default and
 // `set_root`/`CN_HOME` modes. A flat state dir (`set_state_dir`) omits it.
-pub const STATE_DIR: &str = ".concinnity";
+pub(crate) const STATE_DIR: &str = ".concinnity";
 
 // Environment variable that anchors the state root when no root is installed.
-pub const HOME_ENV: &str = "CN_HOME";
+pub(crate) const HOME_ENV: &str = "CN_HOME";
 
 fn installed_root() -> &'static Mutex<Option<PathBuf>> {
     static ROOT: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -32,44 +32,46 @@ fn writable_state_override() -> &'static Mutex<Option<PathBuf>> {
     WRITABLE.get_or_init(|| Mutex::new(None))
 }
 
-// Anchor `.concinnity/` to `dir` for the rest of the process, taking precedence
-// over `CN_HOME` and the working-directory default. A host that chdirs for
-// content resolution installs the invocation directory here before it chdirs.
+/// Anchor `.concinnity/` to `dir` for the rest of the process, taking precedence
+/// over `CN_HOME` and the working-directory default. A host that chdirs for
+/// content resolution installs the invocation directory here before it chdirs.
 pub fn set_root<P: Into<PathBuf>>(dir: P) {
     *installed_root().lock().unwrap() = Some(dir.into());
 }
 
 // Remove an installed root, restoring environment/working-directory resolution.
-pub fn clear_root() {
+#[cfg(test)]
+pub(crate) fn clear_root() {
     *installed_root().lock().unwrap() = None;
 }
 
-// Anchor the state tree directly at `dir` with no `.concinnity` segment, taking
-// precedence over `set_root`, `CN_HOME`, and the default. A shipped application
-// installs this so `data/`, `saves/`, and `settings` resolve beside its
-// executable (or inside its app bundle) rather than under a `.concinnity/`
-// wrapper.
+/// Anchor the state tree directly at `dir` with no `.concinnity` segment, taking
+/// precedence over `set_root`, `CN_HOME`, and the default. A shipped application
+/// installs this so `data/`, `saves/`, and `settings` resolve beside its
+/// executable (or inside its app bundle) rather than under a `.concinnity/`
+/// wrapper.
 pub fn set_state_dir<P: Into<PathBuf>>(dir: P) {
     *flat_state_dir().lock().unwrap() = Some(dir.into());
 }
 
-// Remove an installed flat state dir, restoring the wrapped resolution.
+/// Remove an installed flat state dir, restoring the wrapped resolution.
 pub fn clear_state_dir() {
     *flat_state_dir().lock().unwrap() = None;
 }
 
-// Anchor the runtime-writable state (`saves/` + `settings`) at `dir`, leaving
-// the read-only content (`data/`) at the resolved state dir. A shipped application
-// installs this when its content dir is not writable (a read-only install such
-// as Program Files), redirecting only what it writes at runtime to a per-user
-// directory. When unset, writable state stays beside `data/`.
+/// Anchor the runtime-writable state (`saves/` + `settings`) at `dir`, leaving
+/// the read-only content (`data/`) at the resolved state dir. A shipped application
+/// installs this when its content dir is not writable (a read-only install such
+/// as Program Files), redirecting only what it writes at runtime to a per-user
+/// directory. When unset, writable state stays beside `data/`.
 pub fn set_writable_state_dir<P: Into<PathBuf>>(dir: P) {
     *writable_state_override().lock().unwrap() = Some(dir.into());
 }
 
 // Remove an installed writable-state dir, restoring writable state to the
 // content root beside `data/`.
-pub fn clear_writable_state_dir() {
+#[cfg(test)]
+pub(crate) fn clear_writable_state_dir() {
     *writable_state_override().lock().unwrap() = None;
 }
 
@@ -83,8 +85,8 @@ fn root() -> Option<PathBuf> {
         .or_else(|| std::env::var_os(HOME_ENV).map(PathBuf::from))
 }
 
-// The state directory: the flat state dir verbatim when one is installed,
-// otherwise `<root>/.concinnity` (or the relative `.concinnity` against cwd).
+/// The state directory: the flat state dir verbatim when one is installed,
+/// otherwise `<root>/.concinnity` (or the relative `.concinnity` against cwd).
 pub fn state_dir() -> PathBuf {
     let flat = flat_state_dir().lock().unwrap().clone();
     resolve_state_dir(flat.as_deref(), root().as_deref())
@@ -97,9 +99,9 @@ fn resolve_state_dir(flat: Option<&Path>, root: Option<&Path>) -> PathBuf {
     flat.map_or_else(|| anchor(root, Path::new(STATE_DIR)), Path::to_path_buf)
 }
 
-// The directory holding runtime-writable state (`saves/` + `settings`): the
-// writable override when one is installed, otherwise the state dir (writable
-// state sits beside `data/`).
+/// The directory holding runtime-writable state (`saves/` + `settings`): the
+/// writable override when one is installed, otherwise the state dir (writable
+/// state sits beside `data/`).
 pub fn writable_state_dir() -> PathBuf {
     let over = writable_state_override().lock().unwrap().clone();
     resolve_writable_dir(over.as_deref(), &state_dir())

@@ -1,8 +1,6 @@
-// src/gfx/auto_exposure.rs
-//
-// The resolved auto-exposure tunables the post-process config produces and the
-// backends hold. The running EMA that consumes them, and the histogram it is
-// measured from, are per-frame compute and live above this crate.
+//! The resolved auto-exposure tunables the post-process config produces and the
+//! backends hold. The running EMA that consumes them, and the histogram it is
+//! measured from, are per-frame compute and live above this crate.
 
 // Smallest legal EMA speed. A zero or negative speed would freeze adaptation
 // at the initial EV, so the authored value is floored here.
@@ -16,41 +14,41 @@ const MAX_SPEED: f32 = 20.0;
 // `inf` / `0`. Matches the `EXPOSURE_EV_LIMIT` in [`PostProcessConfig`].
 const EV_LIMIT: f32 = 16.0;
 
-// `log2(0.18)`: perceptual middle-grey in linear light. AE shifts the
-// scene's geometric-mean luminance to this value on the HDR output path so
-// the average pixel reads as a comfortable mid-tone instead of "scene
-// white = SDR reference white = bright" (which only worked on the SDR path
-// because the ACES tonemap implicitly compressed scene-white back down).
+/// `log2(0.18)`: perceptual middle-grey in linear light. AE shifts the
+/// scene's geometric-mean luminance to this value on the HDR output path so
+/// the average pixel reads as a comfortable mid-tone instead of "scene
+/// white = SDR reference white = bright" (which only worked on the SDR path
+/// because the ACES tonemap implicitly compressed scene-white back down).
 pub const HDR_MIDDLE_GREY_LOG2: f32 = -2.473;
 
-// Clamped auto-exposure tunables resolved from the authored asset fields. Held
-// by the backend; the per-frame EMA in [`AutoExposureState::update`] reads them
-// to clamp the adapted EV and drive its adaptation rate.
+/// Clamped auto-exposure tunables resolved from the authored asset fields. Held
+/// by the backend; the per-frame EMA in `AutoExposureState::update` reads them
+/// to clamp the adapted EV and drive its adaptation rate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoExposureSettings {
-    // Lower bound on the adapted EV. Caps how bright a dim scene can ramp.
+    /// Lower bound on the adapted EV. Caps how bright a dim scene can ramp.
     pub min_ev: f32,
-    // Upper bound on the adapted EV. Caps how dark a bright scene can ramp.
+    /// Upper bound on the adapted EV. Caps how dark a bright scene can ramp.
     pub max_ev: f32,
-    // EMA rate (per second). The exponential `1 - exp(-speed * dt)` step pulls
-    // the current EV toward the target each frame; higher = faster adaptation.
+    /// EMA rate (per second). The exponential `1 - exp(-speed * dt)` step pulls
+    /// the current EV toward the target each frame; higher = faster adaptation.
     pub speed: f32,
-    // Log2 of the linear value AE aims the scene's geometric-mean luminance
-    // at. `0.0` = scene-white (legacy SDR + ACES default, ACES then squishes
-    // scene-white back down to a comfortable display mid-tone).
-    // `HDR_MIDDLE_GREY_LOG2` ≈ -2.47 = perceptual middle-grey, the correct
-    // target on the HDR path where there is no ACES compression. Resolved
-    // from `PostProcessConfig.hdr_display` at asset time.
+    /// Log2 of the linear value AE aims the scene's geometric-mean luminance
+    /// at. `0.0` = scene-white (legacy SDR + ACES default, ACES then squishes
+    /// scene-white back down to a comfortable display mid-tone).
+    /// `HDR_MIDDLE_GREY_LOG2` ≈ -2.47 = perceptual middle-grey, the correct
+    /// target on the HDR path where there is no ACES compression. Resolved
+    /// from `PostProcessConfig.hdr_display` at asset time.
     pub target_log_lum: f32,
 }
 
 impl AutoExposureSettings {
-    // Clamp the authored fields into a safe range. `min_ev` is forced to stay
-    // at-or-below `max_ev` so the adapted EV's clamp interval is non-empty.
-    // `hdr_aware` shifts AE's middle-grey pivot down so the average pixel
-    // reads at perceptual middle-grey on the HDR output path; SDR worlds
-    // keep the legacy scene-white pivot to preserve existing exposure
-    // authoring.
+    /// Clamp the authored fields into a safe range. `min_ev` is forced to stay
+    /// at-or-below `max_ev` so the adapted EV's clamp interval is non-empty.
+    /// `hdr_aware` shifts AE's middle-grey pivot down so the average pixel
+    /// reads at perceptual middle-grey on the HDR output path; SDR worlds
+    /// keep the legacy scene-white pivot to preserve existing exposure
+    /// authoring.
     pub fn resolve(min_ev: f32, max_ev: f32, speed: f32, hdr_aware: bool) -> Self {
         let min = min_ev.clamp(-EV_LIMIT, EV_LIMIT);
         let max = max_ev.clamp(-EV_LIMIT, EV_LIMIT);

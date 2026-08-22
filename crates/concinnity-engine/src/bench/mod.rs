@@ -44,7 +44,7 @@ pub(crate) struct BenchWorld {
 }
 
 impl BenchWorld {
-    pub fn new() -> BenchWorld {
+    pub(crate) fn new() -> BenchWorld {
         BenchWorld {
             components: ComponentStorage::default(),
             blob: BlobData::empty(),
@@ -54,7 +54,7 @@ impl BenchWorld {
         }
     }
 
-    pub fn ctx(&mut self) -> PipelineContext<'_> {
+    pub(crate) fn ctx(&mut self) -> PipelineContext<'_> {
         PipelineContext {
             components: &mut self.components,
             blob: &mut self.blob,

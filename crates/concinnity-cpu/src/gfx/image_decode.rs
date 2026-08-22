@@ -1,34 +1,35 @@
-// src/gfx/image_decode.rs
-//
-// GPU-free pixel-decode math shared by the backends' frame-capture and
-// reflection-probe read-back paths. Turns the raw bytes read back from a GPU
-// texture into tightly-packed opaque RGBA8, and decodes a single IEEE 754 half.
-// The backend classifies its own format enum (MTLPixelFormat / vk::Format /
-// DXGI_FORMAT) into a `PixelLayout` and calls `decode_to_rgba8`; the per-channel
-// math here is identical across backends. PNG encoding + file I/O stay in the
-// backends (debug-only, and would pull std::fs / the png crate into core).
+//! GPU-free pixel-decode math shared by the backends' frame-capture and
+//! reflection-probe read-back paths. Turns the raw bytes read back from a GPU
+//! texture into tightly-packed opaque RGBA8, and decodes a single IEEE 754 half.
+//! The backend classifies its own format enum (MTLPixelFormat / vk::Format /
+//! DXGI_FORMAT) into a `PixelLayout` and calls `decode_to_rgba8`; the per-channel
+//! math here is identical across backends. PNG encoding + file I/O stay in the
+//! backends (debug-only, and would pull std::fs / the png crate into core).
 
-// The decode layout of the raw read-back bytes, classified from the backend's
-// own swapchain / texture format. Carries everything the decoder needs so the
-// math stays free of any backend format enum.
+/// The decode layout of the raw read-back bytes, classified from the backend's
+/// own swapchain / texture format. Carries everything the decoder needs so the
+/// math stays free of any backend format enum.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PixelLayout {
-    // 8-bit BGRA (the common SDR swapchain on Windows / macOS); channels are
-    // swizzled to RGBA and alpha is forced opaque.
+    /// 8-bit BGRA (the common SDR swapchain on Windows / macOS); channels are
+    /// swizzled to RGBA and alpha is forced opaque.
     Bgra8,
-    // 8-bit RGBA; passes through with alpha forced opaque.
+    /// 8-bit RGBA; passes through with alpha forced opaque.
     Rgba8,
-    // Four IEEE 754 halfs (8 B/px). `scrgb` true applies the sRGB OETF to the
-    // linear extended-range values; false passes PQ code values through clamped.
-    Rgba16F { scrgb: bool },
-    // Packed 2-10-10-10 unorm (one little-endian u32 per texel, R in the low 10
-    // bits); the PQ fallback swapchain. Not display-ready, but a valid image.
+    /// Four IEEE 754 halfs (8 B/px). `scrgb` true applies the sRGB OETF to the
+    /// linear extended-range values; false passes PQ code values through clamped.
+    Rgba16F {
+        /// Apply the sRGB OETF to the linear extended-range values.
+        scrgb: bool,
+    },
+    /// Packed 2-10-10-10 unorm (one little-endian u32 per texel, R in the low 10
+    /// bits); the PQ fallback swapchain. Not display-ready, but a valid image.
     A2b10g10r10,
 }
 
-// Convert the tightly-packed read-back bytes to opaque RGBA8, decoding per the
-// classified layout. The alpha channel is forced to 255 so a saved image is
-// opaque regardless of the composited alpha.
+/// Convert the tightly-packed read-back bytes to opaque RGBA8, decoding per the
+/// classified layout. The alpha channel is forced to 255 so a saved image is
+/// opaque regardless of the composited alpha.
 pub fn decode_to_rgba8(raw: &[u8], layout: PixelLayout) -> Vec<u8> {
     match layout {
         PixelLayout::Bgra8 => decode_8bit(raw, true),
@@ -91,9 +92,9 @@ fn decode_a2b10g10r10(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-// Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals, normals,
-// and inf/NaN. Shared with the reflection-probe cube-face read-back, which
-// decodes its `RGBA16Float` faces the same way.
+/// Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals, normals,
+/// and inf/NaN. Shared with the reflection-probe cube-face read-back, which
+/// decodes its `RGBA16Float` faces the same way.
 pub fn f16_to_f32(h: u16) -> f32 {
     let sign = if (h >> 15) & 1 == 1 { -1.0 } else { 1.0 };
     let exp = (h >> 10) & 0x1f;

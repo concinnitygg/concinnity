@@ -35,7 +35,7 @@ pub(super) struct ShaderStruct {
 impl ShaderStruct {
     // Byte past the last declared member. What the struct occupies before any
     // target-specific rounding of the block it sits in.
-    pub fn extent(&self) -> usize {
+    pub(super) fn extent(&self) -> usize {
         self.fields
             .iter()
             .map(|f| f.offset + f.size)

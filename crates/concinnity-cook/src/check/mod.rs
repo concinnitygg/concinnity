@@ -1,8 +1,8 @@
-// Cook's semantic-validation surface: the pure checks live in
-// concinnity-world (re-exported below); this module adds the per-asset checks
-// that validate by running a compiler (mesh generators, texture generators,
-// cubemap/environment-map sources) and composes both sets behind the same
-// `check_asset` / `check_world` entry points callers have always used.
+//! Cook's semantic-validation surface: the pure checks live in
+//! concinnity-world (re-exported below); this module adds the per-asset checks
+//! that validate by running a compiler (mesh generators, texture generators,
+//! cubemap/environment-map sources) and composes both sets behind the same
+//! `check_asset` / `check_world` entry points callers have always used.
 
 pub(crate) mod cubemap_texture;
 pub(crate) mod environment_map;
@@ -31,7 +31,11 @@ fn check_compiled_asset(
 
 // The full per-asset check: the pure world-crate checks plus the
 // compile-backed ones above.
-pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_asset(
+    type_norm: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), String> {
     concinnity_world::check::check_asset(type_norm, name, args)?;
     check_compiled_asset(type_norm, name, args)
 }
@@ -39,7 +43,7 @@ pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Res
 // Run all semantic validation on a fully expanded world: the world crate's
 // pure checks, cross-references, and graphics rules, with the compile-backed
 // checks folded into the same error-collection pass.
-pub fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
+pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
     concinnity_world::check::check_world_with(assets, &check_compiled_asset)
 }
 

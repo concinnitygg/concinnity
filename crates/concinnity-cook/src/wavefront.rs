@@ -20,7 +20,7 @@ const NO_UV: u32 = u32::MAX;
 //
 // Vertices are deduplicated: two face corners sharing the same position and UV
 // index map to a single entry in the output vertex list.
-pub fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), String> {
+pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), String> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
 

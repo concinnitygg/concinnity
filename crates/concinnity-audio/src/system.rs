@@ -20,9 +20,9 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::resource::AudioClipTable;
 
-// Audio behavior. Constructed internally by `World::start` when the world
-// declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
-// it carries no config.
+/// Audio behavior. Constructed internally by `World::start` when the world
+/// declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
+/// it carries no config.
 pub struct AudioSystem {
     engine: AudioEngine,
     // The persisted mix volumes (settings menu), applied at init. Resolved by
@@ -103,11 +103,11 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
-    // Fresh system with no device, live emitters, or cues. `volumes` holds
-    // the persisted settings-menu mix (`None` per stage = unity), applied in
-    // [`System::init`]. The output device is acquired and the emitters /
-    // cues are bound from the world's components in `init`, so construction is
-    // side-effect-free (required by the `World::system_manifest` gate probe).
+    /// Fresh system with no device, live emitters, or cues. `volumes` holds
+    /// the persisted settings-menu mix (`None` per stage = unity), applied in
+    /// [`System::init`]. The output device is acquired and the emitters /
+    /// cues are bound from the world's components in `init`, so construction is
+    /// side-effect-free (required by the `World::system_manifest` gate probe).
     pub fn new(volumes: AudioVolumes) -> Self {
         Self {
             engine: AudioEngine::disabled(),
@@ -127,27 +127,23 @@ impl AudioSystem {
         }
     }
 
-    // Number of cue bindings fired since init. Engine-independent progress the
-    // schedule tests observe, since playback itself needs an output device.
+    /// Number of cue bindings fired since init. Engine-independent progress the
+    /// schedule tests observe, since playback itself needs an output device.
     pub fn cues_matched(&self) -> usize {
         self.cues_matched
     }
 
     // Distinct clips handed to the decode worker at init; the same kind of
     // engine-independent observable.
-    pub fn clips_queued(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn clips_queued(&self) -> usize {
         self.clips_queued
-    }
-
-    /// One-shot voices currently playing (or queued behind a clip decode),
-    /// bounded by the engine's voice cap. Zero without an output device.
-    pub fn playing_sounds(&self) -> usize {
-        self.engine.playing_sounds()
     }
 
     // Contacts that resolved to an impact clip; the same kind of
     // engine-independent observable as `cues_matched`.
-    pub fn impacts_played(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn impacts_played(&self) -> usize {
         self.impacts_played
     }
 

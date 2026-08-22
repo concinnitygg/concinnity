@@ -6,8 +6,8 @@ use crate::error::BlobError;
 use crate::schema::BlobMeta;
 use crate::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH};
 
-// Parse a blob image's header and metadata block. Returns the metadata and the
-// offset at which the payload section begins.
+/// Parse a blob image's header and metadata block. Returns the metadata and the
+/// offset at which the payload section begins.
 pub fn parse_cnb(data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
     let meta_len = parse_header(data)? as usize;
 
@@ -26,18 +26,18 @@ pub fn parse_cnb(data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
     Ok((meta, meta_end))
 }
 
-// Payload-section offset read from the header alone, so a caller holding only
-// the first HEADER_SIZE bytes can turn a `PayloadLocator` offset into an
-// absolute file offset without loading the image.
+/// Payload-section offset read from the header alone, so a caller holding only
+/// the first HEADER_SIZE bytes can turn a `PayloadLocator` offset into an
+/// absolute file offset without loading the image.
 pub fn parse_payload_section_start(header: &[u8]) -> Result<u64, BlobError> {
     Ok(HEADER_SIZE as u64 + parse_header(header)?)
 }
 
-// The payload section of a full blob image.
-//
-// Infallible and lenient: an image too short to hold a header, or one whose
-// header points past its end, yields an empty section. Overflow blobs carry no
-// metadata and reach here without a magic or version check.
+/// The payload section of a full blob image.
+///
+/// Infallible and lenient: an image too short to hold a header, or one whose
+/// header points past its end, yields an empty section. Overflow blobs carry no
+/// metadata and reach here without a magic or version check.
 pub fn payload_section(data: &[u8]) -> &[u8] {
     let Some(meta_len) = le_u64(data, 8) else {
         return &[];

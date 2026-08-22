@@ -20,7 +20,7 @@ use super::{alloc_descriptor_sets, create_descriptor_set_layout};
 
 impl VkContext {
     // Upload skinned-mesh geometry and build the skinned render pipelines.
-    pub fn upload_skinned(
+    pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u16],
@@ -295,7 +295,7 @@ impl VkContext {
     // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
     #[allow(dead_code)]
-    pub fn update_skinned_mesh_geometry(
+    pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
         vertex_base: u16,
@@ -380,7 +380,7 @@ impl VkContext {
     // `DxContext::update_skinned_skeleton`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
     #[allow(dead_code)]
-    pub fn update_skinned_skeleton(
+    pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
@@ -405,7 +405,7 @@ impl VkContext {
     }
 
     // Replace the skinning matrices for one skinned object.
-    pub fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
+    pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
             slot.clear();
             slot.extend_from_slice(matrices);
@@ -422,7 +422,7 @@ impl VkContext {
     // replaces it next frame). The copy's deformed region is already valid
     // because `encode_skin` folds every pre-reserved copy each frame. A no-op
     // if the index is out of range. Mirrors the Metal path.
-    pub fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+    pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
         let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
             return;
         };
@@ -435,7 +435,7 @@ impl VkContext {
 
     // Hide a skinned object; the engine's instance pool recycles the slot. A
     // no-op if the index is out of range. Mirrors the Metal path.
-    pub fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
+    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
         if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
             obj.visible = false;
         }
@@ -445,7 +445,7 @@ impl VkContext {
     // `(skinned index, matrix)` entry per moved instance. The per-frame cull
     // records and the legacy skinned draw both read `obj.model` directly, so
     // this only writes the fields. Out-of-range indices have no effect.
-    pub fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(skinned_index, model) in updates {
             if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {
                 obj.model = model;
@@ -588,7 +588,7 @@ impl VkContext {
 
     // Replace one skinned object's morph weights. Out-of-range indices and
     // objects without morph targets are ignored; extra weights are dropped.
-    pub fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+    pub(crate) fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
         if let Some(slot) = self.skinned.morph_weights.get_mut(skinned_index) {
             for (i, w) in slot.iter_mut().enumerate() {
                 *w = weights.get(i).copied().unwrap_or(0.0);

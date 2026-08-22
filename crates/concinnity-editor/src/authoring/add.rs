@@ -20,12 +20,12 @@ use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::build_from_path;
 use concinnity_world::registry::ComponentType;
 
-// Add an asset to `world_path` and rebuild. See module docs.
-//
-// `template` selects a named scaffold preset when scaffolding fires
-// (target is `.glb`, world has no renderer trigger). `None` uses the
-// default scaffold; `Some("minimal-3d-world")` layers that template's
-// entries. Unknown names error out before touching the world file.
+/// Add an asset to `world_path` and rebuild. See module docs.
+///
+/// `template` selects a named scaffold preset when scaffolding fires
+/// (target is `.glb`, world has no renderer trigger). `None` uses the
+/// default scaffold; `Some("minimal-3d-world")` layers that template's
+/// entries. Unknown names error out before touching the world file.
 pub fn add_to_path(
     world_path: &str,
     name: Option<&str>,

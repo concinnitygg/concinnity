@@ -1,38 +1,36 @@
-// src/import/mod.rs
-//
-// Build-time expansion of a scene file into Concinnity asset entries
-// (Texture / Material / Mesh / Model / Prop / Camera3D, plus SkinnedMesh /
-// Animation for a file that carries rigs, see `rig`). Each entry references
-// the source file by path: geometry is filled in later by the desugar passes
-// in `pipeline.rs` and texture pixels by `compile_texture_payload`, so the
-// generated entries carry no inline vertex or pixel data. The expansion is
-// driven from a `SceneImport` asset by
-// `crate::world::scene_import::expand_scene_imports`.
-//
-// Two container formats are supported, dispatched by `source` extension:
-//   - `.fbx` via `crate::fbx`
-//   - `.glb` via `crate::gltf` / `crate::glb`
-//
-// PBR mapping, FBX texture slot -> Concinnity Material field:
-//   DiffuseColor  -> albedo
-//   NormalMap     -> normal_map
-//   SpecularColor -> orm_map      (packed occlusion / roughness / metalness)
-//   EmissiveColor -> emissive_map
-//
-// PBR mapping, glTF -> Concinnity Material:
-//   baseColorTexture         -> albedo
-//   baseColorFactor.rgb      -> tint
-//   normalTexture            -> normal_map
-//   metallicRoughnessTexture -> orm_map  (glTF packs G = roughness, B = metalness)
-//   emissiveTexture          -> emissive_map
-//   metallicFactor           -> metallic
-//   roughnessFactor          -> roughness
-//   emissiveFactor           -> emissive_factor
-//   alphaMode MASK           -> alpha_cutoff (from alphaCutoff, default 0.5)
-// occlusionTexture is dropped on purpose: the screen-space pass is the engine's
-// ambient-occlusion source, and `Material::orm_map` reserves its red channel for
-// that reason. alphaMode BLEND is dropped too, because `Material::transparent`
-// means refracting glass, not a blended card.
+//! Build-time expansion of a scene file into Concinnity asset entries
+//! (Texture / Material / Mesh / Model / Prop / Camera3D, plus SkinnedMesh /
+//! Animation for a file that carries rigs, see `rig`). Each entry references
+//! the source file by path: geometry is filled in later by the desugar passes
+//! in `pipeline.rs` and texture pixels by `compile_texture_payload`, so the
+//! generated entries carry no inline vertex or pixel data. The expansion is
+//! driven from a `SceneImport` asset by
+//! `crate::world::scene_import::expand_scene_imports`.
+//!
+//! Two container formats are supported, dispatched by `source` extension:
+//!   - `.fbx` via `crate::fbx`
+//!   - `.glb` via `crate::gltf` / `crate::glb`
+//!
+//! PBR mapping, FBX texture slot -> Concinnity Material field:
+//!   DiffuseColor  -> albedo
+//!   NormalMap     -> normal_map
+//!   SpecularColor -> orm_map      (packed occlusion / roughness / metalness)
+//!   EmissiveColor -> emissive_map
+//!
+//! PBR mapping, glTF -> Concinnity Material:
+//!   baseColorTexture         -> albedo
+//!   baseColorFactor.rgb      -> tint
+//!   normalTexture            -> normal_map
+//!   metallicRoughnessTexture -> orm_map  (glTF packs G = roughness, B = metalness)
+//!   emissiveTexture          -> emissive_map
+//!   metallicFactor           -> metallic
+//!   roughnessFactor          -> roughness
+//!   emissiveFactor           -> emissive_factor
+//!   alphaMode MASK           -> alpha_cutoff (from alphaCutoff, default 0.5)
+//! occlusionTexture is dropped on purpose: the screen-space pass is the engine's
+//! ambient-occlusion source, and `Material::orm_map` reserves its red channel for
+//! that reason. alphaMode BLEND is dropped too, because `Material::transparent`
+//! means refracting glass, not a blended card.
 
 // Neutral grey vertex colour for imported geometry, so a mesh takes its
 // material albedo unmodified. Shared by every source-format decoder.
@@ -54,11 +52,11 @@ const U16_CAPACITY: usize = u16::MAX as usize + 1;
 // import's (unique) asset name, sanitized; every generated asset name carries
 // it so the expansion never collides with hand-authored assets.
 #[derive(Debug, Clone)]
-pub struct ImportOptions {
-    pub name_prefix: String,
+pub(crate) struct ImportOptions {
+    pub(crate) name_prefix: String,
     pub texture_max_size: u32,
-    pub emissive_map_strength: f32,
-    pub emit_camera: bool,
+    pub(crate) emissive_map_strength: f32,
+    pub(crate) emit_camera: bool,
 }
 
 impl Default for ImportOptions {
@@ -73,7 +71,7 @@ impl Default for ImportOptions {
 }
 
 // Expand a scene file into asset entries, dispatching on the source extension.
-pub fn entries_from_scene(
+pub(crate) fn entries_from_scene(
     source: &str,
     opts: &ImportOptions,
 ) -> std::io::Result<Vec<serde_json::Value>> {
@@ -98,7 +96,7 @@ pub fn entries_from_scene(
 // Lowercase ASCII-alphanumeric/underscore sanitizer for an asset-name prefix
 // and for node-derived prop names. Everything else collapses to underscore so
 // the result reads like an identifier.
-pub fn sanitize_name(input: &str) -> String {
+pub(crate) fn sanitize_name(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.chars() {
         if c.is_ascii_alphanumeric() {

@@ -25,7 +25,7 @@ pub(super) struct OptionalInstanceExts {
 
 impl OptionalInstanceExts {
     // The names to append to `VkInstanceCreateInfo::ppEnabledExtensionNames`.
-    pub fn names(self) -> Vec<&'static CStr> {
+    pub(crate) fn names(self) -> Vec<&'static CStr> {
         let mut names = Vec::new();
         if self.swapchain_colorspace {
             names.push(ash::ext::swapchain_colorspace::NAME);
@@ -37,7 +37,7 @@ impl OptionalInstanceExts {
     }
 
     // The create flags these extensions require.
-    pub fn flags(self) -> vk::InstanceCreateFlags {
+    pub(crate) fn flags(self) -> vk::InstanceCreateFlags {
         if self.portability_enumeration {
             vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
         } else {

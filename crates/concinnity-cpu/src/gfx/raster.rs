@@ -1,9 +1,7 @@
-// src/gfx/raster.rs
-//
-// Pure CPU rasterizer for small offline previews (asset thumbnails): an
-// orthographic three-quarter view of a triangle mesh with a z-buffer and
-// simple key + ambient shading. No GPU, no backend, no ECS; deterministic
-// across platforms, so a baked image is identical everywhere.
+//! Pure CPU rasterizer for small offline previews (asset thumbnails): an
+//! orthographic three-quarter view of a triangle mesh with a z-buffer and
+//! simple key + ambient shading. No GPU, no backend, no ECS; deterministic
+//! across platforms, so a baked image is identical everywhere.
 
 use crate::geometry::vec3::{cross, dot};
 
@@ -21,8 +19,11 @@ const FIT: f32 = 0.9;
 /// An RGBA8 image buffer with a transparent background, the rasterizer's
 /// render target.
 pub struct RasterImage {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Row-major RGBA8 pixels.
     pub rgba: Vec<u8>,
 }
 
@@ -47,8 +48,11 @@ fn camera_basis() -> ([f32; 3], [f32; 3], [f32; 3]) {
 /// shades with. Parts share one camera framing and one z-buffer, so they
 /// occlude each other like a composed model.
 pub struct MeshPart<'a> {
+    /// The mesh's vertices.
     pub verts: &'a [Vertex],
+    /// Triangle indices into `verts`.
     pub indices: &'a [u16],
+    /// Linear RGB colour.
     pub color: [f32; 3],
 }
 

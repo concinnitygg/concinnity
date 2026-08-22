@@ -10,6 +10,6 @@ the cost of a velocity pre-pass and a per-frame history buffer.
 
 ## Values
 
-- `off`
-- `fxaa`
-- `taa`
+- `off`: No edge smoothing.
+- `fxaa`: Single-frame edge filter in the composite.
+- `taa`: Temporal anti-aliasing: jittered projection plus a reprojected history.

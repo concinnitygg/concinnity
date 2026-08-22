@@ -1,20 +1,18 @@
-// src/transparent.rs
-//
-// Backend-agnostic helpers for the transparent (translucent) pass. The pass
-// itself is encoded per backend; this module owns only the CPU-side ordering
-// policy so it can be unit-tested without a GPU and reused as the Vulkan /
-// DirectX transparent ports land.
-//
-// Transparent fragments use SRC_ALPHA / ONE_MINUS_SRC_ALPHA blending, which is
-// order-dependent: a draw must be composited after everything behind it.
-// `back_to_front_order` returns the draw indices sorted farthest-first by
-// camera distance so the blend resolves correctly. This is a single fixed
-// sorted draw list, not order-independent transparency.
+//! Backend-agnostic helpers for the transparent (translucent) pass. The pass
+//! itself is encoded per backend; this module owns only the CPU-side ordering
+//! policy so it can be unit-tested without a GPU and reused as the Vulkan /
+//! DirectX transparent ports land.
+//!
+//! Transparent fragments use SRC_ALPHA / ONE_MINUS_SRC_ALPHA blending, which is
+//! order-dependent: a draw must be composited after everything behind it.
+//! `back_to_front_order` returns the draw indices sorted farthest-first by
+//! camera distance so the blend resolves correctly. This is a single fixed
+//! sorted draw list, not order-independent transparency.
 
-// Return the indices `0..distances.len()` ordered farthest camera distance
-// first (back-to-front). The sort is stable, so draws at equal distance keep
-// their original (declaration) order. Non-finite distances (NaN) are treated
-// as nearest so a degenerate value never pushes a draw behind valid geometry.
+/// Return the indices `0..distances.len()` ordered farthest camera distance
+/// first (back-to-front). The sort is stable, so draws at equal distance keep
+/// their original (declaration) order. Non-finite distances (NaN) are treated
+/// as nearest so a degenerate value never pushes a draw behind valid geometry.
 pub fn back_to_front_order(distances: &[f32]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..distances.len()).collect();
     order.sort_by(|&a, &b| {

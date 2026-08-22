@@ -37,7 +37,7 @@ const VK_BC7_UNORM: u32 = 145;
 const VK_BC7_SRGB: u32 = 146;
 
 // Compile a `.ktx2` byte buffer into a tagged texture image.
-pub fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
+pub(crate) fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
     let reader = Reader::new(bytes).map_err(|e| format!("not a valid KTX2 container: {:?}", e))?;
     let header = reader.header();
 
@@ -234,7 +234,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
 // Decode a KTX2 to RGBA8 for the `cn debug` hot-reload live preview, which
 // uploads RGBA8 rather than a compressed texture. Reuses `compile_ktx2`, then
 // decodes the base level: Basis and BC1/3/5 have decoders here; BC7 does not.
-pub fn decode_ktx2_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn decode_ktx2_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let image = compile_ktx2(bytes)?;
     let (w, h) = (image.width(), image.height());
     match image.format {

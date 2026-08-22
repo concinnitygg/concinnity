@@ -1,29 +1,27 @@
-// src/build/fbx.rs
-//
-// Imports a binary FBX scene (v7.4 / v7.5) into engine-native assets. The
-// scene is reduced to three flat lists: materials (with their resolved texture
-// paths), geometry primitives (one per material group within a mesh, in
-// geometry-local space), and props (one per scene node that carries geometry,
-// holding the node's world transform decomposed into translation / Euler
-// rotation / scale and the indices of its primitives).
-//
-// Only what the renderer needs is extracted: positions, the first UV set, and
-// per-polygon material assignment. Normals and tangents are recomputed by the
-// mesh build, so FBX normal layers are ignored. Geometry is kept in local space
-// and the node transform travels on the prop, mirroring the glTF import.
-//
-// FBX texture slots are mapped from the connection property they bind to:
-// DiffuseColor -> albedo, NormalMap -> normal, SpecularColor -> packed ORM
-// (occlusion/roughness/metalness), EmissiveColor -> emissive.
+//! Imports a binary FBX scene (v7.4 / v7.5) into engine-native assets. The
+//! scene is reduced to three flat lists: materials (with their resolved texture
+//! paths), geometry primitives (one per material group within a mesh, in
+//! geometry-local space), and props (one per scene node that carries geometry,
+//! holding the node's world transform decomposed into translation / Euler
+//! rotation / scale and the indices of its primitives).
+//!
+//! Only what the renderer needs is extracted: positions, the first UV set, and
+//! per-polygon material assignment. Normals and tangents are recomputed by the
+//! mesh build, so FBX normal layers are ignored. Geometry is kept in local space
+//! and the node transform travels on the prop, mirroring the glTF import.
+//!
+//! FBX texture slots are mapped from the connection property they bind to:
+//! DiffuseColor -> albedo, NormalMap -> normal, SpecularColor -> packed ORM
+//! (occlusion/roughness/metalness), EmissiveColor -> emissive.
 
 mod anim;
 #[cfg(test)]
 pub(super) mod fixtures;
 mod skin;
 
-pub use anim::{fbx_animation_names, import_fbx_animation};
-pub use skin::import_skinned_fbx;
-
+pub(crate) use anim::fbx_animation_names;
+pub use anim::import_fbx_animation;
+pub(crate) use skin::import_skinned_fbx;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -36,54 +34,72 @@ use crate::gfx::skinning::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_
 
 use crate::import::NEUTRAL_COLOR;
 
-// A material with its scalar factors and resolved on-disk texture paths.
+/// A material with its scalar factors and resolved on-disk texture paths.
 pub struct FbxMaterial {
+    /// The material's name in the FBX document.
     pub name: String,
+    /// Albedo texture path, when the material names one.
     pub albedo: Option<String>,
+    /// Normal-map path, when the material names one.
     pub normal: Option<String>,
+    /// Occlusion / roughness / metalness texture path, when named.
     pub orm: Option<String>,
+    /// Emissive texture path, when the material names one.
     pub emissive: Option<String>,
+    /// Diffuse colour, linear RGB.
     pub diffuse: [f32; 3],
+    /// Emissive colour, linear RGB.
     pub emissive_factor: [f32; 3],
-    // Surface opacity in [0, 1]; 1 = fully opaque. Read from the FBX Opacity /
-    // TransparencyFactor property (glass/windows export < 1). 1.0 when absent.
+    /// Surface opacity in [0, 1]; 1 = fully opaque. Read from the FBX Opacity /
+    /// TransparencyFactor property (glass/windows export < 1). 1.0 when absent.
     pub opacity: f32,
 }
 
-// One material group of a mesh: geometry-local vertices and triangle indices.
+/// One material group of a mesh: geometry-local vertices and triangle indices.
 pub struct FbxPrimitive {
+    /// The primitive's vertices.
     pub vertices: Vec<VertexData>,
+    /// Triangle indices into `vertices`.
     pub indices: Vec<u32>,
+    /// Index into the scene's material list, when the primitive names one.
     pub material: Option<usize>,
 }
 
-// A scene node carrying geometry: a world transform plus the primitives drawn
-// at that transform.
+/// A scene node carrying geometry: a world transform plus the primitives drawn
+/// at that transform.
 pub struct FbxProp {
+    /// The prop's name in the FBX document.
     pub name: String,
+    /// World-space position.
     pub position: [f32; 3],
+    /// YXZ Euler rotation in degrees.
     pub rotation_deg: [f32; 3],
+    /// Per-axis scale.
     pub scale: [f32; 3],
+    /// Indices into the scene's primitive list.
     pub primitives: Vec<usize>,
-    // Rank of this prop's geometry among the file's skin-deformed geometries,
-    // in Geometry declaration order, or `None` when it is static. Matches the
-    // `skin_index` the skinned importer selects on.
+    /// Rank of this prop's geometry among the file's skin-deformed geometries,
+    /// in Geometry declaration order, or `None` when it is static. Matches the
+    /// `skin_index` the skinned importer selects on.
     pub skin_index: Option<usize>,
 }
 
-// The fully extracted scene.
+/// The fully extracted scene.
 pub struct FbxScene {
+    /// Materials declared by the document.
     pub materials: Vec<FbxMaterial>,
+    /// Primitives declared by the document.
     pub primitives: Vec<FbxPrimitive>,
+    /// Props declared by the document.
     pub props: Vec<FbxProp>,
-    // World-space bounding box (min, max) of all geometry, for framing a camera.
+    /// World-space bounding box (min, max) of all geometry, for framing a camera.
     pub aabb: Option<([f32; 3], [f32; 3])>,
 }
 
 // Raw geometry of a primitive (clones out of the parsed scene), in the same
 // `(Vec<VertexData>, Vec<u32>)` shape the glTF importer produces so the shared
 // `split_into_u16_chunks` chunker applies unchanged.
-pub fn read_primitive_geometry(
+pub(crate) fn read_primitive_geometry(
     scene: &FbxScene,
     index: u32,
 ) -> Result<(Vec<VertexData>, Vec<u32>), String> {
@@ -357,7 +373,7 @@ fn load_tree(path: &str) -> Result<fbxcel::tree::v7400::Tree, String> {
     }
 }
 
-// Parse a binary FBX file into an [`FbxScene`].
+/// Parse a binary FBX file into an [`FbxScene`].
 pub fn parse_fbx(path: &str) -> Result<FbxScene, String> {
     let tree = load_tree(path)?;
     let root = tree.root();

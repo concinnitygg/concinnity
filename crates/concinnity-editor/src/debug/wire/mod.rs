@@ -12,4 +12,4 @@
 pub mod client;
 mod server;
 
-pub use server::DebugServer;
+pub(crate) use server::DebugServer;

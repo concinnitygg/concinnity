@@ -20,7 +20,7 @@ use std::path::Path;
 // `Option` (via the sub-structs): `None` means "use the world's default" so an
 // unchanged setting never overrides the authored value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Settings {
+pub(crate) struct Settings {
     #[serde(default)]
     pub graphics: GraphicsSettings,
     #[serde(default)]
@@ -32,14 +32,14 @@ pub struct Settings {
 // Persisted overrides for graphics settings. Missing fields stay `None` and
 // fall back to the world's GraphicsConfig / Window / PostProcessConfig defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct GraphicsSettings {
+pub(crate) struct GraphicsSettings {
     // Master graphics-quality preset. `None` means never configured: the first
     // launch seeds `Auto` (detect the GPU tier and clamp quality under the
     // world's authored look) and saves once. `Auto` re-resolves from the
     // detected tier each launch; a named tier is a fixed ceiling; `Custom`
     // imposes no ceiling (only the per-field overrides below apply).
     #[serde(default)]
-    pub quality_preset: Option<crate::gfx::quality_preset::QualityPreset>,
+    pub(crate) quality_preset: Option<crate::gfx::quality_preset::QualityPreset>,
     // Display sync (vsync). `None` uses the world's `GraphicsConfig.vsync`.
     #[serde(default)]
     pub vsync: Option<bool>,
@@ -47,22 +47,22 @@ pub struct GraphicsSettings {
     // `GraphicsConfig.fps_cap`. Applied live (the render loop's frame pacer reads
     // it each frame); independent of the quality preset.
     #[serde(default)]
-    pub fps_cap: Option<u32>,
+    pub(crate) fps_cap: Option<u32>,
     // Stats-HUD display toggles. `perf_stats` is the master "Display performance
     // stats" switch; `show_fps` / `show_vram` gate the individual readouts under
     // it. `None` means shown (the engine default), so an existing settings file
     // keeps the frame-rate / GPU-memory chips visible. Applied live; with the
     // master off the per-readout rows stay visible in the menu but grayed out.
     #[serde(default)]
-    pub perf_stats: Option<bool>,
+    pub(crate) perf_stats: Option<bool>,
     #[serde(default)]
-    pub show_fps: Option<bool>,
+    pub(crate) show_fps: Option<bool>,
     #[serde(default)]
-    pub show_vram: Option<bool>,
+    pub(crate) show_vram: Option<bool>,
     // Window mode (windowed / borderless / fullscreen). `None` uses the world's
     // `Window.mode`. Applied live.
     #[serde(default)]
-    pub window_mode: Option<crate::assets::WindowMode>,
+    pub(crate) window_mode: Option<crate::assets::WindowMode>,
     // Chosen fullscreen display mode [width, height, refresh_hz] in pixels
     // (refresh_hz 0 = unknown / keep the display's rate). `None` means never
     // chosen: the display keeps its own mode and the Resolution row shows it.
@@ -74,13 +74,13 @@ pub struct GraphicsSettings {
     // `PostProcessConfig.upscale_quality`. Applied at next launch (the upscaler
     // and render targets are sized once at init).
     #[serde(default)]
-    pub render_scale: Option<crate::assets::UpscaleQuality>,
+    pub(crate) render_scale: Option<crate::assets::UpscaleQuality>,
     // Upscaler backend (`PostProcessConfig.upscale_backend`: Auto / FSR3 / DLSS /
     // XeSS). `None` uses the world's value. Applied at next launch (the upscaler
     // is selected + built once at init); DirectX / Vulkan only (Metal uses
     // MetalFX). A user/hardware preference, independent of the quality preset.
     #[serde(default)]
-    pub upscale_backend: Option<crate::assets::UpscalerBackend>,
+    pub(crate) upscale_backend: Option<crate::assets::UpscalerBackend>,
     // Exposure offset in photographic stops. `None` uses the world's
     // `PostProcessConfig.exposure_ev`. Applied live (a pure post-process
     // uniform), and re-applied at init for a persisted choice.
@@ -97,11 +97,11 @@ pub struct GraphicsSettings {
     // Bloom soft-knee width. `None` uses the world's `PostProcessConfig.bloom_knee`.
     // Applied live (a `PostProcessParams` field, like the other bloom sliders).
     #[serde(default)]
-    pub bloom_knee: Option<f32>,
+    pub(crate) bloom_knee: Option<f32>,
     // Vignette strength in [0, 1]. `None` uses the world's
     // `PostProcessConfig.vignette_strength`. Applied live.
     #[serde(default)]
-    pub vignette: Option<f32>,
+    pub(crate) vignette: Option<f32>,
     // Colour-LUT blend in [0, 1]. `None` uses the world's
     // `PostProcessConfig.lut_strength`. Applied live.
     #[serde(default)]
@@ -149,17 +149,17 @@ pub struct GraphicsSettings {
     // launch on backends without a live path. Governed by the quality preset
     // ceiling like the toggles above.
     #[serde(default)]
-    pub ssgi_resolution: Option<crate::assets::SsgiResolution>,
+    pub(crate) ssgi_resolution: Option<crate::assets::SsgiResolution>,
     #[serde(default)]
-    pub ssgi_rays: Option<u32>,
+    pub(crate) ssgi_rays: Option<u32>,
     #[serde(default)]
-    pub ssgi_steps: Option<u32>,
+    pub(crate) ssgi_steps: Option<u32>,
     // Roughness-aware reflection blur resolution
     // (`PostProcessConfig.reflection_blur_resolution`). `None` uses the world's
     // value. Applied live on Metal; governed by the quality preset ceiling like
     // the SSGI sub-quality above (only bites when a reflection feature is on).
     #[serde(default)]
-    pub reflection_blur_resolution: Option<crate::assets::ReflectionBlurResolution>,
+    pub(crate) reflection_blur_resolution: Option<crate::assets::ReflectionBlurResolution>,
     // Per-feature sub-quality tunables (SSAO radius / intensity, SSR intensity /
     // distance, SSGI intensity / distance, auto-exposure EV bounds + speed). Each
     // `None` uses the world's `PostProcessConfig` value. Applied live on Metal via
@@ -176,13 +176,13 @@ pub struct GraphicsSettings {
     #[serde(default)]
     pub ssgi_intensity: Option<f32>,
     #[serde(default)]
-    pub ssgi_max_distance: Option<f32>,
+    pub(crate) ssgi_max_distance: Option<f32>,
     #[serde(default)]
-    pub auto_exposure_min_ev: Option<f32>,
+    pub(crate) auto_exposure_min_ev: Option<f32>,
     #[serde(default)]
-    pub auto_exposure_max_ev: Option<f32>,
+    pub(crate) auto_exposure_max_ev: Option<f32>,
     #[serde(default)]
-    pub auto_exposure_speed: Option<f32>,
+    pub(crate) auto_exposure_speed: Option<f32>,
     // Shadow quality: cascade map resolution in texels (0 disables shadows) and
     // re-render cadence (`GraphicsConfig.shadow_map_size` / `shadow_update`).
     // `None` uses the world's value. Resolution is restart-required (the shadow
@@ -191,7 +191,7 @@ pub struct GraphicsSettings {
     #[serde(default)]
     pub shadow_map_size: Option<u32>,
     #[serde(default)]
-    pub shadow_update: Option<crate::assets::ShadowUpdate>,
+    pub(crate) shadow_update: Option<crate::assets::ShadowUpdate>,
     // Shadow distance in world units (`GraphicsConfig.shadow_distance`). `None`
     // uses the world's value. Applied live on Metal (the cascade-split math reads
     // it each frame) and governed by the quality preset ceiling like the shadow
@@ -209,18 +209,18 @@ pub struct GraphicsSettings {
     // required (the sampler is built once at backend init) and governed by the
     // quality preset ceiling like the shadow knobs above.
     #[serde(default)]
-    pub anisotropy: Option<u32>,
+    pub(crate) anisotropy: Option<u32>,
     // Display-output / upscaling preferences. Unlike the quality knobs above,
     // these are independent of the master preset (a user choice, not a tier), and
     // each is restart-required: the swapchain format / render targets are sized
     // once at backend init, so a change persists and applies at the next launch.
     // `None` uses the world's `PostProcessConfig` value.
     #[serde(default)]
-    pub temporal_upscaling: Option<bool>,
+    pub(crate) temporal_upscaling: Option<bool>,
     #[serde(default)]
-    pub hdr_display: Option<bool>,
+    pub(crate) hdr_display: Option<bool>,
     #[serde(default)]
-    pub hdr_pq: Option<bool>,
+    pub(crate) hdr_pq: Option<bool>,
     // System / streaming restart preferences, independent of the master preset
     // (like the display rows above) and each restart-required: ring-buffer depth
     // (`GraphicsConfig.frames_in_flight`), two-pass occlusion culling
@@ -228,35 +228,35 @@ pub struct GraphicsSettings {
     // per-frame upload budget (`StreamingConfig.texture_cap` / `texture_budget`,
     // driven together by one "Texture Quality" row). `None` uses the world's value.
     #[serde(default)]
-    pub frames_in_flight: Option<u32>,
+    pub(crate) frames_in_flight: Option<u32>,
     #[serde(default)]
     pub occlusion_two_pass: Option<bool>,
     #[serde(default)]
     pub texture_cap: Option<u32>,
     #[serde(default)]
-    pub texture_budget: Option<u32>,
+    pub(crate) texture_budget: Option<u32>,
 }
 
 // Persisted overrides for audio settings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AudioSettings {
+pub(crate) struct AudioSettings {
     // Master output volume as a linear gain (0.0 = silent, 1.0 = full). `None`
     // leaves each emitter at its authored `AudioEmitter.volume`. Applied when a
     // world's audio initializes (the main menu itself has no audio).
     #[serde(default)]
-    pub master_volume: Option<f32>,
+    pub(crate) master_volume: Option<f32>,
     // Per-bus volumes under the master, same semantics (`None` = unity).
     #[serde(default)]
-    pub music_volume: Option<f32>,
+    pub(crate) music_volume: Option<f32>,
     #[serde(default)]
-    pub sfx_volume: Option<f32>,
+    pub(crate) sfx_volume: Option<f32>,
     #[serde(default)]
-    pub voice_volume: Option<f32>,
+    pub(crate) voice_volume: Option<f32>,
 }
 
 // Persisted overrides for control settings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ControlsSettings {
+pub(crate) struct ControlsSettings {
     // Mouse-look sensitivity in radians per pixel. `None` uses the controlling
     // camera's authored `CameraController.mouse_sensitivity`. Applied when the
     // camera controller initializes.
@@ -266,20 +266,20 @@ pub struct ControlsSettings {
     // `None` uses the engine defaults (W/S/A/D/Shift/Space/E). Applied live: the
     // active backend decodes physical keys through this map.
     #[serde(default)]
-    pub keymap: Option<crate::gfx::keymap::KeyMap>,
+    pub(crate) keymap: Option<crate::gfx::keymap::KeyMap>,
     // Gamepad look sensitivity in radians per second at full stick deflection.
     // `None` uses the engine default. Applied when the camera controller
     // initializes and live via ControlsCommand.
     #[serde(default)]
-    pub gamepad_look_sensitivity: Option<f32>,
+    pub(crate) gamepad_look_sensitivity: Option<f32>,
     // Gamepad stick deadzone as a deflection fraction in [0, 1]. `None` uses
     // the engine default. Applied by the input sampling.
     #[serde(default)]
-    pub gamepad_deadzone: Option<f32>,
+    pub(crate) gamepad_deadzone: Option<f32>,
     // Gamepad action button bindings (sprint/jump/interact). `None` uses the
     // engine defaults (L3/South/West). Applied by the input sampling.
     #[serde(default)]
-    pub gamepad_map: Option<crate::assets::GamepadMap>,
+    pub(crate) gamepad_map: Option<crate::assets::GamepadMap>,
 }
 
 impl Settings {
@@ -289,13 +289,13 @@ impl Settings {
     // not silently reset. The migrated values are persisted on the next `save()`
     // (a settings change). Returns defaults when nothing is stored or the file
     // is unreadable.
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         Self::load_from(&concinnity_store::paths::settings_path())
     }
 
     // Persist to the `settings` file as CBOR. Creates the state directory as
     // needed.
-    pub fn save(&self) -> std::io::Result<()> {
+    pub(crate) fn save(&self) -> std::io::Result<()> {
         self.save_to(&concinnity_store::paths::settings_path())
     }
 

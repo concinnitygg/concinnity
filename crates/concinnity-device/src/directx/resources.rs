@@ -427,7 +427,7 @@ impl DxContext {
     // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
     // the swap instead drains the device and rewrites everything in place,
     // matching the hot-reload paths below.
-    pub fn update_texture_slot(
+    pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
         image: &crate::build::texture::TextureImage,
@@ -497,7 +497,7 @@ impl DxContext {
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The grey is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
         let grey = crate::build::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &grey)
     }
@@ -514,7 +514,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
         let srv_cpu = self.color_lut.srv_cpu;
         let srv_gpu = self.color_lut.srv_gpu;
@@ -538,7 +538,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
@@ -599,7 +599,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn clone_static_draw_object(
+    pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
@@ -778,7 +778,7 @@ impl DxContext {
     // `frame` reclaims deferred frees that have retired by then. `wait_idle`
     // runs first so the whole-resource COPY_DEST transition races no in-flight
     // command list (see `write_geometry_region`).
-    pub fn upload_mesh(
+    pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],
@@ -894,7 +894,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn update_mesh_geometry(
+    pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,
         vertices: &[Vertex],
@@ -1026,7 +1026,7 @@ impl DxContext {
     // The region is not zeroed: the draw leaves the RT-relevant set here, so
     // the next RT update retires its BLAS rather than tracing the vacated
     // bytes, and every raster pass skips a non-resident draw.
-    pub fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
         let obj = self
             .draw
             .objects
@@ -1056,7 +1056,7 @@ impl DxContext {
     // the space is allocatable immediately -- mirrors `setup_chunk_streaming`'s
     // seeding. From then on `upload_mesh` / `evict_mesh` place and free streamed
     // meshes within it. Mirrors `MtlContext::seed_mesh_streaming`.
-    pub fn seed_mesh_streaming(
+    pub(crate) fn seed_mesh_streaming(
         &mut self,
         vtx_offset: u64,
         vtx_bytes: u64,
@@ -1093,7 +1093,7 @@ impl DxContext {
     // (larger) DEFAULT-heap buffers; chunks are placed in the appended
     // headroom by `add_chunk_mesh`. This runs before the first frame, so no
     // in-flight command list references the replaced buffers.
-    pub fn setup_chunk_streaming(
+    pub(crate) fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
@@ -1201,7 +1201,7 @@ impl DxContext {
     // range still renders. `frame` reclaims retired deferred frees first.
     // `wait_idle` runs before the geometry copy so the whole-resource
     // COPY_DEST transition races no in-flight command list.
-    pub fn add_chunk_mesh(
+    pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: crate::gfx::draw_slot::SlotAlloc,
@@ -1343,7 +1343,11 @@ impl DxContext {
     // is not zeroed -- a non-resident draw is skipped everywhere and an
     // `alloc` hands back exactly `size` bytes that `add_chunk_mesh` fully
     // overwrites.
-    pub fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+    pub(crate) fn remove_chunk_mesh(
+        &mut self,
+        draw_idx: usize,
+        retire_frame: u64,
+    ) -> Result<(), String> {
         let obj =
             self.draw.objects.get(draw_idx).ok_or_else(|| {
                 format!("remove_chunk_mesh: draw object {} out of range", draw_idx)
@@ -1369,7 +1373,11 @@ impl DxContext {
     // chunk the render origin follows it, so every resident chunk is rebased
     // onto the new origin. Only the model matrix changes -- the geometry stays
     // where it was uploaded.
-    pub fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String> {
+    pub(crate) fn set_chunk_model(
+        &mut self,
+        draw_idx: usize,
+        model: [[f32; 4]; 4],
+    ) -> Result<(), String> {
         let obj = self
             .draw
             .objects
@@ -1389,7 +1397,7 @@ impl DxContext {
     // joint matrices live in per-(frame, object) upload buffers the skinned
     // passes bind as a root SRV. With no skinned meshes this is never called
     // and every skinned pass is skipped.
-    pub fn upload_skinned(
+    pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u16],
@@ -1662,7 +1670,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn update_skinned_mesh_geometry(
+    pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
         vertex_base: u16,
@@ -1765,7 +1773,7 @@ impl DxContext {
         dead_code,
         reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
     )]
-    pub fn update_skinned_skeleton(
+    pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
@@ -1792,7 +1800,7 @@ impl DxContext {
     // Replace the skinning matrices for one skinned object. Called each frame
     // from `GraphicsSystem` with the pose `AnimationSystem` computed. Out-of-
     // range indices are ignored.
-    pub fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
+    pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
         if let Some(slot) = self.skinned.joint_matrices.get_mut(skinned_index) {
             slot.clear();
             slot.extend_from_slice(matrices);
@@ -1809,7 +1817,7 @@ impl DxContext {
     // replaces it next frame). The copy's deformed region is already valid
     // because `encode_skin` folds every pre-reserved copy each frame. A no-op
     // if the index is out of range. Mirrors the Metal path.
-    pub fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+    pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
         let Some(obj) = self.skinned.draw_objects.get_mut(instance_index) else {
             return;
         };
@@ -1822,7 +1830,7 @@ impl DxContext {
 
     // Hide a skinned object; the engine's instance pool recycles the slot. A
     // no-op if the index is out of range. Mirrors the Metal path.
-    pub fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
+    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
         if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index) {
             obj.visible = false;
         }
@@ -1832,7 +1840,7 @@ impl DxContext {
     // `(skinned index, matrix)` entry per moved instance. The per-frame cull
     // records and the legacy skinned draw both read `obj.model` directly, so
     // this only writes the fields. Out-of-range indices have no effect.
-    pub fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
         for &(skinned_index, model) in updates {
             if let Some(obj) = self.skinned.draw_objects.get_mut(skinned_index as usize) {
                 obj.model = model;
@@ -2027,7 +2035,7 @@ impl DxContext {
     // Everything is built into temporaries first; any compile / PSO-create
     // failure early-returns with the live pipelines untouched, mirroring
     // `reload_shaders`. Mirrors `MtlContext::update_world_shader_pipelines`.
-    pub fn update_world_shader_pipelines(
+    pub(crate) fn update_world_shader_pipelines(
         &mut self,
         vert_bytes: Option<&[u8]>,
         frag_bytes: Option<&[u8]>,

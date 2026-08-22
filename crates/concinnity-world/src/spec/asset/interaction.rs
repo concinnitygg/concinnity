@@ -2,8 +2,8 @@
 
 use crate::spec::AssetSpec;
 
-// A HitRegion over `rect` ([x, y, w, h], window pixels) that fires `action` when
-// clicked. Hover styling and references keep their defaults.
+/// A HitRegion over `rect` ([x, y, w, h], window pixels) that fires `action` when
+/// clicked. Hover styling and references keep their defaults.
 pub fn hit_region(name: impl Into<String>, rect: [f32; 4], action: impl Into<String>) -> AssetSpec {
     AssetSpec::new(name, "HitRegion")
         .set("x", rect[0])

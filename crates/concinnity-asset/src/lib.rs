@@ -1,15 +1,15 @@
-// concinnity-asset
-//
-// The authored-data schema for the engine's assets: the plain structs, enums,
-// and serde `Default`s a world.jsonl declares, plus the identity (`AssetId`) and
-// typed reference (`AssetRef<T>`) primitives they are built from.
-//
-// This crate holds DATA ONLY. All behavior lives above it: the ECS `Component`
-// impls in concinnity-core, the name -> id interner the resolver seam points at
-// in concinnity-cpu, validation and companion expansion in concinnity-cook. The
-// crate is `#![no_std]` (using only `core` + `alloc`) with serde as its single
-// dependency, so it can never pull in engine logic and is consumable from doc
-// tooling and external authoring tools alike.
+//! concinnity-asset
+//!
+//! The authored-data schema for the engine's assets: the plain structs, enums,
+//! and serde `Default`s a world.jsonl declares, plus the identity (`AssetId`) and
+//! typed reference (`AssetRef<T>`) primitives they are built from.
+//!
+//! This crate holds DATA ONLY. All behavior lives above it: the ECS `Component`
+//! impls in concinnity-core, the name -> id interner the resolver seam points at
+//! in concinnity-cpu, validation and companion expansion in concinnity-cook. The
+//! crate is `#![no_std]` (using only `core` + `alloc`) with serde as its single
+//! dependency, so it can never pull in engine logic and is consumable from doc
+//! tooling and external authoring tools alike.
 
 #![no_std]
 

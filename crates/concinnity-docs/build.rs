@@ -1,33 +1,34 @@
-// Extracts the asset reference and bakes it into $OUT_DIR/assets_doc.rs as the
-// static ASSET_DOCS table the library serves.
-//
-// The asset sources are split across two crates: the plain data schema
-// (structs, their rustdoc, `Default`s, and enums) lives in concinnity-asset,
-// while the `impl Component` blocks (carrying NAME / ORIGIN / Args) live in
-// concinnity-core. Both are parsed into one file set so a struct and its impl
-// rejoin by name.
-//
-// For each asset (and each nested value type) the entry contains:
-//   - summary:  first paragraph of the struct-level rustdoc
-//   - full_doc: struct-level rustdoc (hand-written table lines stripped)
-//               followed by a `## Parameters` bullet list generated from the
-//               asset's `args` fields. Each bullet states the field's JSON type
-//               in prose (so no Rust type name, enum, struct, or otherwise,
-//               ever reaches the user), folds in the field's own rustdoc, and
-//               appends the default unless the prose already covers it.
-//
-// Which types get a page is discovered, not listed: every Component whose
-// `ORIGIN` is anything other than RuntimeOnly is an authorable asset and gets a
-// page. Nested objects a field embeds (a Prop's collider, the element type of
-// an array) and documented string enums a field uses (ShaderKind, AaMode, ...)
-// each get their own page too and are linked from the fields that use them, the
-// way a JSON schema separates `$defs` from the objects that reference them.
-//
-// A documented page links cross-references as relative markdown:
-// `[ShaderKind](ShaderKind.md)`, so the docs cross-link correctly when browsed
-// as plain markdown. Hand-written `](#anchor)` links in the source rustdoc are
-// rewritten to the same relative form. A docs viewer rewrites the `.md` suffix
-// to its own routes at render time.
+//! Extracts the asset reference and bakes it into $OUT_DIR/assets_doc.rs as the
+//! static ASSET_DOCS table the library serves.
+//!
+//! The asset sources are split across two crates: the plain data schema
+//! (structs, their rustdoc, `Default`s, and enums) lives in concinnity-asset,
+//! while the `impl Component` blocks (carrying NAME / ORIGIN / Args) live in
+//! concinnity-core. Both are parsed into one file set so a struct and its impl
+//! rejoin by name.
+//!
+//! For each asset (and each nested value type) the entry contains:
+//!
+//! - `summary`: first paragraph of the struct-level rustdoc.
+//! - `full_doc`: struct-level rustdoc (hand-written table lines stripped)
+//!   followed by a `## Parameters` bullet list generated from the asset's
+//!   `args` fields. Each bullet states the field's JSON type in prose (so no
+//!   Rust type name, enum, struct, or otherwise, ever reaches the user), folds
+//!   in the field's own rustdoc, and appends the default unless the prose
+//!   already covers it.
+//!
+//! Which types get a page is discovered, not listed: every Component whose
+//! `ORIGIN` is anything other than RuntimeOnly is an authorable asset and gets a
+//! page. Nested objects a field embeds (a Prop's collider, the element type of
+//! an array) and documented string enums a field uses (ShaderKind, AaMode, ...)
+//! each get their own page too and are linked from the fields that use them, the
+//! way a JSON schema separates `$defs` from the objects that reference them.
+//!
+//! A documented page links cross-references as relative markdown:
+//! `[ShaderKind](ShaderKind.md)`, so the docs cross-link correctly when browsed
+//! as plain markdown. Hand-written `](#anchor)` links in the source rustdoc are
+//! rewritten to the same relative form. A docs viewer rewrites the `.md` suffix
+//! to its own routes at render time.
 
 // Renders a type's doc body from the descriptors the parse produces. Build-side
 // only; page assembly from the finished bodies lives in the library.
@@ -65,9 +66,13 @@ fn write_assets_doc(reference: &Reference) {
     out.push_str("/// One documented type: an authorable asset, or a reference\n");
     out.push_str("/// type (a nested value type or documented enum) an asset embeds.\n");
     out.push_str("pub struct AssetDoc {\n");
+    out.push_str("    /// The type's registry name.\n");
     out.push_str("    pub type_name: &'static str,\n");
+    out.push_str("    /// First paragraph of the type's rustdoc.\n");
     out.push_str("    pub summary: &'static str,\n");
+    out.push_str("    /// The type's full rustdoc body.\n");
     out.push_str("    pub full_doc: &'static str,\n");
+    out.push_str("    /// True for a nested value type or enum rather than an asset.\n");
     out.push_str("    pub is_reference_type: bool,\n");
     out.push_str("}\n\n");
     out.push_str("/// Every documented type, assets first, each group sorted by name.\n");

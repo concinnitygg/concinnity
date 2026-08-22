@@ -1,82 +1,80 @@
-// src/particles.rs
-//
-// Backend-agnostic resolution of `ParticleEmitter` components into the
-// `ParticleEmitterRecord`s the backends consume. Each record carries the
-// clamped emitter tunables, the resolved texture pool slot, and the per-frame
-// uniform builder the GPU compute + render passes share. Pure CPU; the
-// per-emitter GPU buffers themselves are allocated by the backend at init.
+//! Backend-agnostic resolution of `ParticleEmitter` components into the
+//! `ParticleEmitterRecord`s the backends consume. Each record carries the
+//! clamped emitter tunables, the resolved texture pool slot, and the per-frame
+//! uniform builder the GPU compute + render passes share. Pure CPU; the
+//! per-emitter GPU buffers themselves are allocated by the backend at init.
 
 use crate::assets::ParticleEmitter;
 use crate::render_types::ParticleParams;
 
-// Upper bound on the per-emitter pool the backend will allocate. Each slot
-// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.slang`),
-// so 65 536 slots = 2 MiB per emitter, already well past the visual point
-// of diminishing returns for a billboard pool.
+/// Upper bound on the per-emitter pool the backend will allocate. Each slot
+/// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.slang`),
+/// so 65 536 slots = 2 MiB per emitter, already well past the visual point
+/// of diminishing returns for a billboard pool.
 pub const MAX_PARTICLES_PER_EMITTER: u32 = 65_536;
 
 // Hard floor on lifetime so the per-particle `age / lifetime` ratio never
 // divides by zero in the render kernel.
 const MIN_LIFETIME: f32 = 0.001;
 
-// Resolved per-emitter state threaded into the backend at init. The backend
-// allocates one GPU particle pool of `max_particles` slots per record and
-// drives its compute + render passes from these fields each frame.
+/// Resolved per-emitter state threaded into the backend at init. The backend
+/// allocates one GPU particle pool of `max_particles` slots per record and
+/// drives its compute + render passes from these fields each frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParticleEmitterRecord {
-    // Index of the albedo texture in the renderer's bindless / per-frame
-    // texture pool. `0` means "no texture authored": the renderer's white
-    // fallback at slot 0 is sampled and the colour gradient still shows.
+    /// Index of the albedo texture in the renderer's bindless / per-frame
+    /// texture pool. `0` means "no texture authored": the renderer's white
+    /// fallback at slot 0 is sampled and the colour gradient still shows.
     pub texture_slot: usize,
-    // World-space spawn origin.
+    /// World-space spawn origin.
     pub position: [f32; 3],
-    // Mean emission direction, unit-length. The compute kernel samples a
-    // new particle's initial velocity from the cone of half-angle
-    // `spread_cos` around this vector.
+    /// Mean emission direction, unit-length. The compute kernel samples a
+    /// new particle's initial velocity from the cone of half-angle
+    /// `spread_cos` around this vector.
     pub direction: [f32; 3],
-    // Cosine of the cone half-angle. `1.0` = straight jet, `-1.0` = full
-    // sphere. Pre-computed so the kernel does not call `cos()` per spawn.
+    /// Cosine of the cone half-angle. `1.0` = straight jet, `-1.0` = full
+    /// sphere. Pre-computed so the kernel does not call `cos()` per spawn.
     pub spread_cos: f32,
-    // Inclusive lower bound on the initial particle speed (m/s).
+    /// Inclusive lower bound on the initial particle speed (m/s).
     pub speed_min: f32,
-    // Inclusive upper bound on the initial particle speed (m/s).
+    /// Inclusive upper bound on the initial particle speed (m/s).
     pub speed_max: f32,
-    // Inclusive lower bound on the particle lifetime (seconds).
+    /// Inclusive lower bound on the particle lifetime (seconds).
     pub lifetime_min: f32,
-    // Inclusive upper bound on the particle lifetime (seconds).
+    /// Inclusive upper bound on the particle lifetime (seconds).
     pub lifetime_max: f32,
-    // Constant acceleration applied each frame, in m/s².
+    /// Constant acceleration applied each frame, in m/s².
     pub gravity: [f32; 3],
-    // Particles spawned per second.
+    /// Particles spawned per second.
     pub spawn_rate: f32,
-    // Pool size in slots. Live + dead particles share this fixed pool.
+    /// Pool size in slots. Live + dead particles share this fixed pool.
     pub max_particles: u32,
-    // World-space billboard side length at `age = 0` (m).
+    /// World-space billboard side length at `age = 0` (m).
     pub size_start: f32,
-    // World-space billboard side length at `age = lifetime` (m).
+    /// World-space billboard side length at `age = lifetime` (m).
     pub size_end: f32,
-    // Linear-space RGBA at `age = 0`.
+    /// Linear-space RGBA at `age = 0`.
     pub color_start: [f32; 4],
-    // Linear-space RGBA at `age = lifetime`.
+    /// Linear-space RGBA at `age = lifetime`.
     pub color_end: [f32; 4],
 }
 
 #[allow(dead_code)] // Metal-only particle pipeline consumer; DirectX / Vulkan don't draw particles yet.
 impl ParticleEmitterRecord {
-    // Conservative world-space AABB enclosing every particle this emitter
-    // could spawn over its full lifetime. Used by the per-frame frustum-cull
-    // skip so an off-screen emitter pays no _render_ cost; the compute
-    // kernel still ticks so the pool keeps evolving while the camera looks
-    // away.
-    //
-    // The bound is a sphere centred on the emission point and is intentionally
-    // loose: it ignores the cone-spread restriction (`spread_cos`) so the
-    // same AABB also covers full-sphere emitters, and it sums the worst-case
-    // ballistic terms: `speed_max * lifetime_max` (straight-line reach),
-    // `0.5 * |gravity| * lifetime_max²` (gravity drift), and a
-    // `max(size_start, size_end) * sqrt(2) / 2` half-diagonal for the
-    // camera-facing billboard quad. A tighter cone-aware bound is a future
-    // refinement; this version is correct (never false-cull) and cheap.
+    /// Conservative world-space AABB enclosing every particle this emitter
+    /// could spawn over its full lifetime. Used by the per-frame frustum-cull
+    /// skip so an off-screen emitter pays no _render_ cost; the compute
+    /// kernel still ticks so the pool keeps evolving while the camera looks
+    /// away.
+    ///
+    /// The bound is a sphere centred on the emission point and is intentionally
+    /// loose: it ignores the cone-spread restriction (`spread_cos`) so the
+    /// same AABB also covers full-sphere emitters, and it sums the worst-case
+    /// ballistic terms: `speed_max * lifetime_max` (straight-line reach),
+    /// `0.5 * |gravity| * lifetime_max²` (gravity drift), and a
+    /// `max(size_start, size_end) * sqrt(2) / 2` half-diagonal for the
+    /// camera-facing billboard quad. A tighter cone-aware bound is a future
+    /// refinement; this version is correct (never false-cull) and cheap.
     pub fn aabb(&self) -> ([f32; 3], [f32; 3]) {
         let speed_reach = self.speed_max * self.lifetime_max;
         let gx = self.gravity[0];
@@ -96,14 +94,14 @@ impl ParticleEmitterRecord {
         )
     }
 
-    // Build the per-frame compute + render uniform from this record's static
-    // fields and the dynamic spawn / time state the runtime carries.
-    //
-    // `dt` is the elapsed seconds since the previous compute dispatch (the
-    // integration step); `spawn_budget` is `floor(spawn_accumulator)`, the
-    // integer count of fresh particles the kernel may emit this frame; and
-    // `random_seed` is the per-frame seed the kernel mixes with the thread
-    // id to drive its cheap on-GPU RNG.
+    /// Build the per-frame compute + render uniform from this record's static
+    /// fields and the dynamic spawn / time state the runtime carries.
+    ///
+    /// `dt` is the elapsed seconds since the previous compute dispatch (the
+    /// integration step); `spawn_budget` is `floor(spawn_accumulator)`, the
+    /// integer count of fresh particles the kernel may emit this frame; and
+    /// `random_seed` is the per-frame seed the kernel mixes with the thread
+    /// id to drive its cheap on-GPU RNG.
     pub fn params(&self, dt: f32, spawn_budget: u32, random_seed: u32) -> ParticleParams {
         ParticleParams {
             position: self.position,
@@ -126,12 +124,12 @@ impl ParticleEmitterRecord {
     }
 }
 
-// Resolve a list of `ParticleEmitter` components into `ParticleEmitterRecord`s
-// the backend can consume. Skips invisible emitters and emitters whose pool
-// would be empty. An emitter's `texture` carries its cook-assigned
-// `TextureHandle`, whose value is the texture's albedo pool slot; `texture_count`
-// is the pool size and bounds the handle. An out-of-range handle is logged and
-// dropped; an emitter with no `texture` falls back to slot 0 (white).
+/// Resolve a list of `ParticleEmitter` components into `ParticleEmitterRecord`s
+/// the backend can consume. Skips invisible emitters and emitters whose pool
+/// would be empty. An emitter's `texture` carries its cook-assigned
+/// `TextureHandle`, whose value is the texture's albedo pool slot; `texture_count`
+/// is the pool size and bounds the handle. An out-of-range handle is logged and
+/// dropped; an emitter with no `texture` falls back to slot 0 (white).
 pub fn build_particle_records(
     emitters: &[&ParticleEmitter],
     texture_count: usize,
@@ -207,22 +205,22 @@ fn sanitised_color(c: [f32; 4]) -> [f32; 4] {
     out
 }
 
-// Per-emitter spawn accumulator. The runtime keeps one of these per record
-// and feeds the integer overflow into the compute kernel as `spawn_budget`
-// each frame. Fractional carry-over keeps low spawn rates honest even when
-// the frame-time is below the per-particle interval.
+/// Per-emitter spawn accumulator. The runtime keeps one of these per record
+/// and feeds the integer overflow into the compute kernel as `spawn_budget`
+/// each frame. Fractional carry-over keeps low spawn rates honest even when
+/// the frame-time is below the per-particle interval.
 #[derive(Debug, Clone, Copy, Default)]
 #[allow(dead_code)] // Metal-only particle runtime; DirectX / Vulkan ignore.
 pub struct ParticleSpawnState {
-    // Fractional particles owed by this emitter, carried forward across
-    // frames. Cleared by `take_budget` after harvesting the integer part.
+    /// Fractional particles owed by this emitter, carried forward across
+    /// frames. Cleared by `take_budget` after harvesting the integer part.
     pub accumulator: f32,
 }
 
 #[allow(dead_code)] // see ParticleSpawnState: Metal-only consumer.
 impl ParticleSpawnState {
-    // Add this frame's spawn allotment and pop off the integer part. Returns
-    // `0` when the emitter is paused (`spawn_rate <= 0`).
+    /// Add this frame's spawn allotment and pop off the integer part. Returns
+    /// `0` when the emitter is paused (`spawn_rate <= 0`).
     pub fn take_budget(&mut self, dt: f32, spawn_rate: f32, max_particles: u32) -> u32 {
         if spawn_rate <= 0.0 || dt <= 0.0 || !dt.is_finite() {
             return 0;

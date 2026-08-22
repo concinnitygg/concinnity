@@ -8,7 +8,7 @@
 // drive; the allows go away with the first construction site. The module is
 // `pub(crate)`, so these are genuinely unreachable rather than public API.
 #[allow(dead_code)]
-pub struct FpsController {
+pub(crate) struct FpsController {
     // Movement speed in world units per second.
     pub move_speed: f32,
     // Mouse sensitivity in radians per pixel.

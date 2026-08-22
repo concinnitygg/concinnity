@@ -20,7 +20,7 @@ use concinnity_world::source_args::current_platform_source_arg;
 //      `source` fields handle e.g. `"../concinnity-infra/assets/..."`).
 // Returns `None` when nothing exists; `compile_payload` falls back to the raw
 // path in that case so the read error surfaces with a useful message.
-pub fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
+pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
     let raw_path = std::path::Path::new(raw);
     let mut candidates: Vec<String> = Vec::new();
     if raw_path.is_absolute() {

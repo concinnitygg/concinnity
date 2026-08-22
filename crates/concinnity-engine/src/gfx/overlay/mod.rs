@@ -40,15 +40,15 @@ const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 // the build takes it for the duration of each step and puts it back (the
 // `Default` left behind exists only within that step).
 #[derive(Default)]
-pub struct OverlayAssets {
+pub(crate) struct OverlayAssets {
     pub fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
-    pub sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
-    pub debug_hud_chips: Vec<AssetId>,
-    pub stat_hud_chips: Vec<AssetId>,
-    pub clip_rects: std::collections::HashMap<AssetId, [f32; 4]>,
+    pub(crate) sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
+    pub(crate) debug_hud_chips: Vec<AssetId>,
+    pub(crate) stat_hud_chips: Vec<AssetId>,
+    pub(crate) clip_rects: std::collections::HashMap<AssetId, [f32; 4]>,
     // The backend's logical size at init, the viewport used until the first
     // input poll publishes a live one (`FrameInput.viewport`).
-    pub initial_viewport: (f32, f32),
+    pub(crate) initial_viewport: (f32, f32),
 }
 
 // One frame's overlay build, published by OverlaySystem and consumed (taken)
@@ -57,18 +57,18 @@ pub struct OverlayAssets {
 // the resolved menu state (`MenuOverride` applied), and whether an opaque
 // full-canvas backdrop lets the world render be skipped entirely.
 #[derive(Default)]
-pub struct OverlayFrame {
+pub(crate) struct OverlayFrame {
     pub calls: Vec<crate::gfx::render_types::TextDrawCall>,
     pub want_ui_cursor: bool,
-    pub menu_active: bool,
-    pub world_hidden: bool,
+    pub(crate) menu_active: bool,
+    pub(crate) world_hidden: bool,
 }
 
 // A spent frame's overlay draw list, handed back by graphics extraction when
 // it adopts the new one. The next build recycles it whole (the list and every
 // call's geometry buffers), so a steady-state frame allocates nothing.
 #[derive(Default)]
-pub struct OverlayRecycle(pub Vec<crate::gfx::render_types::TextDrawCall>);
+pub(crate) struct OverlayRecycle(pub Vec<crate::gfx::render_types::TextDrawCall>);
 
 #[derive(Debug, Default)]
 pub struct OverlaySystem {

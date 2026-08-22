@@ -1,36 +1,34 @@
-// src/rt_topology.rs
-//
-// Backend-agnostic planner for the incremental RT acceleration-structure
-// topology refresh. When the participating draw set changes at runtime (a
-// cloned prop, a streamed chunk added/removed), the BLAS head must be brought
-// back in line with the current set without rebuilding every BLAS: reuse every
-// BLAS whose geometry slice is unchanged, build only the new ones, and retire
-// the orphans. This module owns only the pure decision (which slot reuses which
-// old BLAS, which are orphaned); the actual GPU allocation / build / retire is
-// per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the plan
-// is unit-testable without a GPU.
-//
-// Consumed by the DirectX + Vulkan backends. The Metal backend predates this
-// module and keeps its own equivalent copy (metal/raytrace.rs); a future
-// cleanup could converge it here once Metal can be rebuilt alongside.
+//! Backend-agnostic planner for the incremental RT acceleration-structure
+//! topology refresh. When the participating draw set changes at runtime (a
+//! cloned prop, a streamed chunk added/removed), the BLAS head must be brought
+//! back in line with the current set without rebuilding every BLAS: reuse every
+//! BLAS whose geometry slice is unchanged, build only the new ones, and retire
+//! the orphans. This module owns only the pure decision (which slot reuses which
+//! old BLAS, which are orphaned); the actual GPU allocation / build / retire is
+//! per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the plan
+//! is unit-testable without a GPU.
+//!
+//! Consumed by the DirectX + Vulkan backends. The Metal backend predates this
+//! module and keeps its own equivalent copy (metal/raytrace.rs); a future
+//! cleanup could converge it here once Metal can be rebuilt alongside.
 
 use crate::render_types::DrawObject;
 
-// Identifies the geometry a draw-object BLAS traces, on the shared
-// vertex/index buffers. Two draw objects with the same signature trace
-// identical geometry, so a topology refresh can reuse the existing BLAS instead
-// of building a new one. A streamed mesh is placed wherever the sub-allocator
-// has room, so a slot that streams out and back in generally returns on a
-// different slice; the signature moves with it and the BLAS is rebuilt rather
-// than wrongly reused. `base_vertex` + `index_offset` + `index_count` are
-// exactly the inputs the per-backend geometry descriptor uses; `vertex_offset`
-// is carried too so a static draw (whose `base_vertex` is 0) still
-// distinguishes distinct vertex regions.
-//
-// The slice location alone is not enough: an asset hot-reload rewrites a slot's
-// bytes in place at unchanged offsets, which leaves every field above equal.
-// `generation` (the draw object's `geometry_generation`) moves on each such
-// rewrite so the stale BLAS is rebuilt instead of reused.
+/// Identifies the geometry a draw-object BLAS traces, on the shared
+/// vertex/index buffers. Two draw objects with the same signature trace
+/// identical geometry, so a topology refresh can reuse the existing BLAS instead
+/// of building a new one. A streamed mesh is placed wherever the sub-allocator
+/// has room, so a slot that streams out and back in generally returns on a
+/// different slice; the signature moves with it and the BLAS is rebuilt rather
+/// than wrongly reused. `base_vertex` + `index_offset` + `index_count` are
+/// exactly the inputs the per-backend geometry descriptor uses; `vertex_offset`
+/// is carried too so a static draw (whose `base_vertex` is 0) still
+/// distinguishes distinct vertex regions.
+///
+/// The slice location alone is not enough: an asset hot-reload rewrites a slot's
+/// bytes in place at unchanged offsets, which leaves every field above equal.
+/// `generation` (the draw object's `geometry_generation`) moves on each such
+/// rewrite so the stale BLAS is rebuilt instead of reused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GeomSig {
     base_vertex: i32,
@@ -41,6 +39,7 @@ pub struct GeomSig {
 }
 
 impl GeomSig {
+    /// The topology class a draw record falls into.
     pub fn of(obj: &DrawObject) -> Self {
         Self {
             base_vertex: obj.base_vertex,
@@ -52,20 +51,20 @@ impl GeomSig {
     }
 }
 
-// Per-new-slot decision for a topology refresh of the draw-object BLAS head.
+/// Per-new-slot decision for a topology refresh of the draw-object BLAS head.
 pub struct TopologyPlan {
-    // `reuse[j] == Some(k)`: new draw slot `j` reuses the old draw BLAS at index
-    // `k` (its geometry is unchanged). `None`: build a fresh BLAS for slot `j`.
+    /// `reuse[j] == Some(k)`: new draw slot `j` reuses the old draw BLAS at index
+    /// `k` (its geometry is unchanged). `None`: build a fresh BLAS for slot `j`.
     pub reuse: Vec<Option<usize>>,
-    // Old draw BLAS indices no longer referenced by any new slot -- retire them.
+    /// Old draw BLAS indices no longer referenced by any new slot -- retire them.
     pub retire: Vec<usize>,
 }
 
-// Decide, for the draw-object BLAS head only, which BLAS to reuse, which to
-// build, and which to retire when the participating draw set changes. Matches
-// old and new slots by `draw_objects` index AND geometry signature: a slot whose
-// geometry moved (a chunk slot recycled for a different chunk) does not match, so
-// it rebuilds. Pure so it is unit-testable without a GPU.
+/// Decide, for the draw-object BLAS head only, which BLAS to reuse, which to
+/// build, and which to retire when the participating draw set changes. Matches
+/// old and new slots by `draw_objects` index AND geometry signature: a slot whose
+/// geometry moved (a chunk slot recycled for a different chunk) does not match, so
+/// it rebuilds. Pure so it is unit-testable without a GPU.
 pub fn plan_topology_refresh(
     old_indices: &[usize],
     old_sigs: &[GeomSig],

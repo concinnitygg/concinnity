@@ -1,17 +1,17 @@
-// Build-time mesh decimator for the multi-LOD pipeline:
-//
-//   * `decimate_by_qem`: half-edge collapse driven by the Garland-Heckbert
-//     quadric error metric. Each candidate edge is scored by the squared
-//     distance the surviving endpoint would have to the planes of every
-//     triangle that touched either endpoint; the cheapest edge is collapsed
-//     first. Only the two endpoints are candidates for the survivor (no
-//     optimal-point solve), so the LOD0 vertex set is preserved unchanged
-//     and the runtime payload format only needs an extra *index* list per
-//     level. Used by `build_lod_alternates` to bake LOD1..N.
-//
-// It writes into the original LOD0 vertex set, so the runtime's shared
-// vertex buffer stays untouched and a LOD swap is a pure
-// `(index_offset, index_count)` change.
+//! Build-time mesh decimator for the multi-LOD pipeline:
+//!
+//!   * `decimate_by_qem`: half-edge collapse driven by the Garland-Heckbert
+//!     quadric error metric. Each candidate edge is scored by the squared
+//!     distance the surviving endpoint would have to the planes of every
+//!     triangle that touched either endpoint; the cheapest edge is collapsed
+//!     first. Only the two endpoints are candidates for the survivor (no
+//!     optimal-point solve), so the LOD0 vertex set is preserved unchanged
+//!     and the runtime payload format only needs an extra *index* list per
+//!     level. Used by `build_lod_alternates` to bake LOD1..N.
+//!
+//! It writes into the original LOD0 vertex set, so the runtime's shared
+//! vertex buffer stays untouched and a LOD swap is a pure
+//! `(index_offset, index_count)` change.
 
 // The runtime slice selection these alternates are chosen between at draw time
 // lives in concinnity-core; re-exported here under its historical path.
@@ -21,26 +21,26 @@ pub use concinnity_core::gfx::lod_select::{
     bounds_finite, camera_distance, pick_lod_level, pick_lod_slice, skinned_camera_distance,
 };
 
-// Decimate `indices` to at most `target_tri_count` triangles using
-// half-edge collapse driven by the Garland-Heckbert quadric error metric.
-//
-// Per-vertex quadrics are the sum of the plane-equation outer products of
-// every triangle the vertex touches; the cost of collapsing edge `(a, b)`
-// is `min(p_a^T (Q_a + Q_b) p_a, p_b^T (Q_a + Q_b) p_b)` and the survivor
-// is the cheaper endpoint. Restricting the survivor to one of the two
-// existing endpoints (the "half-edge" variant of the algorithm) leaves
-// the vertex set unchanged, so the runtime payload format only carries
-// new index lists per LOD; see the module docstring.
-//
-// Costs are evaluated once up front and consumed in order from a min-heap.
-// When an edge is popped we check whether either endpoint has already
-// been merged into another vertex; if so the edge is skipped. This is
-// the "lazy" variant: quality is good enough for distance-keyed LOD
-// swaps without the expense of recomputing every neighbour's cost after
-// each collapse.
-//
-// Returns a new index list addressing the same `positions` slice; empty
-// when the input is empty or every triangle degenerated.
+/// Decimate `indices` to at most `target_tri_count` triangles using
+/// half-edge collapse driven by the Garland-Heckbert quadric error metric.
+///
+/// Per-vertex quadrics are the sum of the plane-equation outer products of
+/// every triangle the vertex touches; the cost of collapsing edge `(a, b)`
+/// is `min(p_a^T (Q_a + Q_b) p_a, p_b^T (Q_a + Q_b) p_b)` and the survivor
+/// is the cheaper endpoint. Restricting the survivor to one of the two
+/// existing endpoints (the "half-edge" variant of the algorithm) leaves
+/// the vertex set unchanged, so the runtime payload format only carries
+/// new index lists per LOD; see the module docstring.
+///
+/// Costs are evaluated once up front and consumed in order from a min-heap.
+/// When an edge is popped we check whether either endpoint has already
+/// been merged into another vertex; if so the edge is skipped. This is
+/// the "lazy" variant: quality is good enough for distance-keyed LOD
+/// swaps without the expense of recomputing every neighbour's cost after
+/// each collapse.
+///
+/// Returns a new index list addressing the same `positions` slice; empty
+/// when the input is empty or every triangle degenerated.
 pub fn decimate_by_qem(
     positions: &[[f32; 3]],
     indices: &[u16],
@@ -289,11 +289,11 @@ fn face_normal_unnormalised(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-// Compute the LOD level's target triangle count given the LOD0 triangle
-// count. Halves per level (level 1 → 50 %, level 2 → 25 %, ...) with a
-// floor of 4 so the coarsest LOD still renders something. Mirrors the
-// "halve triangles per LOD" rule of thumb the legacy clustering grid
-// roughly approximated.
+/// Compute the LOD level's target triangle count given the LOD0 triangle
+/// count. Halves per level (level 1 → 50 %, level 2 → 25 %, ...) with a
+/// floor of 4 so the coarsest LOD still renders something. Mirrors the
+/// "halve triangles per LOD" rule of thumb the legacy clustering grid
+/// roughly approximated.
 pub fn target_tri_count_for_level(lod0_tri_count: usize, level: u32) -> usize {
     if lod0_tri_count == 0 {
         return 0;
@@ -303,13 +303,13 @@ pub fn target_tri_count_for_level(lod0_tri_count: usize, level: u32) -> usize {
     target.max(4)
 }
 
-// Default switch-distance for LOD level `i` (i ≥ 1) given the LOD0 mesh's
-// bounding-sphere radius. Each level doubles the previous threshold so
-// distant LODs swap in progressively further out. The base distance
-// (LOD1) is `radius * 12`, picked so a 1-unit-radius prop swaps at 12 m,
-// far enough that the cluster artefacts are not obvious in the showcase
-// but close enough that the LOD pass shows visible work in the debug
-// renderer.
+/// Default switch-distance for LOD level `i` (i ≥ 1) given the LOD0 mesh's
+/// bounding-sphere radius. Each level doubles the previous threshold so
+/// distant LODs swap in progressively further out. The base distance
+/// (LOD1) is `radius * 12`, picked so a 1-unit-radius prop swaps at 12 m,
+/// far enough that the cluster artefacts are not obvious in the showcase
+/// but close enough that the LOD pass shows visible work in the debug
+/// renderer.
 pub fn default_distance_for_level(radius: f32, level: u32) -> f32 {
     let base = radius.max(0.25) * 12.0;
     let exp = level.saturating_sub(1);

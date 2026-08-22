@@ -1,18 +1,16 @@
-// src/check/behavior.rs
-//
-// Semantic validation of Behavior args: declaration shape, name binding, and
-// expression types. Cross-asset name lookups (spawn templates, clips, scenes,
-// trigger volumes) are handled by the Behavior `CrossReferenced` impl.
-//
-// World variables take their type from the world's `Variables` asset. A world
-// that declares none keeps them implicit and integer-typed, so `check` is given
-// the declared table (empty when there is none) and `check_world` enforces that
-// a declared table accounts for every name a behavior uses.
-//
-// Every complaint carries where it was found (`check::fault`): the walk attaches
-// the hop it descended through as the error unwinds, so a caller holding the
-// authored JSON can address the value at fault. A build reports the message
-// alone, which is why the string-returning entry points are unchanged.
+//! Semantic validation of Behavior args: declaration shape, name binding, and
+//! expression types. Cross-asset name lookups (spawn templates, clips, scenes,
+//! trigger volumes) are handled by the Behavior `CrossReferenced` impl.
+//!
+//! World variables take their type from the world's `Variables` asset. A world
+//! that declares none keeps them implicit and integer-typed, so `check` is given
+//! the declared table (empty when there is none) and `check_world` enforces that
+//! a declared table accounts for every name a behavior uses.
+//!
+//! Every complaint carries where it was found (`check::fault`): the walk attaches
+//! the hop it descended through as the error unwinds, so a caller holding the
+//! authored JSON can address the value at fault. A build reports the message
+//! alone, which is why the string-returning entry points are unchanged.
 
 use serde_json::Value;
 
@@ -55,7 +53,7 @@ impl Ty {
 // The world's declared variables, by name. Empty when the world declares no
 // `Variables` asset, which leaves every variable implicit and integer-typed.
 #[derive(Default)]
-pub struct DeclaredVars {
+pub(crate) struct DeclaredVars {
     declared: bool,
     types: Vec<(String, Ty)>,
 }

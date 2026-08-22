@@ -27,7 +27,7 @@ use crate::directx::texture::{
 
 // HDR-format SSR resolve output. Replaces `hdr_resolve` as the scene colour
 // the TAA / bloom / composite passes consume when SSR is on.
-pub const SSR_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
+pub(crate) const SSR_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 // Size of the SSR resolve fragment-shader uniform block. 96 bytes; see
 // `gfx::render_types::SsrParams`.

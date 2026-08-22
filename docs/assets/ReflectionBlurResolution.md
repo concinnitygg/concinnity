@@ -13,6 +13,6 @@ full-resolution reflection for low roughness.
 
 ## Values
 
-- `full`
-- `half`
-- `quarter`
+- `full`: Blur at native resolution.
+- `half`: Blur at half resolution per axis.
+- `quarter`: Blur at quarter resolution per axis.
