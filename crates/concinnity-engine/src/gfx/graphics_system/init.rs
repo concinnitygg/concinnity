@@ -138,11 +138,22 @@ struct DecodedShaders {
 }
 
 // The text/sprite atlas pool from `decode_text_atlases`: RGBA atlases (font
-// atlases first, dense by FontHandle, then appended sprite/story textures) and
-// the blob indices the font payloads occupy (for the blob-release step).
+// atlases first, dense by FontHandle, then the built-in fallback face when some
+// text names no Font, then appended sprite/story textures) and the blob indices
+// the font payloads occupy (for the blob-release step).
 struct TextAtlases {
     atlases: Vec<(u32, u32, Vec<u8>)>,
     font_blob_indices: Vec<u32>,
+}
+
+// Whether any text in the world names no Font, and so has no face to draw with
+// unless one is registered as the fallback.
+fn font_less_text(ctx: &PipelineContext) -> bool {
+    ctx.query::<crate::assets::TextLabel>()
+        .any(|l| l.font.is_none())
+        || ctx
+            .query::<crate::assets::TextInput>()
+            .any(|t| t.font.is_none())
 }
 
 // Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
@@ -1809,7 +1820,8 @@ impl GraphicsSystem {
 
     // Build the shared text/sprite atlas pool: deserialise each Font's atlas +
     // metrics into `self.loaded_fonts` (its FontHandle == its dense atlas slot),
-    // then append each distinct Sprite / Story-stage texture (resolved through
+    // add the built-in fallback face when any text names no Font, then append
+    // each distinct Sprite / Story-stage texture (resolved through
     // `texture_locators`) into `self.sprite_texture_slots`. An unresolved sprite
     // texture demotes to its tint (warned, not fatal). Returns the RGBA atlases +
     // the font payloads' blob indices, or None (self.failed set) on a Font decode
@@ -1874,6 +1886,26 @@ impl GraphicsSystem {
                     self.failed = true;
                     return None;
                 }
+            }
+        }
+
+        // Text naming no Font has no compiled face to draw with: nothing on
+        // either the cook or the code-assembly path makes one for it. Register
+        // the built-in face for it to fall back to, only when some text needs
+        // it: the atlas is megabytes a world that names its fonts never
+        // samples.
+        if font_less_text(ctx) {
+            let slot = text_atlas_data.len();
+            let handle = crate::ecs::FontHandle(slot as u32);
+            match crate::gfx::builtin_font::load(handle) {
+                Some(builtin) => {
+                    text_atlas_data.push(builtin.atlas);
+                    self.loaded_fonts.insert(handle, builtin.loaded);
+                    self.loaded_fonts.set_fallback(handle);
+                }
+                None => tracing::error!(
+                    "GraphicsSystem: text naming no Font cannot draw -- the built-in face failed to decode"
+                ),
             }
         }
 

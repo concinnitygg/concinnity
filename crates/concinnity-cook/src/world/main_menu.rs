@@ -309,11 +309,11 @@ fn expand_one(
     let mut out = Vec::new();
     let mut wants_settings = false;
 
-    // Resolve the font. Use the user's font when set; otherwise emit a built-in
-    // font for this menu and reference it explicitly. We cannot rely on the
-    // auto-injected default font, because that pass only injects one when the
-    // world declares no Font at all (a HUD font would suppress it), which would
-    // leave the menu labels with no font and no rendered text.
+    // Resolve the font. Use the user's font when set; otherwise emit a font for
+    // this menu at `font_px` and reference it explicitly, because the row
+    // geometry below is laid out in those pixels: leaving the labels font-less
+    // would draw them at the built-in face's own size instead, inside buttons
+    // measured for this one.
     let font_name = if menu.font.is_empty() {
         let name = format!("{}_font", menu_name);
         out.push(spec_to_value(&asset::font(&name, font_px as u32)));

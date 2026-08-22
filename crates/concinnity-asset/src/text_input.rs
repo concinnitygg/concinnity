@@ -33,7 +33,8 @@ pub struct TextInput {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// The [Font](#font) used to render the field's text.
+    /// The [Font](#font) used to render the field's text. Unset draws with the
+    /// engine's built-in face at its native 24px.
     #[serde(deserialize_with = "de_opt_font_handle")]
     pub font: Option<FontHandle>,
     /// The current text. Edited in place as the player types; set an initial
@@ -49,7 +50,8 @@ pub struct TextInput {
     pub width: f32,
     /// Field height in screen pixels.
     pub height: f32,
-    /// Uniform scale applied on top of the font's `size_px`. 1.0 = native size.
+    /// Uniform scale applied on top of the font's `size_px` (24 for the
+    /// built-in face). 1.0 = native size.
     pub scale: f32,
     /// Linear-space RGB colour of the typed text.
     pub text_color: [f32; 3],

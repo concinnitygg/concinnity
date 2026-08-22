@@ -25,7 +25,7 @@ pub(super) struct LabelLayoutScratch {
 // then draws it in place.
 pub(super) fn apply_label_layout(
     ctx: &mut PipelineContext,
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
     scratch: &mut LabelLayoutScratch,
 ) {
     if !ctx.query::<LayoutContainer>().any(|c| c.visible) {
@@ -82,7 +82,7 @@ enum ChipStrip {
 pub(super) fn position_debug_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
     win_w: f32,
 ) {
     if win_w <= 0.0 {
@@ -98,7 +98,7 @@ pub(super) fn position_debug_hud(
 pub(super) fn position_stat_hud(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
 ) {
     position_chip_strip(
         ctx,
@@ -117,7 +117,7 @@ pub(super) fn position_stat_hud(
 fn position_chip_strip(
     ctx: &mut PipelineContext,
     chip_ids: &[AssetId],
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
     strip: ChipStrip,
 ) {
     let mut run = MARGIN;
@@ -177,13 +177,14 @@ mod tests {
     // A fixed-width synthetic font (every glyph 10px in a 16px em, caps 12px
     // tall) makes the measured boxes exact: a 1-line unpadded chip measures
     // 10px per char wide, 12px tall, with a -2px top inset.
-    fn loaded_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
+    fn loaded_fonts() -> text::FontSet {
         let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
         let cap_px = text::derive_cap_px(&metrics, 16.0);
-        std::collections::HashMap::from([(
+        let mut fonts = text::FontSet::default();
+        fonts.insert(
             FONT,
             text::LoadedFont {
                 atlas_slot: 0,
@@ -194,7 +195,8 @@ mod tests {
                 size_px: 16.0,
                 supersample: 1.0,
             },
-        )])
+        );
+        fonts
     }
 
     fn chip(id: AssetId, content: &str) -> TextLabel {

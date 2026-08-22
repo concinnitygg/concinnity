@@ -16,14 +16,14 @@ naming convention (`<screen>_*`), or is always shown when it has none.
 
 ## Parameters
 
-- `font`: A string. The [Font](Font.md) used to render the field's text. Optional.
+- `font`: A string. The [Font](Font.md) used to render the field's text. Unset draws with the engine's built-in face at its native 24px.
 - `content`: A string. The current text. Edited in place as the player types; set an initial value here to pre-fill the field.
 - `placeholder`: A string. Dimmer prompt shown while `content` is empty and the field is unfocused.
 - `x`: A float. Left edge in screen pixels from the window's top-left. Defaults to `0.0`.
 - `y`: A float. Top edge in screen pixels from the window's top-left. Defaults to `0.0`.
 - `width`: A float. Field width in screen pixels. Defaults to `240.0`.
 - `height`: A float. Field height in screen pixels. Defaults to `40.0`.
-- `scale`: A float. Uniform scale applied on top of the font's `size_px`. 1.0 = native size. Defaults to `1.0`.
+- `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Defaults to `1.0`.
 - `text_color`: An array of 3 floats. Linear-space RGB colour of the typed text. Defaults to `[0.95, 0.95, 0.97]`.
 - `placeholder_color`: An array of 3 floats. Linear-space RGB colour of the placeholder prompt. Defaults to `[0.55, 0.55, 0.60]`.
 - `background`: An array of 4 floats. RGBA fill of the field's background box, each channel in [0, 1]. Defaults to `[0.10, 0.10, 0.13, 1.0]`.

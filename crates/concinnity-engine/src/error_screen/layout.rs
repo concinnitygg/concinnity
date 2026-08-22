@@ -8,8 +8,7 @@
 
 use crate::assets::{TextAlign, TextLabel};
 use crate::ecs::FontHandle;
-use crate::gfx::text::{LoadedFont, measure_label_box};
-use std::collections::HashMap;
+use crate::gfx::text::{FontSet, measure_label_box};
 
 // On-screen heights, in window pixels. The header leads, the Quit line matches
 // the menu options' size, and the message draws a step smaller than Quit.
@@ -88,15 +87,11 @@ pub(super) fn build(
     message: &str,
     win_w: f32,
     win_h: f32,
-    fonts: &HashMap<FontHandle, LoadedFont>,
+    fonts: &FontSet,
     handle: FontHandle,
     hovered: bool,
 ) -> Layout {
-    let size_px = fonts
-        .get(&handle)
-        .map(|f| f.size_px)
-        .unwrap_or(1.0)
-        .max(1.0);
+    let size_px = fonts.get(handle).map(|f| f.size_px).unwrap_or(1.0).max(1.0);
 
     let mut labels: Vec<TextLabel> = vec![TextLabel {
         font: Some(handle),
@@ -177,9 +172,12 @@ pub(super) fn build(
 mod tests {
     use super::*;
 
-    fn fonts() -> (HashMap<FontHandle, LoadedFont>, FontHandle) {
-        let font = super::super::font::load().expect("embedded font decodes");
-        (font.fonts, super::super::font::HANDLE)
+    fn fonts() -> (FontSet, FontHandle) {
+        let handle = super::super::FONT_HANDLE;
+        let builtin = crate::gfx::builtin_font::load(handle).expect("embedded font decodes");
+        let mut fonts = FontSet::default();
+        fonts.insert(handle, builtin.loaded);
+        (fonts, handle)
     }
 
     #[test]

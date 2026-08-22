@@ -41,7 +41,7 @@ const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 // `Default` left behind exists only within that step).
 #[derive(Default)]
 pub(crate) struct OverlayAssets {
-    pub fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    pub fonts: text::FontSet,
     pub(crate) sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
     pub(crate) debug_hud_chips: Vec<AssetId>,
     pub(crate) stat_hud_chips: Vec<AssetId>,
@@ -190,7 +190,7 @@ impl OverlaySystem {
         hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
         // Pack the StatHud chips into a tight strip in the top-left corner.
         hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
-        let default_atlas_slot = assets.fonts.values().next().map(|f| f.atlas_slot);
+        let default_atlas_slot = assets.fonts.any_atlas_slot();
         // The component columns are contiguous, so the shapers take the whole
         // slices; each skips what is not its own (hidden elements, and
         // `follow_cursor` sprites, which only the cursor pass draws).
@@ -428,13 +428,14 @@ mod tests {
 
     // A fixed-width synthetic font (every glyph 10px in a 16px em) so the built
     // geometry is exact.
-    fn loaded_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
+    fn loaded_fonts() -> text::FontSet {
         let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
             .chain('A'..='Z')
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
         let cap_px = text::derive_cap_px(&metrics, 16.0);
-        std::collections::HashMap::from([(
+        let mut fonts = text::FontSet::default();
+        fonts.insert(
             FONT,
             text::LoadedFont {
                 atlas_slot: 0,
@@ -445,7 +446,8 @@ mod tests {
                 size_px: 16.0,
                 supersample: 1.0,
             },
-        )])
+        );
+        fonts
     }
 
     fn assets() -> OverlayAssets {

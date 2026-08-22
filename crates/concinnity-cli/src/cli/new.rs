@@ -6,7 +6,11 @@ use concinnity_cook::world::WORLD_JSONL;
 // Default starter world file. Everything else a running world needs (window,
 // renderer, debug HUD) is injected at build time and recorded in
 // world-lock.json; `cn list --expanded` shows the effective world.
-const INIT_WORLD_JSONL: &str = r#"{"name":"hello_world","type":"TextLabel","args":{"content":"Hello, world!"}}
+//
+// The label names no Font, so it draws with the engine's built-in face. It asks
+// for `centered` itself rather than leaning on a default: unset, the greeting
+// lands at the label's default x/y, under the HUD chips in the top-left corner.
+const INIT_WORLD_JSONL: &str = r#"{"name":"hello_world","type":"TextLabel","args":{"content":"Hello, world!","centered":true}}
 "#;
 
 pub(crate) fn new(path: &str) -> std::io::Result<()> {

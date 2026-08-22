@@ -2907,6 +2907,102 @@ impl WorldBuilder {
     }
 }
 
+// A world assembled in code has no compiled Font for its labels to name, so the
+// renderer registers the engine's built-in face and resolves those labels to it.
+// Without the fallback the text draws nothing at all.
+#[test]
+fn text_naming_no_font_falls_back_to_the_built_in_face() {
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    b.push(TextLabel {
+        asset_id: AssetId(800),
+        content: "Hello, world!".to_string(),
+        font: None,
+        visible: true,
+        ..Default::default()
+    });
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+
+    let labels: Vec<TextLabel> = world.ctx().query::<TextLabel>().cloned().collect();
+    let overlay = world
+        .resources
+        .get::<crate::gfx::overlay::OverlayAssets>()
+        .expect("OverlayAssets parked at init");
+    let face = overlay
+        .fonts
+        .resolve(None)
+        .expect("a label naming no font has a face to draw with");
+
+    // The whole point: the label shapes into real glyph geometry rather than
+    // being dropped for want of a font.
+    let calls = crate::gfx::text::build_text_calls(
+        &labels,
+        &overlay.fonts,
+        640.0,
+        360.0,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
+    assert_eq!(calls.len(), 1, "one draw call for the one label");
+    // The space carries no quad of its own; every other character draws one.
+    let glyphs = "Hello, world!".chars().filter(|c| *c != ' ').count();
+    assert_eq!(
+        calls[0].vertices.len(),
+        glyphs * 4,
+        "four vertices per glyph quad"
+    );
+    assert_eq!(calls[0].atlas_slot, face.atlas_slot);
+
+    // The face's atlas rides the shared pool like any other font's.
+    let s = lock(&state);
+    assert_eq!(
+        s.init.as_ref().unwrap().text_atlas_count,
+        1,
+        "the built-in atlas is uploaded for the font-less label"
+    );
+    assert_eq!(
+        face.atlas_slot, 0,
+        "it takes the slot after the world fonts"
+    );
+}
+
+// A world whose text all names a Font pays nothing for the fallback: no extra
+// atlas is uploaded, and nothing resolves without a handle.
+#[test]
+fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
+    use concinnity_core::ecs::ResourceKind;
+
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    let font = b.push_resource(ResourceKind::Font, &font_payload(32, 32));
+    b.push(TextLabel {
+        asset_id: AssetId(800),
+        content: "Hello, world!".to_string(),
+        font: Some(crate::ecs::FontHandle(font)),
+        visible: true,
+        ..Default::default()
+    });
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+
+    let overlay = world
+        .resources
+        .get::<crate::gfx::overlay::OverlayAssets>()
+        .expect("OverlayAssets parked at init");
+    assert_eq!(overlay.fonts.len(), 1);
+    assert!(overlay.fonts.resolve(None).is_none());
+
+    let s = lock(&state);
+    assert_eq!(
+        s.init.as_ref().unwrap().text_atlas_count,
+        1,
+        "the world's own font atlas, and no second one"
+    );
+}
+
 // Font atlases and sprite textures share the text-atlas pool: each font's atlas
 // takes its handle's leading slot, and each distinct Texture a Sprite references
 // is decoded and appended after them (drawn by the same pipeline).
@@ -2948,14 +3044,16 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
     assert_eq!(overlay.fonts.len(), 2);
-    assert_eq!(
-        overlay.fonts[&crate::ecs::FontHandle(0)].atlas_slot,
-        0,
-        "font handle 0 owns atlas slot 0"
-    );
-    assert_eq!(overlay.fonts[&crate::ecs::FontHandle(1)].atlas_slot, 1);
-    assert_eq!(overlay.fonts[&crate::ecs::FontHandle(1)].atlas_w, 64);
-    assert_eq!(overlay.fonts[&crate::ecs::FontHandle(0)].size_px, 32.0);
+    let face = |h| {
+        overlay
+            .fonts
+            .get(crate::ecs::FontHandle(h))
+            .expect("loaded")
+    };
+    assert_eq!(face(0).atlas_slot, 0, "font handle 0 owns atlas slot 0");
+    assert_eq!(face(1).atlas_slot, 1);
+    assert_eq!(face(1).atlas_w, 64);
+    assert_eq!(face(0).size_px, 32.0);
     // The sprite texture lands after the fonts.
     assert_eq!(
         overlay.sprite_texture_slots.get(&TextureHandle(sprite_tex)),

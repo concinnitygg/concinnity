@@ -13,34 +13,37 @@
 //!    and must resolve their NGX symbols when this crate's test binaries link.
 //!    That is `BinaryTargets::None`.
 
-// 3. Bake the bundled default font into an SDF atlas the crate embeds, so the
-//    startup error screen can draw text with no compiled world data present --
-//    the font asset it would normally use lives in the blob that failed to load.
+// 3. Bake the bundled face into an SDF atlas the crate embeds, so text can draw
+//    with no compiled world data behind it: the startup error screen, which runs
+//    when loading that data is what failed, and any TextLabel or TextInput naming
+//    no Font.
 
 use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
-// Rasterisation size of the embedded atlas. The field is signed-distance, so a
-// single size scales cleanly over the range the error screen needs.
-const ERROR_SCREEN_FONT_PX: u32 = 24;
+// Native size of the built-in face: what text naming no Font lays out at before
+// its own `scale`. The field is signed-distance and the atlas supersamples, so
+// one size covers the range both callers need, and sits near the `Font` asset's
+// own 20px default so a font-less label reads like an authored one.
+const BUILTIN_FONT_PX: u32 = 24;
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
     setup_graphics_sdks(backend, BinaryTargets::None);
-    bake_error_screen_font();
+    bake_builtin_font();
 }
 
-// Compile the bundled face into `OUT_DIR`, where `error_screen::font` embeds it.
-fn bake_error_screen_font() {
+// Compile the bundled face into `OUT_DIR`, where `gfx::builtin_font` embeds it.
+fn bake_builtin_font() {
     let payload = concinnity_font::compile(
         concinnity_font::BUILTIN_FONT_BYTES,
-        ERROR_SCREEN_FONT_PX,
+        BUILTIN_FONT_PX,
         concinnity_font::BUILTIN_FONT_FILE,
     )
     .expect("bundled face compiles");
 
     let out = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR is set"))
-        .join("error_screen_font.bin");
+        .join("builtin_font.bin");
     std::fs::write(&out, payload).expect("write baked font atlas");
     println!("cargo:rerun-if-changed=build.rs");
 }

@@ -604,13 +604,12 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // Text files become a TextLabel carrying the file contents. The label
         // is its own renderer trigger (the registry's `renders` flag) and
-        // companion injection adds GraphicsSystem + a default Font, so a fresh
-        // `cn add notes.txt` lands a renderable world without a scaffold.
+        // companion injection adds GraphicsSystem, so a fresh `cn add notes.txt`
+        // lands a renderable world without a scaffold. Naming no Font draws it
+        // with the built-in face.
         //
-        // `centered: true` is set explicitly here to match `cn init`'s output.
-        // (Companion injection's default-font pass auto-centers labels that omit
-        // `centered`, but the validated_entry round-trip materializes the full
-        // default struct so the auto-center path doesn't fire.)
+        // `centered: true` keeps the contents off the HUD chips in the top-left
+        // corner, and matches what `cn init` writes.
         "txt" => Ok(vec![text_label_entry(&stem, path_str)?]),
 
         // Markdown: a file opening with a frontmatter fence is a story and

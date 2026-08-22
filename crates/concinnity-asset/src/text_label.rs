@@ -22,8 +22,11 @@ pub enum TextAlign {
 
 /// Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 ///
-/// Text is laid out using the referenced [Font](#font). The `content` field can
-/// be updated every frame (e.g. by an [FpsCounter](#fpscounter)).
+/// Text is laid out using the referenced [Font](#font). A label naming none
+/// draws with the engine's built-in face at 24px, which costs the build nothing
+/// (the face ships inside the binary) and renders the same whether the world was
+/// compiled or assembled in code. The `content` field can be updated every frame
+/// (e.g. by an [FpsCounter](#fpscounter)).
 ///
 /// A `\n` in `content` starts a new line. When `background` has an alpha > 0, a
 /// box is filled behind the glyphs, extended outward by `padding` pixels,
@@ -46,7 +49,8 @@ pub struct TextLabel {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// The [Font](#font) asset to use for rendering.
+    /// The [Font](#font) asset to use for rendering. Unset draws with the
+    /// engine's built-in face at its native 24px.
     #[serde(deserialize_with = "de_opt_font_handle")]
     pub font: Option<FontHandle>,
     /// Text to display. Can be updated each frame.
@@ -57,9 +61,12 @@ pub struct TextLabel {
     pub y: f32,
     /// Linear-space RGB text colour.
     pub color: [f32; 3],
-    /// Uniform scale applied on top of the font's `size_px`. 1.0 = native size.
+    /// Uniform scale applied on top of the font's `size_px` (24 for the
+    /// built-in face). 1.0 = native size. Ignored when `centered` is set, which
+    /// sizes the text to the viewport instead.
     pub scale: f32,
-    /// When true, center the label in the viewport each frame; x and y are ignored.
+    /// When true, fit the label to the viewport and center it there each frame,
+    /// so `x`, `y`, `align` and `scale` are all ignored.
     pub centered: bool,
     /// Horizontal alignment relative to `x` (measured with the real font
     /// metrics). Ignored when `centered` is set.

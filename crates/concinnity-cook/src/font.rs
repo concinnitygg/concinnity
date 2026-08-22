@@ -6,11 +6,6 @@ use serde::Deserialize;
 
 use concinnity_core::assets::Font;
 
-// Source filename of the bundled default face. Companion injection derives the
-// auto-injected Font asset's name from it, so a generated default font is named
-// exactly as `cn add` would name the same file.
-pub(crate) const BUILTIN_FONT_FILE: &str = concinnity_font::BUILTIN_FONT_FILE;
-
 // Compile a Font asset's arguments into the binary blob payload format.
 //
 // When `path` is empty or absent the engine's bundled default font is used
@@ -35,12 +30,12 @@ mod tests {
     use super::*;
     use concinnity_cpu::build::font::deserialise;
 
-    // An empty or absent `path` compiles the bundled default font at the default
-    // 48px size. Before the atlas layout sizes were widened to u32, the high-res
-    // glyph stride times the glyph count overflowed u16 and panicked in debug
-    // builds at this size.
+    // An empty or absent `path` compiles the bundled face. 48px because before
+    // the atlas layout sizes were widened to u32, the high-res glyph stride
+    // times the glyph count overflowed u16 and panicked in debug builds at
+    // exactly this size.
     #[test]
-    fn builtin_font_compiles_at_default_size() {
+    fn builtin_font_compiles_from_an_empty_path() {
         for args in [
             serde_json::json!({ "size_px": 48 }),
             serde_json::json!({ "path": "", "size_px": 48 }),

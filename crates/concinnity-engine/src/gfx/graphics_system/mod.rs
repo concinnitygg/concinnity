@@ -161,7 +161,7 @@ pub struct GraphicsSystem {
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
     // texture into the text-atlas pool (appended after the font atlases); the
     // chip id lists and scroll clip bands drive the per-frame HUD layout.
-    loaded_fonts: std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: text::FontSet,
     sprite_texture_slots: std::collections::HashMap<crate::ecs::TextureHandle, usize>,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
@@ -444,7 +444,7 @@ impl GraphicsSystem {
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
-            loaded_fonts: std::collections::HashMap::new(),
+            loaded_fonts: text::FontSet::default(),
             sprite_texture_slots: std::collections::HashMap::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),

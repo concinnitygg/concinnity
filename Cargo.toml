@@ -37,11 +37,7 @@ concinnity-toolchain = { path = "crates/concinnity-toolchain", features = ["fetc
 concinnity-toolchain = { path = "crates/concinnity-toolchain" }
 
 [[example]]
-name = "example_simple"
-path = "examples/simple.rs"
-
-[[example]]
-name = "example_bistro"
+name = "bistro"
 path = "examples/bistro/main.rs"
 required-features = ["cook"]
 
@@ -68,7 +64,7 @@ unreachable_pub = "warn"
 missing_docs = "warn"
 
 [workspace.package]
-version = "0.18.49"
+version = "0.18.50"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

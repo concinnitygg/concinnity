@@ -7,15 +7,18 @@
 // there would be unavailable at the moment it is needed. When the window cannot
 // be created the caller keeps its original console-and-exit path.
 
-mod font;
 mod layout;
 
 use crate::assets::{InputKey, Window};
 use crate::ecs::FontHandle;
 use crate::gfx::backend::{FrameParams, RenderBackend};
 use crate::gfx::backend_init::BackendInit;
-use crate::gfx::text::{LoadedFont, build_text_calls};
+use crate::gfx::text::{FontSet, build_text_calls};
 use std::collections::HashMap;
+
+// The single atlas slot the embedded face occupies: this screen uploads it
+// alone, with no world fonts beside it.
+const FONT_HANDLE: FontHandle = FontHandle(0);
 
 // Identity view: the screen draws overlay text only, so no camera is involved.
 const IDENTITY_VIEW: [[f32; 4]; 4] = [
@@ -33,9 +36,12 @@ const IDENTITY_VIEW: [[f32; 4]; 4] = [
 /// Blocks the calling thread until dismissed, and must run on the main thread:
 /// it creates the process's window.
 pub(crate) fn show(title: &str, message: &str) -> bool {
-    let Some(embedded) = font::load() else {
+    let Some(builtin) = crate::gfx::builtin_font::load(FONT_HANDLE) else {
         return false;
     };
+    let atlases = vec![builtin.atlas];
+    let mut fonts = FontSet::default();
+    fonts.insert(FONT_HANDLE, builtin.loaded);
 
     let window = Window {
         title: title.to_string(),
@@ -47,24 +53,20 @@ pub(crate) fn show(title: &str, message: &str) -> bool {
     #[cfg(target_os = "macos")]
     crate::app::runloop::activate_app_macos();
 
-    let init = BackendInit::minimal(&window, embedded.atlases);
+    let init = BackendInit::minimal(&window, atlases);
     let Some(mut backend) = concinnity_device::init_backend(init) else {
         tracing::error!("error screen: no render backend; reporting on the console instead");
         return false;
     };
 
-    run_loop(backend.as_mut(), message, &embedded.fonts);
+    run_loop(backend.as_mut(), message, &fonts);
     backend.wait_idle();
     true
 }
 
 // Draw until the user dismisses the screen: a click on Quit, Escape, Return, or
 // closing the window.
-fn run_loop(
-    backend: &mut dyn RenderBackend,
-    message: &str,
-    fonts: &HashMap<FontHandle, LoadedFont>,
-) {
+fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
     let started = std::time::Instant::now();
     // Hover is resolved against the rect the previous frame laid out, since the
     // cursor position arriving now was sampled against what the user last saw.
@@ -76,7 +78,7 @@ fn run_loop(
         }
 
         let (win_w, win_h) = backend.logical_size();
-        let screen = layout::build(message, win_w, win_h, fonts, font::HANDLE, hovered);
+        let screen = layout::build(message, win_w, win_h, fonts, FONT_HANDLE, hovered);
         let text_calls = build_text_calls(
             &screen.labels,
             fonts,

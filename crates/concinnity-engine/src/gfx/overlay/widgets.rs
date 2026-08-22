@@ -44,7 +44,7 @@ impl WidgetScratch {
 // matching the input hit-test in `ui`.
 pub(super) fn build_dropdown_overlay(
     screen: &crate::ecs::DropdownView,
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
     out: &mut WidgetScratch,
 ) {
     // Panel fill (near-opaque so rows behind it do not show through), a framing
@@ -123,9 +123,8 @@ pub(super) fn build_dropdown_overlay(
 
     // One text label per SHOWN option, vertically centered in its row (the text
     // draws after the sprites, so it sits over the highlights).
-    let line_h = screen
-        .font
-        .and_then(|f| loaded_fonts.get(&f))
+    let line_h = loaded_fonts
+        .resolve(screen.font)
         .map(|f| f.size_px * screen.scale)
         .unwrap_or(0.0);
     for (opt, rect) in screen.options.iter().skip(first).zip(&layout.items) {
@@ -225,12 +224,12 @@ fn fit_line(
 // box (`fit_line`) so a long value never bleeds past the field's edges.
 pub(super) fn build_text_input_overlay(
     ti: &TextInput,
-    loaded_fonts: &std::collections::HashMap<crate::ecs::FontHandle, text::LoadedFont>,
+    loaded_fonts: &text::FontSet,
     caret_visible: bool,
     out: &mut WidgetScratch,
 ) {
     const CARET_W: f32 = 2.0;
-    let font = ti.font.and_then(|f| loaded_fonts.get(&f));
+    let font = loaded_fonts.resolve(ti.font);
     let line_h = font
         .map(|f| f.size_px * ti.scale)
         .unwrap_or(ti.height * 0.6);
@@ -402,7 +401,7 @@ mod tests {
 
     fn build_dropdown_overlay(
         screen: &DropdownView,
-        loaded_fonts: &std::collections::HashMap<FontHandle, text::LoadedFont>,
+        loaded_fonts: &text::FontSet,
     ) -> (Vec<Sprite>, Vec<TextLabel>) {
         let mut out = WidgetScratch::default();
         super::build_dropdown_overlay(screen, loaded_fonts, &mut out);
@@ -411,7 +410,7 @@ mod tests {
 
     fn build_text_input_overlay(
         ti: &TextInput,
-        loaded_fonts: &std::collections::HashMap<FontHandle, text::LoadedFont>,
+        loaded_fonts: &text::FontSet,
         caret_visible: bool,
     ) -> (Vec<Sprite>, Vec<TextLabel>) {
         let mut out = WidgetScratch::default();
@@ -441,7 +440,7 @@ mod tests {
 
     // A fixed-width synthetic font (every glyph 10px in a 16px em) makes the
     // built geometry exact.
-    fn loaded_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
+    fn loaded_fonts() -> text::FontSet {
         let metrics: std::collections::HashMap<u32, crate::build::font::GlyphMetrics> = ('a'..='z')
             .chain('A'..='Z')
             .chain('0'..='9')
@@ -449,7 +448,8 @@ mod tests {
             .map(|c| (c as u32, make_glyph(10.0)))
             .collect();
         let cap_px = text::derive_cap_px(&metrics, 16.0);
-        std::collections::HashMap::from([(
+        let mut fonts = text::FontSet::default();
+        fonts.insert(
             FONT,
             text::LoadedFont {
                 atlas_slot: 0,
@@ -460,11 +460,12 @@ mod tests {
                 size_px: 16.0,
                 supersample: 1.0,
             },
-        )])
+        );
+        fonts
     }
 
-    fn no_fonts() -> std::collections::HashMap<FontHandle, text::LoadedFont> {
-        std::collections::HashMap::new()
+    fn no_fonts() -> text::FontSet {
+        text::FontSet::default()
     }
 
     // A list anchored to a 200x40 control at (400, 100), which has room to open

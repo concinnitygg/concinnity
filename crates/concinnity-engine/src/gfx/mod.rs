@@ -45,6 +45,10 @@ pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
 #[cfg(test)]
 pub(crate) use concinnity_render::skinned_pool;
 
+// The bundled glyph atlas baked into the binary: the face the startup error
+// screen draws with, and the fallback for a world whose labels name no Font.
+pub(crate) mod builtin_font;
+
 /// Skeletal animation playback. Internal system, constructed by `World::start`
 /// when the world declares any `Animation`; produces per-frame skinning matrices.
 /// `pub` so the editor crate can drive the clip hot-reload through the

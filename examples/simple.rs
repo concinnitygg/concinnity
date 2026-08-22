@@ -8,6 +8,7 @@ fn main() -> std::io::Result<()> {
     world.add_component(GraphicsConfig::default());
     world.add_component(TextLabel {
         content: "Hello, world!".to_string(),
+        centered: true,
         ..Default::default()
     });
 
