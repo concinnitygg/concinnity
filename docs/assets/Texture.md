@@ -10,14 +10,6 @@ Use the `generator` field for built-in patterns or supply a `source` file path.
 
 **Choosing a room texture**: for neutral indoor spaces prefer `plaster` (cream-white) or `concrete` (grey). `brick` is reddish-orange, only use it when you explicitly want that look. `stone` (dark grey-blue) suits dungeons or medieval rooms.
 
-```jsonl
-{"name":"tex_brick","type":"Texture","args":{"generator":"brick","resolution":512}}
-{"name":"tex_grass","type":"Texture","args":{"generator":"grass","resolution":256}}
-{"name":"tex_checker","type":"Texture","args":{"generator":"checker","resolution":128}}
-{"name":"tex_stone","type":"Texture","args":{"generator":"stone","resolution":512}}
-{"name":"tex_plaster","type":"Texture","args":{"generator":"plaster","resolution":512}}
-```
-
 ## Parameters
 
 - `generator`: A string. Procedural generator name. Empty or omitted means use `source` instead.

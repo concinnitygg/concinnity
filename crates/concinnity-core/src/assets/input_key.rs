@@ -31,13 +31,13 @@ macro_rules! define_keys {
         // Each variant is one key name; the vocabulary is described above
         // rather than restated per variant.
         #[allow(missing_docs)]
-        pub enum Key {
+        pub enum InputKey {
             $($variant),*
         }
 
-        impl Key {
+        impl InputKey {
             /// Every declared key, in declaration order.
-            pub const ALL: &'static [Key] = &[$(Key::$variant),*];
+            pub const ALL: &'static [InputKey] = &[$(InputKey::$variant),*];
 
             /// The canonical variant name, matching the serialized form and how
             /// a [KeyBinding](#keybinding) stores its `key` (e.g. `"W"`,
@@ -46,7 +46,7 @@ macro_rules! define_keys {
             /// enum-variant spelling, so it round-trips with serde.
             pub fn name(self) -> &'static str {
                 match self {
-                    $(Key::$variant => stringify!($variant)),*
+                    $(InputKey::$variant => stringify!($variant)),*
                 }
             }
 
@@ -55,7 +55,7 @@ macro_rules! define_keys {
             /// declared a shorter one.
             pub fn display_name(self) -> &'static str {
                 match self {
-                    $(Key::$variant => key_label!($variant $(=> $label)?)),*
+                    $(InputKey::$variant => key_label!($variant $(=> $label)?)),*
                 }
             }
         }
@@ -109,21 +109,21 @@ mod tests {
     fn serializes_to_variant_name() {
         // A unit variant serializes to its name, so a persisted binding is
         // readable and stable across builds.
-        let json = serde_json::to_string(&Key::W).unwrap();
+        let json = serde_json::to_string(&InputKey::W).unwrap();
         assert_eq!(json, "\"W\"");
-        let back: Key = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, Key::W);
+        let back: InputKey = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, InputKey::W);
     }
 
     #[test]
     fn display_names_are_short() {
-        assert_eq!(Key::W.display_name(), "W");
-        assert_eq!(Key::Space.display_name(), "Space");
-        assert_eq!(Key::Shift.display_name(), "Shift");
-        assert_eq!(Key::Num1.display_name(), "1");
-        assert_eq!(Key::Backspace.display_name(), "Bksp");
-        assert_eq!(Key::Control.display_name(), "Ctrl");
-        assert_eq!(Key::Minus.display_name(), "-");
+        assert_eq!(InputKey::W.display_name(), "W");
+        assert_eq!(InputKey::Space.display_name(), "Space");
+        assert_eq!(InputKey::Shift.display_name(), "Shift");
+        assert_eq!(InputKey::Num1.display_name(), "1");
+        assert_eq!(InputKey::Backspace.display_name(), "Bksp");
+        assert_eq!(InputKey::Control.display_name(), "Ctrl");
+        assert_eq!(InputKey::Minus.display_name(), "-");
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
         // For every variant: name() and display_name() are non-empty, name()
         // equals the serde spelling, and the binding round-trips. This walks
         // both full match statements, not just a hand-picked sample.
-        for &key in Key::ALL {
+        for &key in InputKey::ALL {
             assert!(!key.name().is_empty(), "name empty for {key:?}");
             assert!(!key.display_name().is_empty(), "display empty for {key:?}");
             let json = serde_json::to_string(&key).unwrap();
@@ -140,7 +140,7 @@ mod tests {
                 format!("\"{}\"", key.name()),
                 "serde vs name for {key:?}"
             );
-            let back: Key = serde_json::from_str(&json).unwrap();
+            let back: InputKey = serde_json::from_str(&json).unwrap();
             assert_eq!(back, key, "round trip for {key:?}");
         }
     }
@@ -150,7 +150,7 @@ mod tests {
         // Names double as persisted identifiers, so no two variants may share
         // one.
         let mut seen = alloc::collections::BTreeSet::new();
-        for &key in Key::ALL {
+        for &key in InputKey::ALL {
             assert!(seen.insert(key.name()), "duplicate name {}", key.name());
         }
     }

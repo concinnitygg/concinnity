@@ -10,7 +10,7 @@
 // click outside it.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::editor::behavior::navigate;
 use crate::editor::palette::{PaletteAction, providers};
 
@@ -24,7 +24,10 @@ impl EditorHook {
     // so the shortcut reads natively on macOS without moving on Windows and
     // Linux, where `cmd` is never set.
     pub(super) fn drive_palette_toggle(&mut self, input: &FrameInput, world: &mut World) {
-        if input.captured_key != Some(Key::K) || !(input.ctrl || input.cmd) || self.sim.playing() {
+        if input.captured_key != Some(InputKey::K)
+            || !(input.ctrl || input.cmd)
+            || self.sim.playing()
+        {
             return;
         }
         self.toggle_palette(world);
@@ -139,9 +142,9 @@ impl EditorHook {
     // Typing goes to the field; Escape closes through the global escape drive.
     pub(super) fn palette_keys(&mut self, world: &mut World, input: &FrameInput) {
         match input.captured_key {
-            Some(Key::Enter) => self.commit_palette(world),
-            Some(key @ (Key::Up | Key::Down)) => {
-                let delta = if key == Key::Up { -1 } else { 1 };
+            Some(InputKey::Enter) => self.commit_palette(world),
+            Some(key @ (InputKey::Up | InputKey::Down)) => {
+                let delta = if key == InputKey::Up { -1 } else { 1 };
                 let total = self.palette_matches.len();
                 let Some(at) = navigate::step(Some(self.palette_pick), delta, total) else {
                     return;

@@ -25,10 +25,11 @@ pub(crate) fn cross_refs_for(
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
     use crate::assets::{
-        AnimGraph, Behavior, Camera3D, InstancedProp, Joint, Model, Prop, VoxelChunk, VoxelWorld,
+        AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
+        VoxelWorld,
     };
     match type_norm {
-        "animgraph" => AnimGraph::cross_refs(name, args),
+        "animationgraph" => AnimationGraph::cross_refs(name, args),
         "behavior" => Behavior::cross_refs(name, args),
         "camera3d" => Camera3D::cross_refs(name, args),
         "prop" => Prop::cross_refs(name, args),
@@ -36,7 +37,7 @@ pub(crate) fn cross_refs_for(
         "instancedprop" | "instanced" => InstancedProp::cross_refs(name, args),
         "voxelchunk" | "chunk" => VoxelChunk::cross_refs(name, args),
         "voxelworld" => VoxelWorld::cross_refs(name, args),
-        "joint" => Joint::cross_refs(name, args),
+        "physicsjoint" => PhysicsJoint::cross_refs(name, args),
         _ => Vec::new(),
     }
 }
@@ -247,7 +248,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
     }
 }
 
-// AnimGraph ownership rules. A graph owns its target mesh's animation set:
+// AnimationGraph ownership rules. A graph owns its target mesh's animation set:
 // at most one graph per SkinnedMesh, every clip a graph references must
 // actually target that mesh, and every Animation targeting a graph-driven
 // mesh must be referenced by the graph (a loose clip would silently never
@@ -257,7 +258,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let norm = |t: &str| t.to_lowercase().replace('_', "");
     let graphs: Vec<&WorldJsonlAsset> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "animgraph")
+        .filter(|a| norm(&a.asset_type) == "animationgraph")
         .collect();
     if graphs.is_empty() {
         return;
@@ -285,7 +286,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         }
         if let Some(other) = owner_by_mesh.insert(mesh, graph.name.as_str()) {
             errors.push(format!(
-                "AnimGraph '{}': SkinnedMesh '{}' is already driven by AnimGraph '{}'; \
+                "AnimationGraph '{}': SkinnedMesh '{}' is already driven by AnimationGraph '{}'; \
                  a mesh can have at most one graph",
                 graph.name, mesh, other
             ));
@@ -306,7 +307,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
                     && clip_target != mesh
                 {
                     errors.push(format!(
-                        "AnimGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
+                        "AnimationGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
                          target '{}'",
                         graph.name, clip, clip_target, mesh
                     ));
@@ -318,7 +319,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         for (&clip, &clip_target) in &clip_targets {
             if clip_target == mesh && !referenced.contains(clip) {
                 errors.push(format!(
-                    "Animation '{}': targets SkinnedMesh '{}', which AnimGraph '{}' drives, \
+                    "Animation '{}': targets SkinnedMesh '{}', which AnimationGraph '{}' drives, \
                      but no graph state references it; add a state for it or remove the clip",
                     clip, mesh, graph.name
                 ));
@@ -329,7 +330,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 
 // Third-person follow rules. The followed SkinnedMesh must declare a
 // `capsule` (the controller moves its character capsule), and an explicitly
-// named speed parameter must exist on an AnimGraph driving that mesh. An
+// named speed parameter must exist on an AnimationGraph driving that mesh. An
 // omitted `speed_parameter` (the "speed" default) is not enforced, so a
 // graph-less direct-drive character still builds; the runtime warns and
 // skips the writes instead. These need the whole world, so they live here
@@ -367,7 +368,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             && !param.is_empty()
         {
             let declared = assets.iter().any(|a| {
-                norm(&a.asset_type) == "animgraph"
+                norm(&a.asset_type) == "animationgraph"
                     && a.args.get("target").and_then(|v| v.as_str()) == Some(target)
                     && a.args
                         .get("parameters")
@@ -380,7 +381,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             });
             if !declared {
                 errors.push(format!(
-                    "Camera3D '{}': no AnimGraph on follow target '{}' declares the speed \
+                    "Camera3D '{}': no AnimationGraph on follow target '{}' declares the speed \
                      parameter '{}'",
                     camera.name, target, param
                 ));
@@ -850,7 +851,7 @@ mod tests {
             ),
             asset(
                 "j",
-                "Joint",
+                "PhysicsJoint",
                 serde_json::json!({"kind":"revolute","body_a":"a","body_b":"b"}),
             ),
         ];
@@ -872,7 +873,7 @@ mod tests {
             ),
             asset(
                 "pendulum",
-                "Joint",
+                "PhysicsJoint",
                 serde_json::json!({"kind":"revolute","body_a":"bob","anchor_b":[0,5,0]}),
             ),
         ];
@@ -883,7 +884,7 @@ mod tests {
     fn joint_missing_body_a_fails() {
         let assets = vec![asset(
             "j",
-            "Joint",
+            "PhysicsJoint",
             serde_json::json!({"kind":"fixed","body_b":"b"}),
         )];
         assert!(err_text(&assets).contains("body_a"));
@@ -900,7 +901,7 @@ mod tests {
             asset("a", "Prop", serde_json::json!({"mesh":"box"})),
             asset(
                 "j",
-                "Joint",
+                "PhysicsJoint",
                 serde_json::json!({"kind":"fixed","body_a":"a","body_b":"ghost"}),
             ),
         ];
@@ -918,7 +919,7 @@ mod tests {
             asset("a", "Prop", serde_json::json!({"mesh":"box"})),
             asset(
                 "j",
-                "Joint",
+                "PhysicsJoint",
                 serde_json::json!({"kind":"frumpus","body_a":"a"}),
             ),
         ];
@@ -933,7 +934,7 @@ mod tests {
             asset("run", "Animation", serde_json::json!({"target":"hero"})),
             asset(
                 "g",
-                "AnimGraph",
+                "AnimationGraph",
                 serde_json::json!({
                     "target":"hero",
                     "states":[
@@ -996,7 +997,7 @@ mod tests {
         let mut assets = graph_world();
         assets.push(asset(
             "g2",
-            "AnimGraph",
+            "AnimationGraph",
             serde_json::json!({
                 "target":"hero",
                 "states":[{"name":"idle","clip":"idle"},{"name":"run","clip":"run"}]
@@ -1047,7 +1048,7 @@ mod tests {
             asset("walk", "Animation", serde_json::json!({"target":"hero"})),
             asset(
                 "g",
-                "AnimGraph",
+                "AnimationGraph",
                 serde_json::json!({
                     "target":"hero",
                     "parameters":[{"name":"speed"}],

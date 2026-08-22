@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_core"
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # Selects backend_vk on Windows (via build.rs reading CARGO_FEATURE_VULKAN) so

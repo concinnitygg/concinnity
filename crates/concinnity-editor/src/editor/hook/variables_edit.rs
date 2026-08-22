@@ -17,7 +17,7 @@
 use serde_json::Value;
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;
@@ -317,7 +317,7 @@ impl EditorHook {
             self.variables_value_focus = false;
             return;
         }
-        if input.captured_key != Some(Key::Enter) {
+        if input.captured_key != Some(InputKey::Enter) {
             return;
         }
         if self.variables_name_focus {

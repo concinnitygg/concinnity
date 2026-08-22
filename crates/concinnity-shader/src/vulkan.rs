@@ -30,7 +30,7 @@ fn compile_glsl(args: &ShaderCompileArgs) -> Result<Vec<u8>, std::io::Error> {
     let mut options = CompileOptions::new()
         .map_err(|e| std::io::Error::other(format!("shaderc options init: {}", e)))?;
     options.set_optimization_level(OptimizationLevel::Performance);
-    // Target Vulkan 1.2 so the emitted module is SPIR-V 1.5 (not the 1.6 a 1.3
+    // EntityTarget Vulkan 1.2 so the emitted module is SPIR-V 1.5 (not the 1.6 a 1.3
     // target produces). The runtime instance is created at Vulkan 1.2 (see
     // `concinnity_device::vulkan::init`), and `vkCreateShaderModule` rejects a SPIR-V version
     // newer than the instance's, so a world-authored Shader stage compiled to

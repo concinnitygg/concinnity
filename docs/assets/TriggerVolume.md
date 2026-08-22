@@ -11,11 +11,6 @@ this area, open that door" is two declared assets. `detects` filters what
 sets it off: the player character, dynamic props, or anything. Volumes
 sense at their authored position; they do not move at runtime.
 
-```jsonl
-{"name":"vault_zone","type":"TriggerVolume","args":{"position":[4,1,-2],"collider":{"shape":"cuboid","half_extents":[2,1.5,2]}}}
-{"name":"vault_opens","type":"Behavior","args":{"on":{"enter":"vault_zone"},"do":[{"despawn":{"target":{"named":"vault_door"}}}],"once":true}}
-```
-
 ## Parameters
 
 - `position`: An array of 3 floats. World-space position of the volume's center.

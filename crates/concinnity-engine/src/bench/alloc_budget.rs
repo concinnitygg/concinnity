@@ -17,8 +17,8 @@
 
 use super::BenchWorld;
 use crate::assets::{
-    Behavior, BehaviorSource, Collider, Expr, GlobalTransform, Node, PhysicsConfig, Prop,
-    PropCollider, RenderHandle, Transform,
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, GlobalTransform, PhysicsConfig,
+    Prop, PropCollider, RenderHandle, Transform,
 };
 use crate::ecs::World;
 use crate::gfx::graphics_system::GraphicsSystem;
@@ -66,9 +66,9 @@ fn static_world() -> World {
     let mut world = World::new();
     world.add_component(Behavior {
         on: BehaviorSource::Tick,
-        body: vec![Node::Set {
+        body: vec![BehaviorNode::Set {
             var: "beat".into(),
-            value: Expr::Int(1),
+            value: BehaviorExpr::Int(1),
             add: true,
         }],
         ..Default::default()

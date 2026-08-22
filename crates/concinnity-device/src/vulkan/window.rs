@@ -12,7 +12,7 @@
 // component is present. GLFW's CursorDisabled mode delivers raw relative
 // deltas directly via CursorPos events, so no manual warping is needed.
 
-use crate::assets::{Key, WindowMode};
+use crate::assets::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 
@@ -103,7 +103,7 @@ fn resolve_cursor_mode(captured: bool, ui_cursor_hidden: bool) -> glfw::CursorMo
 // `pressed` is the held state (movement / sprint follow it) and, on a press,
 // fires the one-shot actions (jump / interact). Mirrors the Metal / DirectX
 // `apply_binding`.
-fn apply_binding(input: &mut InputState, km: KeyMap, key: Key, pressed: bool) {
+fn apply_binding(input: &mut InputState, km: KeyMap, key: InputKey, pressed: bool) {
     if km.forward == key {
         input.forward = pressed;
     }
@@ -129,69 +129,69 @@ fn apply_binding(input: &mut InputState, km: KeyMap, key: Key, pressed: bool) {
     }
 }
 
-// Map a GLFW key to a canonical `Key`, or `None` for a key the engine does not
+// Map a GLFW key to a canonical `InputKey`, or `None` for a key the engine does not
 // bind (function keys, Escape, Ctrl/Alt, keypad, etc.). Left/Right Shift both map
-// to `Key::Shift`: GLFW delivers them as ordinary key events.
-fn key_from_glfw(key: glfw::Key) -> Option<Key> {
-    use glfw::Key as G;
+// to `InputKey::Shift`: GLFW delivers them as ordinary key events.
+fn key_from_glfw(key: glfw::InputKey) -> Option<InputKey> {
+    use glfw::InputKey as G;
     Some(match key {
-        G::A => Key::A,
-        G::B => Key::B,
-        G::C => Key::C,
-        G::D => Key::D,
-        G::E => Key::E,
-        G::F => Key::F,
-        G::G => Key::G,
-        G::H => Key::H,
-        G::I => Key::I,
-        G::J => Key::J,
-        G::K => Key::K,
-        G::L => Key::L,
-        G::M => Key::M,
-        G::N => Key::N,
-        G::O => Key::O,
-        G::P => Key::P,
-        G::Q => Key::Q,
-        G::R => Key::R,
-        G::S => Key::S,
-        G::T => Key::T,
-        G::U => Key::U,
-        G::V => Key::V,
-        G::W => Key::W,
-        G::X => Key::X,
-        G::Y => Key::Y,
-        G::Z => Key::Z,
-        G::Num0 => Key::Num0,
-        G::Num1 => Key::Num1,
-        G::Num2 => Key::Num2,
-        G::Num3 => Key::Num3,
-        G::Num4 => Key::Num4,
-        G::Num5 => Key::Num5,
-        G::Num6 => Key::Num6,
-        G::Num7 => Key::Num7,
-        G::Num8 => Key::Num8,
-        G::Num9 => Key::Num9,
-        G::Space => Key::Space,
-        G::Tab => Key::Tab,
-        G::Enter => Key::Enter,
-        G::Backspace => Key::Backspace,
-        G::Delete => Key::Delete,
-        G::LeftShift | G::RightShift => Key::Shift,
-        G::Up => Key::Up,
-        G::Down => Key::Down,
-        G::Left => Key::Left,
-        G::Right => Key::Right,
-        G::Minus => Key::Minus,
-        G::Equal => Key::Equals,
-        G::LeftBracket => Key::LeftBracket,
-        G::RightBracket => Key::RightBracket,
-        G::Backslash => Key::Backslash,
-        G::Semicolon => Key::Semicolon,
-        G::Apostrophe => Key::Quote,
-        G::Comma => Key::Comma,
-        G::Period => Key::Period,
-        G::Slash => Key::Slash,
-        G::GraveAccent => Key::Backtick,
+        G::A => InputKey::A,
+        G::B => InputKey::B,
+        G::C => InputKey::C,
+        G::D => InputKey::D,
+        G::E => InputKey::E,
+        G::F => InputKey::F,
+        G::G => InputKey::G,
+        G::H => InputKey::H,
+        G::I => InputKey::I,
+        G::J => InputKey::J,
+        G::K => InputKey::K,
+        G::L => InputKey::L,
+        G::M => InputKey::M,
+        G::N => InputKey::N,
+        G::O => InputKey::O,
+        G::P => InputKey::P,
+        G::Q => InputKey::Q,
+        G::R => InputKey::R,
+        G::S => InputKey::S,
+        G::T => InputKey::T,
+        G::U => InputKey::U,
+        G::V => InputKey::V,
+        G::W => InputKey::W,
+        G::X => InputKey::X,
+        G::Y => InputKey::Y,
+        G::Z => InputKey::Z,
+        G::Num0 => InputKey::Num0,
+        G::Num1 => InputKey::Num1,
+        G::Num2 => InputKey::Num2,
+        G::Num3 => InputKey::Num3,
+        G::Num4 => InputKey::Num4,
+        G::Num5 => InputKey::Num5,
+        G::Num6 => InputKey::Num6,
+        G::Num7 => InputKey::Num7,
+        G::Num8 => InputKey::Num8,
+        G::Num9 => InputKey::Num9,
+        G::Space => InputKey::Space,
+        G::Tab => InputKey::Tab,
+        G::Enter => InputKey::Enter,
+        G::Backspace => InputKey::Backspace,
+        G::Delete => InputKey::Delete,
+        G::LeftShift | G::RightShift => InputKey::Shift,
+        G::Up => InputKey::Up,
+        G::Down => InputKey::Down,
+        G::Left => InputKey::Left,
+        G::Right => InputKey::Right,
+        G::Minus => InputKey::Minus,
+        G::Equal => InputKey::Equals,
+        G::LeftBracket => InputKey::LeftBracket,
+        G::RightBracket => InputKey::RightBracket,
+        G::Backslash => InputKey::Backslash,
+        G::Semicolon => InputKey::Semicolon,
+        G::Apostrophe => InputKey::Quote,
+        G::Comma => InputKey::Comma,
+        G::Period => InputKey::Period,
+        G::Slash => InputKey::Slash,
+        G::GraveAccent => InputKey::Backtick,
         _ => return None,
     })
 }
@@ -542,7 +542,7 @@ impl GlfwWindow {
     }
 
     // Drain all pending GLFW events, update input state, and return true if
-    // the window should close. Key state is tracked as a running bitmask;
+    // the window should close. InputKey state is tracked as a running bitmask;
     // cursor deltas are accumulated so no delta is lost between poll calls.
     pub(crate) fn poll(&mut self) -> bool {
         self.glfw.poll_events();
@@ -553,7 +553,7 @@ impl GlfwWindow {
                 glfw::WindowEvent::Close => {
                     should_close = true;
                 }
-                glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) => {
+                glfw::WindowEvent::InputKey(glfw::InputKey::Escape, _, glfw::Action::Press, _) => {
                     // In menu mode (a MainMenu over a captured camera) Escape
                     // always pulses so UiInputSystem can toggle the menu and
                     // GraphicsSystem drives capture from there. Otherwise a
@@ -570,17 +570,17 @@ impl GlfwWindow {
                         self.cursor_captured = false;
                     }
                 }
-                glfw::WindowEvent::Key(glfw::Key::F1, _, glfw::Action::Press, _) => {
+                glfw::WindowEvent::InputKey(glfw::InputKey::F1, _, glfw::Action::Press, _) => {
                     // F1 toggles the in-engine profiler HUD. Pulse-only
                     // (cleared by `take_input`).
                     self.input.hud_toggle = true;
                 }
-                glfw::WindowEvent::Key(key, _, action, _) => {
+                glfw::WindowEvent::InputKey(key, _, action, _) => {
                     // Held Alt modifier (the editor's Alt+drag orbit). GLFW
                     // delivers both Alt keys as ordinary key events and
                     // `key_from_glfw` maps neither, so track it here rather than
                     // through the key map.
-                    if matches!(key, glfw::Key::LeftAlt | glfw::Key::RightAlt)
+                    if matches!(key, glfw::InputKey::LeftAlt | glfw::InputKey::RightAlt)
                         && action != glfw::Action::Repeat
                     {
                         self.input.alt = action == glfw::Action::Press;
@@ -678,7 +678,7 @@ impl GlfwWindow {
 
     // Return a snapshot of the current input state. Held-key flags
     // (forward/backward/left/right/sprint) and the absolute cursor position
-    // persist -- they only change on a GLFW Key/CursorPos event, and GLFW
+    // persist -- they only change on a GLFW InputKey/CursorPos event, and GLFW
     // sends no events for a key that is simply held down (the first repeat
     // event lags the press by ~0.5 s). Resetting them here, as a blanket
     // `mem::take` once did, dropped held movement between events and made
@@ -775,10 +775,10 @@ mod tests {
         // Backspace and forward-delete decode so text fields can edit; they ride
         // `captured_key`, not `typed_char` (mirrors metal / win32). Printable
         // glyphs arrive separately via WindowEvent::Char.
-        use glfw::Key as G;
-        assert_eq!(key_from_glfw(G::Backspace), Some(Key::Backspace));
-        assert_eq!(key_from_glfw(G::Delete), Some(Key::Delete));
-        assert_eq!(key_from_glfw(G::Left), Some(Key::Left));
-        assert_eq!(key_from_glfw(G::Right), Some(Key::Right));
+        use glfw::InputKey as G;
+        assert_eq!(key_from_glfw(G::Backspace), Some(InputKey::Backspace));
+        assert_eq!(key_from_glfw(G::Delete), Some(InputKey::Delete));
+        assert_eq!(key_from_glfw(G::Left), Some(InputKey::Left));
+        assert_eq!(key_from_glfw(G::Right), Some(InputKey::Right));
     }
 }

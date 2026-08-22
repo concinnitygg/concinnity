@@ -30,11 +30,11 @@ pub use voxel::{PaletteSlot, build_voxel_mesh};
 /// pass consumes.
 pub type Vert = ([f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 
-// Convert a payload-form joint back into the args-form `JointDef`.
+// Convert a payload-form joint back into the args-form `SkeletonJoint`.
 fn payload_joint_to_def(
     j: crate::gfx::mesh_payload::PayloadJoint,
-) -> concinnity_core::assets::JointDef {
-    concinnity_core::assets::JointDef {
+) -> concinnity_core::assets::SkeletonJoint {
+    concinnity_core::assets::SkeletonJoint {
         name: j.name,
         parent: j.parent,
         translation: j.translation,
@@ -48,7 +48,7 @@ fn payload_joint_to_def(
 /// init path can call it without re-implementing the field mapping.
 pub fn payload_joints_to_defs(
     joints: Vec<crate::gfx::mesh_payload::PayloadJoint>,
-) -> Vec<concinnity_core::assets::JointDef> {
+) -> Vec<concinnity_core::assets::SkeletonJoint> {
     joints.into_iter().map(payload_joint_to_def).collect()
 }
 

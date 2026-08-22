@@ -5,13 +5,14 @@
 // controlling `Camera3D`'s controller carries a `follow` block. The mouse
 // orbits the camera around the followed character's `CharacterRig`; WASD
 // steers the character camera-relative, turning its facing yaw and feeding
-// the travel speed to its `AnimGraph` parameter so a locomotion blendspace
+// the travel speed to its `AnimationGraph` parameter so a locomotion blendspace
 // picks the gait. Displacement comes from the clips' root motion, or from
 // the controller itself in `direct` drive; either way `PhysicsSystem`
 // resolves it against the scene on the next step.
 
 use crate::assets::{
-    AnimGraph, AnimParams, Camera3D, CameraController, CharacterRig, FollowDrive, FrameInput,
+    AnimationGraph, AnimationParams, Camera3D, CameraController, CharacterRig, FollowDrive,
+    FrameInput,
 };
 use crate::ecs::{PipelineContext, SkinnedMeshHandle, StepResult, System};
 use std::time::Instant;
@@ -99,7 +100,7 @@ impl System for ThirdPersonSystem {
             .writes_components(crate::component_mask![
                 crate::assets::Camera3D,
                 crate::assets::CharacterRig,
-                crate::assets::AnimParams,
+                crate::assets::AnimationParams,
                 crate::assets::CameraProbe,
             ])
             .reads_resources(crate::resource_mask![crate::assets::ControlsCommand])
@@ -122,11 +123,11 @@ impl System for ThirdPersonSystem {
         };
 
         // Resolve the speed parameter to its declaration index now, while the
-        // target's AnimGraph component still exists (AnimationSystem drains
+        // target's AnimationGraph component still exists (AnimationSystem drains
         // it during its own init, which runs after this one).
         if !self.speed_parameter.is_empty() {
             self.speed_param_index = ctx
-                .query::<AnimGraph>()
+                .query::<AnimationGraph>()
                 .find(|g| g.target == Some(target))
                 .and_then(|g| {
                     g.parameters
@@ -135,7 +136,7 @@ impl System for ThirdPersonSystem {
                 });
             if self.speed_param_index.is_none() {
                 tracing::warn!(
-                    "ThirdPersonSystem: no AnimGraph parameter '{}' on follow target {target:?}, \
+                    "ThirdPersonSystem: no AnimationGraph parameter '{}' on follow target {target:?}, \
                      speed writes disabled",
                     self.speed_parameter
                 );
@@ -295,7 +296,9 @@ impl System for ThirdPersonSystem {
             }
 
             if let Some(index) = self.speed_param_index
-                && let Some(params) = ctx.query_mut::<AnimParams>().find(|p| p.target == target)
+                && let Some(params) = ctx
+                    .query_mut::<AnimationParams>()
+                    .find(|p| p.target == target)
             {
                 params.set(index, self.speed);
             }
@@ -414,10 +417,10 @@ mod tests {
 
     // A world with a followed rig: the third-person controller, a seeded
     // CharacterRig (GraphicsSystem would publish it in a rendering world),
-    // and an AnimGraph declaring the speed parameter. AnimationSystem's init
+    // and an AnimationGraph declaring the speed parameter. AnimationSystem's init
     // fails the graph install (no clips) and that is fine: the controller
     // resolved its parameter index before the drain, and this test seeds the
-    // AnimParams block itself.
+    // AnimationParams block itself.
     fn follow_world(drive: FollowDrive, jump_height: f32) -> (World, SkinnedMeshHandle) {
         // The authored "hero" references below deserialize through the
         // resolver's interner fallback, so the handle carries the interned id;
@@ -432,13 +435,13 @@ mod tests {
             0.5,
             0.3,
         ));
-        let graph: crate::assets::AnimGraph = serde_json::from_value(serde_json::json!({
+        let graph: crate::assets::AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
         }))
         .unwrap();
         world.add_component(graph);
-        world.add_component(crate::assets::AnimParams::new(target, vec![0.0]));
+        world.add_component(crate::assets::AnimationParams::new(target, vec![0.0]));
         (world, target)
     }
 
@@ -487,7 +490,7 @@ mod tests {
             rig.desired_move
         );
         let params = world
-            .query::<crate::assets::AnimParams>()
+            .query::<crate::assets::AnimationParams>()
             .find(|p| p.target == target)
             .expect("params survive");
         assert!(

@@ -13,11 +13,6 @@ The sound is at full volume inside `min_distance`, fades according to
 `rolloff` between `min_distance` and `max_distance`, and is inaudible
 beyond `max_distance`.
 
-```jsonl
-{"name":"fire_sound","type":"AudioEmitter","args":{"clip":"fire_loop","position":[6.0,4.0,-6.0]}}
-{"name":"waterfall","type":"AudioEmitter","args":{"clip":"falls","position":[0,2,8],"min_distance":3.0,"max_distance":80.0,"rolloff":"linear"}}
-```
-
 ## Parameters
 
 - `clip`: A string. The [AudioClip](AudioClip.md) this emitter plays. Optional.

@@ -29,23 +29,16 @@ pub enum TextAlign {
 /// box is filled behind the glyphs, extended outward by `padding` pixels,
 /// useful for HUD chips.
 ///
-/// ```jsonl
-/// {
-///   "type": "TextLabel",
-///   "name": "fps_text",
-///   "args": {
-///     "font": "fps_font",
-///     "content": "FPS: --",
-///     "x": 10,
-///     "y": 10,
-///     "color": [
-///       1,
-///       1,
-///       1
-///     ],
-///     "scale": 1
-///   }
-/// }
+/// ```rust
+/// # use concinnity_asset::TextLabel;
+/// TextLabel {
+///     content: "FPS: --".into(),
+///     x: 10.0,
+///     y: 10.0,
+///     color: [1.0, 1.0, 1.0],
+///     scale: 1.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

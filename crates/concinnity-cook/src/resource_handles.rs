@@ -150,7 +150,7 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
     // into the args JSON for glTF-sourced meshes, and inline-authored worlds may
     // carry it directly. Read it straight from the JSON so it can be baked into
     // the compiled payload alongside vertices and indices.
-    let skeleton: Vec<crate::assets::JointDef> = match args.get("skeleton") {
+    let skeleton: Vec<crate::assets::SkeletonJoint> = match args.get("skeleton") {
         Some(v) => Deserialize::deserialize(v).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

@@ -12,13 +12,6 @@ Declare a `PhysicsConfig` to put bodies on terrain or a non-zero floor.
 For terrain-based outdoor scenes the terrain parameters must match the
 terrain mesh exactly.
 
-```jsonl
-// Indoor (flat floor): no PhysicsConfig needed, just declare bodies.
-
-// Outdoor (heightfield terrain):
-{"name":"physics","type":"PhysicsConfig","args":{"terrain_mesh":"ground_heightfield_mesh","terrain_offset_y":-0.5}}
-```
-
 ## Parameters
 
 - `floor_y`: A float. Y coordinate of the floor. When left at 0.0 it is auto-detected from the camera; set it explicitly to override. Defaults to `0.0`.

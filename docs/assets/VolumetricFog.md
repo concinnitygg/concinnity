@@ -9,10 +9,6 @@ sun.
 Only one `VolumetricFog` is honoured: the first declared instance wins;
 later instances are silently dropped. With none declared, there is no fog.
 
-```jsonl
-{"name":"fog","type":"VolumetricFog","args":{"density":0.08,"color":[0.75,0.82,0.95],"height_falloff":0.18,"max_distance":160.0,"phase_g":0.5}}
-```
-
 ## Parameters
 
 - `enabled`: A boolean. Master toggle. `false` disables the fog even when this asset is present. Defaults to `true`.

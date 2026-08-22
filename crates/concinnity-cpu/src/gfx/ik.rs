@@ -357,7 +357,7 @@ mod tests {
         let skeleton = leg();
         let mut locals = bind_locals(&skeleton);
         let before = locals.clone();
-        // Target exactly on the root: no solvable direction.
+        // EntityTarget exactly on the root: no solvable direction.
         solve(&skeleton, &mut locals, &CHAIN, [0.0, 2.0, 0.0], 1.0);
         assert_eq!(locals, before);
         // Out-of-range chain indices are ignored.

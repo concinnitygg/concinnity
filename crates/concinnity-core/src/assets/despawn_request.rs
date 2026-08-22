@@ -1,6 +1,6 @@
 // src/assets/despawn_request.rs
 
-use crate::assets::Target;
+use crate::assets::EntityTarget;
 
 /// Runtime-only event requesting that an authored placement be removed from the
 /// world at runtime. A named target needs no live Entity handle; an
@@ -11,5 +11,5 @@ use crate::assets::Target;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DespawnRequest {
     /// The placement to remove, by name or entity.
-    pub target: Target,
+    pub target: EntityTarget,
 }

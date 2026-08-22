@@ -36,9 +36,9 @@ pub(crate) fn setting_available(key: &str, caps: &crate::gfx::backend::DeviceCap
     }
 }
 
-// Key-rebind settings (Controls tab) are a third setting category alongside
+// InputKey-rebind settings (Controls tab) are a third setting category alongside
 // cycle rows (`options`) and sliders (`slider_range`): a rebind key's value is a
-// physical `Key`, not an option index or a fraction. Their classification +
+// physical `InputKey`, not an option index or a fraction. Their classification +
 // per-action data live in `gfx/keymap.rs` (the `Bindable` / `KeyMap` types) and
 // the live map is owned by `GraphicsSystem`, so there is nothing to register
 // here; this comment just records the third category for the reader.

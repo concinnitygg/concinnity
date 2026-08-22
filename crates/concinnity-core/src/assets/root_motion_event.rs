@@ -11,7 +11,7 @@ use crate::ecs::SkinnedMeshHandle;
 /// mesh's model transform and move the character. Events, not components:
 /// a missed frame must not accumulate.
 #[derive(Debug, Clone, Copy)]
-pub struct RootMotion {
+pub struct RootMotionEvent {
     /// The `SkinnedMesh` resource whose animation produced the displacement.
     pub target: SkinnedMeshHandle,
     /// Displacement in the mesh's local space for this frame.

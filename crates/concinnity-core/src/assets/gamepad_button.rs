@@ -21,7 +21,7 @@ macro_rules! define_buttons {
         /// Face buttons are named by position (`South` is the bottom face
         /// button: Xbox A, PlayStation Cross) so a persisted binding reads the
         /// same for every controller brand. Unit variants serialize to their
-        /// name, so a persisted binding survives a build, like [Key](#key).
+        /// name, so a persisted binding survives a build, like [InputKey](#inputkey).
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
         )]
@@ -37,7 +37,7 @@ macro_rules! define_buttons {
             pub const ALL: &'static [GamepadButton] = &[$(GamepadButton::$variant),*];
 
             /// The canonical variant name, matching the serialized form (e.g.
-            /// `"South"`, `"LeftShoulder"`). Like [Key::name](#method.name)
+            /// `"South"`, `"LeftShoulder"`). Like [InputKey::name](#method.name)
             /// this is the exact enum-variant spelling, so it round-trips with
             /// serde.
             pub fn name(self) -> &'static str {

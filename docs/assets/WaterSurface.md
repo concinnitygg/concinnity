@@ -12,18 +12,6 @@ The surface is positioned by `centre` and sized by `extent` (XZ
 half-widths). The mesh itself is flat; all height variation comes from the
 animated waves.
 
-```jsonl
-{"name":"pond","type":"WaterSurface","args":{
-  "centre":[0.0,0.4,0.0],
-  "extent":[12.0,8.0],
-  "subdivisions":96,
-  "waves":[
-    {"amplitude":0.10,"wavelength":3.0,"speed":0.7,"direction":[1.0,0.0],"steepness":0.4},
-    {"amplitude":0.05,"wavelength":1.5,"speed":1.1,"direction":[-0.4,0.8],"steepness":0.3}
-  ]
-}}
-```
-
 ## Parameters
 
 - `centre`: An array of 3 floats. World-space position of the surface's centre. Defaults to `[0.0, 0.0, 0.0]`.

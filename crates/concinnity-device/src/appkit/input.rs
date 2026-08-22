@@ -1,6 +1,6 @@
 // src/appkit/input.rs
 //
-// Key-event decoding and the persistent per-frame input state for the AppKit
+// InputKey-event decoding and the persistent per-frame input state for the AppKit
 // window layer. The pieces here are pure (no window, no view, no Objective-C
 // state beyond reading an NSEvent), so they are unit-testable and shared by
 // every backend that renders into an NSView; `window.rs` owns the event pump
@@ -8,13 +8,13 @@
 
 use objc2_app_kit::NSEvent;
 
-use crate::assets::Key;
+use crate::assets::InputKey;
 
 // The previously-duplicated InputState collapsed into the shared
 // crate::gfx::input::RenderInput; this alias keeps the historical name.
 pub(crate) use crate::gfx::input::RenderInput as InputState;
 
-// Persistent key state tracked across frames. Key booleans are set on KeyDown
+// Persistent key state tracked across frames. InputKey booleans are set on KeyDown
 // and cleared on KeyUp; they are never reset between frames so that held keys
 // remain active even when no repeat event arrives (avoiding the OS key-repeat
 // delay gap). Mouse deltas are accumulated here and cleared by take_input().
@@ -55,7 +55,7 @@ pub(super) struct KeyState {
     // settings menu's rebind capture. Set on any KeyDown with a known mapping
     // (and on the Shift rising edge); cleared by take_input(). Not gated by
     // capture / menu state so a rebind row can read it while a menu is open.
-    pub(super) captured_key: Option<Key>,
+    pub(super) captured_key: Option<InputKey>,
     // Pulse: the printable character produced by the last key press, taken from
     // the NSEvent's `characters` (so shift / option / dead keys resolve to the
     // right glyph), for text-input fields; cleared by take_input(). Control
@@ -105,68 +105,68 @@ pub(super) fn printable_char(event: &NSEvent) -> Option<char> {
     is_printable_glyph(c).then_some(c)
 }
 
-// Map a macOS virtual key code to a canonical `Key`, or `None` for a key the
+// Map a macOS virtual key code to a canonical `InputKey`, or `None` for a key the
 // engine does not bind (modifiers other than Shift, function keys, Escape, etc.).
 // The codes are hardware-independent (the same on every Mac keyboard). Shift is
 // deliberately absent: it arrives via FlagsChanged, not a key code.
-pub(super) fn key_from_mac(kc: u16) -> Option<Key> {
+pub(super) fn key_from_mac(kc: u16) -> Option<InputKey> {
     Some(match kc {
-        0 => Key::A,
-        11 => Key::B,
-        8 => Key::C,
-        2 => Key::D,
-        14 => Key::E,
-        3 => Key::F,
-        5 => Key::G,
-        4 => Key::H,
-        34 => Key::I,
-        38 => Key::J,
-        40 => Key::K,
-        37 => Key::L,
-        46 => Key::M,
-        45 => Key::N,
-        31 => Key::O,
-        35 => Key::P,
-        12 => Key::Q,
-        15 => Key::R,
-        1 => Key::S,
-        17 => Key::T,
-        32 => Key::U,
-        9 => Key::V,
-        13 => Key::W,
-        7 => Key::X,
-        16 => Key::Y,
-        6 => Key::Z,
-        29 => Key::Num0,
-        18 => Key::Num1,
-        19 => Key::Num2,
-        20 => Key::Num3,
-        21 => Key::Num4,
-        23 => Key::Num5,
-        22 => Key::Num6,
-        26 => Key::Num7,
-        28 => Key::Num8,
-        25 => Key::Num9,
-        49 => Key::Space,
-        48 => Key::Tab,
-        36 => Key::Enter,
-        51 => Key::Backspace,
-        117 => Key::Delete,
-        123 => Key::Left,
-        124 => Key::Right,
-        125 => Key::Down,
-        126 => Key::Up,
-        27 => Key::Minus,
-        24 => Key::Equals,
-        33 => Key::LeftBracket,
-        30 => Key::RightBracket,
-        42 => Key::Backslash,
-        41 => Key::Semicolon,
-        39 => Key::Quote,
-        43 => Key::Comma,
-        47 => Key::Period,
-        44 => Key::Slash,
-        50 => Key::Backtick,
+        0 => InputKey::A,
+        11 => InputKey::B,
+        8 => InputKey::C,
+        2 => InputKey::D,
+        14 => InputKey::E,
+        3 => InputKey::F,
+        5 => InputKey::G,
+        4 => InputKey::H,
+        34 => InputKey::I,
+        38 => InputKey::J,
+        40 => InputKey::K,
+        37 => InputKey::L,
+        46 => InputKey::M,
+        45 => InputKey::N,
+        31 => InputKey::O,
+        35 => InputKey::P,
+        12 => InputKey::Q,
+        15 => InputKey::R,
+        1 => InputKey::S,
+        17 => InputKey::T,
+        32 => InputKey::U,
+        9 => InputKey::V,
+        13 => InputKey::W,
+        7 => InputKey::X,
+        16 => InputKey::Y,
+        6 => InputKey::Z,
+        29 => InputKey::Num0,
+        18 => InputKey::Num1,
+        19 => InputKey::Num2,
+        20 => InputKey::Num3,
+        21 => InputKey::Num4,
+        23 => InputKey::Num5,
+        22 => InputKey::Num6,
+        26 => InputKey::Num7,
+        28 => InputKey::Num8,
+        25 => InputKey::Num9,
+        49 => InputKey::Space,
+        48 => InputKey::Tab,
+        36 => InputKey::Enter,
+        51 => InputKey::Backspace,
+        117 => InputKey::Delete,
+        123 => InputKey::Left,
+        124 => InputKey::Right,
+        125 => InputKey::Down,
+        126 => InputKey::Up,
+        27 => InputKey::Minus,
+        24 => InputKey::Equals,
+        33 => InputKey::LeftBracket,
+        30 => InputKey::RightBracket,
+        42 => InputKey::Backslash,
+        41 => InputKey::Semicolon,
+        39 => InputKey::Quote,
+        43 => InputKey::Comma,
+        47 => InputKey::Period,
+        44 => InputKey::Slash,
+        50 => InputKey::Backtick,
         _ => return None,
     })
 }
@@ -178,12 +178,12 @@ mod tests {
     #[test]
     fn key_from_mac_covers_the_defaults() {
         // The default bindings must decode, so a fresh world keeps moving.
-        assert_eq!(key_from_mac(13), Some(Key::W));
-        assert_eq!(key_from_mac(0), Some(Key::A));
-        assert_eq!(key_from_mac(1), Some(Key::S));
-        assert_eq!(key_from_mac(2), Some(Key::D));
-        assert_eq!(key_from_mac(49), Some(Key::Space));
-        assert_eq!(key_from_mac(14), Some(Key::E));
+        assert_eq!(key_from_mac(13), Some(InputKey::W));
+        assert_eq!(key_from_mac(0), Some(InputKey::A));
+        assert_eq!(key_from_mac(1), Some(InputKey::S));
+        assert_eq!(key_from_mac(2), Some(InputKey::D));
+        assert_eq!(key_from_mac(49), Some(InputKey::Space));
+        assert_eq!(key_from_mac(14), Some(InputKey::E));
         // Escape / F1 stay fixed (no canonical mapping).
         assert_eq!(key_from_mac(53), None);
         assert_eq!(key_from_mac(122), None);
@@ -193,8 +193,8 @@ mod tests {
     fn editing_keys_decode() {
         // Backspace and forward-delete decode so text fields can edit; they ride
         // `captured_key`, not `typed_char`.
-        assert_eq!(key_from_mac(51), Some(Key::Backspace));
-        assert_eq!(key_from_mac(117), Some(Key::Delete));
+        assert_eq!(key_from_mac(51), Some(InputKey::Backspace));
+        assert_eq!(key_from_mac(117), Some(InputKey::Delete));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// Key-to-action binding schema.
+// InputKey-to-action binding schema.
 
 use crate::{AssetId, de_opt_asset_ref};
 use alloc::string::String;
@@ -20,11 +20,16 @@ use alloc::string::String;
 /// - `"screen:hide"`:          close the top [Screen](#screen)
 /// - `"screen:toggle:<name>"`: toggle the named [Screen](#screen)
 ///
-/// Key names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
+/// InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 /// `"Enter"`).
 ///
-/// ```jsonl
-/// {"name":"esc_binding","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
+/// ```rust
+/// # use concinnity_asset::KeyBinding;
+/// KeyBinding {
+///     key: "Escape".into(),
+///     action: "screen:toggle:pause_menu".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

@@ -15,23 +15,6 @@ frame and exposure adapts toward a balanced mid-tone. The authored
 `exposure_ev` then acts as an additive bias (in stops) on top of the adapted
 value.
 
-```jsonl
-{"name":"post","type":"PostProcessConfig","args":{"bloom_intensity":0.8}}
-{"name":"post_dim","type":"PostProcessConfig","args":{"exposure_ev":-1.0,"vignette_strength":0.4}}
-{"name":"post_taa","type":"PostProcessConfig","args":{"aa_mode":"taa"}}
-{"name":"post_ssao","type":"PostProcessConfig","args":{"ssao":true,"ssao_radius":0.6}}
-{"name":"post_ssr","type":"PostProcessConfig","args":{"ssr":true,"ssr_intensity":0.8}}
-{"name":"post_rt","type":"PostProcessConfig","args":{"ray_traced_reflections":true,"ssr_intensity":0.8}}
-{"name":"post_refl_blur","type":"PostProcessConfig","args":{"ssr":true,"reflection_blur_resolution":"quarter"}}
-{"name":"post_ssgi","type":"PostProcessConfig","args":{"indirect_lighting":"ssgi","ssgi_intensity":0.6}}
-{"name":"post_auto_ev","type":"PostProcessConfig","args":{"auto_exposure":true}}
-{"name":"post_hdr","type":"PostProcessConfig","args":{"hdr_display":true}}
-{"name":"post_upscale","type":"PostProcessConfig","args":{"temporal_upscaling":true,"upscale_quality":"balanced"}}
-{"name":"post_dlss","type":"PostProcessConfig","args":{"temporal_upscaling":true,"upscale_backend":"dlss"}}
-{"name":"post_occ2","type":"PostProcessConfig","args":{"occlusion_two_pass":true}}
-{"name":"post_off","type":"PostProcessConfig","args":{"bloom_intensity":0.0}}
-```
-
 ## Parameters
 
 - `bloom_intensity`: A float. Additive bloom contribution. 0 skips bloom entirely. Defaults to `0.6`.

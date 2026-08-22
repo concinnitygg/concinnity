@@ -8,7 +8,6 @@ publish = false
 
 [lib]
 name = "concinnity_audio"
-doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }

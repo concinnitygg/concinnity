@@ -42,7 +42,7 @@ pub struct FollowController {
     pub drive: FollowDrive,
     /// Character turn rate toward the input heading, in radians per second.
     pub turn_speed: f32,
-    /// Name of the character's [AnimGraph](anim_graph.md) float parameter
+    /// Name of the character's [AnimationGraph](anim_graph.md) float parameter
     /// that receives the current travel speed in world units per second
     /// (drives a locomotion blendspace). Empty disables parameter writes,
     /// leaving the graph externally driven.
@@ -128,6 +128,17 @@ fn default_controller() -> Option<CameraController> {
 
 /// Authored fields of a `Camera3D`; the runtime view matrix and per-frame input
 /// intent are not declared.
+///
+/// ```rust
+/// # use concinnity_asset::Camera3DArgs;
+/// Camera3DArgs {
+///     fov_y_degrees: 80.0,
+///     near: 0.05,
+///     far: 500.0,
+///     position: [0.0, 4.0, 0.0],
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Camera3DArgs {

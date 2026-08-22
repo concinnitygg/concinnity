@@ -11,15 +11,16 @@ use crate::{AssetId, TextureHandle, de_opt_asset_ref, de_opt_texture_handle};
 /// white tint to show the image unchanged; the tint's alpha fades it).
 /// Without one, the tint is drawn as a solid-coloured rectangle.
 ///
-/// ```jsonl
-/// {
-///   "name": "title_menu_bg",
-///   "type": "Sprite",
-///   "args": {
-///     "x": 0, "y": 0, "width": 1280, "height": 720,
-///     "tint": [0.04, 0.06, 0.10, 1.0]
-///   }
-/// }
+/// ```rust
+/// # use concinnity_asset::Sprite;
+/// Sprite {
+///     x: 0.0,
+///     y: 0.0,
+///     width: 1280.0,
+///     height: 720.0,
+///     tint: [0.04, 0.06, 0.1, 1.0],
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

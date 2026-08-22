@@ -23,8 +23,13 @@ use alloc::string::String;
 /// the world already declares a `Camera3D` (yours wins) or when `emit_camera`
 /// is set to `false`.
 ///
-/// ```jsonl
-/// {"name":"bistro","type":"SceneImport","args":{"source":"assets/Bistro/BistroExterior.fbx","texture_max_size":512}}
+/// ```rust
+/// # use concinnity_asset::SceneImport;
+/// SceneImport {
+///     source: "assets/Bistro/BistroExterior.fbx".into(),
+///     texture_max_size: 512,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

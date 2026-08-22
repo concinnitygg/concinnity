@@ -100,8 +100,12 @@ use alloc::string::String;
 /// - [Toward the shore](#shore)
 /// ```
 ///
-/// ```jsonl
-/// {"name":"crossroads","type":"StoryImport","args":{"source":"assets/crossroads.md"}}
+/// ```rust
+/// # use concinnity_asset::StoryImport;
+/// StoryImport {
+///     source: "assets/crossroads.md".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

@@ -503,7 +503,7 @@ pub(super) fn handle_quality_set(text: &str) -> String {
 
 // Rebind a movement action to a key. `setting` is the engine key
 // (`key_forward` / `key_backward` / `key_left` / `key_right` / `key_sprint` /
-// `key_jump` / `key_interact`); `key` is a canonical `Key` variant name
+// `key_jump` / `key_interact`); `key` is a canonical `InputKey` variant name
 // (`W`, `Space`, `Shift`, `Num1`, `Up`, ...).
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
@@ -526,14 +526,14 @@ pub(super) fn handle_rebind(text: &str) -> String {
     if req.setting.is_empty() {
         return error_reply("rebind: missing 'setting' (e.g. key_forward)");
     }
-    // The canonical `Key` serializes to its variant name, so a JSON string
+    // The canonical `InputKey` serializes to its variant name, so a JSON string
     // deserializes straight to it (W, Space, Shift, Num1, Up, ...).
-    let key: crate::assets::Key =
+    let key: crate::assets::InputKey =
         match serde_json::from_value(serde_json::Value::String(req.key.clone())) {
             Ok(k) => k,
             Err(_) => {
                 return error_reply(&format!(
-                    "rebind: unknown key '{}' (use a Key variant like W / Space / Shift)",
+                    "rebind: unknown key '{}' (use a InputKey variant like W / Space / Shift)",
                     req.key
                 ));
             }
@@ -1567,7 +1567,7 @@ mod tests {
                     reply,
                 } => {
                     assert_eq!(setting, "key_forward");
-                    assert_eq!(key, crate::assets::Key::Space);
+                    assert_eq!(key, crate::assets::InputKey::Space);
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1742,9 +1742,9 @@ mod tests {
         a
     }
 
-    fn hero_graph() -> crate::assets::AnimGraph {
+    fn hero_graph() -> crate::assets::AnimationGraph {
         crate::ecs::asset_id::ensure_name_resolver();
-        let mut g: crate::assets::AnimGraph = serde_json::from_value(serde_json::json!({
+        let mut g: crate::assets::AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",

@@ -13,8 +13,8 @@ use crate::{
     BodyHandle, CharacterMoveInput, CharacterShape, ColliderShape, LayerMask, PhysicsWorld,
 };
 use concinnity_core::assets::{
-    BodyDynamics, Camera3D, Collider, ContactEvent, Held, Joint, PhysicsConfig, Pickup, RigidBody,
-    Transform, TriggerFilter, TriggerVolume, VolumeEvent,
+    BodyDynamics, Camera3D, Collider, ContactEvent, Held, PhysicsConfig, PhysicsJoint, Pickup,
+    RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -62,13 +62,13 @@ pub struct PhysicsSystem {
     rigs: Vec<super::rig::RigPhysics>,
     // One entry per Prop that carries a collider.
     props: PropBodies,
-    // Reader cursor over the `RootMotion` event queue.
+    // Reader cursor over the `RootMotionEvent` event queue.
     root_cursor: EventCursor,
     // Scratch for the per-tick scan for freshly spawned collider-bearing
     // entities, refilled every step.
     new_props: Vec<(Entity, PropCollSnap)>,
     // Per-step drain scratch, reused so the event handoffs never reallocate.
-    motion_scratch: Vec<concinnity_core::assets::RootMotion>,
+    motion_scratch: Vec<concinnity_core::assets::RootMotionEvent>,
     contact_scratch: Vec<crate::contacts::ContactHit>,
     sensor_scratch: Vec<crate::SensorCrossing>,
     // Index into `props` of the prop currently being carried.
@@ -310,21 +310,24 @@ impl System for PhysicsSystem {
         );
 
         // joints
-        // Each Joint references one or two Props by AssetId. Cross-reference
+        // Each PhysicsJoint references one or two Props by AssetId. Cross-reference
         // validation already guarantees the Prop exists; here we additionally
-        // require the Prop to own a collider (and therefore a body). A Joint
+        // require the Prop to own a collider (and therefore a body). A PhysicsJoint
         // with body_b empty anchors body_a to a hidden static body created on
         // demand at the world-space `anchor_b`.
-        let joints: Vec<Joint> = ctx.drain::<Joint>();
+        let joints: Vec<PhysicsJoint> = ctx.drain::<PhysicsJoint>();
         let mut wired = 0usize;
         for joint in joints {
             let Some(body_a_id) = joint.body_a else {
-                tracing::warn!("Joint '{}': body_a is required; skipping", joint.asset_id);
+                tracing::warn!(
+                    "PhysicsJoint '{}': body_a is required; skipping",
+                    joint.asset_id
+                );
                 continue;
             };
             let Some(handle_a) = body_handles.get(&body_a_id).copied() else {
                 tracing::warn!(
-                    "Joint '{}': body_a Prop has no collider; skipping",
+                    "PhysicsJoint '{}': body_a Prop has no collider; skipping",
                     joint.asset_id
                 );
                 continue;
@@ -334,7 +337,7 @@ impl System for PhysicsSystem {
                     Some(h) => h,
                     None => {
                         tracing::warn!(
-                            "Joint '{}': body_b Prop has no collider; skipping",
+                            "PhysicsJoint '{}': body_b Prop has no collider; skipping",
                             joint.asset_id
                         );
                         continue;

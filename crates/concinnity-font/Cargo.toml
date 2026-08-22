@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_font"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 concinnity-cpu = { path = "../concinnity-cpu" }

@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# Joint
+# PhysicsJoint
 
 A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
 
@@ -21,21 +21,6 @@ normalised on load; a zero axis falls back to `[0, 1, 0]`.
 distance in world units for prismatic. `motor_target_velocity` and
 `motor_max_force` drive the free axis when `motor_max_force > 0`; the
 velocity is in degrees/sec for revolute, units/sec for prismatic.
-
-```jsonl
-// Pendulum: a dynamic ball hanging 2 m below a world anchor, hinged on +Z.
-{"name":"pendulum_joint","type":"Joint","args":{
-  "kind":"revolute","body_a":"pendulum_bob",
-  "anchor_a":[0,2,0],"anchor_b":[0,5,0],"axis":[0,0,1]
-}}
-
-// Door: hinged on a wall, swing limited to ±90°.
-{"name":"door_hinge","type":"Joint","args":{
-  "kind":"revolute","body_a":"wall","body_b":"door",
-  "anchor_a":[1,1,0],"anchor_b":[-0.5,0,0],"axis":[0,1,0],
-  "limits_enabled":true,"limits":[-90,90]
-}}
-```
 
 ## Parameters
 

@@ -8,16 +8,6 @@ lit and shaded.
 Reference it from a [Prop](Prop.md)'s `material` field. The `material` field takes
 precedence over the older `texture` field.
 
-```jsonl
-{"name":"mat_brick","type":"Material","args":{"albedo":"tex_brick","roughness":0.85,"metallic":0.0}}
-{"name":"mat_floor","type":"Material","args":{"albedo":"tex_wood","roughness":0.6,"metallic":0.0}}
-{"name":"mat_metal","type":"Material","args":{"albedo":"tex_metal","roughness":0.3,"metallic":1.0}}
-{"name":"mat_glow","type":"Material","args":{"albedo":"tex_plaster","roughness":0.9,"emissive_factor":[0.5,0.3,0.0]}}
-
-// Prop referencing a material:
-{"name":"crate","type":"Prop","args":{"mesh":"box_mesh","material":"mat_brick","position":[2.0,0.4,-3.0]}}
-```
-
 ## Parameters
 
 - `albedo`: A string. The [Texture](Texture.md) asset used as the base colour (albedo) map. Optional.

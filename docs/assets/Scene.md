@@ -14,13 +14,6 @@ by actions: a UI `scene:<name>` action ([HitRegion](HitRegion.md) /
 the named scene, with the transition ("Cut" or "FadeBlack") declared on the
 jump.
 
-```jsonl
-{"name":"day",  "type":"Scene","args":{}}
-{"name":"night","type":"Scene","args":{}}
-// Props named "day_*" belong to Scene "day"; "night_*" to Scene "night"
-{"name":"nightfall","type":"Behavior","args":{"on":{"timer":{"interval":5.0}},"do":[{"scene":{"scene":"night"}}]}}
-```
-
 ## Parameters
 
 - `camera_shot`: A string. A [CameraShot](CameraShot.md) or [Camera3D](Camera3D.md) to activate when this scene becomes active. `None` keeps the current camera unchanged. Optional.

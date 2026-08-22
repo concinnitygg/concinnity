@@ -15,12 +15,17 @@ use alloc::string::String;
 /// here. The value label shows a placeholder at build time and is corrected to
 /// the live value when the world starts.
 ///
-/// ```jsonl
-/// {"name":"opt_vsync","type":"OptionSelect","args":{"setting":"vsync","label":"Vsync"}}
-/// ```
-///
 /// Generated names are prefixed with this asset's `name` (`<name>_label`,
 /// `<name>_value`, `<name>_btn`), so they never clash with hand-authored assets.
+///
+/// ```rust
+/// # use concinnity_asset::OptionSelect;
+/// OptionSelect {
+///     setting: "vsync".into(),
+///     label: "Vsync".into(),
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct OptionSelect {

@@ -9,37 +9,37 @@ use crate::ecs::asset_id::AssetId;
 /// one it spawned, one a query yielded -- addresses it directly, which is the
 /// only way to reach an entity that never had a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
+pub enum EntityTarget {
     /// Addressed by the placement's authored name.
     Name(AssetId),
     /// Addressed by a live entity handle.
     Entity(Entity),
 }
 
-impl Default for Target {
+impl Default for EntityTarget {
     fn default() -> Self {
-        Target::Name(AssetId::default())
+        EntityTarget::Name(AssetId::default())
     }
 }
 
-impl From<AssetId> for Target {
+impl From<AssetId> for EntityTarget {
     fn from(name: AssetId) -> Self {
-        Target::Name(name)
+        EntityTarget::Name(name)
     }
 }
 
-impl From<Entity> for Target {
+impl From<Entity> for EntityTarget {
     fn from(entity: Entity) -> Self {
-        Target::Entity(entity)
+        EntityTarget::Entity(entity)
     }
 }
 
-impl Target {
+impl EntityTarget {
     /// The asset name this target addresses, if it is name-addressed.
     pub fn name(self) -> Option<AssetId> {
         match self {
-            Target::Name(name) => Some(name),
-            Target::Entity(_) => None,
+            EntityTarget::Name(name) => Some(name),
+            EntityTarget::Entity(_) => None,
         }
     }
 }

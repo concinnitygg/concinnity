@@ -16,15 +16,6 @@ The `palette` lists [BlockType](BlockType.md) assets; the generator uses index
 subsurface block. `material` supplies the textures and lighting shared by
 every chunk.
 
-```jsonl
-{"name":"air","type":"BlockType","args":{"solid":false}}
-{"name":"grass","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-{"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-{"name":"overworld","type":"VoxelWorld","args":{
-  "seed":42,"view_radius":6,"palette":["air","grass","stone"],"material":"mat_ground"
-}}
-```
-
 ## Parameters
 
 - `seed`: An integer. Deterministic terrain seed. The same seed always generates the same world, so a chunk regenerates identically each time it streams back in. Defaults to `0`.

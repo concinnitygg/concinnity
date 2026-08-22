@@ -509,7 +509,7 @@ mod voxel_world {
 
 mod layout_container {
     use super::*;
-    use crate::assets::{Justify, LabelBox, LayoutRow, Placement};
+    use crate::assets::{Justify, LabelBox, LabelPlacement, LayoutRow};
     use crate::ecs::asset_id::AssetId;
     use crate::test_support::{intern_all, reset_interner};
 
@@ -550,7 +550,7 @@ mod layout_container {
         // First box at container origin; origin inset by its padding.
         assert_eq!(
             p[0],
-            Placement {
+            LabelPlacement {
                 id: AssetId(1),
                 x: 12.0,
                 y: 22.0
@@ -559,7 +559,7 @@ mod layout_container {
         // Second box starts after first box width + col_gap = 10 + 30 + 4 = 44.
         assert_eq!(
             p[1],
-            Placement {
+            LabelPlacement {
                 id: AssetId(2),
                 x: 46.0,
                 y: 22.0
@@ -690,7 +690,7 @@ mod layout_container {
             _ => None,
         };
         let p = c.layout(sizes);
-        let row = |id| p.iter().find(|pl: &&Placement| pl.id == id).unwrap().x;
+        let row = |id| p.iter().find(|pl: &&LabelPlacement| pl.id == id).unwrap().x;
         // Three 20px boxes in 200px → 140px slack over 2 gaps = 70px each.
         assert_eq!(row(AssetId(1)), 0.0);
         assert_eq!(row(AssetId(2)), 90.0); // 20 + 70

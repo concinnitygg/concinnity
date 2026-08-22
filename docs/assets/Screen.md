@@ -23,18 +23,11 @@ anywhere. `focus` names a [TextInput](TextInput.md) that receives keyboard
 focus whenever the screen reaches the top of the stack. Worlds that need no
 menus simply declare no screens.
 
-```jsonl
-{"name":"pause_menu","type":"Screen","args":{"toggle_key":"Escape"}}
-// UI assets prefixed pause_menu_* belong to this screen:
-{"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":1280,"height":720,"tint":[0,0,0,0.55]}}
-{"name":"pause_menu_btn_resume","type":"HitRegion","args":{"action":"screen:hide", ...}}
-```
-
 ## Parameters
 
 - `initial`: A boolean. When true, this screen is shown as soon as the world loads. Defaults to `false`.
 - `fade_in_secs`: A float. Seconds to fade the screen in when it's shown. 0 shows it instantly. Defaults to `0.0`.
-- `toggle_key`: A string. Key that toggles this screen open / closed from anywhere, by the same canonical key names a [KeyBinding](KeyBinding.md) uses (e.g. "Escape", "Backtick"). Empty leaves the screen action-driven only.
+- `toggle_key`: A string. InputKey that toggles this screen open / closed from anywhere, by the same canonical key names a [KeyBinding](KeyBinding.md) uses (e.g. "Escape", "Backtick"). Empty leaves the screen action-driven only.
 - `input`: A string (see [ScreenInput](ScreenInput.md)). Input policy while the screen is active.
 - `pauses_world`: A boolean. When true (the default), the world pauses beneath this screen while it is active: gameplay input, physics, and animation freeze.
 - `focus`: A string. [TextInput](TextInput.md) that receives keyboard focus whenever this screen reaches the top of the stack. Optional.

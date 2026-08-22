@@ -7,7 +7,7 @@
 // before the world step, so a publish here gates that same frame's systems.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 
 impl EditorHook {
     // Transport shortcuts: Ctrl+P plays / pauses, Ctrl+Shift+P stops,
@@ -20,9 +20,9 @@ impl EditorHook {
             return;
         }
         match input.captured_key {
-            Some(Key::P) if input.shift => self.sim_stop(),
-            Some(Key::P) => self.sim_toggle_play(),
-            Some(Key::Period) => self.sim.step(),
+            Some(InputKey::P) if input.shift => self.sim_stop(),
+            Some(InputKey::P) => self.sim_toggle_play(),
+            Some(InputKey::Period) => self.sim.step(),
             _ => {}
         }
     }

@@ -25,7 +25,7 @@ pub(super) struct View<'a> {
     pub(super) transforms: &'a dyn Fn(Entity) -> Option<Transform>,
     pub(super) alive: &'a dyn Fn(Entity) -> bool,
     pub(super) self_entity: Option<Entity>,
-    // Node ids executed this run, recorded only while tracing is requested
+    // BehaviorNode ids executed this run, recorded only while tracing is requested
     // (`None` costs one branch per node).
     pub(super) trace: &'a mut Option<Vec<u32>>,
 }

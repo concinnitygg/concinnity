@@ -1107,8 +1107,8 @@ fn zero_skinned_vertex() -> crate::gfx::mesh_payload::SkinnedVertex {
     }
 }
 
-fn joint_def(name: &str) -> crate::assets::JointDef {
-    crate::assets::JointDef {
+fn joint_def(name: &str) -> crate::assets::SkeletonJoint {
+    crate::assets::SkeletonJoint {
         name: name.to_string(),
         parent: -1,
         translation: [0.0; 3],

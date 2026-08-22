@@ -2,12 +2,12 @@
 //
 // The character-rig drive: one kinematic capsule per `CharacterRig`
 // component (a `SkinnedMesh` that declared a `capsule`). Each fixed tick the
-// capsule moves by the target's `RootMotion` displacement -- mapped through
+// capsule moves by the target's `RootMotionEvent` displacement -- mapped through
 // the rig's authored rotation/scale -- plus gravity, sliding against the
 // scene like the player capsule; each frame the blended capsule position is
 // written back to the rig component for GraphicsSystem's render follow.
 
-use concinnity_core::assets::{CharacterRig, RootMotion};
+use concinnity_core::assets::{CharacterRig, RootMotionEvent};
 use concinnity_core::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::root_motion::add3;
 
@@ -82,10 +82,10 @@ pub(crate) fn init_rigs(
 pub(crate) fn drain_motions_into(
     ctx: &PipelineContext,
     cursor: &mut EventCursor,
-    out: &mut Vec<RootMotion>,
+    out: &mut Vec<RootMotionEvent>,
 ) {
     out.clear();
-    if let Some(ev) = ctx.events::<RootMotion>() {
+    if let Some(ev) = ctx.events::<RootMotionEvent>() {
         out.extend(ev.read(cursor).copied());
     }
 }
@@ -114,7 +114,7 @@ pub(crate) fn tick_rigs(
     world: &mut PhysicsWorld,
     ctx: &mut PipelineContext,
     rigs: &mut [RigPhysics],
-    motions: &[RootMotion],
+    motions: &[RootMotionEvent],
     dt: f32,
     gravity: f32,
     mask: LayerMask,

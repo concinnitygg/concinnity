@@ -14,10 +14,6 @@ The bare form gives a centered Return / Settings / Quit menu that starts
 closed, with Escape opening it, so the scene itself shows first. Set
 `"initial": true` to show the menu as soon as the world loads:
 
-```jsonl
-{"name":"main_menu","type":"MainMenu"}
-```
-
 Declaring a `MainMenu` also injects the [StatHud](StatHud.md) (and its chip
 labels) at build time when the world declares none, so the menu's
 performance-stats toggles have chips to drive.
@@ -29,13 +25,6 @@ click. `action` takes the same vocabulary as [HitRegion](HitRegion.md)
 - `"return"`: hide this menu (the same as `"screen:hide"`).
 - `"settings"`: open a generated settings sub-menu that has a Back button.
 
-```jsonl
-{"name":"title","type":"MainMenu","args":{"items":[
-  {"label":"New Game","action":"scene:level_1"},
-  {"label":"Quit","action":"quit"}
-]}}
-```
-
 **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
 hand-authored assets and you never reference them by hand.
@@ -45,7 +34,7 @@ hand-authored assets and you never reference them by hand.
 - `items`: An array of [MainMenuItem](MainMenuItem.md) objects. Menu entries, top to bottom. Each one is a clickable button.
 - `title`: A string. Optional heading drawn above the items. Empty draws no heading.
 - `initial`: A boolean. Show the menu as soon as the world loads. Off by default: the scene shows first and the toggle key opens the menu.
-- `toggle_key`: A string. Key that toggles the menu while the cursor is free. Empty binds no key. Only `"Escape"` is currently recognised by the runtime. Defaults to `"Escape"`.
+- `toggle_key`: A string. InputKey that toggles the menu while the cursor is free. Empty binds no key. Only `"Escape"` is currently recognised by the runtime. Defaults to `"Escape"`.
 - `dim`: An array of 4 floats. RGBA fill drawn across the whole window behind the items. Defaults to opaque black: a fully opaque alpha (1.0) hides the scene completely, which lets the renderer skip the entire world render while the menu is open, so the frame costs only the menu overlay. Lower the alpha to keep the world visible behind a translucent fade (the world then keeps rendering); an alpha of 0 draws no backdrop at all.
 - `centered`: A boolean. Horizontally center the menu and align it to the top of the window. When false, `x` is the column's center and `y` is the top of the first item. The menu is a screen overlay laid out against a fixed reference resolution and uniformly scaled to fill the window, so it keeps the same proportions at any window size. All pixel fields below are in that reference space, not raw window pixels. Defaults to `true`.
 - `x`: A float. Column center x in reference-space pixels, used when `centered` is false. Defaults to `640.0`.

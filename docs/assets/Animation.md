@@ -23,13 +23,6 @@ baked at `sample_rate` keys per second. Channels whose target node is not
 a joint of the file's first skinned node are dropped. The same file should
 back the target [SkinnedMesh](SkinnedMesh.md) so the joint indices agree.
 
-```jsonl
-// Inline:
-{"name":"flag_wave","type":"Animation","args":{"target":"flag","duration":2.0,"tracks":[{"joint":1,"keyframes":[{"time":0.0,"rotation_deg":[0,0,0]},{"time":1.0,"rotation_deg":[0,30,0]},{"time":2.0,"rotation_deg":[0,0,0]}]}]}}
-// From glTF:
-{"name":"hero_walk","type":"Animation","args":{"target":"hero","source":"models/hero.glb","animation_name":"Walk","looping":true}}
-```
-
 ## Parameters
 
 - `target`: A string. The [SkinnedMesh](SkinnedMesh.md) asset this clip animates. Optional.

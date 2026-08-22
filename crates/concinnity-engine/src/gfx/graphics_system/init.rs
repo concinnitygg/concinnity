@@ -42,7 +42,7 @@ struct SkinnedGeometry {
     mesh: crate::assets::SkinnedMesh,
     vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
     indices: Vec<u16>,
-    joint_defs: Vec<crate::assets::JointDef>,
+    joint_defs: Vec<crate::assets::SkeletonJoint>,
     morphs: crate::gfx::mesh_payload::PayloadMorphs,
     lod_alternates: Vec<(f32, Vec<u16>)>,
 }

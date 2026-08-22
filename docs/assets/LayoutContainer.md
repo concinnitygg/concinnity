@@ -16,10 +16,6 @@ sits on its own line beneath the previous row, which is how a wide chip
 Labels referenced by `cols` are matched by name; a label whose font is not
 loaded, or which is hidden, is skipped and reserves no space.
 
-```jsonl
-{"name":"hud_layout","type":"LayoutContainer","args":{"x":10,"y":10,"col_gap":6,"row_gap":6,"rows":[{"cols":["fps_chip","vram_chip","ev_chip","edr_chip"]},{"cols":["passes_chip"]}]}}
-```
-
 ## Parameters
 
 - `x`: A float. Left edge of the container in window pixels. Defaults to `10.0`.

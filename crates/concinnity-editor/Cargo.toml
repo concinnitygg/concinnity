@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_editor"
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # Mirror the runtime's Vulkan feature so an editor build can target the Vulkan

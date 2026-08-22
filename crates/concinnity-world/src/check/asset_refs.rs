@@ -16,8 +16,8 @@
 // concinnity-core.
 
 use crate::assets::{
-    AnimGraph, Behavior, Camera3D, InstancedProp, Joint, JointKind, Model, Prop, VoxelChunk,
-    VoxelWorld,
+    AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, PhysicsJointKind, Prop,
+    VoxelChunk, VoxelWorld,
 };
 
 // The category of asset a structured name reference must resolve to.
@@ -97,17 +97,17 @@ pub(crate) fn state_clip_names(state: &serde_json::Value) -> Vec<String> {
     names
 }
 
-impl CrossReferenced for AnimGraph {
+impl CrossReferenced for AnimationGraph {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
         let mut refs = Vec::new();
         match args.get("target").and_then(|v| v.as_str()).unwrap_or("") {
             "" => refs.push(CrossRef::Issue(format!(
-                "AnimGraph '{name}': `target` field is required (the SkinnedMesh to animate)"
+                "AnimationGraph '{name}': `target` field is required (the SkinnedMesh to animate)"
             ))),
             target => refs.push(CrossRef::Resolve {
                 kind: RefKind::SkinnedMesh,
                 target: target.to_string(),
-                error: format!("AnimGraph '{name}': target SkinnedMesh '{target}' not found"),
+                error: format!("AnimationGraph '{name}': target SkinnedMesh '{target}' not found"),
             }),
         }
         let states = args
@@ -125,13 +125,13 @@ impl CrossReferenced for AnimGraph {
             let clips = state_clip_names(state);
             if clips.is_empty() {
                 refs.push(CrossRef::Issue(format!(
-                    "AnimGraph '{name}': {label} names no Animation (set `clip`, or `blend` \
+                    "AnimationGraph '{name}': {label} names no Animation (set `clip`, or `blend` \
                      members)"
                 )));
             }
             for clip in clips {
                 refs.push(CrossRef::Resolve {
-                    error: format!("AnimGraph '{name}': {label} clip '{clip}' not found"),
+                    error: format!("AnimationGraph '{name}': {label} clip '{clip}' not found"),
                     kind: RefKind::Animation,
                     target: clip,
                 });
@@ -316,7 +316,7 @@ impl CrossReferenced for VoxelWorld {
     }
 }
 
-impl CrossReferenced for Joint {
+impl CrossReferenced for PhysicsJoint {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
         // body_a / body_b resolution is registry-declared and generic; only
         // the kind check and body_a's required-ness stay here.
@@ -324,15 +324,15 @@ impl CrossReferenced for Joint {
         let mut refs = Vec::new();
 
         let kind = arg_str("kind");
-        if !kind.is_empty() && JointKind::from_str_norm(kind).is_none() {
+        if !kind.is_empty() && PhysicsJointKind::from_str_norm(kind).is_none() {
             refs.push(CrossRef::Issue(format!(
-                "Joint '{name}': unknown kind '{kind}' (expected one of fixed | revolute | spherical | prismatic)"
+                "PhysicsJoint '{name}': unknown kind '{kind}' (expected one of fixed | revolute | spherical | prismatic)"
             )));
         }
 
         if arg_str("body_a").is_empty() {
             refs.push(CrossRef::Issue(format!(
-                "Joint '{name}': `body_a` is required, name of a Prop with a collider"
+                "PhysicsJoint '{name}': `body_a` is required, name of a Prop with a collider"
             )));
         }
 
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn anim_graph_cross_refs_cover_target_and_clips() {
-        let refs = AnimGraph::cross_refs("g", &graph_json());
+        let refs = AnimationGraph::cross_refs("g", &graph_json());
         // One target resolve + two clip resolves.
         assert_eq!(refs.len(), 3);
         assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn anim_graph_cross_refs_flag_missing_target_and_clip() {
-        let refs = AnimGraph::cross_refs("g", &json!({"states":[{"name":"idle"}]}));
+        let refs = AnimationGraph::cross_refs("g", &json!({"states":[{"name":"idle"}]}));
         let issues: Vec<_> = refs
             .iter()
             .filter_map(|r| match r {
@@ -605,12 +605,12 @@ mod tests {
 
     #[test]
     fn anim_graph_cross_refs_cover_blend_members() {
-        let refs = AnimGraph::cross_refs("g", &blend1d_graph_json());
+        let refs = AnimationGraph::cross_refs("g", &blend1d_graph_json());
         // One target resolve + three point-clip resolves.
         assert_eq!(refs.len(), 4);
         assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
 
-        let refs = AnimGraph::cross_refs("g", &blend2d_graph_json());
+        let refs = AnimationGraph::cross_refs("g", &blend2d_graph_json());
         // One target resolve + four grid-cell resolves.
         assert_eq!(refs.len(), 5);
     }

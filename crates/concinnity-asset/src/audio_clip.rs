@@ -11,8 +11,12 @@ use alloc::string::String;
 /// An `AudioClip` is inert on its own: reference it from an
 /// [AudioEmitter](#audioemitter)'s `clip` field to place the sound in the world.
 ///
-/// ```jsonl
-/// {"name":"fire_loop","type":"AudioClip","args":{"source":"audio/fire_crackle.ogg"}}
+/// ```rust
+/// # use concinnity_asset::AudioClip;
+/// AudioClip {
+///     source: "audio/fire_crackle.ogg".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

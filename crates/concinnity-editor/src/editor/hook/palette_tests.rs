@@ -6,7 +6,7 @@
 // and the providers are tested beside them in `editor/palette/`.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::editor::palette::{Category, PaletteAction};
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
@@ -25,7 +25,7 @@ fn palette_world() -> World {
     world
 }
 
-fn chord(key: Key, ctrl: bool, cmd: bool) -> FrameInput {
+fn chord(key: InputKey, ctrl: bool, cmd: bool) -> FrameInput {
     FrameInput {
         captured_key: Some(key),
         ctrl,
@@ -41,10 +41,10 @@ fn either_platform_modifier_opens_the_palette() {
     for (ctrl, cmd) in [(true, false), (false, true)] {
         let mut h = hook(Vec::new());
         let mut world = palette_world();
-        h.drive_palette_toggle(&chord(Key::K, ctrl, cmd), &mut world);
+        h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
         assert!(h.palette_open, "ctrl={ctrl} cmd={cmd} did not open it");
         // The same chord closes it again.
-        h.drive_palette_toggle(&chord(Key::K, ctrl, cmd), &mut world);
+        h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
         assert!(!h.palette_open);
     }
 }
@@ -54,7 +54,7 @@ fn either_platform_modifier_opens_the_palette() {
 fn an_unmodified_k_leaves_the_palette_closed() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, false, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, false, false), &mut world);
     assert!(!h.palette_open);
 }
 
@@ -64,7 +64,7 @@ fn an_unmodified_k_leaves_the_palette_closed() {
 fn opening_blurs_the_query_for_one_frame() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     assert!(h.palette_blur);
     assert!(!h.make_palette_view([0.0, 0.0]).focus, "blurred this frame");
 }
@@ -75,7 +75,7 @@ fn opening_blurs_the_query_for_one_frame() {
 fn typing_reranks_and_rehomes_the_highlight() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let opened = h.palette_matches.len();
     assert!(opened > 0, "the launch list is not empty");
 
@@ -96,13 +96,13 @@ fn typing_reranks_and_rehomes_the_highlight() {
 fn the_arrows_walk_the_matches_and_stop_at_the_ends() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
 
-    h.palette_keys(&mut world, &chord(Key::Down, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Down, false, false));
     assert_eq!(h.palette_pick, 1);
-    h.palette_keys(&mut world, &chord(Key::Up, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Up, false, false));
     assert_eq!(h.palette_pick, 0);
-    h.palette_keys(&mut world, &chord(Key::Up, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Up, false, false));
     assert_eq!(h.palette_pick, 0, "stops at the top");
 }
 
@@ -111,7 +111,7 @@ fn the_arrows_walk_the_matches_and_stop_at_the_ends() {
 fn committing_a_panel_row_opens_it() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
         .palette_matches
         .iter()
@@ -119,7 +119,7 @@ fn committing_a_panel_row_opens_it() {
         .expect("the Variables panel is a palette row");
     h.palette_pick = at;
 
-    h.palette_keys(&mut world, &chord(Key::Enter, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
     assert!(!h.palette_open, "committing closes the palette");
     assert!(h.variables_open, "the panel opened");
     assert_eq!(
@@ -135,7 +135,7 @@ fn committing_a_panel_row_opens_it() {
 fn committing_an_argument_command_seeds_command_mode() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
         .palette_matches
         .iter()
@@ -143,7 +143,7 @@ fn committing_an_argument_command_seeds_command_mode() {
         .expect("/add is a palette row");
     h.palette_pick = at;
 
-    h.palette_keys(&mut world, &chord(Key::Enter, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
     assert!(h.palette_open, "the palette stays up for the arguments");
     assert_eq!(widget::field_text(&world, palette_panel::INPUT), "/add ");
 }
@@ -154,7 +154,7 @@ fn committing_an_argument_command_seeds_command_mode() {
 fn a_commit_is_remembered_for_the_next_launch_list() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
         .palette_matches
         .iter()
@@ -162,9 +162,9 @@ fn a_commit_is_remembered_for_the_next_launch_list() {
         .expect("the Variables panel is a palette row");
     let label = h.palette_items[h.palette_matches[at]].label.clone();
     h.palette_pick = at;
-    h.palette_keys(&mut world, &chord(Key::Enter, false, false));
+    h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
 
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let first = &h.palette_items[h.palette_matches[0]];
     assert_eq!(first.label, label, "the last commit leads the list");
 }
@@ -177,7 +177,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
     let vp = [1280.0, 720.0];
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
 
     let o = h.origin(PanelKey::Palette, vp);
     let inside = FrameInput {
@@ -212,7 +212,7 @@ fn world_assets_become_rows_routed_by_type() {
     ];
     let mut h = hook(entries);
     let mut world = palette_world();
-    h.drive_palette_toggle(&chord(Key::K, true, false), &mut world);
+    h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
 
     let row = h
         .palette_items

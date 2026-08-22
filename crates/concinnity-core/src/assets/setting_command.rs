@@ -2,7 +2,7 @@
 
 use alloc::string::String;
 
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::ecs::asset_id::AssetId;
 
 /// What a "setting:*" action does to its value: cycle one step (for a stepper
@@ -26,7 +26,7 @@ pub enum SettingOp {
     SetFraction(f32),
     /// Bind the named action (the command's setting) to this key. Sent once when
     /// the user presses a key while a rebind row is capturing.
-    Rebind(Key),
+    Rebind(InputKey),
     /// Bind the named gamepad action (the command's `pad_*` setting) to this
     /// button. Sent once when the user presses a button while a gamepad rebind
     /// row is capturing.

@@ -3,7 +3,7 @@
 // wnd_proc (window.rs); this struct is the snapshot consumed by
 // GraphicsSystem each tick.
 
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::gfx::keymap::KeyMap;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
@@ -59,7 +59,7 @@ pub(crate) struct KeyState {
     pub escape_pending: bool,
     // One-shot: the canonical key pressed since the last `take`, for the
     // settings-menu rebind capture. Set on any mapped key-down; reset by `take`.
-    pub captured_key: Option<Key>,
+    pub captured_key: Option<InputKey>,
     // One-shot: the printable glyph typed since the last `take`, for text-input
     // fields (the editor's name/filter/arg fields). Filled from WM_CHAR, which
     // Windows resolves for the active layout, Shift, and dead keys, so casing
@@ -85,7 +85,7 @@ impl KeyState {
     // Apply a key transition to whichever gameplay actions are bound to `key`.
     // `down` is the held state (movement / sprint follow it); `fire_pulse`
     // fires the one-shot actions (jump / interact) on a press.
-    fn apply_binding(&mut self, key: Key, down: bool, fire_pulse: bool) {
+    fn apply_binding(&mut self, key: InputKey, down: bool, fire_pulse: bool) {
         let km = self.keymap;
         if km.forward == key {
             self.forward = down;
@@ -246,68 +246,68 @@ fn is_printable_glyph(c: char) -> bool {
     !c.is_control()
 }
 
-// Map a Win32 virtual key to a canonical `Key`, or `None` for a key the engine
+// Map a Win32 virtual key to a canonical `InputKey`, or `None` for a key the engine
 // does not bind (function keys, Escape, Ctrl/Alt, etc.). Shift is mapped: unlike
 // macOS, Windows delivers it as an ordinary key-down.
-fn key_from_vk(vk: VIRTUAL_KEY) -> Option<Key> {
+fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
     Some(match vk {
-        VK_A => Key::A,
-        VK_B => Key::B,
-        VK_C => Key::C,
-        VK_D => Key::D,
-        VK_E => Key::E,
-        VK_F => Key::F,
-        VK_G => Key::G,
-        VK_H => Key::H,
-        VK_I => Key::I,
-        VK_J => Key::J,
-        VK_K => Key::K,
-        VK_L => Key::L,
-        VK_M => Key::M,
-        VK_N => Key::N,
-        VK_O => Key::O,
-        VK_P => Key::P,
-        VK_Q => Key::Q,
-        VK_R => Key::R,
-        VK_S => Key::S,
-        VK_T => Key::T,
-        VK_U => Key::U,
-        VK_V => Key::V,
-        VK_W => Key::W,
-        VK_X => Key::X,
-        VK_Y => Key::Y,
-        VK_Z => Key::Z,
-        VK_0 => Key::Num0,
-        VK_1 => Key::Num1,
-        VK_2 => Key::Num2,
-        VK_3 => Key::Num3,
-        VK_4 => Key::Num4,
-        VK_5 => Key::Num5,
-        VK_6 => Key::Num6,
-        VK_7 => Key::Num7,
-        VK_8 => Key::Num8,
-        VK_9 => Key::Num9,
-        VK_SPACE => Key::Space,
-        VK_TAB => Key::Tab,
-        VK_RETURN => Key::Enter,
-        VK_BACK => Key::Backspace,
-        VK_DELETE => Key::Delete,
-        VK_SHIFT => Key::Shift,
-        VK_LEFT => Key::Left,
-        VK_RIGHT => Key::Right,
-        VK_UP => Key::Up,
-        VK_DOWN => Key::Down,
-        VK_OEM_MINUS => Key::Minus,
-        VK_OEM_PLUS => Key::Equals,
-        VK_OEM_4 => Key::LeftBracket,
-        VK_OEM_6 => Key::RightBracket,
-        VK_OEM_5 => Key::Backslash,
-        VK_OEM_1 => Key::Semicolon,
-        VK_OEM_7 => Key::Quote,
-        VK_OEM_COMMA => Key::Comma,
-        VK_OEM_PERIOD => Key::Period,
-        VK_OEM_2 => Key::Slash,
-        VK_OEM_3 => Key::Backtick,
+        VK_A => InputKey::A,
+        VK_B => InputKey::B,
+        VK_C => InputKey::C,
+        VK_D => InputKey::D,
+        VK_E => InputKey::E,
+        VK_F => InputKey::F,
+        VK_G => InputKey::G,
+        VK_H => InputKey::H,
+        VK_I => InputKey::I,
+        VK_J => InputKey::J,
+        VK_K => InputKey::K,
+        VK_L => InputKey::L,
+        VK_M => InputKey::M,
+        VK_N => InputKey::N,
+        VK_O => InputKey::O,
+        VK_P => InputKey::P,
+        VK_Q => InputKey::Q,
+        VK_R => InputKey::R,
+        VK_S => InputKey::S,
+        VK_T => InputKey::T,
+        VK_U => InputKey::U,
+        VK_V => InputKey::V,
+        VK_W => InputKey::W,
+        VK_X => InputKey::X,
+        VK_Y => InputKey::Y,
+        VK_Z => InputKey::Z,
+        VK_0 => InputKey::Num0,
+        VK_1 => InputKey::Num1,
+        VK_2 => InputKey::Num2,
+        VK_3 => InputKey::Num3,
+        VK_4 => InputKey::Num4,
+        VK_5 => InputKey::Num5,
+        VK_6 => InputKey::Num6,
+        VK_7 => InputKey::Num7,
+        VK_8 => InputKey::Num8,
+        VK_9 => InputKey::Num9,
+        VK_SPACE => InputKey::Space,
+        VK_TAB => InputKey::Tab,
+        VK_RETURN => InputKey::Enter,
+        VK_BACK => InputKey::Backspace,
+        VK_DELETE => InputKey::Delete,
+        VK_SHIFT => InputKey::Shift,
+        VK_LEFT => InputKey::Left,
+        VK_RIGHT => InputKey::Right,
+        VK_UP => InputKey::Up,
+        VK_DOWN => InputKey::Down,
+        VK_OEM_MINUS => InputKey::Minus,
+        VK_OEM_PLUS => InputKey::Equals,
+        VK_OEM_4 => InputKey::LeftBracket,
+        VK_OEM_6 => InputKey::RightBracket,
+        VK_OEM_5 => InputKey::Backslash,
+        VK_OEM_1 => InputKey::Semicolon,
+        VK_OEM_7 => InputKey::Quote,
+        VK_OEM_COMMA => InputKey::Comma,
+        VK_OEM_PERIOD => InputKey::Period,
+        VK_OEM_2 => InputKey::Slash,
+        VK_OEM_3 => InputKey::Backtick,
         _ => return None,
     })
 }
@@ -394,13 +394,13 @@ mod tests {
     fn editing_keys_decode_for_captured_key() {
         // Backspace and forward-delete decode so text fields can edit; they ride
         // `captured_key`, not `typed_char` (mirrors metal/input.rs).
-        assert_eq!(key_from_vk(VK_BACK), Some(Key::Backspace));
-        assert_eq!(key_from_vk(VK_DELETE), Some(Key::Delete));
-        assert_eq!(key_from_vk(VK_LEFT), Some(Key::Left));
-        assert_eq!(key_from_vk(VK_RIGHT), Some(Key::Right));
+        assert_eq!(key_from_vk(VK_BACK), Some(InputKey::Backspace));
+        assert_eq!(key_from_vk(VK_DELETE), Some(InputKey::Delete));
+        assert_eq!(key_from_vk(VK_LEFT), Some(InputKey::Left));
+        assert_eq!(key_from_vk(VK_RIGHT), Some(InputKey::Right));
         // A key-down surfaces the editing key on `captured_key`.
         let mut ks = KeyState::default();
         ks.on_key_down(VK_BACK);
-        assert_eq!(snapshot(&mut ks).captured_key, Some(Key::Backspace));
+        assert_eq!(snapshot(&mut ks).captured_key, Some(InputKey::Backspace));
     }
 }

@@ -1,9 +1,9 @@
 // SkinnedMesh name -> handle index.
 //
 // The animation correlation web (`SkeletonPose.mesh_id`, `CharacterRig.target`,
-// `AnimParams.target`, `GroundProbes.target`, `CameraProbe.target`) is keyed by
+// `AnimationParams.target`, `GroundProbes.target`, `CameraProbe.target`) is keyed by
 // the mesh's dense `SkinnedMeshHandle`, matching the authored references
-// (`Animation.target`, `AnimGraph.target`, `FollowController.target`) directly.
+// (`Animation.target`, `AnimationGraph.target`, `FollowController.target`) directly.
 // The one consumer that still starts from a NAME is the debug WebSocket's
 // animation commands (`anim-crossfade` / `anim-param` / `anim-state`), which
 // resolve the user-typed name to its interned id: this index, published by

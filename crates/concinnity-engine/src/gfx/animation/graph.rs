@@ -1,14 +1,14 @@
 // src/gfx/animation/graph.rs
 //
-// The state-machine drive for a clip bucket: an `AnimGraph` compiled at init
+// The state-machine drive for a clip bucket: an `AnimationGraph` compiled at init
 // owns the target, playing one state at a time and crossfading over
-// transitions. Transition conditions read the target's `AnimParams`
+// transitions. Transition conditions read the target's `AnimationParams`
 // component, which gameplay systems (or the `anim-param` debug command)
 // write; the graph math itself lives in `concinnity_cpu::gfx::anim_graph`.
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::assets::{AnimGraph, AnimParams};
+use crate::assets::{AnimationGraph, AnimationParams};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::anim_graph::{CompiledGraph, GraphCursor};
@@ -20,11 +20,11 @@ pub(super) struct GraphTarget {
     pub graph: CompiledGraph,
     pub cursor: GraphCursor,
     // Parameter values as of this step, copied from the target's
-    // `AnimParams` component before the cursor advances. Also the snapshot
+    // `AnimationParams` component before the cursor advances. Also the snapshot
     // the `anim-state` debug command reports.
     pub params: Vec<f32>,
     // Writes queued by the `anim-param` debug command, applied to the
-    // `AnimParams` component at the top of the next step (the component
+    // `AnimationParams` component at the top of the next step (the component
     // stays the single authoritative store).
     pub pending: Vec<(usize, f32)>,
     // Foot-pinning IK chains, resolved against the target skeleton at
@@ -32,8 +32,8 @@ pub(super) struct GraphTarget {
     pub chains: Vec<super::ik::IkChainRuntime>,
 }
 
-// Compile every declared `AnimGraph` onto its target bucket and publish one
-// seeded `AnimParams` per graph. `clip_slots` maps an Animation asset id to
+// Compile every declared `AnimationGraph` onto its target bucket and publish one
+// seeded `AnimationParams` per graph. `clip_slots` maps an Animation asset id to
 // its (target, clip index) slot from the clip drain. Returns the number of
 // graphs installed. The build validates graph shape and ownership, so a
 // failure here (blob/clip-list disagreement) downgrades the bucket to its
@@ -44,20 +44,20 @@ pub(super) fn install_graphs(
     clip_slots: &HashMap<AssetId, (SkinnedMeshHandle, usize)>,
 ) -> usize {
     let mut installed = 0usize;
-    for g in ctx.drain::<AnimGraph>() {
+    for g in ctx.drain::<AnimationGraph>() {
         // The authored SkinnedMesh handle keys the target bucket (shared with
-        // the clip drain) and the runtime `AnimParams` / `SkeletonPose` /
+        // the clip drain) and the runtime `AnimationParams` / `SkeletonPose` /
         // `GroundProbes` this publishes below.
         let Some(target) = g.target else {
             tracing::warn!(
-                "AnimationSystem: AnimGraph {} has no target, ignored",
+                "AnimationSystem: AnimationGraph {} has no target, ignored",
                 g.asset_id
             );
             continue;
         };
         let Some(bucket) = targets.get_mut(&target) else {
             tracing::warn!(
-                "AnimationSystem: AnimGraph {} targets handle {} which has no clips, ignored",
+                "AnimationSystem: AnimationGraph {} targets handle {} which has no clips, ignored",
                 g.asset_id,
                 target.index()
             );
@@ -74,7 +74,7 @@ pub(super) fn install_graphs(
         match compiled {
             Ok(graph) => {
                 let params = graph.default_params();
-                ctx.push(AnimParams::new(target, params.clone()));
+                ctx.push(AnimationParams::new(target, params.clone()));
                 // IK chains resolve joint names against the target's
                 // skeleton (published by GraphicsSystem init, which ran
                 // before this one) and get a ground-probe exchange for
@@ -89,7 +89,7 @@ pub(super) fn install_graphs(
                     super::ik::resolve_chains(g.asset_id, &g.ik_chains, &g.parameters, &skeleton)
                 } else {
                     tracing::warn!(
-                        "AnimationSystem: AnimGraph {} has ik_chains but target handle {} has \
+                        "AnimationSystem: AnimationGraph {} has ik_chains but target handle {} has \
                          no skeleton pose; IK disabled",
                         g.asset_id,
                         target.index()
@@ -118,14 +118,17 @@ pub(super) fn install_graphs(
 }
 
 // Per-step drive for one graph target: flush queued debug writes into the
-// `AnimParams` component, snapshot its values, and advance the cursor.
+// `AnimationParams` component, snapshot its values, and advance the cursor.
 pub(super) fn step_target(
     g: &mut GraphTarget,
     target: SkinnedMeshHandle,
     ctx: &mut PipelineContext,
     dt_secs: f32,
 ) {
-    if let Some(params) = ctx.query_mut::<AnimParams>().find(|p| p.target == target) {
+    if let Some(params) = ctx
+        .query_mut::<AnimationParams>()
+        .find(|p| p.target == target)
+    {
         for (index, value) in g.pending.drain(..) {
             params.set(index, value);
         }
@@ -243,7 +246,7 @@ mod tests {
         })
     }
 
-    fn parse(v: serde_json::Value) -> AnimGraph {
+    fn parse(v: serde_json::Value) -> AnimationGraph {
         crate::ecs::asset_id::ensure_name_resolver();
         serde_json::from_value(v).unwrap()
     }
@@ -253,7 +256,7 @@ mod tests {
     #[test]
     fn install_graphs_ignores_a_graph_with_no_target() {
         let mut w = TestWorld::new();
-        w.push(AnimGraph::default());
+        w.push(AnimationGraph::default());
         let mut targets = BTreeMap::new();
         assert_eq!(
             install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
@@ -274,7 +277,7 @@ mod tests {
             0
         );
         assert!(!targets.contains_key(&target));
-        assert_eq!(w.count::<AnimParams>(), 0, "no params published");
+        assert_eq!(w.count::<AnimationParams>(), 0, "no params published");
     }
 
     // A graph the blob and clip list disagree on (here: an unresolvable clip
@@ -295,7 +298,7 @@ mod tests {
             !is_graph(&targets, target),
             "the bucket keeps its flat drive"
         );
-        assert_eq!(w.count::<AnimParams>(), 0);
+        assert_eq!(w.count::<AnimationParams>(), 0);
     }
 
     // A graph claiming a clip that belongs to a different target cannot resolve
@@ -313,7 +316,7 @@ mod tests {
         assert!(!is_graph(&targets, target));
     }
 
-    // The success path: the graph takes the bucket and publishes one AnimParams
+    // The success path: the graph takes the bucket and publishes one AnimationParams
     // seeded with the declared defaults. No IK chains means no ground probes.
     #[test]
     fn install_graphs_takes_the_bucket_and_seeds_params() {
@@ -327,7 +330,7 @@ mod tests {
         assert!(is_graph(&targets, target));
 
         let ctx = w.ctx();
-        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].target, target);
         assert_eq!(
@@ -387,7 +390,7 @@ mod tests {
     fn step_target_flushes_queued_writes_into_the_component() {
         let target = handle("gs_component");
         let mut w = TestWorld::new();
-        w.push(AnimParams::new(target, vec![0.0]));
+        w.push(AnimationParams::new(target, vec![0.0]));
         let mut g = graph_target("gs_component");
         g.pending.push((0, 3.0));
 
@@ -395,7 +398,7 @@ mod tests {
         assert!(g.pending.is_empty(), "the queue drains");
         assert_eq!(g.params, vec![3.0], "snapshot taken from the component");
         let ctx = w.ctx();
-        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params[0].values, vec![3.0], "the write landed in the store");
     }
 
@@ -420,14 +423,14 @@ mod tests {
     fn step_target_ignores_another_targets_params() {
         let target = handle("gs_mine");
         let mut w = TestWorld::new();
-        w.push(AnimParams::new(handle("gs_theirs"), vec![9.0]));
+        w.push(AnimationParams::new(handle("gs_theirs"), vec![9.0]));
         let mut g = graph_target("gs_mine");
         g.pending.push((0, 2.0));
 
         step_target(&mut g, target, &mut w.ctx(), 0.1);
         assert_eq!(g.params, vec![2.0], "the stranger's values are not read");
         let ctx = w.ctx();
-        let params: Vec<&AnimParams> = ctx.query::<AnimParams>().collect();
+        let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params[0].values, vec![9.0], "and are not written either");
     }
 }

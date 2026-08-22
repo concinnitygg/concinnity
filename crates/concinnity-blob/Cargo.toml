@@ -15,7 +15,6 @@ publish = false
 [lib]
 name = "concinnity_blob"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 concinnity-asset = { path = "../concinnity-asset" }

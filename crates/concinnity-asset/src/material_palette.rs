@@ -7,21 +7,6 @@ use alloc::vec::Vec;
 ///
 /// Expands into [Material](#material) assets named `<palette_name>_<alias>`.
 /// [Prop](#prop)s reference the expanded names.
-///
-/// ```jsonl
-/// // Inline:
-/// {"type":"MaterialPalette","name":"pal","args":{"entries":[
-///   {"alias":"floor","albedo":"tex_stone","roughness":0.9},
-///   {"alias":"wall","albedo":"tex_brick","roughness":0.85},
-///   {"alias":"trim","albedo":"tex_metal","roughness":0.3,"metallic":0.8}
-/// ]}}
-/// // Props reference expanded names:
-/// {"type":"Prop","name":"floor","args":{"mesh":"room_mesh","material":"pal_floor","position":[0,0,0]}}
-///
-/// // From library preset:
-/// {"type":"MaterialPalette","name":"pal","args":{"preset":"pal_stone_dungeon"}}
-/// {"type":"Prop","name":"south_wall","args":{"mesh":"wall_mesh","material":"pal_wall"}}
-/// ```
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MaterialPalette {

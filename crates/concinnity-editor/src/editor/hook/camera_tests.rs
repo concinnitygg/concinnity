@@ -9,7 +9,7 @@
 // and what hands control back.
 
 use super::*;
-use crate::assets::{Camera3D, Key};
+use crate::assets::{Camera3D, InputKey};
 use crate::test_support::isolate_state_dir;
 
 const VP: [f32; 2] = [1280.0, 720.0];
@@ -261,20 +261,20 @@ fn steering_during_a_glide_hands_the_camera_back() {
 #[test]
 fn digit_keys_map_to_bookmark_slots() {
     let digits = [
-        Key::Num1,
-        Key::Num2,
-        Key::Num3,
-        Key::Num4,
-        Key::Num5,
-        Key::Num6,
-        Key::Num7,
-        Key::Num8,
-        Key::Num9,
+        InputKey::Num1,
+        InputKey::Num2,
+        InputKey::Num3,
+        InputKey::Num4,
+        InputKey::Num5,
+        InputKey::Num6,
+        InputKey::Num7,
+        InputKey::Num8,
+        InputKey::Num9,
     ];
     for (i, key) in digits.into_iter().enumerate() {
         assert_eq!(bookmarks::slot_for(key), Some(i));
     }
-    for key in [Key::A, Key::Num0, Key::Space] {
+    for key in [InputKey::A, InputKey::Num0, InputKey::Space] {
         assert_eq!(bookmarks::slot_for(key), None);
     }
 }

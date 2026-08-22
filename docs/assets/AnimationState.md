@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# GraphState
+# AnimationState
 
 One state of the graph: while active it plays either a single
 [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several

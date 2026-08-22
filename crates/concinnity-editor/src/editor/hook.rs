@@ -967,14 +967,18 @@ impl DebugHook for EditorHook {
                     && self.gizmo_drag.is_none()
                 {
                     match input.captured_key {
-                        Some(crate::assets::Key::T) => {
+                        Some(crate::assets::InputKey::T) => {
                             self.gizmo_mode = gizmo::GizmoMode::Translate;
                         }
-                        Some(crate::assets::Key::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
-                        Some(crate::assets::Key::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
+                        Some(crate::assets::InputKey::R) => {
+                            self.gizmo_mode = gizmo::GizmoMode::Rotate
+                        }
+                        Some(crate::assets::InputKey::S) => {
+                            self.gizmo_mode = gizmo::GizmoMode::Scale
+                        }
                         // F frames the selection; Shift+F keeps the old fly
                         // toggle one modifier away.
-                        Some(crate::assets::Key::F) => {
+                        Some(crate::assets::InputKey::F) => {
                             if input.shift {
                                 self.toggle_fly();
                             } else {
@@ -982,7 +986,7 @@ impl DebugHook for EditorHook {
                             }
                         }
                         // H hides the selection; Shift+H isolates it.
-                        Some(crate::assets::Key::H) => {
+                        Some(crate::assets::InputKey::H) => {
                             if input.shift {
                                 self.toggle_isolate();
                             } else {
@@ -1019,18 +1023,18 @@ impl DebugHook for EditorHook {
                     && self.gizmo_drag.is_none()
                 {
                     match input.captured_key {
-                        Some(crate::assets::Key::Z) => self.undo(world),
-                        Some(crate::assets::Key::Y) => self.redo(world),
-                        Some(crate::assets::Key::D)
+                        Some(crate::assets::InputKey::Z) => self.undo(world),
+                        Some(crate::assets::InputKey::Y) => self.redo(world),
+                        Some(crate::assets::InputKey::D)
                             if self.frontmost_open_panel() != Some(PanelKey::Behavior) =>
                         {
                             self.duplicate_selection();
                         }
-                        Some(crate::assets::Key::Down) => {
+                        Some(crate::assets::InputKey::Down) => {
                             self.drop_selection_to_floor(world);
                         }
                         // Ctrl+H makes everything visible again.
-                        Some(crate::assets::Key::H) => self.unhide_all(),
+                        Some(crate::assets::InputKey::H) => self.unhide_all(),
                         // Ctrl+1..9 save the camera pose to a bookmark.
                         Some(key) => {
                             if let Some(slot) = bookmarks::slot_for(key) {

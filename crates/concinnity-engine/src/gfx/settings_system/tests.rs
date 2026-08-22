@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::assets::{
-    AudioCommand, ControlsCommand, IndirectLighting, Key, SettingCommand, SettingOp, ShadowUpdate,
-    Sprite, TextLabel, WindowMode,
+    AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
+    ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
 use crate::blob::BlobData;
 use crate::config::Settings;
@@ -371,18 +371,18 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
 fn rebind_to_a_free_key_has_no_victim() {
     let mut f = Fixture::new();
     assert!(
-        f.state.keymap.action_for_key(Key::Q).is_none(),
+        f.state.keymap.action_for_key(InputKey::Q).is_none(),
         "Q is unbound in the default map"
     );
     f.apply(vec![SettingCommand {
         setting: Bindable::Forward.setting_key().to_string(),
-        op: SettingOp::Rebind(Key::Q),
+        op: SettingOp::Rebind(InputKey::Q),
         value_label: None,
         persist: true,
     }]);
 
-    assert_eq!(f.state.keymap.get(Bindable::Forward), Key::Q);
-    assert_eq!(f.label(REBIND_LABEL), Key::Q.display_name());
+    assert_eq!(f.state.keymap.get(Bindable::Forward), InputKey::Q);
+    assert_eq!(f.label(REBIND_LABEL), InputKey::Q.display_name());
     assert_eq!(f.label(VICTIM_LABEL), "victim", "no victim was relabelled");
 }
 
@@ -392,7 +392,7 @@ fn rebind_of_an_unknown_action_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![SettingCommand {
         setting: "not_an_action".to_string(),
-        op: SettingOp::Rebind(Key::Q),
+        op: SettingOp::Rebind(InputKey::Q),
         value_label: None,
         persist: true,
     }]);

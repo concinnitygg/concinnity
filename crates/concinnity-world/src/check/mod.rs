@@ -9,7 +9,7 @@
 //! as the per-asset `extra` hook and composes the full check set behind its own
 //! entry points.
 
-pub(crate) mod anim_graph;
+pub(crate) mod animation_graph;
 pub(crate) mod asset_refs;
 pub mod audio;
 pub mod behavior;
@@ -54,7 +54,7 @@ pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
 /// here; cook covers them through the `extra` hook.
 pub fn check_asset(type_norm: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     match type_norm {
-        "animgraph" => anim_graph::check(name, args),
+        "animationgraph" => animation_graph::check(name, args),
         "behavior" => behavior::check(name, args),
         "variables" => behavior::check_variables(name, args),
         "shader" => shader::check(name, args),

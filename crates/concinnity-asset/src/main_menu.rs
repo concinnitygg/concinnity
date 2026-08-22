@@ -16,10 +16,6 @@ use alloc::vec::Vec;
 /// closed, with Escape opening it, so the scene itself shows first. Set
 /// `"initial": true` to show the menu as soon as the world loads:
 ///
-/// ```jsonl
-/// {"name":"main_menu","type":"MainMenu"}
-/// ```
-///
 /// Declaring a `MainMenu` also injects the [StatHud](#stathud) (and its chip
 /// labels) at build time when the world declares none, so the menu's
 /// performance-stats toggles have chips to drive.
@@ -30,13 +26,6 @@ use alloc::vec::Vec;
 /// `"screen:toggle:<name>"`) plus two conveniences resolved against this menu:
 /// - `"return"`: hide this menu (the same as `"screen:hide"`).
 /// - `"settings"`: open a generated settings sub-menu that has a Back button.
-///
-/// ```jsonl
-/// {"name":"title","type":"MainMenu","args":{"items":[
-///   {"label":"New Game","action":"scene:level_1"},
-///   {"label":"Quit","action":"quit"}
-/// ]}}
-/// ```
 ///
 /// **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 /// `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
@@ -51,7 +40,7 @@ pub struct MainMenu {
     /// Show the menu as soon as the world loads. Off by default: the scene
     /// shows first and the toggle key opens the menu.
     pub initial: bool,
-    /// Key that toggles the menu while the cursor is free. Empty binds no key.
+    /// InputKey that toggles the menu while the cursor is free. Empty binds no key.
     /// Only `"Escape"` is currently recognised by the runtime.
     pub toggle_key: String,
     /// RGBA fill drawn across the whole window behind the items. Defaults to

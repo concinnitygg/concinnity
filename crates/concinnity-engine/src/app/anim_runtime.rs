@@ -32,7 +32,7 @@ pub struct CrossfadeRequest {
 }
 
 /// One queued graph parameter write. `target` is the `SkinnedMesh` whose
-/// graph declares the parameter; the value lands in the target's `AnimParams`
+/// graph declares the parameter; the value lands in the target's `AnimationParams`
 /// component on the next animation step.
 ///
 /// `dead_code` allow: same rationale as `CrossfadeRequest` above.

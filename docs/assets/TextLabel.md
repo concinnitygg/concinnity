@@ -11,25 +11,6 @@ A `\n` in `content` starts a new line. When `background` has an alpha > 0, a
 box is filled behind the glyphs, extended outward by `padding` pixels,
 useful for HUD chips.
 
-```jsonl
-{
-  "type": "TextLabel",
-  "name": "fps_text",
-  "args": {
-    "font": "fps_font",
-    "content": "FPS: --",
-    "x": 10,
-    "y": 10,
-    "color": [
-      1,
-      1,
-      1
-    ],
-    "scale": 1
-  }
-}
-```
-
 ## Parameters
 
 - `font`: A string. The [Font](Font.md) asset to use for rendering. Optional.

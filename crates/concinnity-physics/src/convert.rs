@@ -8,7 +8,7 @@ use rapier3d::glamx::EulerRot;
 use rapier3d::math::{Rotation, Vector};
 
 use crate::{ColliderShape, DynamicParams, JointMotor, JointSpec};
-use concinnity_core::assets::{BodyDynamics, Joint, JointKind, PropCollider};
+use concinnity_core::assets::{BodyDynamics, PhysicsJoint, PhysicsJointKind, PropCollider};
 
 // Convert an engine `[x, y, z]` array into a Rapier vector.
 pub(crate) fn to_vec(v: [f32; 3]) -> Vector {
@@ -56,9 +56,9 @@ pub(crate) fn euler_deg_from_quat(q: [f32; 4]) -> [f32; 3] {
     from_rotation(Rotation::from_xyzw(q[0], q[1], q[2], q[3]).normalize())
 }
 
-// The `JointSpec` a `Joint` asset describes, converting authored degrees to
+// The `JointSpec` a `PhysicsJoint` asset describes, converting authored degrees to
 // the radians Rapier expects for revolute joints.
-pub(crate) fn joint_spec(joint: &Joint) -> JointSpec {
+pub(crate) fn joint_spec(joint: &PhysicsJoint) -> JointSpec {
     let limits = if joint.limits_enabled {
         Some(joint.limits)
     } else {
@@ -73,9 +73,9 @@ pub(crate) fn joint_spec(joint: &Joint) -> JointSpec {
         None
     };
     match joint.parsed_kind() {
-        JointKind::Fixed => JointSpec::Fixed,
-        JointKind::Spherical => JointSpec::Spherical,
-        JointKind::Revolute => JointSpec::Revolute {
+        PhysicsJointKind::Fixed => JointSpec::Fixed,
+        PhysicsJointKind::Spherical => JointSpec::Spherical,
+        PhysicsJointKind::Revolute => JointSpec::Revolute {
             axis: joint.axis,
             // Convert authored degrees to the radians Rapier expects.
             limits: limits.map(|[a, b]| [a.to_radians(), b.to_radians()]),
@@ -84,7 +84,7 @@ pub(crate) fn joint_spec(joint: &Joint) -> JointSpec {
                 max_force: m.max_force,
             }),
         },
-        JointKind::Prismatic => JointSpec::Prismatic {
+        PhysicsJointKind::Prismatic => JointSpec::Prismatic {
             axis: joint.axis,
             limits,
             motor,
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn joint_spec_converts_revolute_units_to_radians() {
-        let j = Joint {
+        let j = PhysicsJoint {
             kind: "revolute".to_string(),
             axis: [0.0, 0.0, 1.0],
             limits_enabled: true,
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn joint_spec_prismatic_keeps_units() {
-        let j = Joint {
+        let j = PhysicsJoint {
             kind: "prismatic".to_string(),
             axis: [1.0, 0.0, 0.0],
             limits_enabled: true,
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn joint_motor_inactive_when_max_force_zero() {
-        let j = Joint {
+        let j = PhysicsJoint {
             kind: "revolute".to_string(),
             motor_target_velocity: 30.0,
             motor_max_force: 0.0,

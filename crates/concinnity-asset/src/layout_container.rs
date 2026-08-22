@@ -54,8 +54,15 @@ impl Default for LayoutRow {
 /// Labels referenced by `cols` are matched by name; a label whose font is not
 /// loaded, or which is hidden, is skipped and reserves no space.
 ///
-/// ```jsonl
-/// {"name":"hud_layout","type":"LayoutContainer","args":{"x":10,"y":10,"col_gap":6,"row_gap":6,"rows":[{"cols":["fps_chip","vram_chip","ev_chip","edr_chip"]},{"cols":["passes_chip"]}]}}
+/// ```rust
+/// # use concinnity_asset::LayoutContainer;
+/// LayoutContainer {
+///     x: 10.0,
+///     y: 10.0,
+///     col_gap: 6.0,
+///     row_gap: 6.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -109,7 +116,7 @@ pub struct LabelBox {
 
 /// The resolved top-left text origin for one label.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Placement {
+pub struct LabelPlacement {
     /// The label this placement is for.
     pub id: AssetId,
     /// Text-origin x in pixels from the window's top-left.
@@ -126,7 +133,7 @@ impl LayoutContainer {
     /// geometry: callers measure with their font metrics, this places the
     /// boxes. Boxes within a row are laid edge-to-edge with `col_gap` between
     /// them; rows are stacked with `row_gap` between them.
-    pub fn layout(&self, size_of: impl Fn(AssetId) -> Option<LabelBox>) -> Vec<Placement> {
+    pub fn layout(&self, size_of: impl Fn(AssetId) -> Option<LabelBox>) -> Vec<LabelPlacement> {
         let mut out = Vec::new();
         self.layout_into(size_of, &mut out);
         out
@@ -137,7 +144,7 @@ impl LayoutContainer {
     pub fn layout_into(
         &self,
         size_of: impl Fn(AssetId) -> Option<LabelBox>,
-        out: &mut Vec<Placement>,
+        out: &mut Vec<LabelPlacement>,
     ) {
         out.clear();
         // A row's measurable width: cells laid edge-to-edge with the column
@@ -195,7 +202,7 @@ impl LayoutContainer {
                     // renderer wants is inset from the box's top-left by the
                     // horizontal padding and the (possibly different) vertical
                     // inset, since the box hugs the visible glyphs.
-                    out.push(Placement {
+                    out.push(LabelPlacement {
                         id,
                         x: x_cursor + b.pad,
                         y: y_cursor + b.top_inset,

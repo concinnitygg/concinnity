@@ -10,7 +10,7 @@
 mod font;
 mod layout;
 
-use crate::assets::{Key, WindowArgs};
+use crate::assets::{InputKey, Window};
 use crate::ecs::FontHandle;
 use crate::gfx::backend::{FrameParams, RenderBackend};
 use crate::gfx::backend_init::BackendInit;
@@ -37,10 +37,10 @@ pub(crate) fn show(title: &str, message: &str) -> bool {
         return false;
     };
 
-    let window = WindowArgs {
+    let window = Window {
         title: title.to_string(),
         resizable: true,
-        ..WindowArgs::default()
+        ..Window::default()
     };
 
     // Must precede window creation so AppKit will display it.
@@ -112,7 +112,7 @@ fn run_loop(
         if input.escape || input.left_click && hovered {
             return;
         }
-        if matches!(input.captured_key, Some(Key::Enter)) {
+        if matches!(input.captured_key, Some(InputKey::Enter)) {
             return;
         }
     }

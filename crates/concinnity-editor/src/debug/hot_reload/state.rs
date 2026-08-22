@@ -69,7 +69,7 @@ pub(crate) struct DecodedSkinnedMesh {
     pub entry_idx: usize,
     pub vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
     pub indices: Vec<u16>,
-    pub skeleton: Vec<crate::assets::JointDef>,
+    pub skeleton: Vec<crate::assets::SkeletonJoint>,
 }
 
 // Output of one off-thread decode pass: every captured source the worker

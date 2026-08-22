@@ -7,7 +7,7 @@
 // /snap, /dup, /floor dispatches beside the rest of the drive in `tests.rs`.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::test_support::isolate_state_dir;
 use std::sync::atomic::Ordering;
 
@@ -119,7 +119,7 @@ fn enter_submits_the_line_and_clears_the_field() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(Key::Enter),
+            captured_key: Some(InputKey::Enter),
             ..Default::default()
         },
     );
@@ -141,7 +141,7 @@ fn enter_on_a_blank_line_submits_nothing() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(Key::Enter),
+            captured_key: Some(InputKey::Enter),
             ..Default::default()
         },
     );
@@ -160,7 +160,7 @@ fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(Key::Enter),
+            captured_key: Some(InputKey::Enter),
             ..Default::default()
         },
     );
@@ -182,7 +182,7 @@ fn tab_accepts_the_del_ghost() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(Key::Tab),
+            captured_key: Some(InputKey::Tab),
             ..Default::default()
         },
     );
@@ -198,7 +198,7 @@ fn tab_accepts_the_del_ghost() {
 fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
     let entries = vec![serde_json::json!({"name":"lantern_post","type":"PointLight","args":{}})];
     let key = FrameInput {
-        captured_key: Some(Key::Right),
+        captured_key: Some(InputKey::Right),
         ..Default::default()
     };
 
@@ -239,7 +239,7 @@ fn the_accept_keys_are_inert_without_a_ghost() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(Key::Tab),
+            captured_key: Some(InputKey::Tab),
             ..Default::default()
         },
     );

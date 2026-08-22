@@ -15,10 +15,6 @@ it. Declaring the same asset yourself replaces the injected one; declaring
 The build records every injected asset in `world-lock.json`; copy an entry
 from there (or from `cn explain <name>`) into `world.jsonl` to override it.
 
-```jsonl
-{"name":"defaults","type":"EngineDefaults","args":{"debug_hud":false,"sky":false}}
-```
-
 ## Parameters
 
 - `hud`: A boolean. Inject the [StatHud](StatHud.md) with its chip labels and font when the world declares a [MainMenu](MainMenu.md) but no `StatHud`. Defaults to `true`.

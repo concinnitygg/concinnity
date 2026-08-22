@@ -5,6 +5,14 @@ use alloc::vec::Vec;
 
 /// Authored fields of a `Room`; the resolved dimensions and payload locator are
 /// runtime state.
+///
+/// ```rust
+/// # use concinnity_asset::RoomArgs;
+/// RoomArgs {
+///     size: Some([16.0, 20.0, 3.5]),
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RoomArgs {

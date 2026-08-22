@@ -81,7 +81,7 @@ impl System for Camera3DSystem {
                 crate::ecs::decompose::EntityByName,
                 crate::assets::ControlsCommand,
             ])
-            .writes_resources(crate::resource_mask![crate::assets::InteractSignal])
+            .writes_resources(crate::resource_mask![crate::assets::InteractEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -300,8 +300,8 @@ impl System for Camera3DSystem {
                             .map(|(&name, _)| name)
                     });
                 if let Some(target) = target {
-                    ctx.events_mut::<crate::assets::InteractSignal>()
-                        .send(crate::assets::InteractSignal { target });
+                    ctx.events_mut::<crate::assets::InteractEvent>()
+                        .send(crate::assets::InteractEvent { target });
                 }
             }
         }

@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# QueryDecl
+# BehaviorQuery
 
 A world read declared by a [Behavior](Behavior.md), resolved once per tick
 into the entities carrying every named component.

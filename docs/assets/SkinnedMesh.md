@@ -22,11 +22,6 @@ imported `.glb`) and is baked into the mesh at build time.
 Normals and tangents are computed automatically at build time. Do not
 supply them.
 
-```jsonl
-{"name":"flag","type":"SkinnedMesh","args":{"position":[0,1,0],"material":"mat_cloth","skeleton":[{"parent":-1},{"parent":0,"translation":[0,1,0]}],"vertices":[{"pos":[0,0,0],"joints":[0,0,0,0],"weights":[1,0,0,0]}],"indices":[0,0,0]}}
-{"name":"hero","type":"SkinnedMesh","args":{"source":"models/hero.glb","position":[0,0,0],"material":"mat_skin"}}
-```
-
 ## Parameters
 
 - `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.

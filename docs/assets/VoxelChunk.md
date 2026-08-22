@@ -14,17 +14,6 @@ The palette must contain at least one entry whose [BlockType](BlockType.md) has
 non-solid emit no faces. Faces are only emitted between a solid block and
 either an empty neighbour or the outside of the chunk.
 
-```jsonl
-{"name":"air","type":"BlockType","args":{"solid":false}}
-{"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-{"name":"my_chunk","type":"VoxelChunk","args":{
-  "palette":["air","stone"],
-  "dim":[2,1,1],
-  "blocks":[1,1]
-}}
-{"name":"chunk_prop","type":"Prop","args":{"mesh":"my_chunk","material":"mat_stone"}}
-```
-
 ## Parameters
 
 - `palette`: An array of strings. [BlockType](BlockType.md) asset names. `blocks[i]` is an index into this list.

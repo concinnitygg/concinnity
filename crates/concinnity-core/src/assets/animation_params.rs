@@ -6,7 +6,7 @@ use crate::ecs::SkinnedMeshHandle;
 
 /// Runtime-only parameter block for one animation graph target.
 ///
-/// `AnimationSystem` publishes one `AnimParams` per `AnimGraph` at init,
+/// `AnimationSystem` publishes one `AnimationParams` per `AnimationGraph` at init,
 /// seeded to the graph's declared parameter defaults. Gameplay systems write
 /// values into it each frame (matching on `target`); `AnimationSystem` reads
 /// it back during its step and evaluates the graph's transitions against the
@@ -16,14 +16,14 @@ use crate::ecs::SkinnedMeshHandle;
 ///
 /// Not authored in world files: it has no `args`.
 #[derive(Debug, Clone)]
-pub struct AnimParams {
+pub struct AnimationParams {
     /// The `SkinnedMesh` resource whose graph these parameters drive.
     pub target: SkinnedMeshHandle,
     /// One value per graph parameter, in declaration order.
     pub values: Vec<f32>,
 }
 
-impl AnimParams {
+impl AnimationParams {
     /// A parameter block for `target`, seeded with the graph's defaults.
     pub fn new(target: SkinnedMeshHandle, values: Vec<f32>) -> Self {
         Self { target, values }
@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn set_writes_in_range_and_ignores_out_of_range() {
-        let mut p = AnimParams::new(SkinnedMeshHandle(1), vec![0.0, 1.0]);
+        let mut p = AnimationParams::new(SkinnedMeshHandle(1), vec![0.0, 1.0]);
         p.set(0, 3.5);
         assert_eq!(p.values, vec![3.5, 1.0]);
         p.set(5, 9.0);

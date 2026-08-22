@@ -14,16 +14,17 @@ use crate::AssetId;
 /// direction), and sized by `half_size` (half-width along the panel's tangent,
 /// half-height along its bitangent).
 ///
-/// ```jsonl
-/// {"name":"window","type":"GlassPanel","args":{
-///   "centre":[0.0,2.0,-3.0],
-///   "normal":[0.0,0.0,1.0],
-///   "half_size":[2.0,1.5],
-///   "tint":[0.6,0.85,0.9],
-///   "opacity":0.45,
-///   "refraction_strength":0.04,
-///   "fresnel_power":4.0
-/// }}
+/// ```rust
+/// # use concinnity_asset::GlassPanel;
+/// GlassPanel {
+///     centre: [0.0, 2.0, -3.0],
+///     normal: [0.0, 0.0, 1.0],
+///     half_size: [2.0, 1.5],
+///     tint: [0.6, 0.85, 0.9],
+///     opacity: 0.45,
+///     refraction_strength: 0.04,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

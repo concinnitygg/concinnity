@@ -88,8 +88,8 @@ define_access_ids! {
     ],
     events: [
         crate::assets::ControlsCommand,
-        crate::assets::InteractSignal,
-        crate::assets::RootMotion,
+        crate::assets::InteractEvent,
+        crate::assets::RootMotionEvent,
         crate::assets::ScreenCommand,
         crate::assets::ScreenShown,
         crate::assets::SettingCommand,

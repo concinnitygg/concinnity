@@ -99,7 +99,7 @@ impl AnimationSystem {
     }
 
     // Queue a parameter write on a graph bucket; it lands in the target's
-    // `AnimParams` component at the top of the next animation step.
+    // `AnimationParams` component at the top of the next animation step.
     // `pub(super)` for queue-free tests, like `apply_crossfade`.
     pub(super) fn queue_param(
         &mut self,
@@ -159,7 +159,7 @@ impl AnimationSystem {
         match &mut state.mode {
             TargetMode::Graph(g) => Ok(g),
             TargetMode::Flat(_) => Err(format!(
-                "{cmd}: target {target:?} has no AnimGraph (its clips blend by weight; \
+                "{cmd}: target {target:?} has no AnimationGraph (its clips blend by weight; \
                  use anim-crossfade)"
             )),
         }
@@ -172,7 +172,7 @@ mod tests {
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
     use crate::app::anim_runtime::{CrossfadeRequest, SetParamRequest};
-    use crate::assets::AnimGraph;
+    use crate::assets::AnimationGraph;
     use crate::ecs::asset_id::AssetId;
     use crate::gfx::anim_graph::GraphCursor;
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
@@ -220,7 +220,7 @@ mod tests {
     // command surface reports the machine, it never samples a pose.
     fn graph_system(fade_secs: f32) -> AnimationSystem {
         crate::ecs::asset_id::ensure_name_resolver();
-        let g: AnimGraph = serde_json::from_value(serde_json::json!({
+        let g: AnimationGraph = serde_json::from_value(serde_json::json!({
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",
             "states": [

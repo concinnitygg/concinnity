@@ -72,10 +72,6 @@ impl Default for Window {
     }
 }
 
-/// Back-compat alias: external callers (`GraphicsSystem`, etc.) previously
-/// stored a `WindowArgs`. The runtime and args structs are now one type.
-pub type WindowArgs = Window;
-
 #[cfg(test)]
 mod tests {
     use super::*;

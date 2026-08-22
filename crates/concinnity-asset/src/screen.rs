@@ -37,11 +37,12 @@ pub enum ScreenInput {
 /// focus whenever the screen reaches the top of the stack. Worlds that need no
 /// menus simply declare no screens.
 ///
-/// ```jsonl
-/// {"name":"pause_menu","type":"Screen","args":{"toggle_key":"Escape"}}
-/// // UI assets prefixed pause_menu_* belong to this screen:
-/// {"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":1280,"height":720,"tint":[0,0,0,0.55]}}
-/// {"name":"pause_menu_btn_resume","type":"HitRegion","args":{"action":"screen:hide", ...}}
+/// ```rust
+/// # use concinnity_asset::Screen;
+/// Screen {
+///     toggle_key: "Escape".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -53,7 +54,7 @@ pub struct Screen {
     pub initial: bool,
     /// Seconds to fade the screen in when it's shown. 0 shows it instantly.
     pub fade_in_secs: f32,
-    /// Key that toggles this screen open / closed from anywhere, by the same
+    /// InputKey that toggles this screen open / closed from anywhere, by the same
     /// canonical key names a [KeyBinding](#keybinding) uses (e.g. "Escape",
     /// "Backtick"). Empty leaves the screen action-driven only.
     pub toggle_key: String,

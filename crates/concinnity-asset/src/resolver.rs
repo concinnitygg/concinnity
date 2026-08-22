@@ -155,7 +155,7 @@ handle_resolver! {
 }
 handle_resolver! {
     /// A SkinnedMesh stays an ECS component, but its authored references
-    /// (`Animation.target`, `AnimGraph.target`, `FollowController.target`)
+    /// (`Animation.target`, `AnimationGraph.target`, `FollowController.target`)
     /// resolve to its dense handle so they no longer carry an interned id.
     SKINNED_MESH_HANDLE_RESOLVER, "skinned-mesh",
     set_skinned_mesh_handle_resolver, resolve_skinned_mesh_handle,

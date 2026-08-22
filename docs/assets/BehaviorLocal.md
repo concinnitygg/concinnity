@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# LocalDecl
+# BehaviorLocal
 
 A per-entity state slot declared by a [Behavior](Behavior.md). The declared
 value fixes both the slot's type and its starting value.

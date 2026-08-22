@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    CmpOp, CueKind, FrameInput, Key, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
-    StoryCommand, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold, StoryStage,
-    TextLabel,
+    CueKind, FrameInput, InputKey, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
+    StoryCommand, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold,
+    StoryStage, TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{AudioClipHandle, PipelineContext, StepResult, System};

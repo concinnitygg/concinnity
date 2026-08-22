@@ -4,19 +4,6 @@
 
 Declares the 3D camera. One per scene.
 
-```jsonl
-{
-  "name": "main_camera",
-  "type": "Camera3D",
-  "args": {
-    "fov_y_degrees": 80.0,
-    "near": 0.05,
-    "far": 500.0,
-    "position": [0.0, 4.0, 0.0]
-  }
-}
-```
-
 ## Parameters
 
 - `fov_y_degrees`: A float. Vertical field-of-view in degrees. Defaults to `75.0`.

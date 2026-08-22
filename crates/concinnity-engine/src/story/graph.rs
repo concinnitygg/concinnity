@@ -13,7 +13,7 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn cond_passes(&self, name: &str, op: CmpOp, value: i32) -> bool {
+    pub(super) fn cond_passes(&self, name: &str, op: StoryCompareOp, value: i32) -> bool {
         op.eval(self.vars.get(name).copied().unwrap_or(0), value)
     }
 

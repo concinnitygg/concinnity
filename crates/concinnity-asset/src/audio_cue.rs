@@ -17,11 +17,6 @@ use crate::{AssetId, AudioBus, AudioClipHandle, de_opt_asset_ref, de_opt_audio_c
 ///   a cue is seamless. A screen with a *different* music cue replaces the
 ///   track; a screen with *no* music cue leaves the current music playing.
 /// - `sound`: a one-shot effect, played every time the screen is shown.
-///
-/// ```jsonl
-/// {"name":"inn_theme","type":"AudioCue","args":{"screen":"page_inn","clip":"theme","kind":"music"}}
-/// {"name":"door_sfx","type":"AudioCue","args":{"screen":"page_door","clip":"door_creak"}}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AudioCue {

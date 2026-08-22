@@ -14,19 +14,6 @@ set it to pre-fill the field.
 Like other overlay elements it belongs to a [Screen](Screen.md) resolved from the
 naming convention (`<screen>_*`), or is always shown when it has none.
 
-```jsonl
-{
-  "type": "TextInput",
-  "name": "menu_playername",
-  "args": {
-    "font": "ui_font",
-    "placeholder": "Enter your name",
-    "x": 400, "y": 300, "width": 480, "height": 48,
-    "max_len": 24
-  }
-}
-```
-
 ## Parameters
 
 - `font`: A string. The [Font](Font.md) used to render the field's text. Optional.

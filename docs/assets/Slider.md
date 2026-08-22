@@ -19,10 +19,6 @@ display format live in the engine, not here. The value label and handle
 show a placeholder position at build time and are corrected to the live
 value when the world starts.
 
-```jsonl
-{"name":"sld_exposure","type":"Slider","args":{"setting":"exposure","label":"Exposure"}}
-```
-
 Generated names are prefixed with this asset's `name` (`<name>_label`,
 `<name>_value`, `<name>_track`, `<name>_handle`, `<name>_drag`), so they
 never clash with hand-authored assets.

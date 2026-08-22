@@ -39,8 +39,10 @@ type RawVert = ([f32; 3], [f32; 3], [f32; 2]);
 // LOD alternates: (switch_distance, index buffer) pairs.
 type LodAlternates = Vec<(f32, Vec<u16>)>;
 
-// Convert an args-form `JointDef` into the payload joint form.
-fn joint_def_to_payload(j: &crate::assets::JointDef) -> crate::gfx::mesh_payload::PayloadJoint {
+// Convert an args-form `SkeletonJoint` into the payload joint form.
+fn joint_def_to_payload(
+    j: &crate::assets::SkeletonJoint,
+) -> crate::gfx::mesh_payload::PayloadJoint {
     crate::gfx::mesh_payload::PayloadJoint {
         name: j.name.clone(),
         parent: j.parent,
@@ -301,7 +303,7 @@ pub(crate) fn compile_mesh_from_vertex_data(
 pub(crate) fn compile_skinned_mesh_payload_with_lods(
     vertex_data: &[crate::assets::SkinnedVertexData],
     indices: &[u16],
-    skeleton: &[crate::assets::JointDef],
+    skeleton: &[crate::assets::SkeletonJoint],
     morph_target_names: &[String],
     morph_deltas: &[crate::assets::MorphDelta],
     lod_levels: u32,
@@ -713,7 +715,7 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{JointDef, MorphDelta, SkinnedVertexData, VertexData};
+    use crate::assets::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
     use crate::gfx::mesh_payload::{
         Vertex, deserialise_heightfield, deserialise_skinned_with_lods, deserialise_with_lods,
     };
@@ -1184,8 +1186,8 @@ mod tests {
         assert!(out.iter().all(|v| v.normal == [0.0, 1.0, 0.0]));
     }
 
-    fn joint(name: &str) -> JointDef {
-        JointDef {
+    fn joint(name: &str) -> SkeletonJoint {
+        SkeletonJoint {
             name: name.to_string(),
             parent: -1,
             translation: [0.0; 3],

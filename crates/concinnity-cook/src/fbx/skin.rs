@@ -4,7 +4,7 @@
 // (Cluster) objects, builds a parents-before-children skeleton, and assembles
 // skinned vertices with top-4 normalized weights per control point.
 //
-// The runtime recomputes inverse-bind matrices from the JointDef chain, so a
+// The runtime recomputes inverse-bind matrices from the SkeletonJoint chain, so a
 // weighted joint's locals must multiply out to exactly the bind world its
 // weights were bound against -- the cluster's `TransformLink`. Joints without
 // a cluster (unweighted parents in the chain) extend the chain with their
@@ -18,7 +18,7 @@ use super::{
     arr_f64, arr_i32, attr_i64, attr_str, local_matrices, node_scene_local, object_id, object_name,
     transform_point,
 };
-use crate::assets::{JointDef, SkinnedVertexData, VertexData};
+use crate::assets::{SkeletonJoint, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
 };
@@ -34,7 +34,7 @@ pub(super) struct FbxSkin {
     // Meters per file unit; joint translations are already normalized by it,
     // and evaluated animation translations must be too.
     pub(crate) unit_scale: f32,
-    pub joints: Vec<JointDef>,
+    pub joints: Vec<SkeletonJoint>,
     // Model object id -> joint index, for resolving animation curve targets.
     pub(crate) model_to_joint: HashMap<i64, usize>,
     // Control-point index -> accumulated (joint, weight) pairs.
@@ -270,14 +270,14 @@ pub(super) fn parse_skin(
         worlds.push(world);
         parents.push(parent_joint);
     }
-    let mut joints: Vec<JointDef> = Vec::new();
+    let mut joints: Vec<SkeletonJoint> = Vec::new();
     for (i, &id) in order.iter().enumerate() {
         let local = match parents[i] {
             Some(j) => mat4_mul(mat4_affine_inverse(worlds[j]), worlds[i]),
             None => uniform_scale_pre(unit_scale, worlds[i]),
         };
         let (translation, rotation, scale) = decompose(local);
-        joints.push(JointDef {
+        joints.push(SkeletonJoint {
             name: model_by_id.get(&id).map(object_name).unwrap_or_default(),
             parent: parents[i].map_or(-1, |j| j as i32),
             translation,

@@ -377,7 +377,7 @@ mod tests {
             controls: ControlsSettings {
                 mouse_sensitivity: Some(0.0025),
                 keymap: Some(crate::gfx::keymap::KeyMap {
-                    forward: crate::assets::Key::Up,
+                    forward: crate::assets::InputKey::Up,
                     ..crate::gfx::keymap::KeyMap::default()
                 }),
                 gamepad_look_sensitivity: Some(3.0),

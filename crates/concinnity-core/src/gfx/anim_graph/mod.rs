@@ -1,4 +1,4 @@
-//! The compiled animation state machine: what an `AnimGraph` asset compiles
+//! The compiled animation state machine: what an `AnimationGraph` asset compiles
 //! into, and the blendspace members a state can play. Read-only once built,
 //! except for the clip-duration refresh a hot-reload applies.
 //!
@@ -104,7 +104,7 @@ pub struct ParamSpec {
     pub default: f32,
 }
 
-/// A compiled animation state machine. Built once from the `AnimGraph` asset;
+/// A compiled animation state machine. Built once from the `AnimationGraph` asset;
 /// read-only afterwards except for clip-duration refresh on hot-reload.
 #[derive(Debug, Clone)]
 pub struct CompiledGraph {

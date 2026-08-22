@@ -19,14 +19,6 @@ wall).
 Decals blend over the lit image without affecting depth, so they layer on
 top of the surfaces they stamp.
 
-```jsonl
-// ground stamp (1.5 m square, projects down)
-{"name":"footprint_a","type":"Decal","args":{"texture":"tex_footprint","position":[2.0,0.01,-1.5],"size":[1.5,0.5,1.5]}}
-
-// wall stamp (rotated so local +Y faces +X, into the wall)
-{"name":"bullet_hole_a","type":"Decal","args":{"texture":"tex_bullet","position":[3.0,1.6,-2.0],"rotation_deg":[0,0,90],"size":[0.4,0.2,0.4]}}
-```
-
 ## Parameters
 
 - `texture`: A string. The [Texture](Texture.md) asset projected onto the scene. Optional.

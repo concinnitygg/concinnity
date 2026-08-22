@@ -1030,7 +1030,7 @@ mod tests {
             fx::anim_curve(TRANSLATION_CURVE, vec![0, ONE_SECOND], vec![5.0]),
             // No keys at all.
             fx::anim_curve(TRANSLATION_CURVE, Vec::new(), Vec::new()),
-            // Key times without values.
+            // InputKey times without values.
             fx::object("AnimationCurve", TRANSLATION_CURVE, "", "")
                 .child(fx::node("KeyTime").arr_i64(vec![0, ONE_SECOND])),
         ];

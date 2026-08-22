@@ -12,14 +12,12 @@ use alloc::vec::Vec;
 ///
 /// **Library presets:**
 ///
-/// ```jsonl
-/// // From preset (expands into rig_sun + rig_fill):
-/// {"name":"rig","type":"LightRig","args":{"preset":"rig_outdoor_sun_fill"}}
-///
-/// // Referencing pre-declared lights:
-/// {"name":"sun",  "type":"DirectionalLight","args":{"direction":[-0.4,0.7,0.3],"color":[1.0,0.95,0.8],"intensity":1.2}}
-/// {"name":"torch","type":"PointLight",      "args":{"position":[3.0,2.0,-5.0],"color":[1.0,0.7,0.3],"intensity":10.0,"range":6.0}}
-/// {"name":"rig",  "type":"LightRig","args":{"lights":["sun","torch"]}}
+/// ```rust
+/// # use concinnity_asset::LightRig;
+/// LightRig {
+///     preset: "rig_outdoor_sun_fill".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

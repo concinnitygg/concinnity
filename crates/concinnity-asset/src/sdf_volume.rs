@@ -46,20 +46,16 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// and the build only requires the entry for the backend it is building for. A
 /// single `fragment_shader` path is the fallback when no map entry matches.
 ///
-/// ```jsonl
-/// {"name":"chrome_blob","type":"SdfVolume","args":{
-///   "centre":[0.0, 2.0, -4.0],
-///   "extent":[2.0, 2.0, 2.0],
-///   "fragment_shaders":{"metal":"shaders/chrome_blob.metal",
-///                       "hlsl":"shaders/chrome_blob.hlsl"},
-///   "max_gradient":1.0,
-///   "max_steps":64,
-///   "max_distance":12.0,
-///   "params":[0.95, 0.85, 0.55, 0.08, 1.0, 0.0, 0.0, 0.0,
-///             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-///             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-///             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-/// }}
+/// ```rust
+/// # use concinnity_asset::SdfVolume;
+/// SdfVolume {
+///     centre: [0.0, 2.0, -4.0],
+///     extent: [2.0, 2.0, 2.0],
+///     max_gradient: 1.0,
+///     max_steps: 64,
+///     max_distance: 12.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

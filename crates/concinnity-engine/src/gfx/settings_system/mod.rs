@@ -93,7 +93,7 @@ pub(crate) struct SettingsState {
     pub(crate) show_vram: bool,
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     // Window mode + authored size (the windowed size restored on mode return).
-    pub(crate) window_args: crate::assets::WindowArgs,
+    pub(crate) window_args: crate::assets::Window,
     // The Resolution row's mode list, the user's chosen fullscreen mode, the
     // display's own mode at init, and the row labels grayed outside
     // fullscreen.

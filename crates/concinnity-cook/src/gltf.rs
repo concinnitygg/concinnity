@@ -3,7 +3,7 @@
 //! asset fields. glTF animations are not imported here: the mesh lands in its
 //! bind pose.
 //!
-//! glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
+//! glTF stores a skin's joints in an arbitrary order; this engine's `SkeletonJoint`
 //! list requires parents before children. Joints are therefore topologically
 //! reordered and a remap table rewrites both each joint's parent index and
 //! every vertex's `JOINTS_0` binding into the new index space.

@@ -15,10 +15,6 @@ screen prefix (`pause_card`) puts its children in that [Screen](Screen.md)
 (`pause`) via the `<screen>_*` rule and they never clash with hand-authored
 assets.
 
-```jsonl
-{"name":"pause_card","type":"Panel","args":{"title":"Paused","x":440,"y":220,"width":400,"height":280}}
-```
-
 ## Parameters
 
 - `x`: A float. Left edge of the panel in window pixels. Defaults to `0.0`.

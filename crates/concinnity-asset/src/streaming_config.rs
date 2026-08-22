@@ -12,11 +12,6 @@
 /// Texture streaming covers the colour and normal-map textures (each capped
 /// independently via `texture_budget` / `texture_cap`). Mesh streaming covers
 /// static geometry; the skybox, rooms, and moving props always stay loaded.
-///
-/// ```jsonl
-/// {"name":"streaming","type":"StreamingConfig","args":{}}
-/// {"name":"streaming_slow","type":"StreamingConfig","args":{"texture_budget":1}}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StreamingConfig {

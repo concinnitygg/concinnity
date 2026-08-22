@@ -67,7 +67,7 @@ impl SettingsState {
                 };
                 cmd.op = SettingOp::SetFraction((cur + step).clamp(0.0, 1.0));
             }
-            // Key-rebind settings (Controls tab) take a Rebind op: bind
+            // InputKey-rebind settings (Controls tab) take a Rebind op: bind
             // the named action to the captured key, swapping with whatever
             // action held it, push the map to the backend, persist, and
             // refresh the affected row label(s). Handled first; the

@@ -67,7 +67,6 @@ mod glass_panel;
 mod graphics_config;
 mod hit_region;
 mod instanced_prop;
-mod joint;
 mod key_binding;
 mod layout_container;
 mod light_rig;
@@ -81,6 +80,7 @@ mod option_select;
 mod panel;
 mod particle_emitter;
 mod physics_config;
+mod physics_joint;
 mod point_light;
 mod post_process_config;
 mod prefab;
@@ -122,7 +122,10 @@ pub use audio_bus::AudioBus;
 pub use audio_clip::AudioClip;
 pub use audio_cue::{AudioCue, CueKind};
 pub use audio_emitter::{AudioEmitter, Rolloff};
-pub use behavior::{Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl};
+pub use behavior::{
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
+    BehaviorSource,
+};
 pub use block_type::BlockType;
 pub use camera_shot::CameraShot;
 pub use camera3d::{Camera3DArgs, CameraController, FollowController, FollowDrive};
@@ -140,9 +143,8 @@ pub use glass_panel::GlassPanel;
 pub use graphics_config::{GraphicsConfig, ShadowUpdate};
 pub use hit_region::HitRegion;
 pub use instanced_prop::{InstanceTransform, InstancedProp};
-pub use joint::{Joint, JointKind};
 pub use key_binding::KeyBinding;
-pub use layout_container::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
+pub use layout_container::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
 pub use light_rig::LightRig;
 pub use loading_overlay::LoadingOverlay;
 pub use main_menu::{MainMenu, MainMenuItem, SettingsProfile};
@@ -154,6 +156,7 @@ pub use option_select::OptionSelect;
 pub use panel::Panel;
 pub use particle_emitter::ParticleEmitter;
 pub use physics_config::PhysicsConfig;
+pub use physics_joint::{PhysicsJoint, PhysicsJointKind};
 pub use point_light::PointLight;
 pub use post_process_config::{
     AaMode, DEFAULT_SSGI_RAYS, DEFAULT_SSGI_STEPS, IndirectLighting, PostProcessConfig,
@@ -173,14 +176,16 @@ pub use screen::{Screen, ScreenInput};
 pub use scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use sdf_volume::{SDF_PARAMS_LEN, SdfVolume};
 pub use shader::{Shader, ShaderKind, ShaderPayload, StageSource};
-pub use skinned_mesh::{CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData};
+pub use skinned_mesh::{
+    CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
+};
 pub use slider::Slider;
 pub use spawner::SpawnerArgs;
 pub use spot_light::SpotLight;
 pub use sprite::{Sprite, SpriteFit};
 pub use stat_hud::StatHud;
 pub use story::{
-    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
+    Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
 pub use story_import::StoryImport;
@@ -189,9 +194,9 @@ pub use text_input::TextInput;
 pub use text_label::{TextAlign, TextLabel};
 pub use texture::Texture;
 pub use trigger_volume::{TriggerFilter, TriggerVolume};
-pub use variables::{VarDecl, Variables};
+pub use variables::{VariableDecl, Variables};
 pub use volumetric_fog::VolumetricFog;
 pub use voxel_chunk::VoxelChunk;
 pub use voxel_world::VoxelWorld;
 pub use water_surface::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-pub use window::{Window, WindowArgs, WindowMode};
+pub use window::{Window, WindowMode};

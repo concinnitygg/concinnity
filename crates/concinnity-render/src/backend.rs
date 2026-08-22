@@ -673,7 +673,7 @@ pub trait RenderBackend: SceneControl + Send {
     }
 
     /// Push the gameplay movement key map. The backend resolves each canonical
-    /// `Key` to its native key code and decodes physical key events through the
+    /// `InputKey` to its native key code and decodes physical key events through the
     /// map (instead of hardcoded keys), so a settings-menu rebind takes effect on
     /// the next key event. Pushed once after the backend is built and again on
     /// each rebind. Default no-op: a backend without keymap decode keeps its
@@ -1476,7 +1476,7 @@ mod tests {
     // A minimal empty-world BackendInit borrowing `window`, for exercising the
     // default `reload_world`. Empty slices are `'static`; the only real borrow
     // is the window args.
-    fn empty_backend_init(window: &crate::assets::WindowArgs) -> BackendInit<'_> {
+    fn empty_backend_init(window: &crate::assets::Window) -> BackendInit<'_> {
         use crate::backend_init::{
             MediaPayloads, PostSettings, SceneData, ShaderBytes, ShadowParams, WorldFx,
         };
@@ -1555,7 +1555,7 @@ mod tests {
         // A backend without a real reload path reports the swap unsupported, so
         // the caller falls back to a full rebuild.
         let mut backend = StubBackend;
-        let window = crate::assets::WindowArgs::default();
+        let window = crate::assets::Window::default();
         assert!(backend.reload_world(empty_backend_init(&window)).is_err());
     }
 

@@ -15,8 +15,16 @@ use alloc::string::String;
 /// (`pause`) via the `<screen>_*` rule and they never clash with hand-authored
 /// assets.
 ///
-/// ```jsonl
-/// {"name":"pause_card","type":"Panel","args":{"title":"Paused","x":440,"y":220,"width":400,"height":280}}
+/// ```rust
+/// # use concinnity_asset::Panel;
+/// Panel {
+///     title: "Paused".into(),
+///     x: 440.0,
+///     y: 220.0,
+///     width: 400.0,
+///     height: 280.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

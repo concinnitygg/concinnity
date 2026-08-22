@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# CmpOp
+# StoryCompareOp
 
 A comparison operator in a [Story](Story.md) condition. An unset variable
 reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.

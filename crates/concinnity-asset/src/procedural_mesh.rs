@@ -10,15 +10,15 @@ use alloc::vec::Vec;
 ///
 /// **Built-in generators:**
 ///
-/// ```jsonl
-/// {"name":"room_mesh","type":"ProceduralMesh","args":{"generator":"room","half_width":16.0,"half_depth":20.0,"ceiling_height":3.5}}
-/// {"name":"box_mesh","type":"ProceduralMesh","args":{"generator":"box","half_extents":[0.4,0.4,0.4]}}
-/// {"name":"column_mesh","type":"ProceduralMesh","args":{"generator":"cylinder","radius":0.18,"height":3.4,"segments":14}}
-/// {"name":"sphere_mesh","type":"ProceduralMesh","args":{"generator":"sphere","radius":0.5,"rings":16,"segments":16}}
-/// {"name":"terrain_mesh","type":"ProceduralMesh","args":{"generator":"terrain","half_width":64.0,"half_depth":64.0,"subdivisions":64,"amplitude":4.0}}
-/// {"name":"alpine_mesh","type":"ProceduralMesh","args":{"generator":"heightfield","half_width":64.0,"half_depth":64.0,"subdivisions":128,"source":"../concinnity-infra/assets/heightmaps/alpine_512.png","elevation_max":20.0}}
-/// {"name":"sky_mesh","type":"ProceduralMesh","args":{"generator":"skybox","size":490.0}}
-/// {"name":"plus_mesh","type":"ProceduralMesh","args":{"generator":"extrude","profile":[[-1,-3],[1,-3],[1,-1],[3,-1],[3,1],[1,1],[1,3],[-1,3],[-1,1],[-3,1],[-3,-1],[-1,-1]],"height":0.5,"corner_radius":0.2}}
+/// ```rust
+/// # use concinnity_asset::ProceduralMesh;
+/// ProceduralMesh {
+///     generator: "room".into(),
+///     half_width: 16.0,
+///     half_depth: 20.0,
+///     ceiling_height: 3.5,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

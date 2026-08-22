@@ -9,7 +9,7 @@ use crate::math::sin_cos;
 /// `GraphicsSystem` publishes one `CharacterRig` per `SkinnedMesh` that
 /// declares a `capsule`, carrying the authored model transform and capsule
 /// dimensions. `PhysicsSystem` creates the kinematic capsule from it, then
-/// each frame consumes the target's `RootMotion` events, resolves the
+/// each frame consumes the target's `RootMotionEvent` events, resolves the
 /// displacement against the scene, and writes the new `position` back here;
 /// `GraphicsSystem` moves the rendered mesh to follow. The one-frame
 /// producer/consumer hand-offs are invisible at animation rates.

@@ -113,7 +113,7 @@ pub struct FrameInput {
     /// regardless of menu state (unlike the gameplay keys, which freeze while a
     /// menu is open) so the settings menu can capture a key for rebinding and
     /// scrollable menu lists can react to the arrow keys.
-    pub captured_key: Option<crate::assets::Key>,
+    pub captured_key: Option<crate::assets::InputKey>,
     /// The printable character typed this frame (Unicode, with shift / layout
     /// applied by the OS), for text-input fields, or `None`. A one-frame pulse
     /// surfaced regardless of menu state, like

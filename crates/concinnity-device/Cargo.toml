@@ -10,7 +10,6 @@ publish = false
 name = "concinnity_device"
 crate-type = ["rlib"]
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # Build the macOS or Windows device against the Vulkan backend instead of the

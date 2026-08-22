@@ -36,11 +36,12 @@ use alloc::string::String;
 /// `"sky": false` to use the map for image-based lighting only, with the
 /// background left to `clear_color` or your own geometry.
 ///
-/// ```jsonl
-/// {"name":"env_studio","type":"EnvironmentMap","args":{"source":"assets/hdri/studio.hdr"}}
-/// {"name":"env_outdoor","type":"EnvironmentMap","args":{"source":"assets/hdri/sky.hdr","prefilter_face_size":512}}
-/// {"name":"env_galaxy","type":"EnvironmentMap","args":{"source":"assets/hdri/galaxy.glb"}}
-/// {"name":"env_proc","type":"EnvironmentMap","args":{"generator":"sky"}}
+/// ```rust
+/// # use concinnity_asset::EnvironmentMap;
+/// EnvironmentMap {
+///     source: "assets/hdri/studio.hdr".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

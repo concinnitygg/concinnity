@@ -11,16 +11,17 @@ use alloc::string::String;
 /// **Examples**
 ///
 /// With Scenes: camera switches per scene (declared on each Scene):
-/// ```jsonl
-/// {"name":"wide", "type":"CameraShot","args":{"fov_y_degrees":80,"position":[0,1.75,8],"yaw":3.14}}
-/// {"name":"close","type":"CameraShot","args":{"fov_y_degrees":55,"position":[0,1.5,3],"yaw":3.14}}
-/// {"name":"intro", "type":"Scene","args":{"camera_shot":"wide"}}
-/// {"name":"detail","type":"Scene","args":{"camera_shot":"close"}}
-/// ```
 ///
 /// From library preset (standalone, replaces Camera3D):
-/// ```jsonl
-/// {"name":"cam","type":"CameraShot","args":{"preset":"shot_outdoor_wide"}}
+///
+/// ```rust
+/// # use concinnity_asset::CameraShot;
+/// CameraShot {
+///     fov_y_degrees: 80.0,
+///     position: [0.0, 1.75, 8.0],
+///     yaw: 3.14,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

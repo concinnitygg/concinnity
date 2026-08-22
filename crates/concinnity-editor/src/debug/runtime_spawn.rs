@@ -283,7 +283,7 @@ pub(crate) enum RuntimeCommand {
     // `dispatch_rebind` once the `systems_mut` borrow ends.
     Rebind {
         setting: String,
-        key: crate::assets::Key,
+        key: crate::assets::InputKey,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     // Despawn an authored placement (and its descendants) by name. ECS-side: it
@@ -1269,7 +1269,7 @@ mod tests {
                 "rebind",
                 dispatch_spawn_unit(|reply| RuntimeCommand::Rebind {
                     setting: "key_forward".to_string(),
-                    key: crate::assets::Key::Space,
+                    key: crate::assets::InputKey::Space,
                     reply,
                 }),
             ),
@@ -1593,7 +1593,7 @@ mod tests {
         dispatch_rebind(
             RuntimeCommand::Rebind {
                 setting: "key_forward".to_string(),
-                key: crate::assets::Key::Space,
+                key: crate::assets::InputKey::Space,
                 reply: tx,
             },
             &mut world,
@@ -1609,7 +1609,7 @@ mod tests {
         assert_eq!(seen[0].setting, "key_forward");
         assert_eq!(
             seen[0].op,
-            crate::assets::SettingOp::Rebind(crate::assets::Key::Space)
+            crate::assets::SettingOp::Rebind(crate::assets::InputKey::Space)
         );
     }
 

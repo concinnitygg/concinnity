@@ -14,8 +14,17 @@ use crate::{AssetId, TextureHandle, de_opt_texture_handle};
 /// The pool holds `max_particles` particles; new ones spawn at `spawn_rate` per
 /// second, reusing slots as old particles die.
 ///
-/// ```jsonl
-/// {"name":"sparks","type":"ParticleEmitter","args":{"texture":"tex_spark","position":[0,1,0],"direction":[0,1,0],"spread_deg":25,"speed_min":2,"speed_max":5,"lifetime_min":0.5,"lifetime_max":1.5,"spawn_rate":80,"max_particles":512,"size_start":0.08,"size_end":0.02,"color_start":[1,0.8,0.3,1],"color_end":[1,0.1,0,0]}}
+/// ```rust
+/// # use concinnity_asset::ParticleEmitter;
+/// ParticleEmitter {
+///     position: [0.0, 1.0, 0.0],
+///     direction: [0.0, 1.0, 0.0],
+///     spread_deg: 25.0,
+///     speed_min: 2.0,
+///     speed_max: 5.0,
+///     lifetime_min: 0.5,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

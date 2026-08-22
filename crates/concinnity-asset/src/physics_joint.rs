@@ -3,9 +3,9 @@
 use crate::{AssetId, de_opt_asset_ref};
 use alloc::string::{String, ToString};
 
-/// The constraint shape a `Joint` declares.
+/// The constraint shape a `PhysicsJoint` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JointKind {
+pub enum PhysicsJointKind {
     /// All 6 degrees of freedom locked. The bodies move and rotate as one
     /// rigid assembly relative to their anchors. Use to weld two props
     /// together.
@@ -22,7 +22,7 @@ pub enum JointKind {
     Prismatic,
 }
 
-impl JointKind {
+impl PhysicsJointKind {
     /// The kind an authored name selects, accepting the common synonyms
     /// (`hinge`, `ball`, `slider`, ...). `None` for an unknown name.
     pub fn from_str_norm(s: &str) -> Option<Self> {
@@ -66,23 +66,19 @@ impl JointKind {
 /// `motor_max_force` drive the free axis when `motor_max_force > 0`; the
 /// velocity is in degrees/sec for revolute, units/sec for prismatic.
 ///
-/// ```jsonl
-/// // Pendulum: a dynamic ball hanging 2 m below a world anchor, hinged on +Z.
-/// {"name":"pendulum_joint","type":"Joint","args":{
-///   "kind":"revolute","body_a":"pendulum_bob",
-///   "anchor_a":[0,2,0],"anchor_b":[0,5,0],"axis":[0,0,1]
-/// }}
-///
-/// // Door: hinged on a wall, swing limited to ±90°.
-/// {"name":"door_hinge","type":"Joint","args":{
-///   "kind":"revolute","body_a":"wall","body_b":"door",
-///   "anchor_a":[1,1,0],"anchor_b":[-0.5,0,0],"axis":[0,1,0],
-///   "limits_enabled":true,"limits":[-90,90]
-/// }}
+/// ```rust
+/// # use concinnity_asset::PhysicsJoint;
+/// PhysicsJoint {
+///     kind: "revolute".into(),
+///     anchor_a: [0.0, 2.0, 0.0],
+///     anchor_b: [0.0, 5.0, 0.0],
+///     axis: [0.0, 0.0, 1.0],
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct Joint {
+pub struct PhysicsJoint {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
@@ -114,7 +110,7 @@ pub struct Joint {
     pub motor_max_force: f32,
 }
 
-impl Default for Joint {
+impl Default for PhysicsJoint {
     fn default() -> Self {
         Self {
             asset_id: AssetId::default(),
@@ -132,11 +128,11 @@ impl Default for Joint {
     }
 }
 
-impl Joint {
+impl PhysicsJoint {
     /// Parse `kind`; falls back to `Fixed` for unrecognised values so a typo
     /// degrades safely. Cross-reference validation flags bad kinds explicitly.
-    pub fn parsed_kind(&self) -> JointKind {
-        JointKind::from_str_norm(&self.kind).unwrap_or(JointKind::Fixed)
+    pub fn parsed_kind(&self) -> PhysicsJointKind {
+        PhysicsJointKind::from_str_norm(&self.kind).unwrap_or(PhysicsJointKind::Fixed)
     }
 }
 
@@ -147,19 +143,19 @@ mod tests {
     #[test]
     fn each_kind_accepts_its_aliases_and_round_trips_through_its_canonical_name() {
         let cases = [
-            (JointKind::Fixed, "fixed", ["fixed", "weld", "WELD"]),
+            (PhysicsJointKind::Fixed, "fixed", ["fixed", "weld", "WELD"]),
             (
-                JointKind::Revolute,
+                PhysicsJointKind::Revolute,
                 "revolute",
                 ["revolute", "hinge", "Hinge"],
             ),
             (
-                JointKind::Spherical,
+                PhysicsJointKind::Spherical,
                 "spherical",
                 ["spherical", "ball", "socket"],
             ),
             (
-                JointKind::Prismatic,
+                PhysicsJointKind::Prismatic,
                 "prismatic",
                 ["prismatic", "slider", "piston"],
             ),
@@ -167,23 +163,27 @@ mod tests {
         for (kind, canonical, aliases) in cases {
             assert_eq!(kind.as_str(), canonical);
             for alias in aliases {
-                assert_eq!(JointKind::from_str_norm(alias), Some(kind), "{alias}");
+                assert_eq!(
+                    PhysicsJointKind::from_str_norm(alias),
+                    Some(kind),
+                    "{alias}"
+                );
             }
-            assert_eq!(JointKind::from_str_norm(kind.as_str()), Some(kind));
+            assert_eq!(PhysicsJointKind::from_str_norm(kind.as_str()), Some(kind));
         }
     }
 
     #[test]
     fn an_unrecognised_kind_has_no_parse() {
-        assert_eq!(JointKind::from_str_norm("bendy"), None);
-        assert_eq!(JointKind::from_str_norm(""), None);
+        assert_eq!(PhysicsJointKind::from_str_norm("bendy"), None);
+        assert_eq!(PhysicsJointKind::from_str_norm(""), None);
     }
 
     #[test]
     fn a_blank_joint_welds_two_unset_bodies() {
-        let j = Joint::default();
+        let j = PhysicsJoint::default();
         assert_eq!(j.kind, "fixed");
-        assert_eq!(j.parsed_kind(), JointKind::Fixed);
+        assert_eq!(j.parsed_kind(), PhysicsJointKind::Fixed);
         assert_eq!(j.body_a, None);
         assert_eq!(j.body_b, None);
         assert_eq!(j.axis, [0.0, 1.0, 0.0]);
@@ -194,25 +194,25 @@ mod tests {
     fn a_typo_in_kind_degrades_to_a_weld() {
         // Cross-reference validation reports the bad kind; the accessor must not
         // panic in the meantime.
-        let j: Joint = serde_json::from_str(r#"{"kind":"hindge"}"#).unwrap();
-        assert_eq!(j.parsed_kind(), JointKind::Fixed);
+        let j: PhysicsJoint = serde_json::from_str(r#"{"kind":"hindge"}"#).unwrap();
+        assert_eq!(j.parsed_kind(), PhysicsJointKind::Fixed);
     }
 
     #[test]
     fn an_authored_hinge_round_trips_through_postcard() {
         crate::test_support::install_resolvers();
-        let j: Joint = serde_json::from_str(
+        let j: PhysicsJoint = serde_json::from_str(
             r#"{"kind":"hinge","body_a":"door","body_b":"frame","axis":[0,1,0],
                 "limits_enabled":true,"limits":[-90,0],"motor_max_force":12.5}"#,
         )
         .unwrap();
-        assert_eq!(j.parsed_kind(), JointKind::Revolute);
+        assert_eq!(j.parsed_kind(), PhysicsJointKind::Revolute);
         assert_eq!(j.body_a, Some(crate::AssetId(4)));
         assert_eq!(j.body_b, Some(crate::AssetId(5)));
 
         let bytes = postcard::to_allocvec(&j).unwrap();
-        let back: Joint = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.parsed_kind(), JointKind::Revolute);
+        let back: PhysicsJoint = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.parsed_kind(), PhysicsJointKind::Revolute);
         assert_eq!(back.limits, [-90.0, 0.0]);
         assert_eq!(back.motor_max_force, 12.5);
         // `asset_id` is injected, never authored, so it does not ride the wire.

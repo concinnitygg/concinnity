@@ -12,10 +12,6 @@ budget as point lights and are culled by the same clustered pass. Secondary
 effects (volumetric fog, SDF raymarching, and reflection-probe capture) do
 not consider them.
 
-```jsonl
-{"name":"lantern","type":"SpotLight","args":{"position":[0.0,4.0,-2.0],"direction":[0.0,-1.0,0.0],"color":[1.0,0.9,0.7],"intensity":20.0,"range":10.0,"inner_angle":18.0,"outer_angle":30.0}}
-```
-
 ## Parameters
 
 - `position`: An array of 3 floats. World-space position of the light source. Defaults to `[0.0, 4.0, 0.0]`.

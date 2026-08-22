@@ -82,7 +82,7 @@ pub(crate) enum JointSpec {
 // Velocity-driven motor parameters for a revolute / prismatic joint.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct JointMotor {
-    // Target velocity (radians/second for revolute, units/second for prismatic).
+    // EntityTarget velocity (radians/second for revolute, units/second for prismatic).
     pub(crate) target_velocity: f32,
     // Maximum force the motor may apply to reach the target.
     pub(crate) max_force: f32,

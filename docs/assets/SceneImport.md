@@ -23,10 +23,6 @@ so a freshly imported scene is immediately viewable. It is suppressed when
 the world already declares a `Camera3D` (yours wins) or when `emit_camera`
 is set to `false`.
 
-```jsonl
-{"name":"bistro","type":"SceneImport","args":{"source":"assets/Bistro/BistroExterior.fbx","texture_max_size":512}}
-```
-
 ## Parameters
 
 - `source`: A string. Path to the scene file, relative to the project root. `.fbx` or `.glb`.

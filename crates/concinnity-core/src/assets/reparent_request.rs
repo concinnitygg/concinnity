@@ -1,6 +1,6 @@
 // src/assets/reparent_request.rs
 
-use crate::assets::Target;
+use crate::assets::EntityTarget;
 
 /// Runtime-only event requesting that an authored placement be re-parented at
 /// runtime: `child` is moved under `parent`, or detached to a root when
@@ -11,7 +11,7 @@ use crate::assets::Target;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReparentRequest {
     /// The placement to move.
-    pub child: Target,
+    pub child: EntityTarget,
     /// The new parent, or `None` to detach the child to a root.
-    pub parent: Option<Target>,
+    pub parent: Option<EntityTarget>,
 }

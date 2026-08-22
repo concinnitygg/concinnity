@@ -10,12 +10,6 @@ use crate::{AssetId, de_opt_asset_ref};
 ///
 /// To display an FPS overlay, declare a [Font](#font), a
 /// [TextLabel](#textlabel), and an `FpsCounter` that references the label:
-///
-/// ```jsonl
-/// {"$include":"assets/fps_font.json"}
-/// {"$include":"assets/fps_text.json"}
-/// {"type":"FpsCounter","name":"fps","args":{"label":"fps_text"}}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[derive(Default)]

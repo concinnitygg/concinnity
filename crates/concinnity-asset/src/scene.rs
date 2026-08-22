@@ -13,13 +13,6 @@ use crate::{AssetId, de_opt_asset_ref};
 /// [KeyBinding](#keybinding)) or a [Behavior](#behavior) scene node jumps to
 /// the named scene, with the transition ("Cut" or "FadeBlack") declared on the
 /// jump.
-///
-/// ```jsonl
-/// {"name":"day",  "type":"Scene","args":{}}
-/// {"name":"night","type":"Scene","args":{}}
-/// // Props named "day_*" belong to Scene "day"; "night_*" to Scene "night"
-/// {"name":"nightfall","type":"Behavior","args":{"on":{"timer":{"interval":5.0}},"do":[{"scene":{"scene":"night"}}]}}
-/// ```
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Scene {

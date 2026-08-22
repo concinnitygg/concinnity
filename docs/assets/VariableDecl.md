@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# VarDecl
+# VariableDecl
 
 One variable declared by the world's [Variables](Variables.md). The declared
 value fixes both the variable's type and the value it holds at world start.

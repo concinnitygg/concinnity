@@ -51,7 +51,7 @@ pub struct MorphDelta {
 /// One joint of a skeleton's bind pose.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct JointDef {
+pub struct SkeletonJoint {
     /// Human-readable joint name (animation tracks may reference it later).
     pub name: String,
     /// Parent joint index, or -1 for a root. Parents must appear before their
@@ -65,7 +65,7 @@ pub struct JointDef {
     pub scale: [f32; 3],
 }
 
-impl Default for JointDef {
+impl Default for SkeletonJoint {
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -97,9 +97,12 @@ impl Default for JointDef {
 /// Normals and tangents are computed automatically at build time. Do not
 /// supply them.
 ///
-/// ```jsonl
-/// {"name":"flag","type":"SkinnedMesh","args":{"position":[0,1,0],"material":"mat_cloth","skeleton":[{"parent":-1},{"parent":0,"translation":[0,1,0]}],"vertices":[{"pos":[0,0,0],"joints":[0,0,0,0],"weights":[1,0,0,0]}],"indices":[0,0,0]}}
-/// {"name":"hero","type":"SkinnedMesh","args":{"source":"models/hero.glb","position":[0,0,0],"material":"mat_skin"}}
+/// ```rust
+/// # use concinnity_asset::SkinnedMesh;
+/// SkinnedMesh {
+///     position: [0.0, 1.0, 0.0],
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -223,7 +226,7 @@ mod tests {
 
     #[test]
     fn a_blank_joint_is_a_root_at_the_bind_pose_origin() {
-        let j = JointDef::default();
+        let j = SkeletonJoint::default();
         assert!(j.name.is_empty());
         // -1 is the root marker; 0 would make every joint a child of joint 0.
         assert_eq!(j.parent, -1);

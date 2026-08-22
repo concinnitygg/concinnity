@@ -6,7 +6,9 @@
 // total: anything it cannot resolve becomes `CExpr::Never`, which evaluates to
 // nothing and skips its node rather than panicking.
 
-use crate::assets::{Behavior, BehaviorSource, CueKind, Expr, Literal, Node, StoryPlayback};
+use crate::assets::{
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorNode, BehaviorSource, CueKind, StoryPlayback,
+};
 use crate::ecs::{AudioClipHandle, Entity, TracePath, TraceStep, asset_id::AssetId};
 use concinnity_core::ecs::ComponentTag;
 
@@ -51,24 +53,24 @@ impl Val {
         }
     }
 
-    pub(super) fn from_literal(lit: &Literal) -> Val {
+    pub(super) fn from_literal(lit: &BehaviorLiteral) -> Val {
         match *lit {
-            Literal::Bool(b) => Val::Bool(b),
-            Literal::Int(i) => Val::Int(i),
-            Literal::Float(f) => Val::Float(f),
-            Literal::Vec3(v) => Val::Vec3(v),
+            BehaviorLiteral::Bool(b) => Val::Bool(b),
+            BehaviorLiteral::Int(i) => Val::Int(i),
+            BehaviorLiteral::Float(f) => Val::Float(f),
+            BehaviorLiteral::Vec3(v) => Val::Vec3(v),
         }
     }
 
     // The authored form, for persistence. Entities have no authored form and
     // are never persisted, so they save as their declared-away default.
-    pub(super) fn to_literal(self) -> Literal {
+    pub(super) fn to_literal(self) -> BehaviorLiteral {
         match self {
-            Val::Bool(b) => Literal::Bool(b),
-            Val::Int(i) => Literal::Int(i),
-            Val::Float(f) => Literal::Float(f),
-            Val::Vec3(v) => Literal::Vec3(v),
-            Val::Entity(_) => Literal::Int(0),
+            Val::Bool(b) => BehaviorLiteral::Bool(b),
+            Val::Int(i) => BehaviorLiteral::Int(i),
+            Val::Float(f) => BehaviorLiteral::Float(f),
+            Val::Vec3(v) => BehaviorLiteral::Vec3(v),
+            Val::Entity(_) => BehaviorLiteral::Int(0),
         }
     }
 
@@ -384,7 +386,7 @@ fn branch(path: &[TraceStep], verb: &'static str, list: &'static str) -> Vec<Tra
 }
 
 fn compile_nodes(
-    nodes: &[Node],
+    nodes: &[BehaviorNode],
     names: &mut Names<'_>,
     vars: &mut VarTable,
     base: &[TraceStep],
@@ -410,14 +412,14 @@ fn compile_nodes(
 }
 
 fn compile_node(
-    node: &Node,
+    node: &BehaviorNode,
     names: &mut Names<'_>,
     vars: &mut VarTable,
     path: &[TraceStep],
     paths: &mut Vec<TracePath>,
 ) -> COp {
     match node {
-        Node::If {
+        BehaviorNode::If {
             cond,
             then,
             otherwise,
@@ -426,7 +428,7 @@ fn compile_node(
             then: compile_nodes(then, names, vars, &branch(path, "if", "then"), paths),
             otherwise: compile_nodes(otherwise, names, vars, &branch(path, "if", "else"), paths),
         },
-        Node::ForEach { query, bind, body } => {
+        BehaviorNode::ForEach { query, bind, body } => {
             let Some(query) = names.query(query) else {
                 return COp::Never;
             };
@@ -436,19 +438,19 @@ fn compile_node(
             names.bindings.truncate(depth);
             COp::ForEach { query, bind, body }
         }
-        Node::Let { name, value } => {
+        BehaviorNode::Let { name, value } => {
             let value = compile_expr(value, names, vars);
             COp::Let {
                 bind: names.bind(name),
                 value,
             }
         }
-        Node::Set { var, value, add } => COp::SetVar {
+        BehaviorNode::Set { var, value, add } => COp::SetVar {
             slot: vars.intern(var),
             value: compile_expr(value, names, vars),
             add: *add,
         },
-        Node::SetLocal { local, value, add } => match names.local(local) {
+        BehaviorNode::SetLocal { local, value, add } => match names.local(local) {
             Some(slot) => COp::SetLocal {
                 slot,
                 value: compile_expr(value, names, vars),
@@ -456,7 +458,7 @@ fn compile_node(
             },
             None => COp::Never,
         },
-        Node::SetTransform {
+        BehaviorNode::SetTransform {
             entity,
             position,
             rotation_deg,
@@ -467,7 +469,7 @@ fn compile_node(
             rotation_deg: rotation_deg.as_ref().map(|e| compile_expr(e, names, vars)),
             scale: scale.as_ref().map(|e| compile_expr(e, names, vars)),
         },
-        Node::Spawn {
+        BehaviorNode::Spawn {
             template,
             position,
             rotation_deg,
@@ -487,14 +489,14 @@ fn compile_node(
             },
             None => COp::Never,
         },
-        Node::Despawn { target } => COp::Despawn(compile_expr(target, names, vars)),
-        Node::Reparent { child, parent } => COp::Reparent {
+        BehaviorNode::Despawn { target } => COp::Despawn(compile_expr(target, names, vars)),
+        BehaviorNode::Reparent { child, parent } => COp::Reparent {
             child: compile_expr(child, names, vars),
             parent: parent.as_ref().map(|e| compile_expr(e, names, vars)),
         },
-        Node::Show { target } => COp::Visible(compile_expr(target, names, vars), true),
-        Node::Hide { target } => COp::Visible(compile_expr(target, names, vars), false),
-        Node::Sound { clip, kind, volume } => match clip {
+        BehaviorNode::Show { target } => COp::Visible(compile_expr(target, names, vars), true),
+        BehaviorNode::Hide { target } => COp::Visible(compile_expr(target, names, vars), false),
+        BehaviorNode::Sound { clip, kind, volume } => match clip {
             Some(clip) => COp::Sound {
                 clip: *clip,
                 kind: *kind,
@@ -502,95 +504,96 @@ fn compile_node(
             },
             None => COp::Never,
         },
-        Node::Scene { scene, transition } => match scene {
+        BehaviorNode::Scene { scene, transition } => match scene {
             Some(scene) => COp::Scene {
                 scene: *scene,
                 transition: transition.clone(),
             },
             None => COp::Never,
         },
-        Node::Screen { screen } => match screen {
+        BehaviorNode::Screen { screen } => match screen {
             Some(screen) => COp::Screen(*screen),
             None => COp::Never,
         },
-        Node::Story(playback) => COp::Story(*playback),
-        Node::Save => COp::Save,
+        BehaviorNode::Story(playback) => COp::Story(*playback),
+        BehaviorNode::Save => COp::Save,
     }
 }
 
-fn compile_expr(expr: &Expr, names: &mut Names<'_>, vars: &mut VarTable) -> CExpr {
-    let binary = |a: &Expr, b: &Expr, names: &mut Names<'_>, vars: &mut VarTable| {
-        (
-            Box::new(compile_expr(a, names, vars)),
-            Box::new(compile_expr(b, names, vars)),
-        )
-    };
+fn compile_expr(expr: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable) -> CExpr {
+    let binary =
+        |a: &BehaviorExpr, b: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable| {
+            (
+                Box::new(compile_expr(a, names, vars)),
+                Box::new(compile_expr(b, names, vars)),
+            )
+        };
     match expr {
-        Expr::Bool(b) => CExpr::Lit(Val::Bool(*b)),
-        Expr::Int(i) => CExpr::Lit(Val::Int(*i)),
-        Expr::Float(f) => CExpr::Lit(Val::Float(*f)),
-        Expr::Vec3(v) => CExpr::Lit(Val::Vec3(*v)),
-        Expr::Var(name) => CExpr::Var(vars.intern(name)),
-        Expr::Local(name) => names.local(name).map_or(CExpr::Never, CExpr::Local),
-        Expr::Bind(name) => names.binding(name).map_or(CExpr::Never, CExpr::Bind),
-        Expr::Named(id) => id.map_or(CExpr::Never, CExpr::Named),
-        Expr::SelfEntity => CExpr::SelfEntity,
-        Expr::Dt => CExpr::Dt,
-        Expr::Elapsed => CExpr::Elapsed,
-        Expr::Position(e) => CExpr::Position(Box::new(compile_expr(e, names, vars))),
-        Expr::Alive(e) => CExpr::Alive(Box::new(compile_expr(e, names, vars))),
-        Expr::Normalize(e) => CExpr::Normalize(Box::new(compile_expr(e, names, vars))),
-        Expr::Not(e) => CExpr::Not(Box::new(compile_expr(e, names, vars))),
-        Expr::Distance(a, b) => {
+        BehaviorExpr::Bool(b) => CExpr::Lit(Val::Bool(*b)),
+        BehaviorExpr::Int(i) => CExpr::Lit(Val::Int(*i)),
+        BehaviorExpr::Float(f) => CExpr::Lit(Val::Float(*f)),
+        BehaviorExpr::Vec3(v) => CExpr::Lit(Val::Vec3(*v)),
+        BehaviorExpr::Var(name) => CExpr::Var(vars.intern(name)),
+        BehaviorExpr::Local(name) => names.local(name).map_or(CExpr::Never, CExpr::Local),
+        BehaviorExpr::Bind(name) => names.binding(name).map_or(CExpr::Never, CExpr::Bind),
+        BehaviorExpr::Named(id) => id.map_or(CExpr::Never, CExpr::Named),
+        BehaviorExpr::SelfEntity => CExpr::SelfEntity,
+        BehaviorExpr::Dt => CExpr::Dt,
+        BehaviorExpr::Elapsed => CExpr::Elapsed,
+        BehaviorExpr::Position(e) => CExpr::Position(Box::new(compile_expr(e, names, vars))),
+        BehaviorExpr::Alive(e) => CExpr::Alive(Box::new(compile_expr(e, names, vars))),
+        BehaviorExpr::Normalize(e) => CExpr::Normalize(Box::new(compile_expr(e, names, vars))),
+        BehaviorExpr::Not(e) => CExpr::Not(Box::new(compile_expr(e, names, vars))),
+        BehaviorExpr::Distance(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Distance(a, b)
         }
-        Expr::First(q) => names.query(q).map_or(CExpr::Never, CExpr::First),
-        Expr::Count(q) => names.query(q).map_or(CExpr::Never, CExpr::Count),
-        Expr::Add(a, b) => {
+        BehaviorExpr::First(q) => names.query(q).map_or(CExpr::Never, CExpr::First),
+        BehaviorExpr::Count(q) => names.query(q).map_or(CExpr::Never, CExpr::Count),
+        BehaviorExpr::Add(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Arith(Arith::Add, a, b)
         }
-        Expr::Sub(a, b) => {
+        BehaviorExpr::Sub(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Arith(Arith::Sub, a, b)
         }
-        Expr::Mul(a, b) => {
+        BehaviorExpr::Mul(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Arith(Arith::Mul, a, b)
         }
-        Expr::Div(a, b) => {
+        BehaviorExpr::Div(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Arith(Arith::Div, a, b)
         }
-        Expr::Eq(a, b) => {
+        BehaviorExpr::Eq(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Eq, a, b)
         }
-        Expr::Ne(a, b) => {
+        BehaviorExpr::Ne(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Ne, a, b)
         }
-        Expr::Lt(a, b) => {
+        BehaviorExpr::Lt(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Lt, a, b)
         }
-        Expr::Le(a, b) => {
+        BehaviorExpr::Le(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Le, a, b)
         }
-        Expr::Gt(a, b) => {
+        BehaviorExpr::Gt(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Gt, a, b)
         }
-        Expr::Ge(a, b) => {
+        BehaviorExpr::Ge(a, b) => {
             let (a, b) = binary(a, b, names, vars);
             CExpr::Compare(Cmp::Ge, a, b)
         }
-        Expr::All(items) => {
+        BehaviorExpr::All(items) => {
             CExpr::All(items.iter().map(|e| compile_expr(e, names, vars)).collect())
         }
-        Expr::Any(items) => {
+        BehaviorExpr::Any(items) => {
             CExpr::Any(items.iter().map(|e| compile_expr(e, names, vars)).collect())
         }
     }

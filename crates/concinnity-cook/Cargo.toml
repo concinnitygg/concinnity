@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_cook"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }

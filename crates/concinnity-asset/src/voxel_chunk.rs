@@ -14,17 +14,6 @@ use alloc::vec::Vec;
 /// `solid: false` (typically named `air`); cells whose palette entry is
 /// non-solid emit no faces. Faces are only emitted between a solid block and
 /// either an empty neighbour or the outside of the chunk.
-///
-/// ```jsonl
-/// {"name":"air","type":"BlockType","args":{"solid":false}}
-/// {"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-/// {"name":"my_chunk","type":"VoxelChunk","args":{
-///   "palette":["air","stone"],
-///   "dim":[2,1,1],
-///   "blocks":[1,1]
-/// }}
-/// {"name":"chunk_prop","type":"Prop","args":{"mesh":"my_chunk","material":"mat_stone"}}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct VoxelChunk {

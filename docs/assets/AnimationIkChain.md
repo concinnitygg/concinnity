@@ -1,6 +1,6 @@
 <!-- Auto-generated - do not edit. -->
 
-# GraphIkChain
+# AnimationIkChain
 
 One two-bone IK chain, pinning the chain's end joint (typically a foot)
 to the ground the physics scene finds beneath it.

@@ -10,10 +10,6 @@ The build reads the `source` file (any format the engine can decode:
 An `AudioClip` is inert on its own: reference it from an
 [AudioEmitter](AudioEmitter.md)'s `clip` field to place the sound in the world.
 
-```jsonl
-{"name":"fire_loop","type":"AudioClip","args":{"source":"audio/fire_crackle.ogg"}}
-```
-
 ## Parameters
 
 - `source`: A string. Path to the source audio file.

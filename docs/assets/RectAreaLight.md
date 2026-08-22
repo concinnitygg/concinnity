@@ -14,10 +14,6 @@ windows, ceiling panels, screens, and practical lights.
 The panel is positioned by `centre`, oriented by `normal` (the direction it
 emits), and sized by `half_size`, matching [GlassPanel](GlassPanel.md).
 
-```jsonl
-{"name":"window","type":"RectAreaLight","args":{"centre":[0.0,3.0,-4.0],"normal":[0.0,0.0,1.0],"half_size":[1.5,1.0],"color":[1.0,0.95,0.85],"intensity":12.0,"range":18.0}}
-```
-
 ## Parameters
 
 - `centre`: An array of 3 floats. World-space position of the panel's centre. Defaults to `[0.0, 3.0, 0.0]`.

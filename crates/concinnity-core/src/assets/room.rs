@@ -19,10 +19,6 @@ use crate::ecs::{Component, PayloadLocator, TextureHandle};
 /// `texture`, `wall_texture`, `floor_texture`, and `ceiling_texture` are checked
 /// in that order; the first set value wins. Generator names such as `"brick"` or
 /// `"concrete"` resolve to a matching [Texture](#texture) at build time.
-///
-/// ```jsonl
-/// {"name":"room","type":"Room","args":{"size":[16,20,3.5],"texture":"tex_plaster"}}
-/// ```
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Room {
     /// Assigned by the loader; not authored.

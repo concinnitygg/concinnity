@@ -13,8 +13,13 @@
 /// The build records every injected asset in `world-lock.json`; copy an entry
 /// from there (or from `cn explain <name>`) into `world.jsonl` to override it.
 ///
-/// ```jsonl
-/// {"name":"defaults","type":"EngineDefaults","args":{"debug_hud":false,"sky":false}}
+/// ```rust
+/// # use concinnity_asset::EngineDefaults;
+/// EngineDefaults {
+///     debug_hud: false,
+///     sky: false,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

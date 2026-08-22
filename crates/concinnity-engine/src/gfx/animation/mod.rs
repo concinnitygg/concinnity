@@ -2,13 +2,13 @@
 //
 // Skeletal animation playback. An internal system (not a declarable asset):
 // `World::start` constructs one whenever the world contains any `Animation`
-// or `AnimGraph` component, then it produces fresh skinning matrices for each
+// or `AnimationGraph` component, then it produces fresh skinning matrices for each
 // `SkeletonPose` every frame.
 //
 // Each target `SkinnedMesh` gets a bucket of clips driven in one of two
 // modes: `Flat` blends every clip by a live weight vector (startup fade-in +
 // runtime crossfades; see `flat`), while `Graph` walks a compiled animation
-// state machine whose transitions are driven by the target's `AnimParams`
+// state machine whose transitions are driven by the target's `AnimationParams`
 // component (see `graph`). Runtime debug commands for both modes are drained
 // in `commands`.
 
@@ -44,7 +44,7 @@ struct TargetState {
 enum TargetMode {
     // Weighted blend of every clip (the default).
     Flat(FlatState),
-    // A compiled `AnimGraph` state machine owns the bucket.
+    // A compiled `AnimationGraph` state machine owns the bucket.
     Graph(GraphTarget),
 }
 
@@ -61,7 +61,7 @@ enum TargetMode {
 /// editor crate; the runtime crate only stores the catalogue.
 #[derive(Debug, Clone)]
 pub struct AnimationReloadEntry {
-    /// Target `SkinnedMesh` handle, also the key into
+    /// EntityTarget `SkinnedMesh` handle, also the key into
     /// `AnimationSystem::targets` where this clip lives.
     pub target: SkinnedMeshHandle,
     /// Position in the target bucket's `clips`. Set at init when the clip is
@@ -90,11 +90,11 @@ pub struct AnimationReloadEntry {
 }
 
 /// Skeletal animation playback behavior. Constructed internally by
-/// `World::start` when the world declares any `Animation` or `AnimGraph`;
+/// `World::start` when the world declares any `Animation` or `AnimationGraph`;
 /// never a world-declared asset, so it carries no config.
 pub struct AnimationSystem {
     // Per-target clip buckets keyed by the `SkinnedMesh` handle they animate.
-    // Ordered so per-frame iteration (and the RootMotion events it emits) is
+    // Ordered so per-frame iteration (and the RootMotionEvent events it emits) is
     // deterministic across runs.
     targets: BTreeMap<SkinnedMeshHandle, TargetState>,
     // Interned-name -> handle index snapshotted at init, so the debug WS
@@ -207,11 +207,11 @@ impl System for AnimationSystem {
             .reads_components(crate::component_mask![crate::assets::CharacterRig])
             .writes_components(crate::component_mask![
                 crate::assets::SkeletonPose,
-                crate::assets::AnimParams,
+                crate::assets::AnimationParams,
                 crate::assets::GroundProbes,
             ])
             .reads_resources(crate::resource_mask![crate::ecs::MenuActive])
-            .writes_resources(crate::resource_mask![crate::assets::RootMotion])
+            .writes_resources(crate::resource_mask![crate::assets::RootMotionEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -276,7 +276,7 @@ impl System for AnimationSystem {
         }
 
         // Graphs take ownership of their target's bucket; each publishes an
-        // `AnimParams` component seeded with its declared defaults.
+        // `AnimationParams` component seeded with its declared defaults.
         let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots);
 
         // Build a startup transition for any flat bucket whose clips requested
@@ -368,9 +368,9 @@ impl System for AnimationSystem {
         // `apply_runtime_commands`, not here.
 
         // Advance each bucket's driver before sampling: flat buckets move
-        // their weight transitions, graph buckets sync `AnimParams` and step
+        // their weight transitions, graph buckets sync `AnimationParams` and step
         // their cursor. Each advance also yields the frame's root-motion
-        // displacement (mesh-local), published as one `RootMotion` event per
+        // displacement (mesh-local), published as one `RootMotionEvent` event per
         // target that actually moved; the rig drive in PhysicsSystem
         // consumes them next frame.
         for (target, state) in &mut self.targets {
@@ -393,11 +393,12 @@ impl System for AnimationSystem {
                 }
             };
             if delta != [0.0; 3] {
-                ctx.events_mut::<crate::assets::RootMotion>()
-                    .send(crate::assets::RootMotion {
+                ctx.events_mut::<crate::assets::RootMotionEvent>().send(
+                    crate::assets::RootMotionEvent {
                         target: *target,
                         delta,
-                    });
+                    },
+                );
             }
         }
 

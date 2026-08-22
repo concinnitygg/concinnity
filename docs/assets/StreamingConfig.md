@@ -15,11 +15,6 @@ Texture streaming covers the colour and normal-map textures (each capped
 independently via `texture_budget` / `texture_cap`). Mesh streaming covers
 static geometry; the skybox, rooms, and moving props always stay loaded.
 
-```jsonl
-{"name":"streaming","type":"StreamingConfig","args":{}}
-{"name":"streaming_slow","type":"StreamingConfig","args":{"texture_budget":1}}
-```
-
 ## Parameters
 
 - `texture_budget`: An integer. Maximum number of textures whose load is started per frame, applied independently to the colour and normal-map pools. A low value spreads the cost over more frames. Defaults to `4`.

@@ -3,7 +3,7 @@
 // Root-motion publication for flat clip buckets: the displacement the
 // bucket's weighted blend covered between two absolute clip times. Graph
 // buckets get the equivalent from `gfx::anim_graph::cursor_root_delta`;
-// both feed the per-frame `RootMotion` events consumed by the rig drive in
+// both feed the per-frame `RootMotionEvent` events consumed by the rig drive in
 // PhysicsSystem.
 
 use crate::gfx::root_motion::{add3, scale3};

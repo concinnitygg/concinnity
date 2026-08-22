@@ -1109,7 +1109,7 @@ mod tests {
 
         // World matrix per joint name via the same JointPose math the runtime
         // uses to rebuild bind poses.
-        fn worlds(skeleton: &[crate::assets::JointDef]) -> HashMap<String, Mat4> {
+        fn worlds(skeleton: &[crate::assets::SkeletonJoint]) -> HashMap<String, Mat4> {
             let mut w: Vec<Mat4> = Vec::with_capacity(skeleton.len());
             let mut by_name = HashMap::new();
             for j in skeleton {
@@ -1195,7 +1195,7 @@ mod tests {
             tracks: &[crate::glb::ImportedAnimationTrack],
             joint: usize,
             t: f32,
-            bind: &crate::assets::JointDef,
+            bind: &crate::assets::SkeletonJoint,
         ) -> Mat4 {
             let bind_pose = JointPose {
                 translation: bind.translation,
@@ -1220,7 +1220,7 @@ mod tests {
         }
 
         fn joint_world_at(
-            skeleton: &[crate::assets::JointDef],
+            skeleton: &[crate::assets::SkeletonJoint],
             tracks: &[crate::glb::ImportedAnimationTrack],
             name: &str,
             t: f32,

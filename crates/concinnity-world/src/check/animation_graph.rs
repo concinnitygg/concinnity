@@ -1,8 +1,8 @@
 // src/check/anim_graph.rs
 //
-// Structural validation of AnimGraph args: state/parameter/transition shape
+// Structural validation of AnimationGraph args: state/parameter/transition shape
 // and value ranges. Cross-asset name lookups (target SkinnedMesh, clip
-// Animations) are handled by the AnimGraph `CrossReferenced` impl, and the
+// Animations) are handled by the AnimationGraph `CrossReferenced` impl, and the
 // graph-ownership rules (one graph per mesh, no unreferenced clips) are
 // world-global passes in crate::check::cross_reference.
 
@@ -11,7 +11,7 @@ use serde_json::Value;
 const OPS: [&str; 6] = ["lt", "le", "gt", "ge", "eq", "ne"];
 
 pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
-    let err = |detail: String| Err(format!("AnimGraph '{name}': {detail}"));
+    let err = |detail: String| Err(format!("AnimationGraph '{name}': {detail}"));
 
     let states = args
         .get("states")
@@ -217,7 +217,11 @@ fn check_blend(
     blend: &Value,
     declared_param: &impl Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let err = |detail: String| Err(format!("AnimGraph '{graph}': state '{state}': {detail}"));
+    let err = |detail: String| {
+        Err(format!(
+            "AnimationGraph '{graph}': state '{state}': {detail}"
+        ))
+    };
     let ascending = |v: &[f64]| v.windows(2).all(|w| w[0] < w[1]);
     let param_of = |field: &str| -> Result<(), String> {
         let p = blend.get(field).and_then(|v| v.as_str()).unwrap_or("");
@@ -237,13 +241,13 @@ fn check_blend(
             .unwrap_or_default();
         if values.is_empty() {
             return Err(format!(
-                "AnimGraph '{graph}': state '{state}': blend `{field}` must be a non-empty \
+                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be a non-empty \
                  number array"
             ));
         }
         if !ascending(&values) {
             return Err(format!(
-                "AnimGraph '{graph}': state '{state}': blend `{field}` must be strictly \
+                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be strictly \
                  ascending"
             ));
         }

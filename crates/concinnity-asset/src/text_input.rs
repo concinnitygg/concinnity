@@ -15,17 +15,17 @@ use alloc::string::String;
 /// Like other overlay elements it belongs to a [Screen](#screen) resolved from the
 /// naming convention (`<screen>_*`), or is always shown when it has none.
 ///
-/// ```jsonl
-/// {
-///   "type": "TextInput",
-///   "name": "menu_playername",
-///   "args": {
-///     "font": "ui_font",
-///     "placeholder": "Enter your name",
-///     "x": 400, "y": 300, "width": 480, "height": 48,
-///     "max_len": 24
-///   }
-/// }
+/// ```rust
+/// # use concinnity_asset::TextInput;
+/// TextInput {
+///     placeholder: "Enter your name".into(),
+///     x: 400.0,
+///     y: 300.0,
+///     width: 480.0,
+///     height: 48.0,
+///     max_len: 24,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

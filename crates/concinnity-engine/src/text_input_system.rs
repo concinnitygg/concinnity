@@ -7,7 +7,7 @@
 // (runtime-only fields), so the renderer and any reader see the edited text in
 // place.
 
-use crate::assets::{FrameInput, Key, SpriteFit, TextInput};
+use crate::assets::{FrameInput, InputKey, SpriteFit, TextInput};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -24,12 +24,12 @@ enum Edit {
 
 // The caret edit a non-printable key requests, if any. Printable characters
 // arrive via `FrameInput.typed_char` and take precedence (see `step`).
-fn command_from_key(key: Key) -> Option<Edit> {
+fn command_from_key(key: InputKey) -> Option<Edit> {
     match key {
-        Key::Backspace => Some(Edit::Backspace),
-        Key::Delete => Some(Edit::Delete),
-        Key::Left => Some(Edit::Left),
-        Key::Right => Some(Edit::Right),
+        InputKey::Backspace => Some(Edit::Backspace),
+        InputKey::Delete => Some(Edit::Delete),
+        InputKey::Left => Some(Edit::Left),
+        InputKey::Right => Some(Edit::Right),
         _ => None,
     }
 }
@@ -253,12 +253,12 @@ mod tests {
 
     #[test]
     fn command_keys_map_to_edits() {
-        assert_eq!(command_from_key(Key::Backspace), Some(Edit::Backspace));
-        assert_eq!(command_from_key(Key::Delete), Some(Edit::Delete));
-        assert_eq!(command_from_key(Key::Left), Some(Edit::Left));
-        assert_eq!(command_from_key(Key::Right), Some(Edit::Right));
-        assert_eq!(command_from_key(Key::A), None);
-        assert_eq!(command_from_key(Key::Enter), None);
+        assert_eq!(command_from_key(InputKey::Backspace), Some(Edit::Backspace));
+        assert_eq!(command_from_key(InputKey::Delete), Some(Edit::Delete));
+        assert_eq!(command_from_key(InputKey::Left), Some(Edit::Left));
+        assert_eq!(command_from_key(InputKey::Right), Some(Edit::Right));
+        assert_eq!(command_from_key(InputKey::A), None);
+        assert_eq!(command_from_key(InputKey::Enter), None);
     }
 
     #[test]

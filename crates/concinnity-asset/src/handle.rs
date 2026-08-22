@@ -187,7 +187,7 @@ handle_ref_de! {
 }
 handle_ref_de! {
     /// Used by the SkinnedMesh correlation references (`Animation.target`,
-    /// `AnimGraph.target`, `FollowController.target`): a SkinnedMesh stays an ECS
+    /// `AnimationGraph.target`, `FollowController.target`): a SkinnedMesh stays an ECS
     /// component, but its authored references bake to its dense handle instead of
     /// an interned id.
     SkinnedMeshHandle, "a", "skinned-mesh",
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn de_opt_skinned_mesh_handle_reads_integers_and_resolves_names() {
-        // The correlation-reference seam (Animation/AnimGraph/FollowController
+        // The correlation-reference seam (Animation/AnimationGraph/FollowController
         // `target`): an already-resolved integer passes through, a name resolves
         // through the installed skinned-mesh resolver, empty/null/missing are None.
         install_resolvers();

@@ -12,8 +12,17 @@
 /// The panel is positioned by `centre`, oriented by `normal` (the direction it
 /// emits), and sized by `half_size`, matching [GlassPanel](#glasspanel).
 ///
-/// ```jsonl
-/// {"name":"window","type":"RectAreaLight","args":{"centre":[0.0,3.0,-4.0],"normal":[0.0,0.0,1.0],"half_size":[1.5,1.0],"color":[1.0,0.95,0.85],"intensity":12.0,"range":18.0}}
+/// ```rust
+/// # use concinnity_asset::RectAreaLight;
+/// RectAreaLight {
+///     centre: [0.0, 3.0, -4.0],
+///     normal: [0.0, 0.0, 1.0],
+///     half_size: [1.5, 1.0],
+///     color: [1.0, 0.95, 0.85],
+///     intensity: 12.0,
+///     range: 18.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

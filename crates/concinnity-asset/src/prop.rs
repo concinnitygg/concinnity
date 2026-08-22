@@ -11,7 +11,6 @@ use alloc::string::{String, ToString};
 /// The shape dimensions are in the prop's local space and are scaled by the
 /// prop's `scale`. `ball` and `capsule` use the X scale component (they assume
 /// uniform scaling).
-///
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PropCollider {
@@ -48,24 +47,18 @@ impl Default for PropCollider {
 /// [Mesh](#mesh)/[ProceduralMesh](#proceduralmesh). `model` takes precedence
 /// when both are set.
 ///
-/// ```jsonl
-/// // single mesh
-/// {"name":"crate_a","type":"Prop","args":{"mesh":"box_mesh","material":"mat_brick","position":[4.0,0.4,-8.0],"collider":{"shape":"aabb","half_extents":[0.4,0.4,0.4]}}}
-/// {"name":"column_ne","type":"Prop","args":{"mesh":"column_mesh","material":"mat_stone","position":[8.0,1.7,-10.0],"collider":{"shape":"aabb","half_extents":[0.18,1.7,0.18]}}}
-/// {"name":"room_floor","type":"Prop","args":{"mesh":"room_mesh","material":"mat_plaster","position":[0.0,0.0,0.0]}}
-///
-/// // multi-mesh model
-/// {"name":"crate_a","type":"Prop","args":{"model":"wooden_crate","position":[2.0,0.3,-4.0],"collider":{"shape":"aabb","half_extents":[0.3,0.3,0.3]}}}
-///
-/// // parent-child hierarchy: door panel inherits the frame's world transform
-/// {"name":"door_frame","type":"Prop","args":{"model":"wooden_frame","position":[3,0,-2]}}
-/// {"name":"door_panel","type":"Prop","args":{"model":"door","parent":"door_frame","position":[0,0,0.05]}}
-/// ```
-///
 /// Rotation notes:
 /// - `rotation_deg[0]` = pitch (tilt forward/back)
 /// - `rotation_deg[1]` = yaw (spin on vertical axis), most common
 /// - `rotation_deg[2]` = roll (tilt side-to-side)
+///
+/// ```rust
+/// # use concinnity_asset::Prop;
+/// Prop {
+///     position: [4.0, 0.4, -8.0],
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Prop {

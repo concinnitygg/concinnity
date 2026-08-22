@@ -67,7 +67,7 @@ pub struct RenderInput {
     /// capture, or `None`. A one-frame pulse, surfaced regardless of menu /
     /// capture state. Wired on Metal; DirectX / Vulkan set it from their key
     /// callbacks.
-    pub captured_key: Option<crate::assets::Key>,
+    pub captured_key: Option<crate::assets::InputKey>,
     /// The printable character produced by this poll's key press (with the OS's
     /// shift / dead-key / layout handling applied), for text-input fields, or
     /// `None`. A one-frame pulse like `captured_key`, ungated by menu / capture

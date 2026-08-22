@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_shader"
 path = "src/lib.rs"
-doctest = false
 
 [features]
 vulkan = ["dep:shaderc", "concinnity-device/vulkan"]

@@ -19,13 +19,18 @@ use alloc::string::String;
 /// show a placeholder position at build time and are corrected to the live
 /// value when the world starts.
 ///
-/// ```jsonl
-/// {"name":"sld_exposure","type":"Slider","args":{"setting":"exposure","label":"Exposure"}}
-/// ```
-///
 /// Generated names are prefixed with this asset's `name` (`<name>_label`,
 /// `<name>_value`, `<name>_track`, `<name>_handle`, `<name>_drag`), so they
 /// never clash with hand-authored assets.
+///
+/// ```rust
+/// # use concinnity_asset::Slider;
+/// Slider {
+///     setting: "exposure".into(),
+///     label: "Exposure".into(),
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Slider {

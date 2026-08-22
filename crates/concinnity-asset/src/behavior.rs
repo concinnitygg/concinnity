@@ -23,12 +23,6 @@ use crate::{AssetId, AudioClipHandle, StoryPlayback, de_opt_asset_ref, de_opt_au
 /// firing decision, which is made at fire time rather than after the delay.
 /// Timers, delays, and cooldowns freeze while a menu is open, like the rest of
 /// the world clock.
-///
-/// ```jsonl
-/// {"name":"greet","type":"Behavior","args":{"on":"start","do":[{"set":{"var":"visits","value":{"int":1},"add":true}}]}}
-/// {"name":"drip","type":"Behavior","args":{"on":{"timer":{"interval":5.0,"repeat":true}},"do":[{"spawn":{"template":"drop","position":[0,3,0],"lifetime":4.0}}]}}
-/// {"name":"chase","type":"Behavior","args":{"on":"tick","scope":["Prop"],"locals":[{"name":"speed","value":{"float":3.0}}],"queries":[{"name":"player","has":["Camera3D"]}],"do":[{"let":{"name":"target","value":{"first":"player"}}},{"if":{"cond":{"lt":[{"distance":["self",{"bind":"target"}]},{"float":20.0}]},"then":[]}}]}}
-/// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Behavior {
@@ -42,12 +36,12 @@ pub struct Behavior {
     pub scope: Vec<String>,
     /// Per-entity state. Each matching entity gets its own copy, reset to the
     /// declared value when the world starts. Locals are never persisted.
-    pub locals: Vec<LocalDecl>,
+    pub locals: Vec<BehaviorLocal>,
     /// World reads, resolved once per tick into a stable-ordered entity list.
-    pub queries: Vec<QueryDecl>,
+    pub queries: Vec<BehaviorQuery>,
     /// The nodes run, in order, each time the behavior fires.
     #[serde(rename = "do")]
-    pub body: Vec<Node>,
+    pub body: Vec<BehaviorNode>,
     /// Fire at most once per run.
     pub once: bool,
     /// Seconds between the firing decision and the nodes running (`0` runs
@@ -93,18 +87,18 @@ pub enum BehaviorSource {
 /// value fixes both the slot's type and its starting value.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct LocalDecl {
+pub struct BehaviorLocal {
     /// The name nodes read the slot by.
     pub name: String,
     /// The slot's type and starting value.
-    pub value: Literal,
+    pub value: BehaviorLiteral,
 }
 
 /// A world read declared by a [Behavior](#behavior), resolved once per tick
 /// into the entities carrying every named component.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct QueryDecl {
+pub struct BehaviorQuery {
     /// The name expressions read the result by.
     pub name: String,
     /// Component names an entity must all carry to match.
@@ -114,7 +108,7 @@ pub struct QueryDecl {
 /// A typed literal in a [Behavior](#behavior).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Literal {
+pub enum BehaviorLiteral {
     /// A boolean.
     Bool(bool),
     /// A signed integer.
@@ -125,9 +119,9 @@ pub enum Literal {
     Vec3([f32; 3]),
 }
 
-impl Default for Literal {
+impl Default for BehaviorLiteral {
     fn default() -> Self {
-        Literal::Int(0)
+        BehaviorLiteral::Int(0)
     }
 }
 
@@ -138,7 +132,7 @@ impl Default for Literal {
 /// the two is a build error.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Expr {
+pub enum BehaviorExpr {
     /// A boolean literal.
     Bool(bool),
     /// An integer literal.
@@ -163,48 +157,48 @@ pub enum Expr {
     /// Seconds elapsed since the world started.
     Elapsed,
     /// World-space position of an entity.
-    Position(Box<Expr>),
+    Position(Box<BehaviorExpr>),
     /// Distance between two entities.
-    Distance(Box<Expr>, Box<Expr>),
+    Distance(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// The first entity of a declared query, or none when it is empty.
     First(String),
     /// How many entities a declared query matched.
     Count(String),
     /// Whether an entity is still alive.
-    Alive(Box<Expr>),
+    Alive(Box<BehaviorExpr>),
     /// Sum of two values.
-    Add(Box<Expr>, Box<Expr>),
+    Add(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Difference of two values.
-    Sub(Box<Expr>, Box<Expr>),
+    Sub(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Product of two values; a vector may be scaled by a scalar.
-    Mul(Box<Expr>, Box<Expr>),
+    Mul(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Quotient of two values; dividing by zero yields zero.
-    Div(Box<Expr>, Box<Expr>),
+    Div(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// A vector rescaled to unit length; a zero vector stays zero.
-    Normalize(Box<Expr>),
+    Normalize(Box<BehaviorExpr>),
     /// Equality test.
-    Eq(Box<Expr>, Box<Expr>),
+    Eq(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Inequality test.
-    Ne(Box<Expr>, Box<Expr>),
+    Ne(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Less-than test.
-    Lt(Box<Expr>, Box<Expr>),
+    Lt(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Less-than-or-equal test.
-    Le(Box<Expr>, Box<Expr>),
+    Le(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Greater-than test.
-    Gt(Box<Expr>, Box<Expr>),
+    Gt(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// Greater-than-or-equal test.
-    Ge(Box<Expr>, Box<Expr>),
+    Ge(Box<BehaviorExpr>, Box<BehaviorExpr>),
     /// True when every operand is true.
-    All(Vec<Expr>),
+    All(Vec<BehaviorExpr>),
     /// True when any operand is true.
-    Any(Vec<Expr>),
+    Any(Vec<BehaviorExpr>),
     /// Logical negation.
-    Not(Box<Expr>),
+    Not(Box<BehaviorExpr>),
 }
 
-impl Default for Expr {
+impl Default for BehaviorExpr {
     fn default() -> Self {
-        Expr::Bool(false)
+        BehaviorExpr::Bool(false)
     }
 }
 
@@ -214,17 +208,17 @@ impl Default for Expr {
 /// loop and no recursion, so a behavior body always terminates.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Node {
+pub enum BehaviorNode {
     /// Runs `then` when `cond` holds, `else` otherwise.
     If {
         /// The tested expression.
-        cond: Expr,
+        cond: BehaviorExpr,
         /// Nodes run when `cond` holds.
         #[serde(default)]
-        then: Vec<Node>,
+        then: Vec<BehaviorNode>,
         /// Nodes run when `cond` does not hold.
         #[serde(default, rename = "else")]
-        otherwise: Vec<Node>,
+        otherwise: Vec<BehaviorNode>,
     },
     /// Runs `do` once per entity a declared query matched, binding each to
     /// `bind`.
@@ -235,14 +229,14 @@ pub enum Node {
         bind: String,
         /// Nodes run per entity.
         #[serde(default, rename = "do")]
-        body: Vec<Node>,
+        body: Vec<BehaviorNode>,
     },
     /// Binds an expression to a name for the rest of the body.
     Let {
         /// The bound name.
         name: String,
         /// The bound expression.
-        value: Expr,
+        value: BehaviorExpr,
     },
     /// Writes a world variable: assign `value`, or add it to the current value
     /// when `add` is `true`.
@@ -250,7 +244,7 @@ pub enum Node {
         /// The variable written.
         var: String,
         /// The value assigned (or added).
-        value: Expr,
+        value: BehaviorExpr,
         /// `false` assigns `value`; `true` adds it to the current value.
         #[serde(default)]
         add: bool,
@@ -260,7 +254,7 @@ pub enum Node {
         /// The local written.
         local: String,
         /// The value assigned (or added).
-        value: Expr,
+        value: BehaviorExpr,
         /// `false` assigns `value`; `true` adds it to the current value.
         #[serde(default)]
         add: bool,
@@ -268,16 +262,16 @@ pub enum Node {
     /// Writes an entity's transform. An omitted field is left unchanged.
     SetTransform {
         /// The entity moved.
-        entity: Expr,
+        entity: BehaviorExpr,
         /// New world-space position.
         #[serde(default)]
-        position: Option<Expr>,
+        position: Option<BehaviorExpr>,
         /// New Euler rotation in degrees.
         #[serde(default)]
-        rotation_deg: Option<Expr>,
+        rotation_deg: Option<BehaviorExpr>,
         /// New scale.
         #[serde(default)]
-        scale: Option<Expr>,
+        scale: Option<BehaviorExpr>,
     },
     /// Creates a copy of an existing placement at a world position. Binding
     /// `bind` makes the copy addressable for the rest of the body.
@@ -304,26 +298,26 @@ pub enum Node {
     /// Removes an entity and its children from the world.
     Despawn {
         /// The entity removed.
-        target: Expr,
+        target: BehaviorExpr,
     },
     /// Re-points an entity's parent edge.
     Reparent {
         /// The entity moved.
-        child: Expr,
+        child: BehaviorExpr,
         /// The new parent, or unset to detach to a root.
         #[serde(default)]
-        parent: Option<Expr>,
+        parent: Option<BehaviorExpr>,
     },
     /// Makes a hidden entity (and its children) visible again.
     Show {
         /// The entity revealed.
-        target: Expr,
+        target: BehaviorExpr,
     },
     /// Makes an entity (and its children) invisible without removing it. A
     /// hidden entity keeps simulating; `show` reverses this.
     Hide {
         /// The entity hidden.
-        target: Expr,
+        target: BehaviorExpr,
     },
     /// Plays an [AudioClip](#audioclip) flat on the main mix (no 3D position).
     Sound {
@@ -367,13 +361,13 @@ impl Behavior {
     /// Whether any node plays an audio clip, so the runtime knows this
     /// behavior needs the audio system and its clip payloads cached.
     pub fn plays_sound(&self) -> bool {
-        self.visit(&mut |n| matches!(n, Node::Sound { .. }))
+        self.visit(&mut |n| matches!(n, BehaviorNode::Sound { .. }))
     }
 
     /// Whether any node saves the world's logic state, so the runtime knows to
     /// restore persisted state when the world starts.
     pub fn saves_state(&self) -> bool {
-        self.visit(&mut |n| matches!(n, Node::Save))
+        self.visit(&mut |n| matches!(n, BehaviorNode::Save))
     }
 
     /// Whether the behavior runs against individual entities rather than the
@@ -383,15 +377,15 @@ impl Behavior {
     }
 
     // True when any node in the body, at any nesting depth, satisfies `pred`.
-    fn visit(&self, pred: &mut impl FnMut(&Node) -> bool) -> bool {
-        fn walk(nodes: &[Node], pred: &mut impl FnMut(&Node) -> bool) -> bool {
+    fn visit(&self, pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
+        fn walk(nodes: &[BehaviorNode], pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
             nodes.iter().any(|n| {
                 pred(n)
                     || match n {
-                        Node::If {
+                        BehaviorNode::If {
                             then, otherwise, ..
                         } => walk(then, pred) || walk(otherwise, pred),
-                        Node::ForEach { body, .. } => walk(body, pred),
+                        BehaviorNode::ForEach { body, .. } => walk(body, pred),
                         _ => false,
                     }
             })
@@ -422,9 +416,9 @@ mod tests {
 
     // Destructuring helpers, each `None` for any other kind. The parse tests
     // read as assertions on the parts rather than nested pattern matches.
-    fn as_if(node: &Node) -> Option<(&Expr, &[Node], &[Node])> {
+    fn as_if(node: &BehaviorNode) -> Option<(&BehaviorExpr, &[BehaviorNode], &[BehaviorNode])> {
         match node {
-            Node::If {
+            BehaviorNode::If {
                 cond,
                 then,
                 otherwise,
@@ -433,37 +427,37 @@ mod tests {
         }
     }
 
-    fn as_spawn(node: &Node) -> Option<(Option<&str>, [f32; 3])> {
+    fn as_spawn(node: &BehaviorNode) -> Option<(Option<&str>, [f32; 3])> {
         match node {
-            Node::Spawn { bind, scale, .. } => Some((bind.as_deref(), *scale)),
+            BehaviorNode::Spawn { bind, scale, .. } => Some((bind.as_deref(), *scale)),
             _ => None,
         }
     }
 
-    fn as_set(node: &Node) -> Option<(&str, &Expr, bool)> {
+    fn as_set(node: &BehaviorNode) -> Option<(&str, &BehaviorExpr, bool)> {
         match node {
-            Node::Set { var, value, add } => Some((var, value, *add)),
+            BehaviorNode::Set { var, value, add } => Some((var, value, *add)),
             _ => None,
         }
     }
 
-    fn as_despawn(node: &Node) -> Option<&Expr> {
+    fn as_despawn(node: &BehaviorNode) -> Option<&BehaviorExpr> {
         match node {
-            Node::Despawn { target } => Some(target),
+            BehaviorNode::Despawn { target } => Some(target),
             _ => None,
         }
     }
 
-    fn as_lt(expr: &Expr) -> Option<(&Expr, &Expr)> {
+    fn as_lt(expr: &BehaviorExpr) -> Option<(&BehaviorExpr, &BehaviorExpr)> {
         match expr {
-            Expr::Lt(lhs, rhs) => Some((lhs, rhs)),
+            BehaviorExpr::Lt(lhs, rhs) => Some((lhs, rhs)),
             _ => None,
         }
     }
 
-    fn as_distance(expr: &Expr) -> Option<(&Expr, &Expr)> {
+    fn as_distance(expr: &BehaviorExpr) -> Option<(&BehaviorExpr, &BehaviorExpr)> {
         match expr {
-            Expr::Distance(a, b) => Some((a, b)),
+            BehaviorExpr::Distance(a, b) => Some((a, b)),
             _ => None,
         }
     }
@@ -476,8 +470,8 @@ mod tests {
         assert!(as_spawn(save).is_none());
         assert!(as_set(save).is_none());
         assert!(as_despawn(save).is_none());
-        assert!(as_lt(&Expr::Bool(true)).is_none());
-        assert!(as_distance(&Expr::Bool(true)).is_none());
+        assert!(as_lt(&BehaviorExpr::Bool(true)).is_none());
+        assert!(as_distance(&BehaviorExpr::Bool(true)).is_none());
     }
 
     #[test]
@@ -511,7 +505,7 @@ mod tests {
         assert_eq!(b.scope, ["Prop"]);
         assert_eq!(b.locals.len(), 1);
         assert_eq!(b.locals[0].name, "speed");
-        assert_eq!(b.locals[0].value, Literal::Float(3.0));
+        assert_eq!(b.locals[0].value, BehaviorLiteral::Float(3.0));
     }
 
     #[test]
@@ -531,10 +525,10 @@ mod tests {
         assert!(then.is_empty());
         assert!(otherwise.is_empty());
         let (lhs, rhs) = as_lt(cond).expect("a less-than comparison");
-        assert_eq!(*rhs, Expr::Float(20.0));
+        assert_eq!(*rhs, BehaviorExpr::Float(20.0));
         let (a, b) = as_distance(lhs).expect("a distance expression");
-        assert_eq!(*a, Expr::SelfEntity);
-        assert_eq!(*b, Expr::Bind(String::from("t")));
+        assert_eq!(*a, BehaviorExpr::SelfEntity);
+        assert_eq!(*b, BehaviorExpr::Bind(String::from("t")));
     }
 
     #[test]
@@ -564,7 +558,7 @@ mod tests {
         assert_eq!(again.on, b.on);
         let (var, value, add) = as_set(&again.body[0]).expect("a set node");
         assert_eq!(var, "visits");
-        assert_eq!(*value, Expr::Int(1));
+        assert_eq!(*value, BehaviorExpr::Int(1));
         assert!(add);
     }
 
@@ -572,7 +566,7 @@ mod tests {
     fn a_blank_expression_is_false() {
         // Lets a node's expression field carry `#[serde(default)]` without the
         // omission reading as "fires".
-        assert_eq!(Expr::default(), Expr::Bool(false));
+        assert_eq!(BehaviorExpr::default(), BehaviorExpr::Bool(false));
     }
 
     #[test]
@@ -582,8 +576,8 @@ mod tests {
         assert!(matches!(
             (&b.body[0], &b.body[1]),
             (
-                Node::Scene { transition: a, .. },
-                Node::Scene { transition: c, .. },
+                BehaviorNode::Scene { transition: a, .. },
+                BehaviorNode::Scene { transition: c, .. },
             ) if a == "FadeBlack" && c == "Cut"
         ));
     }
@@ -591,7 +585,7 @@ mod tests {
     #[test]
     fn a_sound_node_plays_at_unit_gain_unless_told_otherwise() {
         let b = parse(r#"{"do":[{"sound":{}}]}"#);
-        assert!(matches!(b.body[0], Node::Sound { volume, .. } if volume == 1.0));
+        assert!(matches!(b.body[0], BehaviorNode::Sound { volume, .. } if volume == 1.0));
         assert!(b.plays_sound());
     }
 
@@ -602,6 +596,6 @@ mod tests {
         let again: Behavior = postcard::from_bytes(&bytes).expect("behavior decodes");
         assert_eq!(again.on, BehaviorSource::Tick);
         let target = as_despawn(&again.body[0]).expect("a despawn node");
-        assert_eq!(*target, Expr::SelfEntity);
+        assert_eq!(*target, BehaviorExpr::SelfEntity);
     }
 }

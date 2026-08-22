@@ -10,7 +10,7 @@
 // log sink.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use std::sync::atomic::Ordering;
 
 impl EditorHook {
@@ -38,7 +38,7 @@ impl EditorHook {
     // The console's own focus does not stand in the way, so backtick still
     // closes an open console mid-typing.
     pub(super) fn drive_console_toggle(&mut self, input: &FrameInput, world: &mut World) {
-        if input.captured_key != Some(Key::Backtick) || input.ctrl {
+        if input.captured_key != Some(InputKey::Backtick) || input.ctrl {
             return;
         }
         if self.sim.playing() || self.non_console_text_focus() {
@@ -126,7 +126,7 @@ impl EditorHook {
             return;
         }
         match input.captured_key {
-            Some(Key::Enter) => {
+            Some(InputKey::Enter) => {
                 let line = widget::field_text(world, console_panel::INPUT);
                 widget::seed_field(world, console_panel::INPUT, "");
                 let line = line.trim().to_string();
@@ -134,8 +134,8 @@ impl EditorHook {
                     self.run_console_line(world, &line);
                 }
             }
-            Some(Key::Tab) => self.accept_console_ghost(world),
-            Some(Key::Right) => {
+            Some(InputKey::Tab) => self.accept_console_ghost(world),
+            Some(InputKey::Right) => {
                 let at_end = widget::input(world, console_panel::INPUT)
                     .map(|t| t.caret >= t.content.chars().count())
                     .unwrap_or(false);

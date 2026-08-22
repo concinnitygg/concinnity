@@ -16,7 +16,7 @@ use crate::gfx::anim_graph::{
 /// transitions compare against them. Flag-like parameters use 0 and 1.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphParam {
+pub struct AnimationParam {
     /// Parameter name, referenced by transition conditions.
     pub name: String,
     /// Initial value at world start.
@@ -26,7 +26,7 @@ pub struct GraphParam {
 /// One member of a 1D blendspace: a clip pinned at a parameter `value`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphBlendPoint {
+pub struct AnimationBlendPoint {
     /// Parameter value at which this clip plays alone.
     pub value: f32,
     /// The [Animation](#animation) clip at this point. Must target the same
@@ -43,7 +43,7 @@ pub struct GraphBlendPoint {
 /// speed changes do not slide the feet. Leave it false for members that are
 /// not cyclic gaits.
 #[derive(Debug, Clone)]
-pub enum GraphBlend {
+pub enum AnimationBlend {
     /// Clips along one parameter. The parameter picks the two neighbouring
     /// `points` (by ascending `value`) and blends them; outside the range
     /// the nearest end clip plays alone.
@@ -51,7 +51,7 @@ pub enum GraphBlend {
         /// Name of the declared graph parameter driving the blend.
         parameter: String,
         /// Members in ascending `value` order.
-        points: Vec<GraphBlendPoint>,
+        points: Vec<AnimationBlendPoint>,
         /// Phase-sync the members (see above).
         sync: bool,
     },
@@ -85,7 +85,7 @@ pub enum GraphBlend {
 enum GraphBlendTagged {
     Blend1d {
         parameter: String,
-        points: Vec<GraphBlendPoint>,
+        points: Vec<AnimationBlendPoint>,
         #[serde(default)]
         sync: bool,
     },
@@ -104,7 +104,7 @@ enum GraphBlendTagged {
 enum GraphBlendPlain {
     Blend1d {
         parameter: String,
-        points: Vec<GraphBlendPoint>,
+        points: Vec<AnimationBlendPoint>,
         sync: bool,
     },
     Blend2d {
@@ -148,25 +148,25 @@ macro_rules! graph_blend_from {
     };
 }
 
-impl serde::Serialize for GraphBlend {
+impl serde::Serialize for AnimationBlend {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let cloned = self.clone();
         if s.is_human_readable() {
-            graph_blend_from!(GraphBlend, GraphBlendTagged, cloned).serialize(s)
+            graph_blend_from!(AnimationBlend, GraphBlendTagged, cloned).serialize(s)
         } else {
-            graph_blend_from!(GraphBlend, GraphBlendPlain, cloned).serialize(s)
+            graph_blend_from!(AnimationBlend, GraphBlendPlain, cloned).serialize(s)
         }
     }
 }
 
-impl<'de> serde::Deserialize<'de> for GraphBlend {
+impl<'de> serde::Deserialize<'de> for AnimationBlend {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         if d.is_human_readable() {
             let b = GraphBlendTagged::deserialize(d)?;
-            Ok(graph_blend_from!(GraphBlendTagged, GraphBlend, b))
+            Ok(graph_blend_from!(GraphBlendTagged, AnimationBlend, b))
         } else {
             let b = GraphBlendPlain::deserialize(d)?;
-            Ok(graph_blend_from!(GraphBlendPlain, GraphBlend, b))
+            Ok(graph_blend_from!(GraphBlendPlain, AnimationBlend, b))
         }
     }
 }
@@ -176,7 +176,7 @@ impl<'de> serde::Deserialize<'de> for GraphBlend {
 /// clips by parameter value). Exactly one of the two must be set.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphState {
+pub struct AnimationState {
     /// State name, referenced by `initial` and by transitions.
     pub name: String,
     /// The [Animation](#animation) clip this state plays. Must target the
@@ -185,7 +185,7 @@ pub struct GraphState {
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub clip: Option<AssetId>,
     /// A blendspace to play instead of a single `clip`.
-    pub blend: Option<GraphBlend>,
+    pub blend: Option<AnimationBlend>,
     /// Playback speed scale; 1.0 plays at authored speed.
     pub rate: f32,
     /// Overrides the loop mode while this state plays: a single `clip`
@@ -193,7 +193,7 @@ pub struct GraphState {
     pub loop_override: Option<bool>,
 }
 
-impl Default for GraphState {
+impl Default for AnimationState {
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -216,7 +216,7 @@ impl Default for GraphState {
 /// Pinning pauses automatically while the character is airborne.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphIkChain {
+pub struct AnimationIkChain {
     /// Names of the chain's root, middle, and end joints, in order. Exactly
     /// three are required, matching the target skeleton's joint names.
     pub joints: Vec<String>,
@@ -231,7 +231,7 @@ pub struct GraphIkChain {
     pub foot_height: f32,
 }
 
-impl Default for GraphIkChain {
+impl Default for AnimationIkChain {
     fn default() -> Self {
         Self {
             joints: Vec::new(),
@@ -246,7 +246,7 @@ impl Default for GraphIkChain {
 /// conditions must pass for it to fire.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphCondition {
+pub struct AnimationCondition {
     /// Name of a declared graph parameter.
     pub parameter: String,
     /// Comparison operator: `lt`, `le`, `gt`, `ge`, `eq`, or `ne`.
@@ -258,7 +258,7 @@ pub struct GraphCondition {
 /// One directed transition between two states.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct GraphTransition {
+pub struct AnimationTransition {
     /// Source state name.
     pub from: String,
     /// Destination state name.
@@ -273,7 +273,7 @@ pub struct GraphTransition {
     pub exit_time: Option<f32>,
     /// Conditions that must all pass (in addition to any `exit_time` gate).
     /// An empty list always passes.
-    pub conditions: Vec<GraphCondition>,
+    pub conditions: Vec<AnimationCondition>,
 }
 
 /// An animation state machine for one [SkinnedMesh](#skinnedmesh).
@@ -295,40 +295,16 @@ pub struct GraphTransition {
 /// A state with no outgoing transitions (or none passing) keeps playing;
 /// looping states wrap, non-looping states hold their final pose.
 ///
-/// ```jsonl
-/// // Two single-clip states:
-/// {"name":"hero_graph","type":"AnimGraph","args":{
-///   "target":"hero",
-///   "parameters":[{"name":"speed","default":0.0}],
-///   "initial":"idle",
-///   "states":[
-///     {"name":"idle","clip":"hero_idle"},
-///     {"name":"run","clip":"hero_run","rate":1.1}
-///   ],
-///   "transitions":[
-///     {"from":"idle","to":"run","duration_secs":0.2,
-///      "conditions":[{"parameter":"speed","op":"gt","value":0.5}]},
-///     {"from":"run","to":"idle","duration_secs":0.3,
-///      "conditions":[{"parameter":"speed","op":"le","value":0.5}]}
-///   ]
-/// }}
-/// // One locomotion blendspace state mixing idle/walk/run by speed:
-/// {"name":"hero_graph","type":"AnimGraph","args":{
-///   "target":"hero",
-///   "parameters":[{"name":"speed","default":0.0}],
-///   "states":[
-///     {"name":"locomotion","blend":{"kind":"blend1d","parameter":"speed","sync":true,
-///      "points":[
-///        {"value":0.0,"clip":"hero_idle"},
-///        {"value":1.6,"clip":"hero_walk"},
-///        {"value":5.0,"clip":"hero_run"}
-///      ]}}
-///   ]
-/// }}
+/// ```rust
+/// # use concinnity_core::assets::AnimationGraph;
+/// AnimationGraph {
+///     initial: "idle".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct AnimGraph {
+pub struct AnimationGraph {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
@@ -336,19 +312,19 @@ pub struct AnimGraph {
     #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
     /// Named float parameters transitions compare against.
-    pub parameters: Vec<GraphParam>,
+    pub parameters: Vec<AnimationParam>,
     /// Name of the state the graph starts in. Defaults to the first state.
     pub initial: String,
     /// The graph's states. At least one is required.
-    pub states: Vec<GraphState>,
+    pub states: Vec<AnimationState>,
     /// Directed transitions between states.
-    pub transitions: Vec<GraphTransition>,
+    pub transitions: Vec<AnimationTransition>,
     /// Two-bone IK chains applied on top of every state's pose; see
-    /// [GraphIkChain](#graphikchain).
-    pub ik_chains: Vec<GraphIkChain>,
+    /// [AnimationIkChain](#animationikchain).
+    pub ik_chains: Vec<AnimationIkChain>,
 }
 
-impl AnimGraph {
+impl AnimationGraph {
     /// Compile the authored graph into the runtime representation, resolving
     /// state and parameter names to indices and clip references through
     /// `resolve_clip`, which maps an [Animation](#animation) asset id to its
@@ -360,7 +336,7 @@ impl AnimGraph {
         &self,
         resolve_clip: impl Fn(AssetId) -> Option<(usize, f32, bool)>,
     ) -> Result<CompiledGraph, String> {
-        let ctx = |detail: String| format!("AnimGraph {}: {detail}", self.asset_id);
+        let ctx = |detail: String| format!("AnimationGraph {}: {detail}", self.asset_id);
         if self.states.is_empty() {
             return Err(ctx("graph has no states".into()));
         }
@@ -472,8 +448,8 @@ impl AnimGraph {
 // Compile one blendspace node: parameter and clip names resolve to indices,
 // axis positions must ascend strictly, and 2D grids must be complete.
 fn compile_blend(
-    state: &GraphState,
-    blend: &GraphBlend,
+    state: &AnimationState,
+    blend: &AnimationBlend,
     param_index: &impl Fn(&str) -> Option<usize>,
     play_for: &impl Fn(AssetId) -> Result<(ClipPlay, bool), String>,
 ) -> Result<StatePlay, String> {
@@ -489,7 +465,7 @@ fn compile_blend(
     };
 
     match blend {
-        GraphBlend::Blend1d {
+        AnimationBlend::Blend1d {
             parameter,
             points,
             sync,
@@ -512,7 +488,7 @@ fn compile_blend(
                 sync: *sync,
             }))
         }
-        GraphBlend::Blend2d {
+        AnimationBlend::Blend2d {
             parameter_x,
             parameter_y,
             x_values,
@@ -581,7 +557,7 @@ mod tests {
     #[test]
     fn deserialises_full_graph() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(graph_json()).unwrap();
         assert!(g.target.is_some());
         assert_eq!(g.parameters.len(), 1);
         assert_eq!(g.states.len(), 2);
@@ -594,7 +570,7 @@ mod tests {
 
     #[test]
     fn deserialises_with_defaults() {
-        let g: AnimGraph = serde_json::from_str("{}").unwrap();
+        let g: AnimationGraph = serde_json::from_str("{}").unwrap();
         assert!(g.target.is_none());
         assert!(g.states.is_empty());
         assert!(g.initial.is_empty());
@@ -603,7 +579,7 @@ mod tests {
     #[test]
     fn compiles_names_to_indices() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         assert_eq!(compiled.initial, 0);
         assert_eq!(compiled.states[0].transitions.len(), 1);
@@ -620,7 +596,7 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = graph_json();
         v["initial"] = serde_json::json!("");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert_eq!(g.compile(any_clip).unwrap().initial, 0);
     }
 
@@ -629,35 +605,35 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = graph_json();
         v["transitions"][0]["to"] = serde_json::json!("ghost");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("ghost"));
 
         let mut v = graph_json();
         v["transitions"][0]["conditions"][0]["parameter"] = serde_json::json!("nope");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("nope"));
 
         let mut v = graph_json();
         v["initial"] = serde_json::json!("ghost");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("ghost"));
     }
 
     #[test]
     fn compile_rejects_unresolvable_clip_and_bad_rate() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(graph_json()).unwrap();
         assert!(g.compile(|_| None).unwrap_err().contains("clip"));
 
         let mut v = graph_json();
         v["states"][0]["rate"] = serde_json::json!(0.0);
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("rate"));
     }
 
     #[test]
     fn compile_rejects_empty_graph() {
-        let g = AnimGraph::default();
+        let g = AnimationGraph::default();
         assert!(g.compile(any_clip).unwrap_err().contains("no states"));
     }
 
@@ -693,7 +669,7 @@ mod tests {
     #[test]
     fn compiles_blend1d_state() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         let StatePlay::Blend1D(b) = &compiled.states[0].play else {
             panic!("expected a 1D blendspace");
@@ -708,7 +684,7 @@ mod tests {
     #[test]
     fn compiles_blend2d_state() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
         let compiled = g.compile(any_clip).unwrap();
         let StatePlay::Blend2D(b) = &compiled.states[0].play else {
             panic!("expected a 2D blendspace");
@@ -723,7 +699,7 @@ mod tests {
     #[test]
     fn graph_blend_keeps_the_tagged_json_shape_and_round_trips_through_postcard() {
         crate::test_support::reset_interner();
-        let g: AnimGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
+        let g: AnimationGraph = serde_json::from_value(blend1d_graph_json()).unwrap();
         let json = serde_json::to_value(&g).unwrap();
         assert_eq!(
             json["states"][0]["blend"]["kind"],
@@ -732,8 +708,8 @@ mod tests {
         );
 
         let bytes = postcard::to_allocvec(&g).unwrap();
-        let back: AnimGraph = postcard::from_bytes(&bytes).unwrap();
-        let Some(GraphBlend::Blend1d {
+        let back: AnimationGraph = postcard::from_bytes(&bytes).unwrap();
+        let Some(AnimationBlend::Blend1d {
             parameter,
             points,
             sync,
@@ -745,10 +721,10 @@ mod tests {
         assert_eq!(points.len(), 3);
         assert!(sync);
 
-        let g2: AnimGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
+        let g2: AnimationGraph = serde_json::from_value(blend2d_graph_json()).unwrap();
         let bytes = postcard::to_allocvec(&g2).unwrap();
-        let back: AnimGraph = postcard::from_bytes(&bytes).unwrap();
-        let Some(GraphBlend::Blend2d { rows, .. }) = &back.states[0].blend else {
+        let back: AnimationGraph = postcard::from_bytes(&bytes).unwrap();
+        let Some(AnimationBlend::Blend2d { rows, .. }) = &back.states[0].blend else {
             panic!("expected a 2D blendspace after the round trip");
         };
         assert_eq!(rows.len(), 2);
@@ -759,11 +735,11 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["clip"] = serde_json::json!("idle");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("pick one"));
 
         let v = serde_json::json!({"target":"hero","states":[{"name":"empty"}]});
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(
             g.compile(any_clip)
                 .unwrap_err()
@@ -776,7 +752,7 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["blend"]["points"][2]["value"] = serde_json::json!(1.0);
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("ascending"));
     }
 
@@ -785,7 +761,7 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = blend1d_graph_json();
         v["states"][0]["blend"]["parameter"] = serde_json::json!("nope");
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("nope"));
     }
 
@@ -794,7 +770,7 @@ mod tests {
         crate::test_support::reset_interner();
         let mut v = blend2d_graph_json();
         v["states"][0]["blend"]["rows"] = serde_json::json!([["a", "b"]]);
-        let g: AnimGraph = serde_json::from_value(v).unwrap();
+        let g: AnimationGraph = serde_json::from_value(v).unwrap();
         assert!(g.compile(any_clip).unwrap_err().contains("rows"));
     }
 }

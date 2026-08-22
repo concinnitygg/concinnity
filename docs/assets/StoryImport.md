@@ -100,10 +100,6 @@ You wake at a roadside inn. A note rests on the pillow.
 - [Toward the shore](#shore)
 ```
 
-```jsonl
-{"name":"crossroads","type":"StoryImport","args":{"source":"assets/crossroads.md"}}
-```
-
 ## Parameters
 
 - `source`: A string. Path to the Markdown story file, relative to the project root.

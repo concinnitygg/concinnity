@@ -15,7 +15,7 @@
 // on the best answer. Escape closes outright rather than first clearing the
 // query: one press, one meaning, and Backspace already clears.
 //
-// Escape (its own `FrameInput` pulse rather than a `Key`) otherwise answers
+// Escape (its own `FrameInput` pulse rather than a `InputKey`) otherwise answers
 // whichever state is waiting on a press, most consequential first: an armed
 // removal is cancelled, and failing that the field holding the keyboard gives
 // it up, the name field reverting to what the world holds.
@@ -48,17 +48,17 @@
 // only Left and Right, which are the caret's (`text_input_system`).
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
 use crate::editor::behavior_chart::CARD_POOL;
 
-fn direction(key: Key) -> Option<Dir> {
+fn direction(key: InputKey) -> Option<Dir> {
     Some(match key {
-        Key::Up => Dir::Up,
-        Key::Down => Dir::Down,
-        Key::Left => Dir::Left,
-        Key::Right => Dir::Right,
+        InputKey::Up => Dir::Up,
+        InputKey::Down => Dir::Down,
+        InputKey::Left => Dir::Left,
+        InputKey::Right => Dir::Right,
         _ => return None,
     })
 }
@@ -91,9 +91,11 @@ impl EditorHook {
             return;
         }
         match key {
-            Key::Enter => self.commit_behavior_key(world),
+            InputKey::Enter => self.commit_behavior_key(world),
             _ if self.behavior_name_focus => {}
-            Key::Tab => self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0]),
+            InputKey::Tab => {
+                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0])
+            }
             // Left and Right belong to the caret while the value field holds
             // the keyboard.
             _ => {
@@ -105,11 +107,11 @@ impl EditorHook {
         }
     }
 
-    fn clipboard_behavior_key(&mut self, key: Key, world: &mut World) {
+    fn clipboard_behavior_key(&mut self, key: InputKey, world: &mut World) {
         let action = match key {
-            Key::C => BehaviorAction::Copy,
-            Key::V => BehaviorAction::Paste,
-            Key::D => BehaviorAction::Duplicate,
+            InputKey::C => BehaviorAction::Copy,
+            InputKey::V => BehaviorAction::Paste,
+            InputKey::D => BehaviorAction::Duplicate,
             _ => return,
         };
         self.apply_behavior_action(action, world, [0.0, 0.0]);
@@ -121,9 +123,9 @@ impl EditorHook {
         self.behavior_picking && !self.behavior_data().picks.is_empty()
     }
 
-    fn behavior_palette_key(&mut self, key: Key, world: &mut World) {
+    fn behavior_palette_key(&mut self, key: InputKey, world: &mut World) {
         match key {
-            Key::Enter => {
+            InputKey::Enter => {
                 // The highlight counts kept options, so it resolves through the
                 // filter before it can name one.
                 let Some(&at) = self.behavior_data().matches.get(self.behavior_pick) else {
@@ -131,9 +133,9 @@ impl EditorHook {
                 };
                 self.apply_behavior_action(BehaviorAction::Choose(at), world, [0.0, 0.0]);
             }
-            Key::Up | Key::Down => {
+            InputKey::Up | InputKey::Down => {
                 let total = self.behavior_data().matches.len();
-                let delta = if key == Key::Up { -1 } else { 1 };
+                let delta = if key == InputKey::Up { -1 } else { 1 };
                 let Some(at) = navigate::step(Some(self.behavior_pick), delta, total) else {
                     return;
                 };

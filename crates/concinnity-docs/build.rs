@@ -413,7 +413,7 @@ fn render_doc_entry(
     ctx: &Ctx,
     refs: &mut Refs,
 ) -> (String, String) {
-    let doc = struct_doc(doc_ident, ctx);
+    let doc = strip_rust_blocks(&struct_doc(doc_ident, ctx));
     let cleaned = strip_table_lines(&doc);
     let fields = build_fields(args_ident, ctx, refs);
     let params = render_parameters(&fields);
@@ -428,7 +428,7 @@ fn render_enum_doc(name: &str, ctx: &Ctx) -> (String, String) {
         Some(i) => i,
         None => return (String::new(), String::new()),
     };
-    let cleaned = strip_table_lines(&info.enum_doc);
+    let cleaned = strip_table_lines(&strip_rust_blocks(&info.enum_doc));
     let values: Vec<EnumValue> = info
         .variants
         .iter()
@@ -887,6 +887,29 @@ fn first_paragraph(doc: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// Drop ```rust blocks. They are for the Rust caller reading `concinnity::assets`;
+// this reference is for the world.jsonl author, who is never shown a Rust name.
+fn strip_rust_blocks(doc: &str) -> String {
+    let mut out = String::new();
+    let mut in_rust = false;
+    for line in doc.lines() {
+        let trimmed = line.trim();
+        if in_rust {
+            if trimmed == "```" {
+                in_rust = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("```rust") || trimmed == "```no_run" || trimmed == "```ignore" {
+            in_rust = true;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 // Remove markdown table lines (starting with '|') from a doc string.

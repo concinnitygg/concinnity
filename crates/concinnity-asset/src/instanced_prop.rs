@@ -36,21 +36,6 @@ impl Default for InstanceTransform {
 ///
 /// Each `instances` entry has the shape `{"position":[x,y,z], "rotation_deg":[p,y,r], "scale":[sx,sy,sz]}`.
 /// `rotation_deg` and `scale` may be omitted (defaults `[0,0,0]` and `[1,1,1]`).
-///
-/// ```jsonl
-/// {"name":"rock_mesh","type":"ProceduralMesh","args":{"generator":"sphere","radius":0.4,"rings":8,"segments":10}}
-/// {"name":"mat_stone","type":"Material","args":{"albedo":"tex_stone","roughness":0.9}}
-/// {"name":"rocks","type":"InstancedProp","args":{
-///   "mesh":"rock_mesh",
-///   "material":"mat_stone",
-///   "cull_distance":80.0,
-///   "instances":[
-///     {"position":[ 2.0, 0.4, -3.0]},
-///     {"position":[-5.0, 0.4,  1.0], "rotation_deg":[0, 45, 0]},
-///     {"position":[ 4.0, 0.4,  7.0], "scale":[1.5, 1.5, 1.5]}
-///   ]
-/// }}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstancedProp {

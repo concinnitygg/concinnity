@@ -11,17 +11,6 @@ A sprite with a `texture` draws that image, multiplied by the tint (use a
 white tint to show the image unchanged; the tint's alpha fades it).
 Without one, the tint is drawn as a solid-coloured rectangle.
 
-```jsonl
-{
-  "name": "title_menu_bg",
-  "type": "Sprite",
-  "args": {
-    "x": 0, "y": 0, "width": 1280, "height": 720,
-    "tint": [0.04, 0.06, 0.10, 1.0]
-  }
-}
-```
-
 ## Parameters
 
 - `x`: A float. Left edge in screen pixels from the window's top-left. Defaults to `0.0`.

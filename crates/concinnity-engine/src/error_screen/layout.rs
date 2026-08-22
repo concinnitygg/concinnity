@@ -1,4 +1,4 @@
-// Placement for the error screen's message lines and the Quit button, plus the
+// LabelPlacement for the error screen's message lines and the Quit button, plus the
 // button's hit rect.
 //
 // Everything is laid out in window pixels against the live drawable size, so

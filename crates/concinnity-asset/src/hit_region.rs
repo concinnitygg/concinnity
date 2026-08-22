@@ -10,18 +10,17 @@ use alloc::string::String;
 ///
 /// The cursor must be free (not captured for camera control) for events to fire.
 ///
-/// ```jsonl
-/// {
-///   "name": "btn_start",
-///   "type": "HitRegion",
-///   "args": {
-///     "x": 430, "y": 330, "width": 220, "height": 40,
-///     "label": "scene_menu_start",
-///     "hover_color": [1.0, 0.85, 0.3],
-///     "hover_scale": 1.08,
-///     "action": "scene:scene_game"
-///   }
-/// }
+/// ```rust
+/// # use concinnity_asset::HitRegion;
+/// HitRegion {
+///     x: 430.0,
+///     y: 330.0,
+///     width: 220.0,
+///     height: 40.0,
+///     hover_color: Some([1.0, 0.85, 0.3]),
+///     hover_scale: Some(1.08),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

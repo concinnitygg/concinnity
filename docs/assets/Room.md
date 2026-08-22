@@ -15,10 +15,6 @@ as `half_width`, `half_depth`, and `ceiling_height` individually.
 in that order; the first set value wins. Generator names such as `"brick"` or
 `"concrete"` resolve to a matching [Texture](Texture.md) at build time.
 
-```jsonl
-{"name":"room","type":"Room","args":{"size":[16,20,3.5],"texture":"tex_plaster"}}
-```
-
 ## Parameters
 
 - `half_width`: A float. Half the room's width along X, in world units. Ignored when `size` is set. Defaults to `8.0`.

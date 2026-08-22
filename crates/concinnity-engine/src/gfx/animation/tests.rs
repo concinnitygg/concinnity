@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::resumed_origin;
-use crate::assets::{AnimGraph, AnimParams, Animation};
+use crate::assets::{Animation, AnimationGraph, AnimationParams};
 use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::asset_id::intern;
 use crate::ecs::{SystemAsset, World};
@@ -49,12 +49,12 @@ fn no_animation_no_internal_system() {
     assert!(world.systems().is_empty());
 }
 
-// An `AnimGraph` alone also implies the system (a graph without clips is a
+// An `AnimationGraph` alone also implies the system (a graph without clips is a
 // build error, but the runtime gate must not depend on validation).
 #[test]
 fn anim_graph_component_spawns_internal_system() {
     let mut world = World::new();
-    world.add_component(AnimGraph::default());
+    world.add_component(AnimationGraph::default());
     world.start().unwrap();
 
     let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -78,8 +78,8 @@ fn clip(name: &str, duration: f32) -> Animation {
 
 // idle/run graph on `hero`, transitioning on `speed` in both directions with
 // snap fades (duration 0) so state flips are visible after one step.
-fn hero_graph() -> AnimGraph {
-    let mut g: AnimGraph = serde_json::from_value(serde_json::json!({
+fn hero_graph() -> AnimationGraph {
+    let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
         "target": "hero",
         "parameters": [{"name": "speed", "default": 0.0}],
         "initial": "idle",
@@ -124,14 +124,14 @@ fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut super::AnimationSystem) -
     panic!("AnimationSystem not constructed");
 }
 
-// Init publishes one `AnimParams` per graph, seeded with the declared
+// Init publishes one `AnimationParams` per graph, seeded with the declared
 // defaults, and the graph starts in its initial state.
 #[test]
 fn graph_init_seeds_params_and_initial_state() {
     let mut world = graph_world();
     world.step();
 
-    let params: Vec<&AnimParams> = world.query::<AnimParams>().collect();
+    let params: Vec<&AnimationParams> = world.query::<AnimationParams>().collect();
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].target, hero());
     assert_eq!(params[0].values, vec![0.0]);
@@ -156,7 +156,7 @@ fn blendspace_weights_follow_the_parameter() {
         a.target = Some(SkinnedMeshHandle(target.0));
         world.add_component(a);
     }
-    let mut g: AnimGraph = serde_json::from_value(serde_json::json!({
+    let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
         "target": "hero_blend",
         "parameters": [{"name": "speed", "default": 0.0}],
         "states": [
@@ -194,21 +194,21 @@ fn blendspace_weights_follow_the_parameter() {
     );
 }
 
-// Writing the `AnimParams` component (the gameplay surface) drives a
+// Writing the `AnimationParams` component (the gameplay surface) drives a
 // transition on the next step; writing it back returns to the source state.
 #[test]
 fn graph_transitions_on_component_write() {
     let mut world = graph_world();
     world.step();
 
-    for p in world.query_mut::<AnimParams>() {
+    for p in world.query_mut::<AnimationParams>() {
         p.set(0, 2.0);
     }
     world.step();
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "run");
 
-    for p in world.query_mut::<AnimParams>() {
+    for p in world.query_mut::<AnimationParams>() {
         p.set(0, 0.0);
     }
     world.step();
@@ -233,7 +233,7 @@ fn queued_param_writes_component_and_drives_graph() {
     });
     world.step();
 
-    let params: Vec<&AnimParams> = world.query::<AnimParams>().collect();
+    let params: Vec<&AnimationParams> = world.query::<AnimationParams>().collect();
     assert_eq!(params[0].values, vec![3.0], "write landed in the component");
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "run");
@@ -266,11 +266,11 @@ fn mode_mismatched_commands_are_rejected() {
         let err = anim.queue_param(target, "speed", 1.0).unwrap_err();
         assert!(err.contains("anim-crossfade"));
         let err = anim.graph_report(target).unwrap_err();
-        assert!(err.contains("no AnimGraph"));
+        assert!(err.contains("no AnimationGraph"));
     });
 }
 
-// A clip with a baked root track publishes per-frame `RootMotion` events
+// A clip with a baked root track publishes per-frame `RootMotionEvent` events
 // carrying the mesh-local displacement; clips without one stay silent.
 #[test]
 fn root_motion_clip_publishes_displacement_events() {
@@ -296,8 +296,8 @@ fn root_motion_clip_publishes_displacement_events() {
     world.step();
 
     let events = world
-        .events::<crate::assets::RootMotion>()
-        .expect("RootMotion queue exists");
+        .events::<crate::assets::RootMotionEvent>()
+        .expect("RootMotionEvent queue exists");
     let mut cursor = crate::ecs::EventCursor::default();
     let motions: Vec<_> = events.read(&mut cursor).collect();
     assert!(!motions.is_empty(), "expected displacement events");
@@ -345,8 +345,8 @@ fn root_motion_events_emit_in_handle_order() {
     world.step();
 
     let events = world
-        .events::<crate::assets::RootMotion>()
-        .expect("RootMotion queue exists");
+        .events::<crate::assets::RootMotionEvent>()
+        .expect("RootMotionEvent queue exists");
     let mut cursor = crate::ecs::EventCursor::default();
     let order: Vec<_> = events.read(&mut cursor).map(|m| m.target).collect();
     assert_eq!(order.len(), handles.len(), "one event per moving target");
@@ -407,7 +407,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     stand.asset_id = intern("hero_ik_stand");
     world.add_component(stand);
 
-    let mut graph: AnimGraph = serde_json::from_value(serde_json::json!({
+    let mut graph: AnimationGraph = serde_json::from_value(serde_json::json!({
         "target": "hero_ik",
         "states": [{"name": "stand", "clip": "hero_ik_stand"}],
         "ik_chains": [{"joints": ["hip", "knee", "foot"], "pole": [0.0, 0.0, 1.0]}],
@@ -531,7 +531,7 @@ fn graph_freezes_while_menu_open() {
     world.step();
 
     world.insert_resource(crate::ecs::MenuActive(true));
-    for p in world.query_mut::<AnimParams>() {
+    for p in world.query_mut::<AnimationParams>() {
         p.set(0, 2.0);
     }
     world.step();

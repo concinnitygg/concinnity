@@ -1,7 +1,7 @@
 // src/gfx/animation/ik.rs
 //
 // Foot-pinning IK for graph targets. At install time each authored
-// `GraphIkChain` resolves its joint names against the target's skeleton and
+// `AnimationIkChain` resolves its joint names against the target's skeleton and
 // its weight parameter against the graph's declaration order; per frame the
 // chain's ground probe (answered by PhysicsSystem, one frame behind) turns
 // into a mesh-space target for the analytic two-bone solve, applied to the
@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::assets::{AnimParams, CharacterRig, GraphIkChain, GroundProbe, GroundProbes};
+use crate::assets::{AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};
 use crate::gfx::ik::TwoBoneChain;
@@ -37,14 +37,14 @@ pub(super) struct IkChainRuntime {
 // name never takes down the rest.
 pub(super) fn resolve_chains(
     graph_id: AssetId,
-    authored: &[GraphIkChain],
-    parameters: &[crate::assets::GraphParam],
+    authored: &[AnimationIkChain],
+    parameters: &[crate::assets::AnimationParam],
     skeleton: &Skeleton,
 ) -> Vec<IkChainRuntime> {
     let mut chains = Vec::new();
     for (i, c) in authored.iter().enumerate() {
         let fail = |detail: String| {
-            tracing::warn!("AnimGraph {graph_id}: ik_chains[{i}] {detail}; chain disabled");
+            tracing::warn!("AnimationGraph {graph_id}: ik_chains[{i}] {detail}; chain disabled");
         };
         if c.joints.len() != 3 {
             fail(format!("names {} joints, expected 3", c.joints.len()));
@@ -152,7 +152,7 @@ fn refresh_target(
     else {
         return false;
     };
-    let params = ctx.query::<AnimParams>().find(|p| p.target == target);
+    let params = ctx.query::<AnimationParams>().find(|p| p.target == target);
     let probes = ctx.query::<GroundProbes>().find(|p| p.target == target);
     let frame = out.entry(target).or_default();
     frame.model = model;
@@ -283,7 +283,7 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::GraphParam;
+    use crate::assets::AnimationParam;
     use crate::gfx::skinning::{Joint, JointPose, Skeleton};
 
     // A valid hip -> knee -> foot chain (each the direct child of the last),
@@ -302,8 +302,8 @@ mod tests {
         ])
     }
 
-    fn chain(joints: &[&str], weight_parameter: &str) -> GraphIkChain {
-        GraphIkChain {
+    fn chain(joints: &[&str], weight_parameter: &str) -> AnimationIkChain {
+        AnimationIkChain {
             joints: joints.iter().map(|s| s.to_string()).collect(),
             pole: [0.0, 0.0, 1.0],
             weight_parameter: weight_parameter.to_string(),
@@ -336,11 +336,11 @@ mod tests {
     fn resolves_the_weight_parameter_to_its_declaration_index() {
         let skel = leg_skeleton();
         let params = [
-            GraphParam {
+            AnimationParam {
                 name: "unused".to_string(),
                 default: 0.0,
             },
-            GraphParam {
+            AnimationParam {
                 name: "ik".to_string(),
                 default: 1.0,
             },

@@ -15,7 +15,7 @@ pub use concinnity_core::gfx::{
 pub use concinnity_cpu::gfx::mesh_payload;
 
 // The rest of what the render-prep modules reach by their `crate::` paths:
-// asset data types (`Decal`, `ParticleEmitter`, `Key`, ...) and the stable
+// asset data types (`Decal`, `ParticleEmitter`, `InputKey`, ...) and the stable
 // `AssetId` newtype from the vocabulary, and from the compute crate the
 // environment-map bake the reflection-probe payload builder calls plus the
 // glass-quad generator.

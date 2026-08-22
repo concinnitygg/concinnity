@@ -13,9 +13,12 @@ use crate::{AssetId, AudioBus, AudioClipHandle, de_opt_asset_ref, de_opt_audio_c
 /// `rolloff` between `min_distance` and `max_distance`, and is inaudible
 /// beyond `max_distance`.
 ///
-/// ```jsonl
-/// {"name":"fire_sound","type":"AudioEmitter","args":{"clip":"fire_loop","position":[6.0,4.0,-6.0]}}
-/// {"name":"waterfall","type":"AudioEmitter","args":{"clip":"falls","position":[0,2,8],"min_distance":3.0,"max_distance":80.0,"rolloff":"linear"}}
+/// ```rust
+/// # use concinnity_asset::AudioEmitter;
+/// AudioEmitter {
+///     position: [6.0, 4.0, -6.0],
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

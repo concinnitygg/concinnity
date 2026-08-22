@@ -244,8 +244,8 @@ impl StorySystem {
             scroll -= 1;
         }
         match frame.captured_key {
-            Some(Key::Down) => scroll += 1,
-            Some(Key::Up) => scroll -= 1,
+            Some(InputKey::Down) => scroll += 1,
+            Some(InputKey::Up) => scroll -= 1,
             _ => {}
         }
         let max = self.max_slot_scroll() as i32;

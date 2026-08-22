@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::assets::{
-    Behavior, Expr, Literal, LocalDecl, Node, Prop, QueryDecl, Target, Transform, VarDecl,
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
+    EntityTarget, Prop, Transform, VariableDecl,
 };
 use crate::blob::BlobData;
 use crate::ecs::{Arena, ComponentStorage, EventCursor, FrameContext, Resources};
@@ -81,10 +82,10 @@ fn spawn_prop(world: &mut TestWorld, position: [f32; 3]) -> Entity {
     entity
 }
 
-fn set_var(var: &str, value: i32, add: bool) -> Node {
-    Node::Set {
+fn set_var(var: &str, value: i32, add: bool) -> BehaviorNode {
+    BehaviorNode::Set {
         var: var.to_string(),
-        value: Expr::Int(value),
+        value: BehaviorExpr::Int(value),
         add,
     }
 }
@@ -165,13 +166,13 @@ fn locals_are_per_entity() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
-        locals: vec![LocalDecl {
+        locals: vec![BehaviorLocal {
             name: "count".into(),
-            value: Literal::Int(0),
+            value: BehaviorLiteral::Int(0),
         }],
-        body: vec![Node::SetLocal {
+        body: vec![BehaviorNode::SetLocal {
             local: "count".into(),
-            value: Expr::Int(1),
+            value: BehaviorExpr::Int(1),
             add: true,
         }],
         ..Default::default()
@@ -196,11 +197,11 @@ fn self_moves_only_its_own_entity() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
-        body: vec![Node::SetTransform {
-            entity: Expr::SelfEntity,
-            position: Some(Expr::Add(
-                Box::new(Expr::Position(Box::new(Expr::SelfEntity))),
-                Box::new(Expr::Vec3([1.0, 0.0, 0.0])),
+        body: vec![BehaviorNode::SetTransform {
+            entity: BehaviorExpr::SelfEntity,
+            position: Some(BehaviorExpr::Add(
+                Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                Box::new(BehaviorExpr::Vec3([1.0, 0.0, 0.0])),
             )),
             rotation_deg: None,
             scale: None,
@@ -221,13 +222,13 @@ fn self_moves_only_its_own_entity() {
 fn a_query_counts_matching_entities() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
-        body: vec![Node::Set {
+        body: vec![BehaviorNode::Set {
             var: "n".into(),
-            value: Expr::Count("props".into()),
+            value: BehaviorExpr::Count("props".into()),
             add: false,
         }],
         ..Default::default()
@@ -244,16 +245,16 @@ fn a_query_counts_matching_entities() {
 fn for_each_binds_every_queried_entity() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
-        body: vec![Node::ForEach {
+        body: vec![BehaviorNode::ForEach {
             query: "props".into(),
             bind: "e".into(),
-            body: vec![Node::SetTransform {
-                entity: Expr::Bind("e".into()),
-                position: Some(Expr::Vec3([5.0, 0.0, 0.0])),
+            body: vec![BehaviorNode::SetTransform {
+                entity: BehaviorExpr::Bind("e".into()),
+                position: Some(BehaviorExpr::Vec3([5.0, 0.0, 0.0])),
                 rotation_deg: None,
                 scale: None,
             }],
@@ -275,22 +276,22 @@ fn distance_gates_a_condition() {
     // Fires only while the two props are closer than 5 units.
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
         body: vec![
-            Node::Let {
+            BehaviorNode::Let {
                 name: "first".into(),
-                value: Expr::First("props".into()),
+                value: BehaviorExpr::First("props".into()),
             },
-            Node::If {
-                cond: Expr::Lt(
-                    Box::new(Expr::Distance(
-                        Box::new(Expr::Bind("first".into())),
-                        Box::new(Expr::Named(Some(AssetId(7)))),
+            BehaviorNode::If {
+                cond: BehaviorExpr::Lt(
+                    Box::new(BehaviorExpr::Distance(
+                        Box::new(BehaviorExpr::Bind("first".into())),
+                        Box::new(BehaviorExpr::Named(Some(AssetId(7)))),
                     )),
-                    Box::new(Expr::Float(5.0)),
+                    Box::new(BehaviorExpr::Float(5.0)),
                 ),
                 then: vec![set_var("near", 1, false)],
                 otherwise: vec![set_var("near", 0, false)],
@@ -324,8 +325,8 @@ fn despawn_of_self_addresses_the_entity_not_a_name() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
-        body: vec![Node::Despawn {
-            target: Expr::SelfEntity,
+        body: vec![BehaviorNode::Despawn {
+            target: BehaviorExpr::SelfEntity,
         }],
         ..Default::default()
     }]);
@@ -334,12 +335,12 @@ fn despawn_of_self_addresses_the_entity_not_a_name() {
 
     tick(&mut sys, &mut world, 0.016);
     let mut cursor = EventCursor::default();
-    let requests: Vec<Target> = world
+    let requests: Vec<EntityTarget> = world
         .ctx()
         .events::<DespawnRequest>()
         .map(|e| e.read(&mut cursor).map(|r| r.target).collect())
         .unwrap_or_default();
-    assert_eq!(requests, vec![Target::Entity(entity)]);
+    assert_eq!(requests, vec![EntityTarget::Entity(entity)]);
 }
 
 #[test]
@@ -406,7 +407,7 @@ fn spawn_emits_a_request_and_binds_nothing_this_tick() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Start,
         body: vec![
-            Node::Spawn {
+            BehaviorNode::Spawn {
                 template: Some(AssetId(3)),
                 position: [0.0, 1.0, 0.0],
                 rotation_deg: [0.0; 3],
@@ -416,8 +417,8 @@ fn spawn_emits_a_request_and_binds_nothing_this_tick() {
             },
             // The entity does not exist yet, so this despawn is skipped
             // rather than acting on a stale handle.
-            Node::Despawn {
-                target: Expr::Bind("made".into()),
+            BehaviorNode::Despawn {
+                target: BehaviorExpr::Bind("made".into()),
             },
         ],
         ..Default::default()
@@ -482,7 +483,7 @@ fn query_order_is_stable_across_a_removal() {
     // Column order shifts on swap-remove; the resolved query must not.
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
@@ -506,7 +507,7 @@ fn query_order_is_stable_across_a_removal() {
 fn a_query_intersects_every_declared_component() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "placed".into(),
             has: vec!["Prop".into(), "Transform".into()],
         }],
@@ -533,13 +534,13 @@ fn each_run_gets_back_exactly_the_effects_it_produced() {
             asset_id: AssetId(1),
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
-            locals: vec![LocalDecl {
+            locals: vec![BehaviorLocal {
                 name: "one".into(),
-                value: Literal::Int(0),
+                value: BehaviorLiteral::Int(0),
             }],
-            body: vec![Node::SetLocal {
+            body: vec![BehaviorNode::SetLocal {
                 local: "one".into(),
-                value: Expr::Int(1),
+                value: BehaviorExpr::Int(1),
                 add: true,
             }],
             ..Default::default()
@@ -548,19 +549,19 @@ fn each_run_gets_back_exactly_the_effects_it_produced() {
             asset_id: AssetId(2),
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
-            locals: vec![LocalDecl {
+            locals: vec![BehaviorLocal {
                 name: "many".into(),
-                value: Literal::Int(0),
+                value: BehaviorLiteral::Int(0),
             }],
             body: vec![
-                Node::SetLocal {
+                BehaviorNode::SetLocal {
                     local: "many".into(),
-                    value: Expr::Int(10),
+                    value: BehaviorExpr::Int(10),
                     add: true,
                 },
-                Node::SetLocal {
+                BehaviorNode::SetLocal {
                     local: "many".into(),
-                    value: Expr::Int(100),
+                    value: BehaviorExpr::Int(100),
                     add: true,
                 },
             ],
@@ -590,20 +591,20 @@ fn alive_follows_the_world_not_this_ticks_queries() {
     // rather than whether anything this tick happens to name it.
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
         body: vec![
             // An empty query yields nothing and skips this node, so the latched
             // handle survives every tick after the entity stops matching.
-            Node::Set {
+            BehaviorNode::Set {
                 var: "target".into(),
-                value: Expr::First("props".into()),
+                value: BehaviorExpr::First("props".into()),
                 add: false,
             },
-            Node::If {
-                cond: Expr::Alive(Box::new(Expr::Var("target".into()))),
+            BehaviorNode::If {
+                cond: BehaviorExpr::Alive(Box::new(BehaviorExpr::Var("target".into()))),
                 then: vec![set_var("still_here", 1, false)],
                 otherwise: vec![set_var("still_here", 0, false)],
             },
@@ -642,13 +643,13 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
     let mover = Behavior {
         asset_id: AssetId(1),
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
-        body: vec![Node::SetTransform {
-            entity: Expr::First("props".into()),
-            position: Some(Expr::Vec3([9.0, 0.0, 0.0])),
+        body: vec![BehaviorNode::SetTransform {
+            entity: BehaviorExpr::First("props".into()),
+            position: Some(BehaviorExpr::Vec3([9.0, 0.0, 0.0])),
             rotation_deg: None,
             scale: None,
         }],
@@ -657,13 +658,13 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
     let reader = Behavior {
         asset_id: AssetId(2),
         on: BehaviorSource::Tick,
-        queries: vec![QueryDecl {
+        queries: vec![BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],
-        body: vec![Node::Set {
+        body: vec![BehaviorNode::Set {
             var: "seen_x".into(),
-            value: Expr::Position(Box::new(Expr::First("props".into()))),
+            value: BehaviorExpr::Position(Box::new(BehaviorExpr::First("props".into()))),
             add: false,
         }],
         ..Default::default()
@@ -720,15 +721,15 @@ fn persisting_system(world: &mut TestWorld, dir: &std::path::Path) -> BehaviorSy
 fn counter_behavior() -> Behavior {
     Behavior {
         asset_id: AssetId(1),
-        body: vec![set_var("visits", 1, true), Node::Save],
+        body: vec![set_var("visits", 1, true), BehaviorNode::Save],
         once: true,
         ..Default::default()
     }
 }
 
-fn despawn_named(target: u32) -> Node {
-    Node::Despawn {
-        target: Expr::Named(Some(AssetId(target))),
+fn despawn_named(target: u32) -> BehaviorNode {
+    BehaviorNode::Despawn {
+        target: BehaviorExpr::Named(Some(AssetId(target))),
     }
 }
 
@@ -871,15 +872,15 @@ fn interact_fires_on_matching_press_only() {
 
     world
         .ctx()
-        .events_mut::<InteractSignal>()
-        .send(InteractSignal { target: AssetId(9) });
+        .events_mut::<InteractEvent>()
+        .send(InteractEvent { target: AssetId(9) });
     sys.step(&mut world.ctx());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
 
     world
         .ctx()
-        .events_mut::<InteractSignal>()
-        .send(InteractSignal { target: AssetId(4) });
+        .events_mut::<InteractEvent>()
+        .send(InteractEvent { target: AssetId(4) });
     sys.step(&mut world.ctx());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
 }
@@ -889,11 +890,11 @@ fn show_and_hide_send_visibility_requests() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Start,
         body: vec![
-            Node::Hide {
-                target: Expr::Named(Some(AssetId(3))),
+            BehaviorNode::Hide {
+                target: BehaviorExpr::Named(Some(AssetId(3))),
             },
-            Node::Show {
-                target: Expr::Named(Some(AssetId(3))),
+            BehaviorNode::Show {
+                target: BehaviorExpr::Named(Some(AssetId(3))),
             },
         ],
         ..Default::default()
@@ -920,7 +921,7 @@ fn show_and_hide_send_visibility_requests() {
 fn story_sends_the_playback_command() {
     let mut world = world_with(vec![Behavior {
         on: BehaviorSource::Start,
-        body: vec![Node::Story(StoryPlayback::Continue)],
+        body: vec![BehaviorNode::Story(StoryPlayback::Continue)],
         ..Default::default()
     }]);
     let mut sys = system(&mut world);
@@ -978,8 +979,8 @@ fn an_edited_behavior_loses_its_persisted_fired_flag() {
 fn branching_behavior() -> Behavior {
     Behavior {
         asset_id: AssetId(7),
-        body: vec![Node::If {
-            cond: Expr::Bool(true),
+        body: vec![BehaviorNode::If {
+            cond: BehaviorExpr::Bool(true),
             then: vec![set_var("n", 1, true)],
             otherwise: vec![set_var("n", 5, true)],
         }],
@@ -1081,13 +1082,13 @@ fn tracing_surfaces_the_requested_entitys_locals() {
         asset_id: AssetId(9),
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
-        locals: vec![LocalDecl {
+        locals: vec![BehaviorLocal {
             name: "count".into(),
-            value: Literal::Int(0),
+            value: BehaviorLiteral::Int(0),
         }],
-        body: vec![Node::SetLocal {
+        body: vec![BehaviorNode::SetLocal {
             local: "count".into(),
-            value: Expr::Int(1),
+            value: BehaviorExpr::Int(1),
             add: true,
         }],
         ..Default::default()
@@ -1191,7 +1192,7 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
     // A `story` node emits unconditionally; `named` targets would need a live
     // entity and a name index this bare world has not built.
     world.add_component(Behavior {
-        body: vec![Node::Story(StoryPlayback::Start)],
+        body: vec![BehaviorNode::Story(StoryPlayback::Start)],
         ..Default::default()
     });
     world.start().unwrap();
@@ -1219,12 +1220,12 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
 
 // Typed world variables, declared by the world's Variables asset.
 
-fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, Literal)>) -> TestWorld {
+fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, BehaviorLiteral)>) -> TestWorld {
     let mut world = world_with(behaviors);
     world.components.push_typed(Variables {
         vars: vars
             .into_iter()
-            .map(|(name, value)| VarDecl {
+            .map(|(name, value)| VariableDecl {
                 name: name.to_string(),
                 value,
             })
@@ -1242,7 +1243,7 @@ fn a_declared_variable_starts_at_its_declared_value() {
             body: vec![],
             ..Default::default()
         }],
-        vec![("health", Literal::Float(100.0))],
+        vec![("health", BehaviorLiteral::Float(100.0))],
     );
     let sys = system(&mut world);
     assert_eq!(var_val(&sys, "health"), Val::Float(100.0));
@@ -1253,14 +1254,14 @@ fn a_float_variable_holds_a_float() {
     let mut world = world_with_vars(
         vec![Behavior {
             on: BehaviorSource::Start,
-            body: vec![Node::Set {
+            body: vec![BehaviorNode::Set {
                 var: "health".into(),
-                value: Expr::Float(-2.5),
+                value: BehaviorExpr::Float(-2.5),
                 add: true,
             }],
             ..Default::default()
         }],
-        vec![("health", Literal::Float(100.0))],
+        vec![("health", BehaviorLiteral::Float(100.0))],
     );
     let mut sys = system(&mut world);
 
@@ -1278,15 +1279,15 @@ fn a_vec3_variable_feeds_a_transform() {
         vec![Behavior {
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
-            body: vec![Node::SetTransform {
-                entity: Expr::SelfEntity,
-                position: Some(Expr::Var("spawn".into())),
+            body: vec![BehaviorNode::SetTransform {
+                entity: BehaviorExpr::SelfEntity,
+                position: Some(BehaviorExpr::Var("spawn".into())),
                 rotation_deg: None,
                 scale: None,
             }],
             ..Default::default()
         }],
-        vec![("spawn", Literal::Vec3([1.0, 2.0, 3.0]))],
+        vec![("spawn", BehaviorLiteral::Vec3([1.0, 2.0, 3.0]))],
     );
     let entity = spawn_prop(&mut world, [0.0; 3]);
     let mut sys = system(&mut world);
@@ -1306,7 +1307,7 @@ fn an_undeclared_variable_is_still_an_integer() {
             body: vec![set_var("loose", 3, true)],
             ..Default::default()
         }],
-        vec![("health", Literal::Float(1.0))],
+        vec![("health", BehaviorLiteral::Float(1.0))],
     );
     let mut sys = system(&mut world);
 
@@ -1321,22 +1322,28 @@ fn a_typed_variable_survives_a_save_and_restore() {
         asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![
-            Node::Set {
+            BehaviorNode::Set {
                 var: "health".into(),
-                value: Expr::Float(-25.0),
+                value: BehaviorExpr::Float(-25.0),
                 add: true,
             },
-            Node::Save,
+            BehaviorNode::Save,
         ],
         ..Default::default()
     };
 
-    let mut world = world_with_vars(vec![author()], vec![("health", Literal::Float(100.0))]);
+    let mut world = world_with_vars(
+        vec![author()],
+        vec![("health", BehaviorLiteral::Float(100.0))],
+    );
     let mut sys = persisting_system(&mut world, &dir);
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var_val(&sys, "health"), Val::Float(75.0));
 
-    let mut world2 = world_with_vars(vec![author()], vec![("health", Literal::Float(100.0))]);
+    let mut world2 = world_with_vars(
+        vec![author()],
+        vec![("health", BehaviorLiteral::Float(100.0))],
+    );
     let sys2 = persisting_system(&mut world2, &dir);
     assert_eq!(
         var_val(&sys2, "health"),
@@ -1353,16 +1360,16 @@ fn a_retyped_variable_ignores_its_stale_save() {
         asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![
-            Node::Set {
+            BehaviorNode::Set {
                 var: "v".into(),
-                value: Expr::Float(7.5),
+                value: BehaviorExpr::Float(7.5),
                 add: false,
             },
-            Node::Save,
+            BehaviorNode::Save,
         ],
         ..Default::default()
     };
-    let mut world = world_with_vars(vec![saver], vec![("v", Literal::Float(0.0))]);
+    let mut world = world_with_vars(vec![saver], vec![("v", BehaviorLiteral::Float(0.0))]);
     let mut sys = persisting_system(&mut world, &dir);
     tick(&mut sys, &mut world, 0.016);
 
@@ -1371,10 +1378,10 @@ fn a_retyped_variable_ignores_its_stale_save() {
     let mut world2 = world_with_vars(
         vec![Behavior {
             asset_id: AssetId(1),
-            body: vec![Node::Save],
+            body: vec![BehaviorNode::Save],
             ..Default::default()
         }],
-        vec![("v", Literal::Int(3))],
+        vec![("v", BehaviorLiteral::Int(3))],
     );
     let sys2 = persisting_system(&mut world2, &dir);
     assert_eq!(var_val(&sys2, "v"), Val::Int(3));
@@ -1392,11 +1399,11 @@ fn parallel_eval_matches_serial_state() {
             scope: vec!["Prop".into()],
             body: vec![
                 set_var("total", 1, true),
-                Node::SetTransform {
-                    entity: Expr::SelfEntity,
-                    position: Some(Expr::Add(
-                        Box::new(Expr::Position(Box::new(Expr::SelfEntity))),
-                        Box::new(Expr::Vec3([0.25, 0.0, 0.0])),
+                BehaviorNode::SetTransform {
+                    entity: BehaviorExpr::SelfEntity,
+                    position: Some(BehaviorExpr::Add(
+                        Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                        Box::new(BehaviorExpr::Vec3([0.25, 0.0, 0.0])),
                     )),
                     rotation_deg: None,
                     scale: None,
@@ -1406,9 +1413,12 @@ fn parallel_eval_matches_serial_state() {
         };
         let counter = Behavior {
             on: BehaviorSource::Tick,
-            body: vec![Node::Set {
+            body: vec![BehaviorNode::Set {
                 var: "double".into(),
-                value: Expr::Mul(Box::new(Expr::Var("total".into())), Box::new(Expr::Int(2))),
+                value: BehaviorExpr::Mul(
+                    Box::new(BehaviorExpr::Var("total".into())),
+                    Box::new(BehaviorExpr::Int(2)),
+                ),
                 add: false,
             }],
             ..Default::default()

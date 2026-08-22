@@ -303,7 +303,7 @@ impl PayloadMorphs {
 }
 
 /// One joint of a skinned mesh's bind-pose skeleton, as stored in the
-/// compiled payload. Mirrors `assets::skinned_mesh::JointDef` but lives in
+/// compiled payload. Mirrors `assets::skinned_mesh::SkeletonJoint` but lives in
 /// `gfx` so the payload format stays self-contained: the build/runtime
 /// boundaries convert between the two. Parents must appear before their
 /// children, so the runtime can walk the array once when building the

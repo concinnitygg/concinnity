@@ -7,15 +7,13 @@ use alloc::string::String;
 ///
 /// Reference a Font by name from a [TextLabel](#textlabel).
 ///
-/// ```jsonl
-/// {
-///   "type": "Font",
-///   "name": "fps_font",
-///   "args": {
-///     "path": "assets/fonts/JetBrainsMono-Regular.ttf",
-///     "size_px": 20
-///   }
-/// }
+/// ```rust
+/// # use concinnity_asset::Font;
+/// Font {
+///     path: "assets/fonts/JetBrainsMono-Regular.ttf".into(),
+///     size_px: 20,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

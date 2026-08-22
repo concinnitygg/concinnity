@@ -14,11 +14,12 @@ use alloc::vec::Vec;
 /// For terrain-based outdoor scenes the terrain parameters must match the
 /// terrain mesh exactly.
 ///
-/// ```jsonl
-/// // Indoor (flat floor): no PhysicsConfig needed, just declare bodies.
-///
-/// // Outdoor (heightfield terrain):
-/// {"name":"physics","type":"PhysicsConfig","args":{"terrain_mesh":"ground_heightfield_mesh","terrain_offset_y":-0.5}}
+/// ```rust
+/// # use concinnity_asset::PhysicsConfig;
+/// PhysicsConfig {
+///     terrain_offset_y: -0.5,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

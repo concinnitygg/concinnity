@@ -21,10 +21,6 @@ distinct space (a room) parallax-corrects better than one large box. Boxes may
 overlap freely: a surface inside several boxes blends all of them, so reflections
 cross-fade smoothly as the camera moves between probes.
 
-```jsonl
-{"name":"lobby_probe","type":"ReflectionProbe","args":{"position":[0.0,1.7,0.0],"half_extents":[8.0,4.0,8.0]}}
-```
-
 ## Parameters
 
 - `position`: An array of 3 floats. World-space capture point the cubemap is rendered from. Put it at roughly eye height in open space (not inside geometry) for the area it serves. Defaults to `[0.0, 1.7, 0.0]`.

@@ -12,7 +12,7 @@
 // frontmost open panel.
 
 use super::*;
-use crate::assets::Key;
+use crate::assets::InputKey;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).
@@ -158,20 +158,20 @@ impl EditorHook {
             .map(|t| t.caret)
             .unwrap_or(0);
         match input.captured_key {
-            Some(Key::Enter) => {
+            Some(InputKey::Enter) => {
                 self.commit_story_line(world);
                 self.story_line = story::split_line(&mut self.story_lines, self.story_line, caret);
                 self.seed_story_line(world);
                 self.set_story_caret(world, 0);
                 self.ensure_story_visible();
             }
-            Some(Key::Up) if self.story_line > 0 => {
+            Some(InputKey::Up) if self.story_line > 0 => {
                 self.set_story_line(world, self.story_line - 1);
             }
-            Some(Key::Down) if self.story_line + 1 < self.story_lines.len() => {
+            Some(InputKey::Down) if self.story_line + 1 < self.story_lines.len() => {
                 self.set_story_line(world, self.story_line + 1);
             }
-            Some(Key::Backspace) if caret == 0 => {
+            Some(InputKey::Backspace) if caret == 0 => {
                 self.commit_story_line(world);
                 if let Some((line, caret)) =
                     story::join_with_previous(&mut self.story_lines, self.story_line)

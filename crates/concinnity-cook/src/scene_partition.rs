@@ -47,7 +47,7 @@ fn merge(a: Option<Owner>, b: Owner) -> Owner {
 // references them. Resource assets plus the component types that only exist
 // to be referenced (mesh sources and Model). Everything else is a root whose
 // label is fixed -- labels never merge INTO a root, so a logic asset naming a
-// scene prop (an AnimGraph target, a Behavior show/hide) does not drag that
+// scene prop (an AnimationGraph target, a Behavior show/hide) does not drag that
 // prop's resources into the global set.
 fn is_reference_target(type_norm: &str) -> bool {
     concinnity_world::resource_type::ResourceAssetType::all()

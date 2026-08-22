@@ -2,7 +2,7 @@
 //! (binary `.glb` or text `.gltf`, see `crate::gltf_source`) into the engine's
 //! inline mesh / skeleton / animation forms.
 //!
-//! glTF stores a skin's joints in an arbitrary order; this engine's `JointDef`
+//! glTF stores a skin's joints in an arbitrary order; this engine's `SkeletonJoint`
 //! list requires parents before children. Joints are therefore topologically
 //! reordered and a remap table rewrites both each joint's parent index and
 //! every vertex's `JOINTS_0` binding into the new index space.
@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::assets::{JointDef, SkinnedVertexData, VertexData};
+use crate::assets::{SkeletonJoint, SkinnedVertexData, VertexData};
 use crate::gfx::skinning::{JointPose, euler_yxz_from_quat};
 use crate::gltf_source::GltfDoc;
 
@@ -23,7 +23,7 @@ use crate::import::NEUTRAL_COLOR;
 pub(crate) struct ImportedSkinnedMesh {
     pub vertices: Vec<SkinnedVertexData>,
     pub indices: Vec<u16>,
-    pub skeleton: Vec<JointDef>,
+    pub skeleton: Vec<SkeletonJoint>,
     // Morph-target names, one per target; empty when the mesh has none.
     pub(crate) morph_target_names: Vec<String>,
     // Dense target-major deltas: entry `t * vertices.len() + v`.
@@ -309,7 +309,7 @@ pub(crate) fn resolve_source(source: &str) -> String {
 // tables an animation importer needs to resolve a glTF channel target back
 // to a joint in this skeleton.
 pub(crate) struct ImportedSkeleton {
-    pub joints: Vec<JointDef>,
+    pub joints: Vec<SkeletonJoint>,
     // `remap[skin_joint_index] = topologically-sorted index`.
     pub remap: Vec<usize>,
     // `node_to_joint[glTF_node_index] = skin_joint_index`. An animation
@@ -356,7 +356,7 @@ pub(crate) fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton,
         .map(|&sj| {
             let node = &joint_nodes[sj];
             let (translation, rotation, scale) = node.transform().decomposed();
-            JointDef {
+            SkeletonJoint {
                 name: node.name().unwrap_or("").to_string(),
                 parent: parents[sj].map_or(-1, |p| remap[p] as i32),
                 translation,

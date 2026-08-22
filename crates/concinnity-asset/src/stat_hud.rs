@@ -29,16 +29,6 @@ use crate::{AssetId, de_opt_asset_ref};
 /// only needed to restyle the chips or run a HUD without a menu. Declare an
 /// [EngineDefaults](#enginedefaults) with `"hud": false` to remove the
 /// injection entirely.
-///
-/// ```jsonl
-/// {"type":"Font","name":"hud_font","args":{"size_px":20}}
-/// {"type":"TextLabel","name":"fps_chip","args":{"font":"hud_font","x":10,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.18,0.32,0.85],"padding":5}}
-/// {"type":"TextLabel","name":"vram_chip","args":{"font":"hud_font","x":92,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.18,0.32,0.85],"padding":5}}
-/// {"type":"TextLabel","name":"ram_chip","args":{"font":"hud_font","x":192,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.18,0.32,0.85],"padding":5}}
-/// {"type":"TextLabel","name":"ev_chip","args":{"font":"hud_font","x":330,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.18,0.32,0.85],"padding":5}}
-/// {"type":"TextLabel","name":"edr_chip","args":{"font":"hud_font","x":410,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.18,0.32,0.85],"padding":5}}
-/// {"type":"StatHud","name":"hud","args":{"fps_label":"fps_chip","vram_label":"vram_chip","ram_label":"ram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}}
-/// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StatHud {

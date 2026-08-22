@@ -5,10 +5,10 @@
 //! The runtime never runs these -- a baked record is already validated.
 
 use crate::assets::{
-    Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Joint, JointKind,
-    Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
-    SPOT_MAX_ANGLE_DEG, SdfVolume, SpotLight, SpotLightGeometry, VolumetricFog, VoxelChunk,
-    WaterSurface, WaterWave,
+    Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp, Material,
+    ParticleEmitter, PhysicsJoint, PhysicsJointKind, PointLight, Prop, RectAreaLight,
+    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SpotLight, SpotLightGeometry,
+    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
 };
 
 // The wave ceiling lives with the schema in concinnity-asset and is shared with
@@ -151,10 +151,10 @@ pub(crate) fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args
 }
 
-/// Clamp a `Joint`'s authored fields into their valid ranges.
-pub fn joint(mut args: Joint) -> Joint {
+/// Clamp a `PhysicsJoint`'s authored fields into their valid ranges.
+pub fn joint(mut args: PhysicsJoint) -> PhysicsJoint {
     // Normalise the kind string so `to_args` round-trips cleanly.
-    if let Some(k) = JointKind::from_str_norm(&args.kind) {
+    if let Some(k) = PhysicsJointKind::from_str_norm(&args.kind) {
         args.kind = k.as_str().to_string();
     }
     args
@@ -381,7 +381,7 @@ mod tests {
 
         #[test]
         fn deserialises_with_defaults() {
-            let j: Joint = serde_json::from_str("{}").unwrap();
+            let j: PhysicsJoint = serde_json::from_str("{}").unwrap();
             assert_eq!(j.kind, "fixed");
             assert_eq!(j.anchor_a, [0.0, 0.0, 0.0]);
             assert_eq!(j.axis, [0.0, 1.0, 0.0]);
@@ -404,8 +404,8 @@ mod tests {
                 "motor_target_velocity":30.0,
                 "motor_max_force":50.0
             }"#;
-            let j: Joint = serde_json::from_str(json).unwrap();
-            assert_eq!(j.parsed_kind(), JointKind::Revolute);
+            let j: PhysicsJoint = serde_json::from_str(json).unwrap();
+            assert_eq!(j.parsed_kind(), PhysicsJointKind::Revolute);
             assert!(j.body_a.is_some());
             assert!(j.body_b.is_some());
             assert!(j.limits_enabled);
@@ -413,30 +413,39 @@ mod tests {
 
         #[test]
         fn aliases_resolve_to_canonical_kind() {
-            assert_eq!(JointKind::from_str_norm("hinge"), Some(JointKind::Revolute));
-            assert_eq!(JointKind::from_str_norm("WELD"), Some(JointKind::Fixed));
-            assert_eq!(JointKind::from_str_norm("ball"), Some(JointKind::Spherical));
             assert_eq!(
-                JointKind::from_str_norm("slider"),
-                Some(JointKind::Prismatic)
+                PhysicsJointKind::from_str_norm("hinge"),
+                Some(PhysicsJointKind::Revolute)
+            );
+            assert_eq!(
+                PhysicsJointKind::from_str_norm("WELD"),
+                Some(PhysicsJointKind::Fixed)
+            );
+            assert_eq!(
+                PhysicsJointKind::from_str_norm("ball"),
+                Some(PhysicsJointKind::Spherical)
+            );
+            assert_eq!(
+                PhysicsJointKind::from_str_norm("slider"),
+                Some(PhysicsJointKind::Prismatic)
             );
         }
 
         #[test]
         fn from_args_normalises_kind_string() {
             let json = r#"{"kind":"HINGE"}"#;
-            let parsed: Joint = serde_json::from_str(json).unwrap();
+            let parsed: PhysicsJoint = serde_json::from_str(json).unwrap();
             let normalised = super::super::joint(parsed);
             assert_eq!(normalised.kind, "revolute");
         }
 
         #[test]
         fn unknown_kind_falls_back_to_fixed() {
-            let j = Joint {
+            let j = PhysicsJoint {
                 kind: "frumpus".to_string(),
                 ..Default::default()
             };
-            assert_eq!(j.parsed_kind(), JointKind::Fixed);
+            assert_eq!(j.parsed_kind(), PhysicsJointKind::Fixed);
         }
     }
 

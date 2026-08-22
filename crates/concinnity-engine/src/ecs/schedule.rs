@@ -209,12 +209,15 @@ pub(crate) fn fps_counter(world: &World) -> Option<SystemAsset> {
 }
 
 // AnimationSystem: present whenever the world declares any `Animation` or
-// `AnimGraph`. It drains both at init and writes `SkeletonPose` each
+// `AnimationGraph`. It drains both at init and writes `SkeletonPose` each
 // frame. (A graph without clips is a build error, so the second check
 // only matters for hand-assembled worlds.)
 pub(crate) fn animation(world: &World) -> Option<SystemAsset> {
     let declared = world.query::<crate::assets::Animation>().next().is_some()
-        || world.query::<crate::assets::AnimGraph>().next().is_some();
+        || world
+            .query::<crate::assets::AnimationGraph>()
+            .next()
+            .is_some();
     declared.then(|| crate::gfx::animation::AnimationSystem::new().into())
 }
 

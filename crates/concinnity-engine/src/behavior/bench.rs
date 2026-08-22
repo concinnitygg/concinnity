@@ -12,7 +12,7 @@
 // instead of the behaviors is the regression.
 
 use super::{BehaviorSystem, Snapshot};
-use crate::assets::{Behavior, BehaviorSource, Expr, Node, Prop, Transform};
+use crate::assets::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, Transform};
 use crate::bench::{BenchWorld, bench};
 use crate::ecs::System;
 
@@ -25,9 +25,9 @@ const LARGE_WORLD: usize = 20_000;
 fn counter(i: usize) -> Behavior {
     Behavior {
         on: BehaviorSource::Tick,
-        body: vec![Node::Set {
+        body: vec![BehaviorNode::Set {
             var: format!("acc{i}"),
-            value: Expr::Int(1),
+            value: BehaviorExpr::Int(1),
             add: true,
         }],
         ..Default::default()

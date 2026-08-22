@@ -28,7 +28,7 @@
 //     previous-frame `desired_move` (a one-frame-lagged resolution).
 //   * Cameras and Story before Audio: the listener reads the camera, and a
 //     `PlayCue` page audio is heard the same tick.
-// Event-carried couplings (RootMotion, GroundProbes, SettingCommand) are
+// Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
 // order-robust thanks to the event store's two-frame retention.
 
 use crate::ecs::{PipelineContext, StepResult, System, schedule};
@@ -120,7 +120,7 @@ crate::define_systems! {
     },
     AnimationSystem => crate::gfx::animation::AnimationSystem {
         gate: schedule::animation,
-        present_when: "the world declares any Animation or AnimGraph",
+        present_when: "the world declares any Animation or AnimationGraph",
         after: [OverlaySystem],
         before: [],
     },

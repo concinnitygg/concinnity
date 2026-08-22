@@ -14,8 +14,12 @@ use alloc::string::String;
 ///   - `.cube`  Adobe Cube LUT (plain-text interchange format).
 ///   - `.png`   A horizontal slice strip: `(n*n)` wide by `n` tall.
 ///
-/// ```jsonl
-/// {"name":"grade","type":"ColorLut","args":{"source":"luts/cinematic_warm.cube"}}
+/// ```rust
+/// # use concinnity_asset::ColorLut;
+/// ColorLut {
+///     source: "luts/cinematic_warm.cube".into(),
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

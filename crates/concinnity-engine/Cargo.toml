@@ -10,7 +10,6 @@ publish = false
 name = "concinnity_engine"
 crate-type = ["rlib"]
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # Build the macOS or Windows client against the Vulkan backend instead of the

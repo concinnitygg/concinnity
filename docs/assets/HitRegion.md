@@ -9,20 +9,6 @@ referenced [TextLabel](TextLabel.md) (colour and/or scale).
 
 The cursor must be free (not captured for camera control) for events to fire.
 
-```jsonl
-{
-  "name": "btn_start",
-  "type": "HitRegion",
-  "args": {
-    "x": 430, "y": 330, "width": 220, "height": 40,
-    "label": "scene_menu_start",
-    "hover_color": [1.0, 0.85, 0.3],
-    "hover_scale": 1.08,
-    "action": "scene:scene_game"
-  }
-}
-```
-
 ## Parameters
 
 - `x`: A float. Left edge of the region in window pixels. Defaults to `0.0`.

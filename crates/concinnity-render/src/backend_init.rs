@@ -5,9 +5,7 @@
 //! selected at compile time (Metal / DirectX / Vulkan). Every backend receives
 //! the same struct; each reads the fields its feature set consumes.
 
-use crate::assets::{
-    GlassPanel, SdfVolume, ShadowUpdate, UpscalerBackend, WaterSurface, WindowArgs,
-};
+use crate::assets::{GlassPanel, SdfVolume, ShadowUpdate, UpscalerBackend, WaterSurface, Window};
 use crate::auto_exposure::AutoExposureSettings;
 use crate::decal::DecalRecord;
 use crate::mesh_payload::Vertex;
@@ -163,7 +161,7 @@ pub struct WorldFx {
 /// init after the world's assets have been drained and settings resolved.
 pub struct BackendInit<'a> {
     /// The window the backend opens.
-    pub window: &'a WindowArgs,
+    pub window: &'a Window,
     /// Debug-layer toggle for the DirectX / Vulkan validation layers.
     pub validation: bool,
     /// Frames the backend keeps in flight.
@@ -279,7 +277,7 @@ impl<'a> BackendInit<'a> {
     /// This is the startup error screen's path, which has to stand up a window
     /// with no compiled world data at all. Keeping it here means the field
     /// defaulting is maintained beside the struct it fills.
-    pub fn minimal(window: &'a WindowArgs, text_atlases: Vec<(u32, u32, Vec<u8>)>) -> Self {
+    pub fn minimal(window: &'a Window, text_atlases: Vec<(u32, u32, Vec<u8>)>) -> Self {
         let mut init = Self {
             window,
             validation: false,
@@ -464,7 +462,7 @@ mod tests {
 
     #[test]
     fn minimal_carries_only_a_window_and_its_atlases() {
-        let window = WindowArgs::default();
+        let window = Window::default();
         let atlas = vec![(2u32, 2u32, vec![255u8; 2 * 2 * 4])];
         let init = BackendInit::minimal(&window, atlas);
 

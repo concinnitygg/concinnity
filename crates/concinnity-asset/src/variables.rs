@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::AssetId;
-use crate::behavior::Literal;
+use crate::behavior::BehaviorLiteral;
 
 /// The world's shared variables: the state [Behavior](#behavior)s read with
 /// `var` and write with `set`, and the state a `save` node persists.
@@ -19,14 +19,6 @@ use crate::behavior::Literal;
 /// Variables are world-scoped and shared. Per-entity state belongs in a
 /// behavior's `locals`, which are typed the same way but private to one entity
 /// and never persisted.
-///
-/// ```jsonl
-/// {"name":"world_vars","type":"Variables","args":{"vars":[
-///   {"name":"visits","value":{"int":0}},
-///   {"name":"health","value":{"float":100.0}},
-///   {"name":"spawn_point","value":{"vec3":[0,1,0]}}
-/// ]}}
-/// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Variables {
@@ -34,18 +26,18 @@ pub struct Variables {
     #[serde(skip)]
     pub asset_id: AssetId,
     /// Every variable the world declares.
-    pub vars: Vec<VarDecl>,
+    pub vars: Vec<VariableDecl>,
 }
 
 /// One variable declared by the world's [Variables](#variables). The declared
 /// value fixes both the variable's type and the value it holds at world start.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct VarDecl {
+pub struct VariableDecl {
     /// The name behaviors read and write the variable by.
     pub name: String,
     /// The variable's type and starting value.
-    pub value: Literal,
+    pub value: BehaviorLiteral,
 }
 
 #[cfg(test)]
@@ -66,8 +58,8 @@ mod tests {
         .expect("variables parse");
         assert_eq!(v.vars.len(), 2);
         assert_eq!(v.vars[0].name, "health");
-        assert_eq!(v.vars[0].value, Literal::Float(100.0));
-        assert_eq!(v.vars[1].value, Literal::Vec3([0.0, 1.0, 0.0]));
+        assert_eq!(v.vars[0].value, BehaviorLiteral::Float(100.0));
+        assert_eq!(v.vars[1].value, BehaviorLiteral::Vec3([0.0, 1.0, 0.0]));
     }
 
     #[test]
@@ -77,6 +69,6 @@ mod tests {
         let bytes = postcard::to_allocvec(&v).expect("encodes");
         let back: Variables = postcard::from_bytes(&bytes).expect("decodes");
         assert_eq!(back.vars[0].name, "n");
-        assert_eq!(back.vars[0].value, Literal::Int(3));
+        assert_eq!(back.vars[0].value, BehaviorLiteral::Int(3));
     }
 }

@@ -12,8 +12,8 @@
 // as world state.
 
 use crate::assets::{
-    Behavior, BehaviorSource, BodyDynamics, Collider, Expr, Node, PhysicsConfig, Prop,
-    PropCollider, Transform,
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
+    Prop, PropCollider, Transform,
 };
 use crate::ecs::{ScheduleMode, StepResult, World};
 
@@ -54,11 +54,11 @@ fn build_world() -> World {
     world.add_component(Behavior {
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
-        body: vec![Node::SetTransform {
-            entity: Expr::SelfEntity,
-            position: Some(Expr::Add(
-                Box::new(Expr::Position(Box::new(Expr::SelfEntity))),
-                Box::new(Expr::Vec3([0.01, 0.0, 0.0])),
+        body: vec![BehaviorNode::SetTransform {
+            entity: BehaviorExpr::SelfEntity,
+            position: Some(BehaviorExpr::Add(
+                Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                Box::new(BehaviorExpr::Vec3([0.01, 0.0, 0.0])),
             )),
             rotation_deg: None,
             scale: None,
@@ -69,9 +69,9 @@ fn build_world() -> World {
     // tick, so their relative order is observable in `pace`.
     world.add_component(Behavior {
         on: BehaviorSource::Tick,
-        body: vec![Node::Set {
+        body: vec![BehaviorNode::Set {
             var: "beat".into(),
-            value: Expr::Int(1),
+            value: BehaviorExpr::Int(1),
             add: true,
         }],
         ..Default::default()
@@ -79,19 +79,22 @@ fn build_world() -> World {
     world.add_component(Behavior {
         on: BehaviorSource::Tick,
         body: vec![
-            Node::Set {
+            BehaviorNode::Set {
                 var: "pace".into(),
-                value: Expr::Mul(Box::new(Expr::Var("beat".into())), Box::new(Expr::Int(3))),
+                value: BehaviorExpr::Mul(
+                    Box::new(BehaviorExpr::Var("beat".into())),
+                    Box::new(BehaviorExpr::Int(3)),
+                ),
                 add: false,
             },
-            Node::SetTransform {
-                entity: Expr::First("props".into()),
+            BehaviorNode::SetTransform {
+                entity: BehaviorExpr::First("props".into()),
                 position: None,
-                rotation_deg: Some(Expr::Vec3([0.0, 1.0, 0.0])),
+                rotation_deg: Some(BehaviorExpr::Vec3([0.0, 1.0, 0.0])),
                 scale: None,
             },
         ],
-        queries: vec![crate::assets::QueryDecl {
+        queries: vec![crate::assets::BehaviorQuery {
             name: "props".into(),
             has: vec!["Prop".into()],
         }],

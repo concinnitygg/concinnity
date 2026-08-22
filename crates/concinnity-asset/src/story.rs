@@ -184,7 +184,7 @@ pub struct StoryPage {
     pub speaker: Option<StorySpeaker>,
     /// The dialog text, pre-wrapped with explicit newlines.
     pub text: String,
-    /// Node index advancing jumps to, overriding the default next-page /
+    /// BehaviorNode index advancing jumps to, overriding the default next-page /
     /// fall-through order.
     pub jump: Option<u32>,
     /// Music current at this page ([AudioClip](#audioclip) reference).
@@ -252,7 +252,7 @@ pub struct StoryImage {
 pub struct StoryChoice {
     /// Button text.
     pub label: String,
-    /// Node index chosen; play continues at that node's first page.
+    /// BehaviorNode index chosen; play continues at that node's first page.
     pub target: u32,
     /// Condition gating the option: shown only while it passes. `None` is
     /// always shown.
@@ -280,10 +280,10 @@ pub struct StoryGate {
     /// The variable the condition tests.
     pub name: String,
     /// How the variable compares against `value`.
-    pub op: CmpOp,
+    pub op: StoryCompareOp,
     /// The literal compared against.
     pub value: i32,
-    /// Node index play jumps to when the condition passes.
+    /// BehaviorNode index play jumps to when the condition passes.
     pub target: u32,
 }
 
@@ -294,7 +294,7 @@ pub struct StoryCondition {
     /// The variable the condition tests.
     pub name: String,
     /// How the variable compares against `value`.
-    pub op: CmpOp,
+    pub op: StoryCompareOp,
     /// The literal compared against.
     pub value: i32,
 }
@@ -303,7 +303,7 @@ pub struct StoryCondition {
 /// reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CmpOp {
+pub enum StoryCompareOp {
     /// Equal.
     Eq,
     /// Not equal.
@@ -319,16 +319,16 @@ pub enum CmpOp {
     Ge,
 }
 
-impl CmpOp {
+impl StoryCompareOp {
     /// Evaluate `lhs <op> rhs`.
     pub fn eval(self, lhs: i32, rhs: i32) -> bool {
         match self {
-            CmpOp::Eq => lhs == rhs,
-            CmpOp::Ne => lhs != rhs,
-            CmpOp::Lt => lhs < rhs,
-            CmpOp::Le => lhs <= rhs,
-            CmpOp::Gt => lhs > rhs,
-            CmpOp::Ge => lhs >= rhs,
+            StoryCompareOp::Eq => lhs == rhs,
+            StoryCompareOp::Ne => lhs != rhs,
+            StoryCompareOp::Lt => lhs < rhs,
+            StoryCompareOp::Le => lhs <= rhs,
+            StoryCompareOp::Gt => lhs > rhs,
+            StoryCompareOp::Ge => lhs >= rhs,
         }
     }
 }
@@ -389,12 +389,12 @@ mod tests {
     #[test]
     fn every_comparison_agrees_with_the_operator_it_names() {
         for (lhs, rhs) in [(1, 2), (2, 2), (3, 2)] {
-            assert_eq!(CmpOp::Eq.eval(lhs, rhs), lhs == rhs);
-            assert_eq!(CmpOp::Ne.eval(lhs, rhs), lhs != rhs);
-            assert_eq!(CmpOp::Lt.eval(lhs, rhs), lhs < rhs);
-            assert_eq!(CmpOp::Le.eval(lhs, rhs), lhs <= rhs);
-            assert_eq!(CmpOp::Gt.eval(lhs, rhs), lhs > rhs);
-            assert_eq!(CmpOp::Ge.eval(lhs, rhs), lhs >= rhs);
+            assert_eq!(StoryCompareOp::Eq.eval(lhs, rhs), lhs == rhs);
+            assert_eq!(StoryCompareOp::Ne.eval(lhs, rhs), lhs != rhs);
+            assert_eq!(StoryCompareOp::Lt.eval(lhs, rhs), lhs < rhs);
+            assert_eq!(StoryCompareOp::Le.eval(lhs, rhs), lhs <= rhs);
+            assert_eq!(StoryCompareOp::Gt.eval(lhs, rhs), lhs > rhs);
+            assert_eq!(StoryCompareOp::Ge.eval(lhs, rhs), lhs >= rhs);
         }
     }
 
@@ -402,22 +402,25 @@ mod tests {
     fn an_omitted_comparison_defaults_to_not_equal() {
         // A gate written with only a name and a value reads as "flag is set",
         // which is the common case in an imported markdown story.
-        assert_eq!(CmpOp::default(), CmpOp::Ne);
+        assert_eq!(StoryCompareOp::default(), StoryCompareOp::Ne);
         let g: StoryGate = serde_json::from_str(r#"{"name":"met_ana","target":3}"#).unwrap();
-        assert_eq!(g.op, CmpOp::Ne);
+        assert_eq!(g.op, StoryCompareOp::Ne);
         assert!(g.op.eval(1, 0));
     }
 
     #[test]
     fn comparison_and_playback_names_parse_in_lowercase() {
-        let op = |s: &str| serde_json::from_str::<CmpOp>(s).unwrap();
-        assert_eq!(op(r#""eq""#), CmpOp::Eq);
-        assert_eq!(op(r#""ne""#), CmpOp::Ne);
-        assert_eq!(op(r#""lt""#), CmpOp::Lt);
-        assert_eq!(op(r#""le""#), CmpOp::Le);
-        assert_eq!(op(r#""gt""#), CmpOp::Gt);
-        assert_eq!(op(r#""ge""#), CmpOp::Ge);
-        assert_eq!(serde_json::to_string(&CmpOp::Ge).unwrap(), r#""ge""#);
+        let op = |s: &str| serde_json::from_str::<StoryCompareOp>(s).unwrap();
+        assert_eq!(op(r#""eq""#), StoryCompareOp::Eq);
+        assert_eq!(op(r#""ne""#), StoryCompareOp::Ne);
+        assert_eq!(op(r#""lt""#), StoryCompareOp::Lt);
+        assert_eq!(op(r#""le""#), StoryCompareOp::Le);
+        assert_eq!(op(r#""gt""#), StoryCompareOp::Gt);
+        assert_eq!(op(r#""ge""#), StoryCompareOp::Ge);
+        assert_eq!(
+            serde_json::to_string(&StoryCompareOp::Ge).unwrap(),
+            r#""ge""#
+        );
 
         assert_eq!(StoryPlayback::default(), StoryPlayback::Start);
         assert_eq!(
@@ -466,13 +469,16 @@ mod tests {
         assert!(page.stage.left.is_none());
         assert_eq!(page.ops[0].name, "visits");
         assert!(page.ops[0].add);
-        assert_eq!(page.gates[0].op, CmpOp::Gt);
+        assert_eq!(page.gates[0].op, StoryCompareOp::Gt);
         assert_eq!(page.gates[0].target, 4);
 
         let choice = &node.choices[0];
         assert_eq!(choice.label, "Stay");
         assert_eq!(choice.target, 1);
-        assert_eq!(choice.condition.as_ref().expect("condition").op, CmpOp::Ge);
+        assert_eq!(
+            choice.condition.as_ref().expect("condition").op,
+            StoryCompareOp::Ge
+        );
     }
 
     #[test]
@@ -501,7 +507,7 @@ mod tests {
                 ..StoryPage::default()
             }],
             choice_gates: vec![StoryGate {
-                op: CmpOp::Le,
+                op: StoryCompareOp::Le,
                 target: 7,
                 ..StoryGate::default()
             }],
@@ -520,7 +526,7 @@ mod tests {
             page.stage.center.as_ref().expect("center image").texture,
             TextureHandle(3)
         );
-        assert_eq!(back.nodes[0].choice_gates[0].op, CmpOp::Le);
+        assert_eq!(back.nodes[0].choice_gates[0].op, StoryCompareOp::Le);
         assert_eq!(back.scaffold.slot_labels, vec![AssetId(9)]);
     }
 

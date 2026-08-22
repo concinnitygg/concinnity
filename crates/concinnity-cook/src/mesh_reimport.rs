@@ -17,7 +17,7 @@ type LodAlternates = Vec<(f32, Vec<u16>)>;
 type SkinnedImport = (
     Vec<concinnity_cpu::gfx::mesh_payload::SkinnedVertex>,
     Vec<u16>,
-    Vec<concinnity_core::assets::JointDef>,
+    Vec<concinnity_core::assets::SkeletonJoint>,
 );
 
 /// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
@@ -76,7 +76,7 @@ pub fn decode_mesh_from_parsed_glb(
 /// The caller is responsible for parsing the `.glb` (via [`crate::glb::parse_glb`])
 /// so a single reload pass can amortise the parse across every `Mesh` /
 /// `SkinnedMesh` that references the same file. The skeleton is returned in the
-/// same `JointDef` form the `SkinnedMesh` asset args carry; the reload helper
+/// same `SkeletonJoint` form the `SkinnedMesh` asset args carry; the reload helper
 /// checks it against the init-time joint count before pushing to the GPU.
 pub fn decode_skinned_from_parsed_glb(
     doc: &crate::gltf_source::GltfDoc,

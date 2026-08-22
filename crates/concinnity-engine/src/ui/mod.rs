@@ -9,7 +9,7 @@ mod screen;
 mod scroll_layout;
 
 use crate::assets::{
-    FrameInput, HitRegion, Key, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
+    FrameInput, HitRegion, InputKey, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
     ScreenShown, ScrollPanel, SettingCommand, SettingOp, Sprite, SpriteFit, StoryCommand,
     TextLabel,
 };
@@ -533,10 +533,10 @@ impl System for UiInputSystem {
         // The keyboard arrows drive the same focus model as the pad pulse.
         let nav = if screen_active && !typing {
             input.nav.or(match input.captured_key {
-                Some(Key::Up) => Some(NavDirection::Up),
-                Some(Key::Down) => Some(NavDirection::Down),
-                Some(Key::Left) => Some(NavDirection::Left),
-                Some(Key::Right) => Some(NavDirection::Right),
+                Some(InputKey::Up) => Some(NavDirection::Up),
+                Some(InputKey::Down) => Some(NavDirection::Down),
+                Some(InputKey::Left) => Some(NavDirection::Left),
+                Some(InputKey::Right) => Some(NavDirection::Right),
                 _ => None,
             })
         } else {
@@ -545,7 +545,7 @@ impl System for UiInputSystem {
         // Confirm fires the focused control: the pad's South button, or Enter
         // while something is focused (an unfocused Enter still reaches the
         // KeyBindings, e.g. a story's advance binding).
-        let enter_pressed = screen_active && !typing && input.captured_key == Some(Key::Enter);
+        let enter_pressed = screen_active && !typing && input.captured_key == Some(InputKey::Enter);
         let enter_confirm = enter_pressed && self.focus.is_some();
         let confirm = (screen_active && !typing && input.confirm) || enter_confirm;
         // The pad's East button backs out like Escape while a screen is up.
@@ -630,7 +630,7 @@ impl System for UiInputSystem {
         // Handle KeyBindings before HitRegion clicks so an Esc-toggle-pause
         // beats a click that landed on the same frame. A binding scoped to a
         // screen only fires while that screen is on top of the stack. Escape is
-        // matched separately (it is not a `Key` variant, so it never arrives as
+        // matched separately (it is not a `InputKey` variant, so it never arrives as
         // a `captured_key`); every other binding matches the one-frame pressed
         // key by its canonical name -- e.g. a story's Space / Enter advance
         // bindings. Rebind capture and an open dropdown already returned above,
@@ -2424,7 +2424,7 @@ mod tests {
         let pulse_down = || FrameInput {
             mouse_x: 500.0,
             mouse_y: 120.0,
-            captured_key: Some(Key::Down),
+            captured_key: Some(InputKey::Down),
             ..Default::default()
         };
 
@@ -2448,7 +2448,7 @@ mod tests {
         world.add_component(FrameInput {
             mouse_x: 500.0,
             mouse_y: 120.0,
-            captured_key: Some(Key::Enter),
+            captured_key: Some(InputKey::Enter),
             ..Default::default()
         });
         world.step();
@@ -3298,7 +3298,7 @@ mod tests {
     fn nav_focus_walks_panel_rows_and_scrolls_them_into_view() {
         let (mut world, e0) = scrollbar_panel_world();
         let pulse_down = || FrameInput {
-            captured_key: Some(Key::Down),
+            captured_key: Some(InputKey::Down),
             ..Default::default()
         };
 
@@ -3370,7 +3370,7 @@ mod tests {
     // command fires); the next pressed key binds it via a Rebind SettingCommand.
     #[test]
     fn rebind_click_captures_then_binds_next_key() {
-        use crate::assets::Key;
+        use crate::assets::InputKey;
         let (mut world, value) = rebind_world();
 
         // Click the rebind row: enters capture, value shows the prompt, and no
@@ -3388,7 +3388,7 @@ mod tests {
 
         // Press a key: it binds, pushing a Rebind command carrying the key.
         world.add_component(FrameInput {
-            captured_key: Some(Key::Q),
+            captured_key: Some(InputKey::Q),
             ..Default::default()
         });
         world.step();
@@ -3398,7 +3398,7 @@ mod tests {
             .unwrap();
         assert_eq!(cmd.setting, "key_forward");
         assert_eq!(cmd.value_label, Some(value));
-        assert!(matches!(cmd.op, SettingOp::Rebind(Key::Q)));
+        assert!(matches!(cmd.op, SettingOp::Rebind(InputKey::Q)));
         assert!(cmd.persist);
     }
 
@@ -3426,10 +3426,10 @@ mod tests {
     // A captured key with no active capture binds nothing.
     #[test]
     fn captured_key_without_capture_is_ignored() {
-        use crate::assets::Key;
+        use crate::assets::InputKey;
         let (mut world, _value) = rebind_world();
         world.add_component(FrameInput {
-            captured_key: Some(Key::Q),
+            captured_key: Some(InputKey::Q),
             ..Default::default()
         });
         world.step();
@@ -3521,7 +3521,7 @@ mod tests {
     // one-frame captured_key), so a story's Space / Enter advance bindings work.
     #[test]
     fn pressed_key_binding_fires_action() {
-        for key in [Key::Space, Key::Enter] {
+        for key in [InputKey::Space, InputKey::Enter] {
             let mut world = World::new();
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
@@ -3557,7 +3557,7 @@ mod tests {
         world.start().unwrap();
 
         world.add_component(FrameInput {
-            captured_key: Some(Key::Down),
+            captured_key: Some(InputKey::Down),
             ..Default::default()
         });
         world.step();
@@ -3687,7 +3687,7 @@ mod tests {
 
         let backtick = |w: &mut World| {
             w.add_component(FrameInput {
-                captured_key: Some(Key::Backtick),
+                captured_key: Some(InputKey::Backtick),
                 ..Default::default()
             });
             w.step();
@@ -3729,7 +3729,7 @@ mod tests {
 
         let backtick = |w: &mut World| {
             w.add_component(FrameInput {
-                captured_key: Some(Key::Backtick),
+                captured_key: Some(InputKey::Backtick),
                 ..Default::default()
             });
             w.step();
@@ -3766,7 +3766,7 @@ mod tests {
         world.start().unwrap();
 
         world.add_component(FrameInput {
-            captured_key: Some(Key::T),
+            captured_key: Some(InputKey::T),
             ..Default::default()
         });
         world.step();
@@ -3780,7 +3780,7 @@ mod tests {
             ti.focused = false;
         }
         world.add_component(FrameInput {
-            captured_key: Some(Key::T),
+            captured_key: Some(InputKey::T),
             ..Default::default()
         });
         world.step();
@@ -3811,7 +3811,7 @@ mod tests {
 
         // No screen on top: the scoped binding stays quiet.
         world.add_component(FrameInput {
-            captured_key: Some(Key::Space),
+            captured_key: Some(InputKey::Space),
             ..Default::default()
         });
         world.step();
@@ -3824,7 +3824,7 @@ mod tests {
         world.add_component(FrameInput::default());
         world.step();
         world.add_component(FrameInput {
-            captured_key: Some(Key::Space),
+            captured_key: Some(InputKey::Space),
             ..Default::default()
         });
         world.step();

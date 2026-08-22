@@ -9,9 +9,9 @@
 //! historical `crate::assets::*` paths.
 
 // Component data types.
-mod anim_graph;
-mod anim_params;
 mod animation;
+mod animation_graph;
+mod animation_params;
 mod application;
 mod audio_command;
 mod audio_occlusion_probe;
@@ -21,6 +21,7 @@ mod character_rig;
 mod contact_event;
 mod controls_command;
 mod despawn_request;
+mod entity_target;
 mod file;
 mod frame_input;
 mod gamepad_button;
@@ -28,7 +29,7 @@ mod gamepad_map;
 mod geometry;
 mod ground_probes;
 mod input_key;
-mod interact_signal;
+mod interact_event;
 mod lifetime;
 mod nav_direction;
 mod play_cue;
@@ -48,7 +49,6 @@ mod skinned_mesh;
 mod spawn_request;
 mod spawner;
 mod story_command;
-mod target;
 mod visibility_request;
 mod volume_event;
 
@@ -74,12 +74,12 @@ mod transform;
 #[cfg(test)]
 mod component_tests;
 
-pub use anim_graph::{
-    AnimGraph, GraphBlend, GraphBlendPoint, GraphCondition, GraphIkChain, GraphParam, GraphState,
-    GraphTransition,
+pub use animation::{Animation, AnimationTrack, Keyframe, MorphKey};
+pub use animation_graph::{
+    AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph, AnimationIkChain,
+    AnimationParam, AnimationState, AnimationTransition,
 };
-pub use anim_params::AnimParams;
-pub use animation::Animation;
+pub use animation_params::AnimationParams;
 pub use application::Application;
 pub use audio_command::{AudioCommand, AudioTarget};
 pub use audio_occlusion_probe::AudioOcclusionProbe;
@@ -106,14 +106,12 @@ pub use concinnity_asset::KeyBinding;
 pub use concinnity_asset::LightRig;
 pub use concinnity_asset::LoadingOverlay;
 pub use concinnity_asset::Material;
-pub use concinnity_asset::MaterialPalette;
 pub use concinnity_asset::OptionSelect;
 pub use concinnity_asset::Panel;
 pub use concinnity_asset::ParticleEmitter;
 pub use concinnity_asset::PhysicsConfig;
 pub use concinnity_asset::PointLight;
 pub use concinnity_asset::PostProcessConfig;
-pub use concinnity_asset::Prefab;
 pub use concinnity_asset::ProceduralMesh;
 pub use concinnity_asset::Prop;
 pub use concinnity_asset::PropBody;
@@ -143,33 +141,37 @@ pub use concinnity_asset::{AppLimits, ApplicationArgs};
 pub use concinnity_asset::{AudioCue, CueKind};
 pub use concinnity_asset::{AudioEmitter, Rolloff};
 pub use concinnity_asset::{
-    Behavior, BehaviorSource, Expr, Literal, LocalDecl, Node, QueryDecl, VarDecl, Variables,
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
+    BehaviorSource, VariableDecl, Variables,
 };
 pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, FollowDrive};
 pub use concinnity_asset::{
-    CharacterCapsule, JointDef, MorphDelta, SkinnedMesh, SkinnedVertexData,
-};
-pub use concinnity_asset::{
-    CmpOp, Story, StoryChoice, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
-    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
+    CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
 };
 pub use concinnity_asset::{FileArgs, FileKind};
 pub use concinnity_asset::{InstanceTransform, InstancedProp};
-pub use concinnity_asset::{Joint, JointKind};
-pub use concinnity_asset::{Justify, LabelBox, LayoutContainer, LayoutRow, Placement};
+pub use concinnity_asset::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
 pub use concinnity_asset::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 pub use concinnity_asset::{MainMenu, MainMenuItem, SettingsProfile};
+pub use concinnity_asset::{MaterialPalette, PaletteEntry};
 pub use concinnity_asset::{Mesh, VertexData};
 pub use concinnity_asset::{Model, SubMeshRef};
+pub use concinnity_asset::{PhysicsJoint, PhysicsJointKind};
+pub use concinnity_asset::{Prefab, PrefabEntry, PrefabKind};
 pub use concinnity_asset::{Screen, ScreenInput};
 pub use concinnity_asset::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use concinnity_asset::{Sprite, SpriteFit};
+pub use concinnity_asset::{
+    Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
+    StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
+};
 pub use concinnity_asset::{TextAlign, TextLabel};
 pub use concinnity_asset::{TriggerFilter, TriggerVolume};
-pub use concinnity_asset::{Window, WindowArgs, WindowMode};
+pub use concinnity_asset::{Window, WindowMode};
 pub use contact_event::ContactEvent;
 pub use controls_command::ControlsCommand;
 pub use despawn_request::DespawnRequest;
+pub use entity_target::EntityTarget;
 pub use file::File;
 pub use frame_input::FrameInput;
 pub use gamepad_button::GamepadButton;
@@ -179,15 +181,15 @@ pub use geometry::{
     SpotLightGeometry,
 };
 pub use ground_probes::{GroundProbe, GroundProbes};
-pub use input_key::Key;
-pub use interact_signal::InteractSignal;
+pub use input_key::InputKey;
+pub use interact_event::InteractEvent;
 pub use lifetime::Lifetime;
 pub use nav_direction::NavDirection;
 pub use play_cue::PlayCue;
 pub use post_process_config::PostProcessResolve;
 pub use reparent_request::ReparentRequest;
 pub use room::Room;
-pub use root_motion_event::RootMotion;
+pub use root_motion_event::RootMotionEvent;
 pub use scene_command::SceneCommand;
 pub use screen_command::ScreenCommand;
 pub use screen_shown::ScreenShown;
@@ -199,7 +201,6 @@ pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;
 pub use story_command::StoryCommand;
-pub use target::Target;
 pub use visibility_request::VisibilityRequest;
 pub use volume_event::VolumeEvent;
 

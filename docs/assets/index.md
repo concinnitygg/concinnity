@@ -2,8 +2,8 @@
 
 # Assets
 
-- [AnimGraph](AnimGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
+- [AnimationGraph](AnimationGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
 - [Application](Application.md) - Runtime half of the Application asset: the process resource budgets.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
@@ -26,7 +26,6 @@
 - [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear colour. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
-- [Joint](Joint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action string.
 - [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, colour, background, padding) but their `x`/`y` are overwritten each frame.
 - [LightRig](LightRig.md) - A named grouping of lights.
@@ -40,6 +39,7 @@
 - [Panel](Panel.md) - A titled background container for grouping UI overlay elements.
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
 - [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics floor / terrain.
+- [PhysicsJoint](PhysicsJoint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
 - [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used (bloom on at a moderate intensity).
 - [Prefab](Prefab.md) - A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested prefabs.
@@ -79,27 +79,27 @@
 ## Reference types
 
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
+- [AnimationCondition](AnimationCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
+- [AnimationIkChain](AnimationIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
+- [AnimationParam](AnimationParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
+- [AnimationState](AnimationState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
+- [AnimationTransition](AnimationTransition.md) - One directed transition between two states.
 - [AppLimits](AppLimits.md) - Optional per-application overrides for the runtime's thread and memory budgets. Each field of `0` means "auto" (the engine picks a value from the host machine); a non-zero value overrides that choice, clamped to what the machine can safely give.
 - [AudioBus](AudioBus.md) - A mix bus grouping related sounds under one user volume.
+- [BehaviorLocal](BehaviorLocal.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
+- [BehaviorQuery](BehaviorQuery.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
-- [CmpOp](CmpOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
-- [GraphCondition](GraphCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
-- [GraphIkChain](GraphIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
-- [GraphParam](GraphParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
-- [GraphState](GraphState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
-- [GraphTransition](GraphTransition.md) - One directed transition between two states.
 - [IndirectLighting](IndirectLighting.md) - Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`. `Ibl` is the image-based-lighting-only ambient term the renderer has always used; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
 - [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
 - [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
-- [LocalDecl](LocalDecl.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [MainMenu](MainMenu.md).
 - [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
@@ -107,7 +107,6 @@
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are unresolved references to other assets, resolved when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
-- [QueryDecl](QueryDecl.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
 - [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
 - [Rolloff](Rolloff.md) - How an [AudioEmitter](AudioEmitter.md)'s volume falls with distance.
 - [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
@@ -120,6 +119,7 @@
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StageSource](StageSource.md) - Source declaration for one stage of a [Shader](Shader.md).
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
+- [StoryCompareOp](StoryCompareOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
 - [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.
 - [StoryImage](StoryImage.md) - One placed stage image: which [Texture](Texture.md) to sample and where it sits on the reference canvas.
@@ -134,7 +134,7 @@
 - [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler backend selector for `PostProcessConfig.temporal_upscaling`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific backend and fall back when it is unavailable. DLSS (NVIDIA NGX) and XeSS (Intel) are DirectX-only; Metal uses MetalFX and Vulkan has no upscaler yet, so both treat any value as their native path.
-- [VarDecl](VarDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
+- [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
 - [WaterWave](WaterWave.md) - One wave in a water surface's motion. A surface sums up to four of these to displace its flat grid. Each wave travels horizontally along `direction`, rising and falling with `amplitude` peak height, `wavelength` distance between crests, and `speed` metres per second. `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier water).
 - [WindowMode](WindowMode.md) - How the application window is presented.

@@ -9,7 +9,6 @@ publish = false
 [lib]
 name = "concinnity_cpu"
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # Forwarded to concinnity-core, whose build script resolves the backend cfg the

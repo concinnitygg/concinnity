@@ -10,8 +10,17 @@
 /// effects (volumetric fog, SDF raymarching, and reflection-probe capture) do
 /// not consider them.
 ///
-/// ```jsonl
-/// {"name":"lantern","type":"SpotLight","args":{"position":[0.0,4.0,-2.0],"direction":[0.0,-1.0,0.0],"color":[1.0,0.9,0.7],"intensity":20.0,"range":10.0,"inner_angle":18.0,"outer_angle":30.0}}
+/// ```rust
+/// # use concinnity_asset::SpotLight;
+/// SpotLight {
+///     position: [0.0, 4.0, -2.0],
+///     direction: [0.0, -1.0, 0.0],
+///     color: [1.0, 0.9, 0.7],
+///     intensity: 20.0,
+///     range: 10.0,
+///     inner_angle: 18.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

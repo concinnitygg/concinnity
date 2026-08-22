@@ -9,8 +9,13 @@ use alloc::string::String;
 /// The build resamples the source into six square HDR faces of `face_size`
 /// pixels each, used as an environment / image-based-lighting source.
 ///
-/// ```jsonl
-/// {"name":"env_studio","type":"CubemapTexture","args":{"source":"assets/hdri/studio.hdr","face_size":512}}
+/// ```rust
+/// # use concinnity_asset::CubemapTexture;
+/// CubemapTexture {
+///     source: "assets/hdri/studio.hdr".into(),
+///     face_size: 512,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

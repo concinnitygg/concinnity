@@ -15,7 +15,6 @@ publish = false
 [lib]
 name = "concinnity_toolchain"
 path = "src/lib.rs"
-doctest = false
 
 [features]
 # First-run asset fetching for the examples. Off by default so the ten crates

@@ -13,10 +13,6 @@ Two source formats are accepted, picked by file extension:
   - `.cube`  Adobe Cube LUT (plain-text interchange format).
   - `.png`   A horizontal slice strip: `(n*n)` wide by `n` tall.
 
-```jsonl
-{"name":"grade","type":"ColorLut","args":{"source":"luts/cinematic_warm.cube"}}
-```
-
 ## Parameters
 
 - `source`: A string. Path to the source `.cube` or `.png` LUT file.

@@ -16,7 +16,9 @@
 // list. The world clock (Lifetime + Spawner) freezes while a menu is open
 // (`MenuActive`, published by OverlaySystem earlier this tick).
 
-use crate::assets::{DespawnRequest, ReparentRequest, SpawnRequest, Target, VisibilityRequest};
+use crate::assets::{
+    DespawnRequest, EntityTarget, ReparentRequest, SpawnRequest, VisibilityRequest,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ActiveRenderQueues, PipelineContext, StepResult, System};
 use crate::gfx::ops::RenderOps;
@@ -27,10 +29,10 @@ use std::time::Instant;
 // Resolve a request target to a live entity. A named target goes through the
 // world's name index; an entity-addressed one is already what the caller means,
 // including entities that never had a name.
-fn resolve_target(ctx: &PipelineContext, target: Target) -> Option<crate::ecs::Entity> {
+fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<crate::ecs::Entity> {
     match target {
-        Target::Name(name) => resolve_name(ctx, name),
-        Target::Entity(entity) => Some(entity),
+        EntityTarget::Name(name) => resolve_name(ctx, name),
+        EntityTarget::Entity(entity) => Some(entity),
     }
 }
 

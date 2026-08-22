@@ -16,7 +16,7 @@
 //   scene.rs     scene-flow wiring + scene visibility
 //   helpers.rs   shared free functions
 
-use crate::assets::{PostProcessResolve, WindowArgs};
+use crate::assets::{PostProcessResolve, Window};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, System};
 use crate::gfx::backend::RenderBackend;
@@ -64,7 +64,7 @@ struct PickCandidate {
 
 /// Drives the render backend: builds it at init, submits a frame per step.
 pub struct GraphicsSystem {
-    window_args: WindowArgs,
+    window_args: Window,
     clear_color: [f32; 4],
     frames_in_flight: usize,
     vsync: bool,

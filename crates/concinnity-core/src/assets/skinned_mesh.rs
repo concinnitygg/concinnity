@@ -1,21 +1,21 @@
 // src/assets/skinned_mesh.rs
 //
 // Runtime behavior for the SkinnedMesh asset. The authored schema (SkinnedMesh,
-// its SkinnedVertexData / JointDef / CharacterCapsule, and their Defaults) lives
+// its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
 // in concinnity-asset; SkinnedMesh is a resource now (compiled by cook into the
 // blob's resource stream, no `Component` impl), so this file keeps only the
 // skeleton builder and the `SkinnedMeshGeometry` extension trait that needs
 // `gfx::skeleton`.
 
-use crate::assets::{JointDef, SkinnedMesh};
+use crate::assets::{SkeletonJoint, SkinnedMesh};
 
 /// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
 /// conversion `GraphicsSystem::init` does at world load time: each
-/// `JointDef.parent` becomes `Some(usize)` for valid indices (negative values
-/// mark roots), and each `JointDef`'s translation / rotation / scale becomes the
+/// `SkeletonJoint.parent` becomes `Some(usize)` for valid indices (negative values
+/// mark roots), and each `SkeletonJoint`'s translation / rotation / scale becomes the
 /// joint's bind `JointPose`. Used at init and by the asset hot-reload's
 /// skeleton-shape change path.
-pub fn build_skeleton_from_joint_defs(defs: &[JointDef]) -> crate::gfx::skeleton::Skeleton {
+pub fn build_skeleton_from_joint_defs(defs: &[SkeletonJoint]) -> crate::gfx::skeleton::Skeleton {
     use crate::gfx::skeleton as skinning;
     let joints = defs
         .iter()
@@ -63,21 +63,21 @@ mod tests {
     #[test]
     fn build_skeleton_from_joint_defs_preserves_count_and_parent_links() {
         let defs = vec![
-            JointDef {
+            SkeletonJoint {
                 name: "root".into(),
                 parent: -1,
                 translation: [0.0, 0.0, 0.0],
                 rotation_deg: [0.0, 0.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
             },
-            JointDef {
+            SkeletonJoint {
                 name: "tip".into(),
                 parent: 0,
                 translation: [0.0, 1.0, 0.0],
                 rotation_deg: [0.0, 0.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
             },
-            JointDef {
+            SkeletonJoint {
                 name: "tail".into(),
                 parent: 1,
                 translation: [0.0, 1.0, 0.0],
@@ -96,9 +96,9 @@ mod tests {
     #[test]
     fn build_skeleton_from_joint_defs_treats_negative_parent_as_root() {
         // Any negative parent (not just -1) collapses to None; mirrors the
-        // init-time semantics so a hot-reload from the same JointDef shape
+        // init-time semantics so a hot-reload from the same SkeletonJoint shape
         // produces the same Skeleton.
-        let defs = vec![JointDef {
+        let defs = vec![SkeletonJoint {
             name: "root".into(),
             parent: -42,
             translation: [1.0, 2.0, 3.0],
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(cap.half_height, 0.5);
         assert_eq!(cap.radius, 0.3);
 
-        let jd: JointDef = serde_json::from_value(serde_json::json!({})).unwrap();
+        let jd: SkeletonJoint = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(jd.parent, -1);
         assert_eq!(jd.scale, [1.0, 1.0, 1.0]);
     }

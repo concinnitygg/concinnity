@@ -2617,12 +2617,12 @@ fn every_owned_slider_key_recovers_a_live_value() {
 // the live rebind drain.
 #[test]
 fn rebind_rows_show_their_bound_keys_at_init() {
-    use crate::assets::Key;
+    use crate::assets::InputKey;
     use crate::gfx::keymap::{Bindable, KeyMap};
 
     let mut settings = crate::config::Settings::default();
     settings.controls.keymap = Some(KeyMap {
-        forward: Key::Up,
+        forward: InputKey::Up,
         ..Default::default()
     });
     let (_state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
@@ -2658,7 +2658,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
 
     assert_eq!(
         label_text(&mut world, AssetId(400)),
-        Key::Up.display_name(),
+        InputKey::Up.display_name(),
         "the persisted forward rebind shows on its row"
     );
     for i in 1..Bindable::ALL.len() {
@@ -2677,7 +2677,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     assert_eq!(live.rebind_rows.len(), Bindable::ALL.len());
     assert_eq!(
         live.keymap.forward,
-        Key::Up,
+        InputKey::Up,
         "the persisted map is the live one"
     );
 }

@@ -1,11 +1,11 @@
 //! The runtime, rebindable key map for the gameplay movement keys. Each backend
 //! decodes physical keys into the same semantic booleans (forward, jump, ...);
-//! this map says which canonical Key drives each action, so the settings menu can
-//! remap them at runtime. The map is canonical (backend-agnostic Key values); a
+//! this map says which canonical InputKey drives each action, so the settings menu can
+//! remap them at runtime. The map is canonical (backend-agnostic InputKey values); a
 //! backend resolves it to its own native key codes when it is pushed via
 //! `RenderBackend::set_keymap`.
 
-use crate::assets::Key;
+use crate::assets::InputKey;
 use serde::{Deserialize, Serialize};
 
 /// A rebindable gameplay action. The four movement directions, sprint, jump, and
@@ -68,42 +68,42 @@ impl Bindable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyMap {
     #[serde(default = "def_forward")]
-    /// Key bound to [`Bindable::Forward`].
-    pub forward: Key,
+    /// InputKey bound to [`Bindable::Forward`].
+    pub forward: InputKey,
     #[serde(default = "def_backward")]
-    /// Key bound to [`Bindable::Backward`].
-    pub backward: Key,
+    /// InputKey bound to [`Bindable::Backward`].
+    pub backward: InputKey,
     #[serde(default = "def_left")]
-    /// Key bound to [`Bindable::Left`].
-    pub left: Key,
+    /// InputKey bound to [`Bindable::Left`].
+    pub left: InputKey,
     #[serde(default = "def_right")]
-    /// Key bound to [`Bindable::Right`].
-    pub right: Key,
+    /// InputKey bound to [`Bindable::Right`].
+    pub right: InputKey,
     #[serde(default = "def_sprint")]
-    /// Key bound to [`Bindable::Sprint`].
-    pub sprint: Key,
+    /// InputKey bound to [`Bindable::Sprint`].
+    pub sprint: InputKey,
     #[serde(default = "def_jump")]
-    /// Key bound to [`Bindable::Jump`].
-    pub jump: Key,
+    /// InputKey bound to [`Bindable::Jump`].
+    pub jump: InputKey,
     #[serde(default = "def_interact")]
-    /// Key bound to [`Bindable::Interact`].
-    pub interact: Key,
+    /// InputKey bound to [`Bindable::Interact`].
+    pub interact: InputKey,
 }
 
 impl KeyMap {
     /// The default bindings: the keys that were hardcoded before rebinding.
     pub const DEFAULT: KeyMap = KeyMap {
-        forward: Key::W,
-        backward: Key::S,
-        left: Key::A,
-        right: Key::D,
-        sprint: Key::Shift,
-        jump: Key::Space,
-        interact: Key::E,
+        forward: InputKey::W,
+        backward: InputKey::S,
+        left: InputKey::A,
+        right: InputKey::D,
+        sprint: InputKey::Shift,
+        jump: InputKey::Space,
+        interact: InputKey::E,
     };
 
     /// The key currently bound to an action.
-    pub fn get(self, action: Bindable) -> Key {
+    pub fn get(self, action: Bindable) -> InputKey {
         match action {
             Bindable::Forward => self.forward,
             Bindable::Backward => self.backward,
@@ -116,7 +116,7 @@ impl KeyMap {
     }
 
     /// Bind an action to a key directly (no conflict handling).
-    pub fn set(&mut self, action: Bindable, key: Key) {
+    pub fn set(&mut self, action: Bindable, key: InputKey) {
         match action {
             Bindable::Forward => self.forward = key,
             Bindable::Backward => self.backward = key,
@@ -131,14 +131,14 @@ impl KeyMap {
     /// The action a key is bound to, or `None` if unbound. The map keeps each key
     /// bound to at most one action (the invariant `rebind` maintains), so this is
     /// the unique holder.
-    pub fn action_for_key(self, key: Key) -> Option<Bindable> {
+    pub fn action_for_key(self, key: InputKey) -> Option<Bindable> {
         Bindable::ALL.into_iter().find(|&b| self.get(b) == key)
     }
 
     /// Bind `action` to `new_key`, swapping with whichever action already holds
     /// `new_key` so every action stays bound. Rebinding an action to its own key
     /// is a no-op.
-    pub fn rebind(&mut self, action: Bindable, new_key: Key) {
+    pub fn rebind(&mut self, action: Bindable, new_key: InputKey) {
         let old_key = self.get(action);
         if old_key == new_key {
             return;
@@ -158,25 +158,25 @@ impl Default for KeyMap {
     }
 }
 
-fn def_forward() -> Key {
+fn def_forward() -> InputKey {
     KeyMap::DEFAULT.forward
 }
-fn def_backward() -> Key {
+fn def_backward() -> InputKey {
     KeyMap::DEFAULT.backward
 }
-fn def_left() -> Key {
+fn def_left() -> InputKey {
     KeyMap::DEFAULT.left
 }
-fn def_right() -> Key {
+fn def_right() -> InputKey {
     KeyMap::DEFAULT.right
 }
-fn def_sprint() -> Key {
+fn def_sprint() -> InputKey {
     KeyMap::DEFAULT.sprint
 }
-fn def_jump() -> Key {
+fn def_jump() -> InputKey {
     KeyMap::DEFAULT.jump
 }
-fn def_interact() -> Key {
+fn def_interact() -> InputKey {
     KeyMap::DEFAULT.interact
 }
 
@@ -187,13 +187,13 @@ mod tests {
     #[test]
     fn default_is_wasd_shift_space_e() {
         let m = KeyMap::default();
-        assert_eq!(m.forward, Key::W);
-        assert_eq!(m.backward, Key::S);
-        assert_eq!(m.left, Key::A);
-        assert_eq!(m.right, Key::D);
-        assert_eq!(m.sprint, Key::Shift);
-        assert_eq!(m.jump, Key::Space);
-        assert_eq!(m.interact, Key::E);
+        assert_eq!(m.forward, InputKey::W);
+        assert_eq!(m.backward, InputKey::S);
+        assert_eq!(m.left, InputKey::A);
+        assert_eq!(m.right, InputKey::D);
+        assert_eq!(m.sprint, InputKey::Shift);
+        assert_eq!(m.jump, InputKey::Space);
+        assert_eq!(m.interact, InputKey::E);
     }
 
     #[test]
@@ -208,8 +208,8 @@ mod tests {
     #[test]
     fn get_set_round_trip() {
         let mut m = KeyMap::default();
-        m.set(Bindable::Forward, Key::Up);
-        assert_eq!(m.get(Bindable::Forward), Key::Up);
+        m.set(Bindable::Forward, InputKey::Up);
+        assert_eq!(m.get(Bindable::Forward), InputKey::Up);
     }
 
     #[test]
@@ -217,13 +217,13 @@ mod tests {
         // Drive set + get across all seven actions with distinct keys, hitting
         // every match arm in both methods.
         let keys = [
-            Key::Up,
-            Key::Down,
-            Key::Left,
-            Key::Right,
-            Key::Q,
-            Key::R,
-            Key::T,
+            InputKey::Up,
+            InputKey::Down,
+            InputKey::Left,
+            InputKey::Right,
+            InputKey::Q,
+            InputKey::R,
+            InputKey::T,
         ];
         let mut m = KeyMap::default();
         for (b, k) in Bindable::ALL.into_iter().zip(keys) {
@@ -238,7 +238,7 @@ mod tests {
     fn empty_cbor_map_uses_all_defaults() {
         // A settings file predating every field (an empty map) still loads, each
         // field falling back through its `serde(default = "def_*")` helper.
-        let empty: std::collections::BTreeMap<String, Key> = std::collections::BTreeMap::new();
+        let empty: std::collections::BTreeMap<String, InputKey> = std::collections::BTreeMap::new();
         let mut bytes = Vec::new();
         ciborium::into_writer(&empty, &mut bytes).unwrap();
         let loaded: KeyMap = ciborium::from_reader(&bytes[..]).unwrap();
@@ -248,25 +248,25 @@ mod tests {
     #[test]
     fn action_for_key_finds_the_holder() {
         let m = KeyMap::default();
-        assert_eq!(m.action_for_key(Key::W), Some(Bindable::Forward));
-        assert_eq!(m.action_for_key(Key::Space), Some(Bindable::Jump));
+        assert_eq!(m.action_for_key(InputKey::W), Some(Bindable::Forward));
+        assert_eq!(m.action_for_key(InputKey::Space), Some(Bindable::Jump));
         // A key bound to nothing.
-        assert_eq!(m.action_for_key(Key::Q), None);
+        assert_eq!(m.action_for_key(InputKey::Q), None);
     }
 
     #[test]
     fn rebind_to_free_key_just_sets_it() {
         let mut m = KeyMap::default();
-        m.rebind(Bindable::Forward, Key::Q);
-        assert_eq!(m.forward, Key::Q);
+        m.rebind(Bindable::Forward, InputKey::Q);
+        assert_eq!(m.forward, InputKey::Q);
         // The others are untouched.
-        assert_eq!(m.backward, Key::S);
+        assert_eq!(m.backward, InputKey::S);
     }
 
     #[test]
     fn rebind_to_own_key_is_a_noop() {
         let mut m = KeyMap::default();
-        m.rebind(Bindable::Forward, Key::W);
+        m.rebind(Bindable::Forward, InputKey::W);
         assert_eq!(m, KeyMap::default());
     }
 
@@ -275,9 +275,9 @@ mod tests {
         // Bind Forward to S, which Backward holds: they swap, so Backward
         // inherits Forward's old key (W) and every action stays bound.
         let mut m = KeyMap::default();
-        m.rebind(Bindable::Forward, Key::S);
-        assert_eq!(m.forward, Key::S);
-        assert_eq!(m.backward, Key::W);
+        m.rebind(Bindable::Forward, InputKey::S);
+        assert_eq!(m.forward, InputKey::S);
+        assert_eq!(m.backward, InputKey::W);
         // No key is bound twice.
         for b in Bindable::ALL {
             assert_eq!(m.action_for_key(m.get(b)), Some(b));
@@ -288,7 +288,7 @@ mod tests {
     fn cbor_round_trip_and_missing_field_defaults() {
         // A full map survives a CBOR round trip.
         let m = KeyMap {
-            forward: Key::Up,
+            forward: InputKey::Up,
             ..KeyMap::default()
         };
         let mut bytes = Vec::new();
@@ -300,26 +300,26 @@ mod tests {
         // missing field falling back to its default rather than failing.
         #[derive(Serialize)]
         struct Partial {
-            forward: Key,
-            backward: Key,
-            left: Key,
-            right: Key,
-            sprint: Key,
-            jump: Key,
+            forward: InputKey,
+            backward: InputKey,
+            left: InputKey,
+            right: InputKey,
+            sprint: InputKey,
+            jump: InputKey,
             // `interact` omitted.
         }
         let partial = Partial {
-            forward: Key::Up,
-            backward: Key::S,
-            left: Key::A,
-            right: Key::D,
-            sprint: Key::Shift,
-            jump: Key::Space,
+            forward: InputKey::Up,
+            backward: InputKey::S,
+            left: InputKey::A,
+            right: InputKey::D,
+            sprint: InputKey::Shift,
+            jump: InputKey::Space,
         };
         let mut bytes = Vec::new();
         ciborium::into_writer(&partial, &mut bytes).unwrap();
         let loaded: KeyMap = ciborium::from_reader(&bytes[..]).unwrap();
-        assert_eq!(loaded.forward, Key::Up);
-        assert_eq!(loaded.interact, Key::E);
+        assert_eq!(loaded.forward, InputKey::Up);
+        assert_eq!(loaded.interact, InputKey::E);
     }
 }

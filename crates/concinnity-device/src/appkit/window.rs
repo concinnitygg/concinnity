@@ -16,7 +16,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
-use crate::assets::{Key, WindowMode};
+use crate::assets::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 
@@ -499,7 +499,7 @@ impl AppKitWindow {
     }
 
     // Snapshot the current input state for this frame.
-    // Key booleans reflect what is held right now; mouse deltas are cleared
+    // InputKey booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
     // `interact` and `jump` are true for exactly one frame per key press then cleared.
     pub(crate) fn take_input(&mut self) -> InputState {
@@ -543,7 +543,7 @@ impl AppKitWindow {
     }
 
     // Dequeue all pending NSEvents and update input state. Sets the closed flag
-    // on a window-will-close application event. Key events update the persistent
+    // on a window-will-close application event. InputKey events update the persistent
     // key state; mouse moved events accumulate deltas if the cursor is captured.
     pub(crate) fn pump_ns_events(&mut self, mtm: objc2::MainThreadMarker) {
         let ns_app = NSApplication::sharedApplication(mtm);
@@ -573,9 +573,9 @@ impl AppKitWindow {
                     let edge_down = shift && !self.keys.shift_down;
                     self.keys.shift_down = shift;
                     if edge_down {
-                        self.keys.captured_key = Some(Key::Shift);
+                        self.keys.captured_key = Some(InputKey::Shift);
                     }
-                    self.apply_binding(Key::Shift, shift, edge_down);
+                    self.apply_binding(InputKey::Shift, shift, edge_down);
                     // Control is a held modifier too (a story's Ctrl fast-forward
                     // reads it each frame); track it like Shift but drive no
                     // gameplay binding.
@@ -714,7 +714,7 @@ impl AppKitWindow {
     // edge is the KeyDown, so both come from `pressed`; for the Shift modifier
     // the pulse fires only on the rising edge (FlagsChanged can re-fire while
     // Shift stays held if another modifier changes).
-    fn apply_binding(&mut self, key: Key, down: bool, fire_pulse: bool) {
+    fn apply_binding(&mut self, key: InputKey, down: bool, fire_pulse: bool) {
         let km = self.keymap;
         if km.forward == key {
             self.keys.forward = down;
@@ -742,7 +742,7 @@ impl AppKitWindow {
     }
 
     // Update the persistent key state from a key event. Escape and F1 are fixed
-    // (not rebindable); every other key is decoded to a canonical `Key` and
+    // (not rebindable); every other key is decoded to a canonical `InputKey` and
     // routed through the runtime key map. Sprint's default (Shift) is a pure
     // modifier and is handled in the FlagsChanged arm, not here.
     fn handle_key(&mut self, event: &NSEvent, pressed: bool) {

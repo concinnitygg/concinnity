@@ -6,8 +6,15 @@
 /// to a large per-scene budget). Secondary effects (volumetric fog, SDF
 /// raymarching, and reflection-probe capture) still consider only the first 8.
 ///
-/// ```jsonl
-/// {"name":"lamp","type":"PointLight","args":{"position":[2.0,2.5,-3.0],"color":[1.0,0.8,0.5],"intensity":8.0,"range":6.0}}
+/// ```rust
+/// # use concinnity_asset::PointLight;
+/// PointLight {
+///     position: [2.0, 2.5, -3.0],
+///     color: [1.0, 0.8, 0.5],
+///     intensity: 8.0,
+///     range: 6.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

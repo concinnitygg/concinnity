@@ -19,12 +19,8 @@ The action vocabulary is the same as [HitRegion](HitRegion.md)'s:
 - `"screen:hide"`:          close the top [Screen](Screen.md)
 - `"screen:toggle:<name>"`: toggle the named [Screen](Screen.md)
 
-Key names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
+InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 `"Enter"`).
-
-```jsonl
-{"name":"esc_binding","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
-```
 
 ## Parameters
 

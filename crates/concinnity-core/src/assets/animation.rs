@@ -102,11 +102,12 @@ pub struct AnimationTrack {
 /// a joint of the file's first skinned node are dropped. The same file should
 /// back the target [SkinnedMesh](#skinnedmesh) so the joint indices agree.
 ///
-/// ```jsonl
-/// // Inline:
-/// {"name":"flag_wave","type":"Animation","args":{"target":"flag","duration":2.0,"tracks":[{"joint":1,"keyframes":[{"time":0.0,"rotation_deg":[0,0,0]},{"time":1.0,"rotation_deg":[0,30,0]},{"time":2.0,"rotation_deg":[0,0,0]}]}]}}
-/// // From glTF:
-/// {"name":"hero_walk","type":"Animation","args":{"target":"hero","source":"models/hero.glb","animation_name":"Walk","looping":true}}
+/// ```rust
+/// # use concinnity_core::assets::Animation;
+/// Animation {
+///     duration: 2.0,
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

@@ -16,15 +16,6 @@ use alloc::vec::Vec;
 /// 0 as air, index 1 as the surface block, and index 2 (when present) as the
 /// subsurface block. `material` supplies the textures and lighting shared by
 /// every chunk.
-///
-/// ```jsonl
-/// {"name":"air","type":"BlockType","args":{"solid":false}}
-/// {"name":"grass","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-/// {"name":"stone","type":"BlockType","args":{"uv_min":[0,0],"uv_max":[1,1]}}
-/// {"name":"overworld","type":"VoxelWorld","args":{
-///   "seed":42,"view_radius":6,"palette":["air","grass","stone"],"material":"mat_ground"
-/// }}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct VoxelWorld {

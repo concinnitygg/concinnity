@@ -7,6 +7,6 @@ One conditional jump in a [Story](Story.md)'s script.
 ## Parameters
 
 - `name`: A string. The variable the condition tests.
-- `op`: A string (see [CmpOp](CmpOp.md)). How the variable compares against `value`.
+- `op`: A string (see [StoryCompareOp](StoryCompareOp.md)). How the variable compares against `value`.
 - `value`: An integer. The literal compared against.
-- `target`: An integer. Node index play jumps to when the condition passes.
+- `target`: An integer. BehaviorNode index play jumps to when the condition passes.

@@ -7,19 +7,6 @@ use crate::assets::{Camera3DArgs, CameraController};
 use crate::ecs::Component;
 
 /// Declares the 3D camera. One per scene.
-///
-/// ```jsonl
-/// {
-///   "name": "main_camera",
-///   "type": "Camera3D",
-///   "args": {
-///     "fov_y_degrees": 80.0,
-///     "near": 0.05,
-///     "far": 500.0,
-///     "position": [0.0, 4.0, 0.0]
-///   }
-/// }
-/// ```
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera3D {
     /// Vertical field of view in degrees.

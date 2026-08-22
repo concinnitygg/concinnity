@@ -35,13 +35,6 @@ mesh of its own. Declare an [EngineDefaults](EngineDefaults.md) with
 `"sky": false` to use the map for image-based lighting only, with the
 background left to `clear_color` or your own geometry.
 
-```jsonl
-{"name":"env_studio","type":"EnvironmentMap","args":{"source":"assets/hdri/studio.hdr"}}
-{"name":"env_outdoor","type":"EnvironmentMap","args":{"source":"assets/hdri/sky.hdr","prefilter_face_size":512}}
-{"name":"env_galaxy","type":"EnvironmentMap","args":{"source":"assets/hdri/galaxy.glb"}}
-{"name":"env_proc","type":"EnvironmentMap","args":{"generator":"sky"}}
-```
-
 ## Parameters
 
 - `source`: A string. Path to the source equirectangular panorama -- a Radiance `.hdr`, or a panorama-sphere `.glb` / `.gltf` -- relative to the project root. Mutually exclusive with `generator`.

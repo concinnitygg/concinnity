@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn qem_returns_input_when_target_meets_or_exceeds_tri_count() {
-        // 8-corner cube, 12 triangles. Target ≥ 12 means no work to do.
+        // 8-corner cube, 12 triangles. EntityTarget ≥ 12 means no work to do.
         let verts = vec![
             pos(-1.0, -1.0, -1.0),
             pos(1.0, -1.0, -1.0),

@@ -2296,7 +2296,7 @@ fn story_session(lines: &[&str]) -> (EditorHook, World) {
     (h, world)
 }
 
-fn story_key_input(key: crate::assets::Key) -> FrameInput {
+fn story_key_input(key: crate::assets::InputKey) -> FrameInput {
     FrameInput {
         captured_key: Some(key),
         viewport: [1280.0, 720.0],
@@ -2316,14 +2316,17 @@ fn line_caret(world: &mut World, caret: usize) {
 fn story_enter_splits_and_backspace_joins() {
     let (mut h, mut world) = story_session(&["hello world"]);
     line_caret(&mut world, 5);
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.story_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.story_lines, ["hello", " world"]);
     assert_eq!(h.story_line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, " world");
     assert_eq!(input.caret, 0, "the caret starts the new line");
 
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Backspace));
+    h.story_keys(
+        &mut world,
+        &story_key_input(crate::assets::InputKey::Backspace),
+    );
     assert_eq!(h.story_lines, ["hello world"]);
     assert_eq!(h.story_line, 0);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
@@ -2334,7 +2337,7 @@ fn story_enter_splits_and_backspace_joins() {
         "the view yields focus that frame"
     );
     // The next key frame clears the blur.
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Left));
+    h.story_keys(&mut world, &story_key_input(crate::assets::InputKey::Left));
     assert!(!h.story_blur);
 }
 
@@ -2343,15 +2346,15 @@ fn story_enter_splits_and_backspace_joins() {
 fn story_up_down_commit_and_navigate() {
     let (mut h, mut world) = story_session(&["one", "two", "three"]);
     widget::seed_field(&mut world, story_panel::LINE_INPUT, "ONE edited");
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Down));
+    h.story_keys(&mut world, &story_key_input(crate::assets::InputKey::Down));
     assert_eq!(h.story_lines[0], "ONE edited", "moving commits the edit");
     assert_eq!(h.story_line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, "two");
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Up));
+    h.story_keys(&mut world, &story_key_input(crate::assets::InputKey::Up));
     assert_eq!(h.story_line, 0);
     // Up at the first line stays put.
-    h.story_keys(&mut world, &story_key_input(crate::assets::Key::Up));
+    h.story_keys(&mut world, &story_key_input(crate::assets::InputKey::Up));
     assert_eq!(h.story_line, 0);
 }
 
@@ -2609,7 +2612,7 @@ fn import_enter_key_adds() {
     let glb = dir.join("prop.glb");
     std::fs::write(&glb, b"glb").unwrap();
     type_path(&mut world, &glb.to_string_lossy());
-    h.import_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.import_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.entries.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3184,8 +3187,8 @@ fn undo_drops_entry_indexed_ui_state() {
 // field owns the keyboard or the world holds the cursor (play mode).
 #[test]
 fn ctrl_z_y_step_history_unless_typing_or_playing() {
-    use crate::assets::Key;
-    let step = |h: &mut EditorHook, key: Key| {
+    use crate::assets::InputKey;
+    let step = |h: &mut EditorHook, key: InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
             ctrl: true,
@@ -3200,7 +3203,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
 
     // Typing in the Story panel: the shortcut must not fire.
     h.story_focus = true;
-    step(&mut h, Key::Z);
+    step(&mut h, InputKey::Z);
     assert_eq!(
         h.entries.len(),
         1,
@@ -3210,13 +3213,13 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
 
     // Play mode: the world owns the keyboard.
     h.sim.state = sim::SimState::Playing;
-    step(&mut h, Key::Z);
+    step(&mut h, InputKey::Z);
     assert_eq!(h.entries.len(), 1, "suppressed in play mode");
     h.sim.state = sim::SimState::Stopped;
 
-    step(&mut h, Key::Z);
+    step(&mut h, InputKey::Z);
     assert!(h.entries.is_empty(), "Ctrl+Z undoes the edit");
-    step(&mut h, Key::Y);
+    step(&mut h, InputKey::Y);
     assert_eq!(h.entries.len(), 1, "Ctrl+Y redoes it");
 }
 
@@ -3875,7 +3878,7 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
 fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
     let mut world = world_with_input(FrameInput {
         ctrl: true,
-        captured_key: Some(crate::assets::Key::D),
+        captured_key: Some(crate::assets::InputKey::D),
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
@@ -4697,7 +4700,7 @@ fn multi_rotate_orbits_members_about_the_centroid() {
 #[test]
 fn gizmo_mode_keys_switch_unless_typing() {
     let mut h = hook(Vec::new());
-    let key = |h: &mut EditorHook, k: crate::assets::Key| {
+    let key = |h: &mut EditorHook, k: crate::assets::InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
             captured_key: Some(k),
@@ -4705,11 +4708,11 @@ fn gizmo_mode_keys_switch_unless_typing() {
         });
         h.tick(&mut world);
     };
-    key(&mut h, crate::assets::Key::R);
+    key(&mut h, crate::assets::InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Rotate);
-    key(&mut h, crate::assets::Key::S);
+    key(&mut h, crate::assets::InputKey::S);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Scale);
-    key(&mut h, crate::assets::Key::T);
+    key(&mut h, crate::assets::InputKey::T);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
 
     // Shift+F toggles the fly camera through the same guard; plain F frames
@@ -4717,13 +4720,13 @@ fn gizmo_mode_keys_switch_unless_typing() {
     let shift_f = |h: &mut EditorHook| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
-            captured_key: Some(crate::assets::Key::F),
+            captured_key: Some(crate::assets::InputKey::F),
             shift: true,
             ..Default::default()
         });
         h.tick(&mut world);
     };
-    key(&mut h, crate::assets::Key::F);
+    key(&mut h, crate::assets::InputKey::F);
     assert!(!h.fly, "plain F frames instead of flying");
     shift_f(&mut h);
     assert!(h.fly, "Shift+F starts the fly camera");
@@ -4732,7 +4735,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
 
     // A focused text field keeps the keys for typing.
     h.story_focus = true;
-    key(&mut h, crate::assets::Key::R);
+    key(&mut h, crate::assets::InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
     shift_f(&mut h);
     assert!(!h.fly, "typing keeps F");
@@ -5059,7 +5062,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     let input = FrameInput {
-        captured_key: Some(crate::assets::Key::Backtick),
+        captured_key: Some(crate::assets::InputKey::Backtick),
         ..Default::default()
     };
 
@@ -5105,7 +5108,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
     assert_eq!(h.console_ghost(&world), "be_red");
     h.console_focus = true;
     let tab = FrameInput {
-        captured_key: Some(crate::assets::Key::Tab),
+        captured_key: Some(crate::assets::InputKey::Tab),
         ..Default::default()
     };
     h.console_keys(&mut world, &tab);
@@ -5124,7 +5127,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
 fn tick_opens_the_console_blurred_then_focuses() {
     isolate_state_dir();
     let mut world = world_with_input(FrameInput {
-        captured_key: Some(crate::assets::Key::Backtick),
+        captured_key: Some(crate::assets::InputKey::Backtick),
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
@@ -5361,11 +5364,11 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
     assert!(h.behavior_focus, "a typed row is ready to type into");
 
     widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "2.5");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(open_args(&h)["delay"], serde_json::json!(2.5));
 
     widget::seed_field(&mut world, behavior_panel::VALUE_INPUT, "soon");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(
         open_args(&h)["delay"],
         serde_json::json!(2.5),
@@ -5504,7 +5507,7 @@ fn behavior_rename_commits_on_enter() {
     );
 
     type_name(&mut world, "  welcome  ");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.behavior_data().name, "welcome", "trimmed on the way in");
     assert!(!h.behavior_name_focus, "committing gives up the keyboard");
     assert!(h.dirty && h.rebuild_preview, "renaming is a world edit");
@@ -5522,7 +5525,7 @@ fn behavior_rename_keeps_the_name_unique() {
     ]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "chase");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
     assert_eq!(
         widget::field_text(&world, behavior_panel::NAME_INPUT),
@@ -5532,7 +5535,7 @@ fn behavior_rename_keeps_the_name_unique() {
 
     // Committing a name unchanged is not a collision with itself.
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
 }
 
@@ -5541,7 +5544,7 @@ fn behavior_rename_refuses_a_blank_name() {
     let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "   ");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
 
     assert_eq!(h.behavior_data().name, "greet", "nothing was written");
     assert!(!h.dirty, "and no edit was recorded");
@@ -5566,7 +5569,7 @@ fn behavior_rename_reruns_the_checker_under_the_new_name() {
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "still_broken");
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
 
     let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
         panic!("expected the error to survive the rename");
@@ -5588,7 +5591,7 @@ fn behavior_name_reverts_when_it_loses_focus() {
         widget::field_text(&world, behavior_panel::NAME_INPUT),
         "greet"
     );
-    h.behavior_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.behavior_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(h.behavior_data().name, "greet");
     assert!(!h.dirty);
 }
@@ -6015,7 +6018,7 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
     }
 }
 
-// Escape arrives as its own one-frame pulse rather than as a `Key`.
+// Escape arrives as its own one-frame pulse rather than as a `InputKey`.
 fn behavior_escape_input() -> FrameInput {
     FrameInput {
         escape: true,
@@ -6024,7 +6027,7 @@ fn behavior_escape_input() -> FrameInput {
     }
 }
 
-fn press_behavior_key(h: &mut EditorHook, world: &mut World, key: crate::assets::Key) {
+fn press_behavior_key(h: &mut EditorHook, world: &mut World, key: crate::assets::InputKey) {
     h.behavior_keys(world, &story_key_input(key));
 }
 
@@ -6053,17 +6056,17 @@ fn behavior_arrows_step_the_outline_one_row_at_a_time() {
     )]);
     assert_eq!(h.behavior_row, None);
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(h.behavior_row, Some(0));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(h.behavior_row, Some(1));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Up);
     assert_eq!(h.behavior_row, Some(0));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Up);
     assert_eq!(h.behavior_row, Some(0), "the top of the list does not wrap");
 
     // Left and Right have nothing to follow in a list.
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(h.behavior_row, Some(0));
 }
 
@@ -6076,7 +6079,7 @@ fn behavior_arrows_scroll_the_outline_to_keep_the_selection_showing() {
         serde_json::json!({"on": "start", "do": body}),
     )]);
     for _ in 0..25 {
-        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+        press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     }
     let row = h.behavior_row.expect("a row is selected");
     assert_eq!(row, 24);
@@ -6103,18 +6106,18 @@ fn behavior_arrows_follow_the_chart_chain_and_cross_its_branches() {
     assert_eq!(h.behavior_mode, ViewMode::Chart);
 
     // With nothing selected the chart starts at its first card, the trigger.
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("on tick"));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(selected_card_title(&h).as_deref(), Some("hide"));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Up);
     assert_eq!(selected_card_title(&h).as_deref(), Some("show"));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Left);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Left);
     assert_eq!(selected_card_title(&h).as_deref(), Some("if"));
 }
 
@@ -6143,15 +6146,15 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
         "the map opens on the behavior that was showing"
     );
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("score"));
     // A variable card stands for no behavior, so Enter leaves the map alone.
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert_eq!(h.behavior_mode, ViewMode::Overview);
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Right);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("react"));
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert_eq!(h.behavior_index, 1);
     assert_eq!(h.behavior_data().name, "react");
     assert_eq!(h.behavior_mode, ViewMode::Chart);
@@ -6168,14 +6171,14 @@ fn behavior_enter_opens_the_palette_and_its_arrows_pick_from_it() {
     select_behavior(&mut h, &mut world, "do");
     assert!(!h.behavior_focus, "a list row takes no typed value");
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(h.behavior_picking, "Enter opened the palette");
     assert_eq!(h.behavior_pick, 0);
 
     let second = h.behavior_data().picks[1].verb;
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(h.behavior_pick, 1);
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
 
     assert!(!h.behavior_picking, "picking closed the palette");
     let body = open_args(&h)["do"].clone();
@@ -6195,7 +6198,7 @@ fn behavior_enter_on_a_row_with_no_options_opens_nothing() {
     )]);
     select_behavior(&mut h, &mut world, "name");
     assert!(h.behavior_data().picks.is_empty());
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(!h.behavior_picking);
 }
 
@@ -6208,7 +6211,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
         serde_json::json!({"on": "tick", "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     let total = h.behavior_data().picks.len();
     assert!(
         total > behavior_panel::PICK_POOL,
@@ -6216,7 +6219,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
     );
 
     for _ in 0..behavior_panel::PICK_POOL {
-        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+        press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     }
     assert_eq!(h.behavior_pick, behavior_panel::PICK_POOL);
     assert!(h.behavior_pick_scroll > 0, "the window followed it down");
@@ -6225,7 +6228,7 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
 
     // And back up again, dragging the window with it.
     for _ in 0..behavior_panel::PICK_POOL {
-        press_behavior_key(&mut h, &mut world, crate::assets::Key::Up);
+        press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Up);
     }
     assert_eq!(h.behavior_pick, 0);
     assert_eq!(h.behavior_pick_scroll, 0);
@@ -6240,7 +6243,7 @@ fn behavior_escape_clears_one_waiting_state_at_a_time() {
         serde_json::json!({"on": "tick", "do": [{"let": {"name": "t", "value": {"int": 1}}}]}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(h.behavior_picking);
     h.behavior_keys(&mut world, &behavior_escape_input());
     assert!(!h.behavior_picking, "the palette closed without picking");
@@ -6290,11 +6293,14 @@ fn behavior_horizontal_keys_stay_with_the_caret_while_a_value_is_focused() {
     assert!(h.behavior_focus);
     let row = h.behavior_row;
 
-    for key in [crate::assets::Key::Left, crate::assets::Key::Right] {
+    for key in [
+        crate::assets::InputKey::Left,
+        crate::assets::InputKey::Right,
+    ] {
         press_behavior_key(&mut h, &mut world, key);
         assert_eq!(h.behavior_row, row, "{key:?} moved the selection");
     }
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_ne!(h.behavior_row, row, "Down still steps the outline");
 }
 
@@ -6307,11 +6313,11 @@ fn behavior_name_field_holds_the_arrows_until_it_is_given_up() {
         serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(h.behavior_row, None, "the arrows did not reach the outline");
 
     h.behavior_keys(&mut world, &behavior_escape_input());
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     assert_eq!(h.behavior_row, Some(0));
 }
 
@@ -6328,7 +6334,7 @@ fn behavior_tab_cycles_through_the_three_views() {
     assert_eq!(h.behavior_mode, ViewMode::Outline);
 
     for want in [ViewMode::Chart, ViewMode::Overview, ViewMode::Outline] {
-        press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+        press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Tab);
         assert_eq!(h.behavior_mode, want);
         assert_eq!(
             h.behavior_row, selected,
@@ -6347,12 +6353,12 @@ fn behavior_tab_leaves_the_view_alone_while_the_name_field_is_focused() {
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "half typed");
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Outline);
     assert!(h.behavior_name_focus, "the field kept the keyboard");
 
     h.behavior_keys(&mut world, &behavior_escape_input());
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Chart);
 }
 
@@ -6365,10 +6371,10 @@ fn behavior_tab_does_nothing_while_the_palette_is_open() {
         serde_json::json!({"on": "tick", "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "do");
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(h.behavior_picking);
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Tab);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Tab);
     assert_eq!(h.behavior_mode, ViewMode::Outline);
     assert!(h.behavior_picking, "the palette is still up");
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
@@ -6540,7 +6546,7 @@ fn behavior_palette_filter_narrows_and_enter_takes_the_best_match() {
     assert!(data.matches.len() < unfiltered, "the query narrowed it");
     assert_eq!(data.picks[data.matches[0]].verb, "for_each");
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(
         open_args(&h)["do"][0].get("for_each").is_some(),
         "the best match is what landed: {:?}",
@@ -6562,7 +6568,7 @@ fn behavior_palette_filter_clears_when_the_palette_closes() {
     assert!(h.behavior_data().matches.len() < unfiltered);
 
     // Picking closes it, and the filter goes with it.
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(h.behavior_filter.is_empty());
     assert_eq!(
         widget::field_text(&world, behavior_panel::FILTER_INPUT),
@@ -6590,7 +6596,7 @@ fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
     )]);
     open_palette(&mut h, &mut world, "do");
     for _ in 0..4 {
-        press_behavior_key(&mut h, &mut world, crate::assets::Key::Down);
+        press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Down);
     }
     assert_eq!(h.behavior_pick, 4);
 
@@ -6600,7 +6606,7 @@ fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
     assert_eq!(h.behavior_pick_scroll, 0);
     assert!(h.behavior_data().matches.len() <= 4);
 
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(
         open_args(&h)["do"][0].get("spawn").is_some(),
         "Enter still picked: {:?}",
@@ -6622,7 +6628,7 @@ fn behavior_palette_survives_a_query_nothing_answers() {
     assert!(h.behavior_picking, "the palette is still up");
 
     // Enter has nothing to insert, and nothing is written.
-    press_behavior_key(&mut h, &mut world, crate::assets::Key::Enter);
+    press_behavior_key(&mut h, &mut world, crate::assets::InputKey::Enter);
     assert!(h.behavior_picking);
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
 
@@ -6670,7 +6676,7 @@ fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
     );
 }
 
-fn ctrl_key_input(key: crate::assets::Key) -> FrameInput {
+fn ctrl_key_input(key: crate::assets::InputKey) -> FrameInput {
     FrameInput {
         captured_key: Some(key),
         ctrl: true,
@@ -6729,14 +6735,14 @@ fn behavior_ctrl_c_holds_a_node_and_ctrl_v_places_it() {
         serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
     )]);
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::C));
     assert!(h.behavior_clip.is_some(), "the node is held");
     assert_eq!(body_verbs(&h), ["save", "hide"], "copying wrote nothing");
 
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
     // Still held, so a second paste lands beside the first copy.
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide", "hide"]);
 }
 
@@ -6749,14 +6755,14 @@ fn behavior_duplicate_leaves_what_is_held_alone() {
         serde_json::json!({"on": "start", "do": [{"save": {}}, {"hide": {"target": "self"}}]}),
     )]);
     select_behavior(&mut h, &mut world, "save");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::C));
 
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::D));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide"]);
 
     // What was held is still the `save`, and pastes as one.
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::V));
     assert_eq!(body_verbs(&h), ["save", "hide", "hide", "save"]);
 }
 
@@ -6772,7 +6778,7 @@ fn behavior_clipboard_carries_a_node_to_another_behavior() {
         behavior("greet", serde_json::json!({"on": "tick", "do": []})),
     ]);
     select_behavior(&mut h, &mut world, "hide");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::C));
 
     h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
     assert_eq!(h.behavior_data().name, "greet");
@@ -6780,7 +6786,7 @@ fn behavior_clipboard_carries_a_node_to_another_behavior() {
 
     // The empty body's own row is the list, so a paste there appends.
     select_behavior(&mut h, &mut world, "do");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::V));
     assert_eq!(body_verbs(&h), ["hide"]);
 }
 
@@ -6793,10 +6799,10 @@ fn behavior_paste_is_refused_by_a_list_of_another_kind() {
         serde_json::json!({"on": "start", "scope": ["Prop"], "do": [{"save": {}}]}),
     )]);
     select_behavior(&mut h, &mut world, "save");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::C));
 
     select_behavior(&mut h, &mut world, "scope");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::V));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::V));
     assert_eq!(open_args(&h)["scope"], serde_json::json!(["Prop"]));
     assert_eq!(body_verbs(&h), ["save"], "and the body is untouched too");
 }
@@ -6809,9 +6815,9 @@ fn behavior_copy_of_a_non_member_holds_nothing() {
         serde_json::json!({"on": "start", "do": [{"save": {}}]}),
     )]);
     select_behavior(&mut h, &mut world, "on");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::C));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::C));
     assert!(h.behavior_clip.is_none());
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::D));
     assert_eq!(
         body_verbs(&h),
         ["save"],
@@ -6829,11 +6835,11 @@ fn behavior_clipboard_keys_stand_down_while_a_field_is_focused() {
     )]);
     select_behavior(&mut h, &mut world, "name");
     assert!(h.behavior_focus, "a text row takes the value field");
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::D));
     assert_eq!(body_verbs(&h), ["let"], "nothing was duplicated");
 
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::Key::D));
+    h.behavior_keys(&mut world, &ctrl_key_input(crate::assets::InputKey::D));
     assert_eq!(body_verbs(&h), ["let"]);
 }
 
@@ -7019,7 +7025,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     select_var(&mut h, &mut world, "spawn");
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "1, 2, 3");
-    h.variables_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.variables_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -7029,7 +7035,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     // field goes back to what the table holds.
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "nonsense");
-    h.variables_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.variables_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -7052,7 +7058,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
     select_var(&mut h, &mut world, "score");
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "points");
-    h.variables_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.variables_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
@@ -7065,7 +7071,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
 
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "   ");
-    h.variables_keys(&mut world, &story_key_input(crate::assets::Key::Enter));
+    h.variables_keys(&mut world, &story_key_input(crate::assets::InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
@@ -7208,13 +7214,13 @@ fn transport_keys_play_pause_stop_and_step() {
         captured_key: Some(k),
         ..Default::default()
     };
-    h.sim_keys(&key(crate::assets::Key::P, false));
+    h.sim_keys(&key(crate::assets::InputKey::P, false));
     assert!(h.sim.playing(), "Ctrl+P plays");
-    h.sim_keys(&key(crate::assets::Key::P, false));
+    h.sim_keys(&key(crate::assets::InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Paused, "Ctrl+P again pauses");
-    h.sim_keys(&key(crate::assets::Key::Period, false));
+    h.sim_keys(&key(crate::assets::InputKey::Period, false));
     assert!(h.sim.take_run_frame(), "Ctrl+Period queues one step");
-    h.sim_keys(&key(crate::assets::Key::P, true));
+    h.sim_keys(&key(crate::assets::InputKey::P, true));
     assert_eq!(h.sim.state, sim::SimState::Stopped, "Ctrl+Shift+P stops");
     assert!(
         h.rebuild_preview,
@@ -7223,7 +7229,7 @@ fn transport_keys_play_pause_stop_and_step() {
 
     // A focused text field owns the keyboard.
     h.story_focus = true;
-    h.sim_keys(&key(crate::assets::Key::P, false));
+    h.sim_keys(&key(crate::assets::InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Stopped);
 }
 

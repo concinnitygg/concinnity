@@ -15,12 +15,6 @@ slot the next spawn reuses.
 The spawner's own `Transform` (its position) is where copies appear, so place
 the spawner where you want the stream to originate.
 
-```jsonl
-{"name":"crate","type":"Prop","args":{"mesh":"box_mesh","material":"mat_brick","position":[0.0,1.0,-6.0]}}
-{"name":"fountain","type":"Prop","args":{"mesh":"box_mesh","position":[0.0,1.0,-3.0]}}
-{"name":"fountain_spawner","type":"Spawner","args":{"template":"crate","interval":0.5,"lifetime":2.0}}
-```
-
 ## Parameters
 
 - `template`: A string. Name of the placement to copy on each spawn.

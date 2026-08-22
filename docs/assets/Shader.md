@@ -16,17 +16,6 @@ The engine-internal shadow map covers a ±20 m world-space region centred at
 the origin with 80 m depth. For larger scenes, increase `shadow_map_size` in
 [GraphicsConfig](GraphicsConfig.md) to maintain resolution.
 
-```jsonl
-// Multi-platform:
-{"name":"scene_shader","type":"Shader","args":{
-  "vertex":{"sources":{"metal":"my.metal","hlsl":"my_vert.hlsl","glsl":"my.vert"}},
-  "fragment":{"sources":{"metal":"my.metal","hlsl":"my_frag.hlsl","glsl":"my.frag"}}}}
-
-// Single-platform (macOS only):
-{"name":"scene_shader","type":"Shader","args":{
-  "vertex":{"source":"my.metal"},"fragment":{"source":"my.metal"}}}
-```
-
 A stage that resolves no source for the running backend falls back to the
 engine's own program for that stage, so a Shader may cover only the
 platforms it has sources for.
@@ -36,14 +25,6 @@ platforms it has sources for.
 The first declared Shader is the world's default: everything renders with it
 unless a [Material](Material.md) names another one through its `shader` field.
 A world may declare up to 8 Shaders in total.
-
-```jsonl
-{"name":"scene_shader","type":"Shader","args":{
-  "vertex":{"source":"scene.metal"},"fragment":{"source":"scene.metal"}}}
-{"name":"water_shader","type":"Shader","args":{
-  "vertex":{"source":"water.metal"},"fragment":{"source":"water.metal"}}}
-{"name":"pond_mat","type":"Material","args":{"shader":"water_shader"}}
-```
 
 Three rules come with the second Shader, all enforced at build time:
 

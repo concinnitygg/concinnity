@@ -9,18 +9,18 @@ use crate::assets::Camera3D;
 use framing::CameraPose;
 
 // The bookmark slot a digit key addresses, if any.
-pub(super) fn slot_for(key: crate::assets::Key) -> Option<usize> {
-    use crate::assets::Key;
+pub(super) fn slot_for(key: crate::assets::InputKey) -> Option<usize> {
+    use crate::assets::InputKey;
     Some(match key {
-        Key::Num1 => 0,
-        Key::Num2 => 1,
-        Key::Num3 => 2,
-        Key::Num4 => 3,
-        Key::Num5 => 4,
-        Key::Num6 => 5,
-        Key::Num7 => 6,
-        Key::Num8 => 7,
-        Key::Num9 => 8,
+        InputKey::Num1 => 0,
+        InputKey::Num2 => 1,
+        InputKey::Num3 => 2,
+        InputKey::Num4 => 3,
+        InputKey::Num5 => 4,
+        InputKey::Num6 => 5,
+        InputKey::Num7 => 6,
+        InputKey::Num8 => 7,
+        InputKey::Num9 => 8,
         _ => return None,
     })
 }

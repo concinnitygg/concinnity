@@ -14,7 +14,7 @@ pub(super) struct LabelLayoutScratch {
     // Every measurable label's box this frame, keyed by id.
     boxes: std::collections::HashMap<AssetId, LabelBox>,
     // One container's resolved placements, reused per container.
-    placements: Vec<crate::assets::Placement>,
+    placements: Vec<crate::assets::LabelPlacement>,
     // Every placed label's resolved text origin.
     placed: std::collections::HashMap<AssetId, (f32, f32)>,
 }

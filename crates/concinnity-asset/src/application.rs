@@ -18,10 +18,6 @@ use alloc::string::{String, ToString};
 /// into the world's data. `id` is a reverse-DNS bundle identifier
 /// (e.g. `gg.studio.mygame`); when left empty the export derives one from
 /// `name`. Empty string fields mean "unset".
-///
-/// ```jsonl
-/// {"name":"app","type":"Application","args":{"name":"My Game","id":"gg.studio.mygame","version":"1.0.0","author":"Studio","icon":"art/icon.png"}}
-/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ApplicationArgs {

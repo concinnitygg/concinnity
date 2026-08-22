@@ -565,7 +565,7 @@ fn ops_raise_flags_and_gates_redirect() {
                     StoryPage {
                         gates: vec![StoryGate {
                             name: "asked".to_string(),
-                            op: CmpOp::Ne,
+                            op: StoryCompareOp::Ne,
                             value: 0,
                             target: 1,
                         }],
@@ -613,7 +613,7 @@ fn gated_choices_filter_and_remap() {
                         target: 1,
                         condition: Some(StoryCondition {
                             name: "secret".to_string(),
-                            op: CmpOp::Ne,
+                            op: StoryCompareOp::Ne,
                             value: 0,
                         }),
                     },
@@ -679,7 +679,7 @@ fn menu_gates_redirect_past_the_menu() {
                 }],
                 choice_gates: vec![StoryGate {
                     name: "skip".to_string(),
-                    op: CmpOp::Ne,
+                    op: StoryCompareOp::Ne,
                     value: 0,
                     target: 1,
                 }],
@@ -924,7 +924,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
                     StoryPage {
                         gates: vec![StoryGate {
                             name: "trips".to_string(),
-                            op: CmpOp::Ge,
+                            op: StoryCompareOp::Ge,
                             value: 2,
                             target: 1,
                         }],
@@ -1667,7 +1667,7 @@ fn pageless_choice_gate_redirects_on_entry() {
                 }],
                 choice_gates: vec![StoryGate {
                     name: "x".to_string(),
-                    op: CmpOp::Eq,
+                    op: StoryCompareOp::Eq,
                     value: 0,
                     target: 1,
                 }],
@@ -1701,7 +1701,7 @@ fn first_page_gate_redirects_on_node_entry() {
                 pages: vec![StoryPage {
                     gates: vec![StoryGate {
                         name: "x".to_string(),
-                        op: CmpOp::Eq,
+                        op: StoryCompareOp::Eq,
                         value: 0,
                         target: 1,
                     }],
@@ -1740,7 +1740,7 @@ fn all_gated_choices_fall_through() {
                     target: 2,
                     condition: Some(StoryCondition {
                         name: "secret".to_string(),
-                        op: CmpOp::Ne,
+                        op: StoryCompareOp::Ne,
                         value: 0,
                     }),
                 }],
@@ -1772,7 +1772,7 @@ fn gate_loop_is_stopped_by_the_hop_limit() {
     };
     let gate_to = |target: u32| StoryGate {
         name: "x".to_string(),
-        op: CmpOp::Eq,
+        op: StoryCompareOp::Eq,
         value: 0,
         target,
     };

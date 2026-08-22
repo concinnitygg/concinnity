@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 
 use crate::assets::{
-    Behavior, BehaviorSource, DespawnRequest, InteractSignal, PlayCue, ReparentRequest,
+    Behavior, BehaviorSource, DespawnRequest, InteractEvent, PlayCue, ReparentRequest,
     SceneCommand, ScreenCommand, SpawnRequest, StoryCommand, StoryPlayback, Transform, Variables,
     VisibilityRequest, VolumeEvent,
 };
@@ -76,7 +76,7 @@ impl Instance {
         var_slot: Option<u16>,
         dt: f32,
         crossings: &[VolumeEvent],
-        presses: &[InteractSignal],
+        presses: &[InteractEvent],
     ) -> bool {
         self.cooldown_left = (self.cooldown_left - dt).max(0.0);
         let sourced = match &def.on {
@@ -146,7 +146,7 @@ pub struct BehaviorSystem {
     crossing_cursor: EventCursor,
     press_cursor: EventCursor,
     crossings: Vec<VolumeEvent>,
-    presses: Vec<InteractSignal>,
+    presses: Vec<InteractEvent>,
     save_dir: PathBuf,
     // Sampled from the `TransientSaves` resource at init: while true, the
     // state file is neither read nor written, so a preview session starts
@@ -295,7 +295,7 @@ impl System for BehaviorSystem {
             self.crossings
                 .extend(events.read(&mut self.crossing_cursor).copied());
         }
-        if let Some(events) = ctx.events::<InteractSignal>() {
+        if let Some(events) = ctx.events::<InteractEvent>() {
             self.presses
                 .extend(events.read(&mut self.press_cursor).copied());
         }

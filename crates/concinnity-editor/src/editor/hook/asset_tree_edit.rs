@@ -289,7 +289,7 @@ impl EditorHook {
 
     // Enter blurs the search field (the filter applies live while typing).
     pub(super) fn tree_keys(&mut self, _world: &mut World, input: &FrameInput) {
-        if self.search_focus && input.captured_key == Some(crate::assets::Key::Enter) {
+        if self.search_focus && input.captured_key == Some(crate::assets::InputKey::Enter) {
             self.search_focus = false;
         }
     }

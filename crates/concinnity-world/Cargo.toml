@@ -17,7 +17,6 @@ publish = false
 [lib]
 name = "concinnity_world"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies]
 concinnity-core = { path = "../concinnity-core" }

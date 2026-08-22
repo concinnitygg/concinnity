@@ -19,8 +19,13 @@
 /// overlap freely: a surface inside several boxes blends all of them, so reflections
 /// cross-fade smoothly as the camera moves between probes.
 ///
-/// ```jsonl
-/// {"name":"lobby_probe","type":"ReflectionProbe","args":{"position":[0.0,1.7,0.0],"half_extents":[8.0,4.0,8.0]}}
+/// ```rust
+/// # use concinnity_asset::ReflectionProbe;
+/// ReflectionProbe {
+///     position: [0.0, 1.7, 0.0],
+///     half_extents: [8.0, 4.0, 8.0],
+///     ..Default::default()
+/// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
