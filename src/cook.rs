@@ -1,5 +1,8 @@
 //! Compile authored worlds into runnable [`World`]s, entirely in memory.
 //!
+//! Requires the `cook` feature, which is off by default: the importers this
+//! module needs are build-time weight a shipped application does not carry.
+//!
 //! The runtime plays compiled blobs, never `world.jsonl` source declarations.
 //! This module owns the in-process compile step: validate and expand the
 //! declarations, compile each asset's payload, then assemble the components

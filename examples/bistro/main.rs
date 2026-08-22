@@ -9,7 +9,7 @@
 //!
 //! The renderer is heavy here (2.8M triangles, ray-traced reflections, SSGI).
 //! Run in release for full frame rate:
-//! `cargo run --example bistro --release`.
+//! `cargo run --example bistro --release --features cook`.
 
 use std::io;
 use std::path::{Path, PathBuf};

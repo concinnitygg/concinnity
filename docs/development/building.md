@@ -1,4 +1,4 @@
-# Building Concinnity
+# Build Guide
 
 The rendering backend is chosen automatically from the target platform:
 
@@ -7,6 +7,25 @@ The rendering backend is chosen automatically from the target platform:
 | macOS    | Metal           | Build with `--features vulkan` to use Vulkan. |
 | Windows  | DirectX 12      | Build with `--features vulkan` to use Vulkan. |
 | Linux    | Vulkan          | Only backend available.                       |
+
+## Cargo features
+
+The `concinnity` facade crate, which is what an application depends on, has two:
+
+| Feature  | Default | What it adds                                                                |
+| -------- | ------- | --------------------------------------------------------------------------- |
+| `cook`   | off     | `concinnity::cook`, which compiles authored assets into a world in process. |
+| `vulkan` | off     | The Vulkan backend, where the platform default is Metal or DirectX.         |
+
+A default build is the runtime alone. `cook` pulls in the asset importers
+(glTF, FBX, textures, fonts) and 43 further dependencies in total, which is
+build-time weight an application playing an already-compiled world does not
+carry. Authoring through the `cn` CLI needs nothing extra; the feature is for
+declaring a world in Rust, as `examples/bistro` does.
+
+`vulkan` is mirrored by every crate between the facade and the device backends,
+and by the `cn` CLI, so `--features vulkan` means the same thing whichever of
+them a build targets.
 
 ## Common prerequisites
 

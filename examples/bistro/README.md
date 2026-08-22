@@ -14,7 +14,7 @@ config, and a stat HUD.
 ## Running
 
 ```
-cargo run --example bistro --release
+cargo run --example bistro --release --features cook
 ```
 
 The first run downloads the Bistro asset pack (~833 MB) into
@@ -23,7 +23,9 @@ straight to rendering. The download is a runtime preflight, so `cargo build`
 never touches the network.
 
 Use `--release`: the scene is GPU-heavy and a debug build runs well below full
-frame rate. Free-fly the camera with WASD + mouse.
+frame rate. `--features cook` is what gives the example `concinnity::cook`,
+which compiles the world in `world.rs` in memory. Free-fly the camera with WASD
++ mouse.
 
 ### Asset fetch overrides
 

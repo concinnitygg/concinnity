@@ -38,7 +38,7 @@ supported asset types and fields.
 
 This project is in **early development** and no releases are available yet.
 
-The [Building Guide](docs/development/building.md) covers how to manually
+The [Build Guide](docs/development/building.md) covers how to manually
 build the project.
 
 ## License

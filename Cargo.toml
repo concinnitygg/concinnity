@@ -13,8 +13,11 @@ autobins = false
 name = "concinnity"
 path = "src/lib.rs"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
-default = ["cook"]
+default = []
 cook = ["dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
 vulkan = ["concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
 
@@ -27,10 +30,16 @@ concinnity-world = { path = "crates/concinnity-world", optional = true }
 concinnity-shader = { path = "crates/concinnity-shader", optional = true }
 
 [dev-dependencies]
+concinnity-core = { path = "crates/concinnity-core" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", features = ["fetch"] }
 
 [build-dependencies]
 concinnity-toolchain = { path = "crates/concinnity-toolchain" }
+
+[[example]]
+name = "bistro"
+path = "examples/bistro/main.rs"
+required-features = ["cook"]
 
 [lints]
 workspace = true
@@ -55,7 +64,7 @@ unreachable_pub = "warn"
 missing_docs = "warn"
 
 [workspace.package]
-version = "0.18.47"
+version = "0.18.48"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
