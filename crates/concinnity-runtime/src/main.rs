@@ -12,22 +12,6 @@ use std::path::{Path, PathBuf};
 
 concinnity_memory::install_global_allocator!();
 
-// Windows' system `d3d12.dll` reads these two symbols from the host EXE's PE
-// export table at process start to load the bundled Agility SDK D3D12 runtime
-// in place of the older OS copy (modern FidelityFX FSR3 needs it). The build
-// script copies the Agility DLLs into `<exe dir>/D3D12/` and emits the matching
-// linker exports. Mirrors examples/bistro and concinnity-editor; keep the
-// version in sync when bumping the Agility SDK.
-#[cfg(backend_dx)]
-#[unsafe(no_mangle)]
-#[used]
-pub static D3D12SDKVersion: u32 = 619;
-
-#[cfg(backend_dx)]
-#[unsafe(no_mangle)]
-#[used]
-pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
-
 // Backend stamp read back by `cn export`.
 //
 // A shipped player consumes shaders in exactly one format, fixed by the backend

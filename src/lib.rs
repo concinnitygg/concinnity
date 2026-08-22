@@ -1,20 +1,11 @@
 //! Concinnity is a graphics application framework: construct an [`App`],
-//! populate its [`World`] with assets, and run it on the engine's runtime
-//! loop.
-//!
-//! The runtime plays compiled blobs. Worlds are authored either as
-//! `world.jsonl` declarations or as typed specs, and compiled in memory with
-//! the [`world`] module (behind the default-on `world` feature). The feature
-//! gates authoring worlds from source, not worlds themselves: the [`World`]
-//! type is always present, so a shipped player that only loads prebuilt
-//! blobs can depend on this crate with `default-features = false`, which
-//! reduces the dependency set to the runtime tier.
+//! populate its [`World`] with components, and run it on the engine's
+//! runtime loop.
 //!
 //! # Creating an application
 //!
 //! A [`World`] is constructed first, then handed to an [`App`], which runs
-//! it. This is the `cn init` starter world written in code: a window and a
-//! line of text.
+//! it.
 //!
 //! ```no_run
 //! use concinnity::assets::{GraphicsConfig, TextLabel};
@@ -28,44 +19,15 @@
 //!         ..Default::default()
 //!     });
 //!
-//!     let mut app = App::new();
-//!     app.load_world(world);
-//!     app.run()
+//!     App::from_world(world).run()
 //! }
 //! ```
 //!
 //! A [`GraphicsConfig`](assets::GraphicsConfig) is what gives the app a
-//! window. Without one the world runs headless, which is what a test or a
-//! simulation-only tool wants.
-//!
-//! # Loading compiled blobs and running
-//!
-//! A shipped app plays the blobs a prior build wrote under the state dir:
-//!
-//! ```no_run
-//! use concinnity::{App, init_logging};
-//!
-//! fn main() -> std::io::Result<()> {
-//!     init_logging();
-//!     let mut app = App::new();
-//!     app.load_blob().expect("compiled blobs under the state dir");
-//!     app.run()
-//! }
-//! ```
-//!
-//! For a packaged binary whose content dir sits beside the executable,
-//! [`run_from`] wraps the same flow with the state root pinned there.
-//!
-//! # Authoring a world in code
-//!
-//! With the `world` feature, typed asset specs or `world.jsonl` content
-//! compile straight into a runnable [`World`]; see [`world`] for the
-//! examples.
+//! window.
 
+pub use concinnity_engine::App;
 pub use concinnity_engine::ecs::World;
-pub use concinnity_engine::{
-    App, PipelineMode, RunOptions, init_logging, run_from, set_writable_state_dir,
-};
 pub use concinnity_memory::install_global_allocator;
 
 /// The runtime asset vocabulary (`Application`, `Camera3D`, `Room`,
@@ -74,14 +36,8 @@ pub mod assets {
     pub use concinnity_engine::assets::*;
 }
 
-/// State-tree anchoring: where `.concinnity/` (blobs, caches, saves,
-/// settings) resolves from.
-pub mod paths {
-    pub use concinnity_store::paths::*;
-}
-
-#[cfg(feature = "world")]
-pub mod world;
+#[cfg(feature = "cook")]
+pub mod cook;
 
 #[cfg(test)]
 mod tests {
@@ -99,8 +55,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut app = App::new();
-        app.load_world(world);
+        let mut app = App::from_world(world);
         assert_eq!(app.start(), Ok(()));
     }
 }

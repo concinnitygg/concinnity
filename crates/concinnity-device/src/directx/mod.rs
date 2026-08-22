@@ -1,6 +1,7 @@
 // D3D12 rendering backend. Gated by #[cfg(backend_dx)] on the mod declaration
 // in lib.rs; compiled on Windows unless the `vulkan` feature is enabled.
 
+mod agility;
 mod allocator;
 mod auto_exposure;
 mod backend;

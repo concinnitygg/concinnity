@@ -345,6 +345,96 @@ macro_rules! define_component_type {
 
 concinnity_core::for_each_component!(define_component_type);
 
+// The authored-value trait: the bridge from a typed authoring struct to the
+// world line that declares it. Implemented for every declarable asset's args
+// schema (the `args:` override where the authored form diverges from the
+// component, the component itself where it does not) and for every resource
+// asset, so a caller hands the cook a typed value instead of a name/type/args
+// triple assembled by hand.
+pub trait Authored: serde::Serialize {
+    /// The registered asset type, as it appears in a world line's `type`.
+    const TYPE: &'static str;
+}
+
+// Runtime-only entries are never authored, so they get no impl; every other
+// entry (including the `manual` ones, whose hand-written `Component` impl is
+// unrelated to authoring) resolves its authored type through `__meta_args_ty`.
+macro_rules! __authored_component {
+    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
+        $( __authored_component!(@one $variant $ty { $($meta)* }); )+
+    };
+    (@one $variant:ident $ty:path { runtime $($rest:tt)* }) => {};
+    (@one $variant:ident $ty:path { $($meta:tt)* }) => {
+        impl Authored for __meta_args_ty!($ty; $($meta)*) {
+            const TYPE: &'static str = stringify!($variant);
+        }
+    };
+}
+
+// Resource assets carry no `args:` divergence: the declared type is the
+// authored type.
+macro_rules! __authored_resource {
+    ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
+        $(
+            impl Authored for $ty {
+                const TYPE: &'static str = stringify!($variant);
+            }
+        )+
+    };
+}
+
+concinnity_core::for_each_component!(__authored_component);
+concinnity_core::for_each_resource_asset!(__authored_resource);
+
+/// Serialize one authored asset into the world line that declares it, newline
+/// included. The caller never names a JSON type: the line is finished text.
+pub fn asset_line<T: Authored>(name: &str, value: &T) -> std::io::Result<String> {
+    let bad =
+        |e: serde_json::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string());
+    let args = serde_json::to_value(value).map_err(bad)?;
+    let line = serde_json::json!({ "name": name, "type": T::TYPE, "args": args });
+    let mut out = serde_json::to_string(&line).map_err(bad)?;
+    out.push('\n');
+    Ok(out)
+}
+
+#[cfg(test)]
+mod authored_tests {
+    use super::*;
+
+    // The three shapes the generation has to cover: an args-schema override, a
+    // pass-through component, and a resource asset.
+    #[test]
+    fn authored_types_report_their_registered_name() {
+        assert_eq!(<crate::assets::RoomArgs as Authored>::TYPE, "Room");
+        assert_eq!(
+            <crate::assets::DirectionalLight as Authored>::TYPE,
+            "DirectionalLight"
+        );
+        assert_eq!(<crate::assets::Texture as Authored>::TYPE, "Texture");
+        assert_eq!(
+            <crate::assets::EnvironmentMap as Authored>::TYPE,
+            "EnvironmentMap"
+        );
+    }
+
+    // Every Authored type names a type the registry can actually parse, so a
+    // value handed to the cook always lands on a declarable asset.
+    #[test]
+    fn the_reported_name_round_trips_through_the_registry() {
+        for name in [
+            <crate::assets::RoomArgs as Authored>::TYPE,
+            <crate::assets::Camera3DArgs as Authored>::TYPE,
+            <crate::assets::DirectionalLight as Authored>::TYPE,
+        ] {
+            assert!(
+                ComponentType::parse(name).is_some(),
+                "{name} is not a registered component type"
+            );
+        }
+    }
+}
+
 // JSON args that fail the typed schema are an authoring error. Core dropped
 // its `From<serde_json::Error>` conversion along with runtime JSON parsing,
 // so the build side maps the error here.

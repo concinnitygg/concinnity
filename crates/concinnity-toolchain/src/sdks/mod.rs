@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Backend, SdkOptions};
+use crate::{Backend, BinaryTargets};
 
 #[cfg(test)]
 mod tests;
@@ -60,18 +60,18 @@ pub(crate) fn backend_cfg_directive(backend: Backend) -> String {
 // backend) this returns nothing: none of these SDKs apply.
 pub(crate) fn graphics_sdk_directives(
     backend: Backend,
-    opts: SdkOptions,
+    targets: BinaryTargets,
     env: &SdkEnv,
 ) -> Vec<String> {
     let mut out = Vec::new();
     match backend {
         Backend::Dx => {
-            agility_directives(env, opts.bundle_dlls, &mut out);
-            fidelityfx_dx_directives(env, opts.bundle_dlls, &mut out);
-            xess_directives(env, opts.bundle_dlls, &mut out);
-            dlss_directives(env, opts.bundle_dlls, &mut out);
-            if opts.bundle_dlls {
-                dxc_directives(env, &mut out);
+            agility_directives(env, targets, &mut out);
+            fidelityfx_dx_directives(env, targets, &mut out);
+            xess_directives(env, targets, &mut out);
+            dlss_directives(env, targets, &mut out);
+            if targets.bundles() {
+                dxc_directives(env, targets, &mut out);
             }
         }
         Backend::Vk if env.target_os == "windows" => {
@@ -79,9 +79,9 @@ pub(crate) fn graphics_sdk_directives(
             // binaries the DirectX backend uses, so the setup helpers are
             // backend-agnostic and reused here. Windowing comes from the
             // shared native Win32 layer (no GLFW DLL to bundle).
-            fidelityfx_vk_directives(env, opts.bundle_dlls, &mut out);
-            dlss_directives(env, opts.bundle_dlls, &mut out);
-            xess_directives(env, opts.bundle_dlls, &mut out);
+            fidelityfx_vk_directives(env, targets, &mut out);
+            dlss_directives(env, targets, &mut out);
+            xess_directives(env, targets, &mut out);
         }
         _ => {}
     }
@@ -92,10 +92,10 @@ pub(crate) fn graphics_sdk_directives(
 // `D3D12SDKVersion`/`D3D12SDKPath` exports are only emitted when bundling for a
 // final binary; the `agility_sdk_configured` cfg is always emitted when the SDK
 // is present so the runtime FSR3 gate matches what the binary actually carries.
-fn agility_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
+fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_AGILITY_SDK"));
     if !env.agility_enabled {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(
                 "Agility SDK setup skipped (CN_ENABLE_AGILITY_SDK=0); \
                  binary will use the OS-bundled D3D12 runtime",
@@ -114,7 +114,7 @@ fn agility_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
     let core_dll = sdk_bin.join("D3D12Core.dll");
 
     if !core_dll.exists() {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(&format!(
                 "Agility SDK not found at {} - set AGILITY_SDK_ROOT \
                  or install the `microsoft.direct3d.d3d12` NuGet package. FidelityFX \
@@ -126,13 +126,14 @@ fn agility_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
         return;
     }
 
-    if bundle_dlls {
+    if targets.bundles() {
         // `D3D12SDKPath = ".\\D3D12\\"` resolves relative to the .exe, so the
-        // DLLs must live in `<target>/<profile>/D3D12/`.
-        let Some(profile_dir) = profile_dir(env) else {
+        // DLLs must live in a `D3D12/` beside the binary -- which for an
+        // example is `<target>/<profile>/examples/`, not the profile directory.
+        let Some(exe_dir) = exe_dir(env, targets) else {
             return;
         };
-        let d3d12_dir = profile_dir.join("D3D12");
+        let d3d12_dir = exe_dir.join("D3D12");
         if let Err(e) = std::fs::create_dir_all(&d3d12_dir) {
             out.push(warning(&format!(
                 "Agility SDK: could not create {}: {e}",
@@ -156,10 +157,13 @@ fn agility_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
 
         // Export the two symbols `d3d12.dll` reads at process start. `,DATA` is
         // critical: without it the linker inserts a code thunk that `d3d12.dll`
-        // would dereference as a pointer. The symbols themselves are defined as
-        // `#[used]` statics in the binary crate's source.
-        out.push("cargo::rustc-link-arg-bins=/EXPORT:D3D12SDKVersion,DATA".to_string());
-        out.push("cargo::rustc-link-arg-bins=/EXPORT:D3D12SDKPath,DATA".to_string());
+        // would dereference as a pointer. `/EXPORT` also demands the symbol
+        // resolve, so every target the key covers has to define the statics --
+        // which is what `install_agility_sdk_exports!` is for.
+        if let Some(key) = targets.link_arg_key() {
+            out.push(format!("{key}=/EXPORT:D3D12SDKVersion,DATA"));
+            out.push(format!("{key}=/EXPORT:D3D12SDKPath,DATA"));
+        }
     }
 
     out.push(rustc_cfg("agility_sdk_configured"));
@@ -168,10 +172,10 @@ fn agility_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
 // AMD FidelityFX DX12 upscaler runtime. The renderer loads the DLL with
 // `LoadLibrary` at runtime, so bundling only copies it next to the .exe; the
 // `ffx_sdk_bundled` cfg is emitted when the SDK is present regardless.
-fn fidelityfx_dx_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
+fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(
                 "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
                  temporal upscaling will be unavailable unless amd_fidelityfx_dx12.dll \
@@ -187,7 +191,7 @@ fn fidelityfx_dx_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
         .join("bin")
         .join("amd_fidelityfx_dx12.dll");
     if !dll_src.exists() {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(&format!(
                 "FidelityFX SDK not found at {} - set FIDELITYFX_SDK_ROOT \
                  or install the SDK. Temporal upscaling will be unavailable unless \
@@ -198,7 +202,9 @@ fn fidelityfx_dx_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
         return;
     }
 
-    if bundle_dlls && !copy_next_to_exe(env, &dll_src, "amd_fidelityfx_dx12.dll", out) {
+    if targets.bundles()
+        && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_dx12.dll", out)
+    {
         return;
     }
     out.push(rustc_cfg("ffx_sdk_bundled"));
@@ -207,10 +213,10 @@ fn fidelityfx_dx_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
 // AMD FidelityFX Vulkan upscaler runtime. Prefers the in-repo patched DLL under
 // `crates/concinnity-engine/third_party/ffx/` (carries the FSR3 rw_luma_history
 // format fix), falling back to the stock SDK copy.
-fn fidelityfx_vk_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
+fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(
                 "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
                  Vulkan temporal upscaling will be unavailable unless amd_fidelityfx_vk.dll \
@@ -240,7 +246,7 @@ fn fidelityfx_vk_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
         _ => sdk_dll,
     };
     if !dll_src.exists() {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(&format!(
                 "FidelityFX VK runtime not found ({}). Set FIDELITYFX_SDK_ROOT, \
                  run scripts/setup_ffx_vk_dll.ps1, or put amd_fidelityfx_vk.dll on PATH at \
@@ -251,7 +257,8 @@ fn fidelityfx_vk_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
         return;
     }
 
-    if bundle_dlls && !copy_next_to_exe(env, &dll_src, "amd_fidelityfx_vk.dll", out) {
+    if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_vk.dll", out)
+    {
         return;
     }
     out.push(rustc_cfg("ffx_sdk_bundled"));
@@ -259,10 +266,10 @@ fn fidelityfx_vk_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<Strin
 
 // Intel XeSS upscaler runtime. Pure `LoadLibrary` at runtime, so bundling only
 // copies the DLL; the cfg gates the copy and a log.
-fn xess_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
+fn xess_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_XESS"));
     if !env.xess_enabled {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(
                 "XeSS SDK bundling skipped (CN_ENABLE_XESS=0); the XeSS \
                  upscaler will be unavailable unless libxess.dll is on PATH at runtime",
@@ -274,7 +281,7 @@ fn xess_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
 
     let dll_src = env.xess_root.join("bin").join("libxess.dll");
     if !dll_src.exists() {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(&format!(
                 "XeSS SDK not found at {} - set XESS_SDK_ROOT or install \
                  the SDK. The XeSS upscaler backend will be unavailable unless \
@@ -285,7 +292,7 @@ fn xess_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
         return;
     }
 
-    if bundle_dlls && !copy_next_to_exe(env, &dll_src, "libxess.dll", out) {
+    if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "libxess.dll", out) {
         return;
     }
     out.push(rustc_cfg("xess_sdk_bundled"));
@@ -295,10 +302,10 @@ fn xess_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
 // compiled into the runtime rlib references its symbols, so every final binary
 // and the rlib's own tests must resolve them). When bundling for a final binary
 // the feature DLL `nvngx_dlss.dll` is also copied next to the .exe.
-fn dlss_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
+fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_DLSS"));
     if !env.dlss_enabled {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(
                 "DLSS (NGX) setup skipped (CN_ENABLE_DLSS=0); the DLSS \
                  upscaler backend will be unavailable",
@@ -316,7 +323,7 @@ fn dlss_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
         .join("Windows_x86_64")
         .join("nvsdk_ngx_d.lib");
     if !ngx_lib.exists() {
-        if bundle_dlls {
+        if targets.bundles() {
             out.push(warning(&format!(
                 "NGX import lib not found at {} - set STREAMLINE_SDK_ROOT. \
                  The DLSS upscaler backend will be unavailable.",
@@ -334,7 +341,7 @@ fn dlss_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
     out.push(rerun_path(&ngx_lib));
     out.push(rustc_cfg("ngx_sdk_bundled"));
 
-    if bundle_dlls {
+    if targets.bundles() {
         let dll_src = env
             .streamline_root
             .join("bin")
@@ -348,14 +355,14 @@ fn dlss_directives(env: &SdkEnv, bundle_dlls: bool, out: &mut Vec<String>) {
             )));
             return;
         }
-        copy_next_to_exe(env, &dll_src, "nvngx_dlss.dll", out);
+        copy_next_to_exe(env, targets, &dll_src, "nvngx_dlss.dll", out);
     }
 }
 
 // DirectX Shader Compiler (`dxcompiler.dll` + `dxil.dll`) for the runtime DXC
 // path that compiles the inline ray-tracing reflection shader. Copy-only, so
 // only relevant when bundling for a final binary.
-fn dxc_directives(env: &SdkEnv, out: &mut Vec<String>) {
+fn dxc_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_DXC"));
     if !env.dxc_enabled {
         out.push(warning(
@@ -379,23 +386,39 @@ fn dxc_directives(env: &SdkEnv, out: &mut Vec<String>) {
 
     for dll in ["dxcompiler.dll", "dxil.dll"] {
         let src = dxc_dir.join(dll);
-        if !copy_next_to_exe(env, &src, dll, out) {
+        if !copy_next_to_exe(env, targets, &src, dll, out) {
             return;
         }
     }
     out.push(rustc_cfg("dxc_bundled"));
 }
 
-// Copy `src` to `<target>/<profile>/<file_name>` so `LoadLibrary` (which
-// searches the .exe directory first) finds it. Skips the copy when the
-// destination is already current, which avoids a redundant overwrite (and the
-// Windows sharing violation it can raise while the DLL is loaded). Returns
-// false on failure after recording a `cargo::warning`.
-fn copy_next_to_exe(env: &SdkEnv, src: &Path, file_name: &str, out: &mut Vec<String>) -> bool {
-    let Some(profile_dir) = profile_dir(env) else {
+// Copy `src` into the directory holding the package's binaries so
+// `LoadLibrary` (which searches the .exe directory first) finds it. Skips the
+// copy when the destination is already current, which avoids a redundant
+// overwrite (and the Windows sharing violation it can raise while the DLL is
+// loaded). Returns false on failure after recording a `cargo::warning`.
+fn copy_next_to_exe(
+    env: &SdkEnv,
+    targets: BinaryTargets,
+    src: &Path,
+    file_name: &str,
+    out: &mut Vec<String>,
+) -> bool {
+    let Some(exe_dir) = exe_dir(env, targets) else {
         return false;
     };
-    let dst = profile_dir.join(file_name);
+    // On a clean tree the build script can run before Cargo has laid out the
+    // directory it will link the binaries into, so create it rather than
+    // warning a DLL away.
+    if let Err(e) = std::fs::create_dir_all(&exe_dir) {
+        out.push(warning(&format!(
+            "could not create {}: {e}",
+            exe_dir.display()
+        )));
+        return false;
+    }
+    let dst = exe_dir.join(file_name);
 
     // Watch the source regardless of the copy below, so a newer SDK DLL
     // retriggers the build script even when this run is skipped as up to date.
@@ -430,7 +453,18 @@ fn up_to_date(src: &Path, dst: &Path) -> bool {
     matches!((s.modified(), d.modified()), (Ok(sm), Ok(dm)) if dm >= sm)
 }
 
-// `<target>/<profile>/`, where the final binaries and bundled DLLs land.
+// The directory Cargo writes `targets` into, which is where the bundled DLLs
+// have to land: `<target>/<profile>/` for bins, `<target>/<profile>/examples/`
+// for examples.
+fn exe_dir(env: &SdkEnv, targets: BinaryTargets) -> Option<PathBuf> {
+    let dir = profile_dir(env)?;
+    Some(match targets.exe_subdir() {
+        Some(sub) => dir.join(sub),
+        None => dir,
+    })
+}
+
+// `<target>/<profile>/`, the root Cargo lays every build artifact out under.
 fn profile_dir(env: &SdkEnv) -> Option<PathBuf> {
     profile_dir_from_out_dir(env.out_dir.as_deref()?).map(Path::to_path_buf)
 }

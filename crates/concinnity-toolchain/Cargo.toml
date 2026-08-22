@@ -17,8 +17,15 @@ name = "concinnity_toolchain"
 path = "src/lib.rs"
 doctest = false
 
+[features]
+# First-run asset fetching for the examples. Off by default so the ten crates
+# that build-depend on this one do not compile an HTTP and zip stack.
+fetch = ["dep:ureq", "dep:zip"]
+
 [dependencies]
 concinnity-slang = { path = "../concinnity-slang" }
+ureq = { version = "3.2.0", optional = true }
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.25.0"

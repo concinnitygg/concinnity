@@ -13,13 +13,13 @@
 //    link directive kept is the NGX import lib: the DLSS modules are
 //    `#[cfg(ngx_sdk_bundled)]`, so when that cfg is on they compile into the lib
 //    and must resolve their NGX symbols when this crate's test binaries link.
-//    That is `SdkOptions { bundle_dlls: false }`.
+//    That is `BinaryTargets::None`.
 
 // 3. Bake the bundled default font into an SDF atlas the crate embeds, so the
 //    startup error screen can draw text with no compiled world data present --
 //    the font asset it would normally use lives in the blob that failed to load.
 
-use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
 // Rasterisation size of the embedded atlas. The field is signed-distance, so a
 // single size scales cleanly over the range the error screen needs.
@@ -28,7 +28,7 @@ const ERROR_SCREEN_FONT_PX: u32 = 24;
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    setup_graphics_sdks(backend, BinaryTargets::None);
     bake_error_screen_font();
 }
 

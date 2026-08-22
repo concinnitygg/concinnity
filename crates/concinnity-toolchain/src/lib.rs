@@ -11,21 +11,24 @@
 //
 // 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
 //    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
-//    `ngx_sdk_bundled`, `dxc_bundled`). For a package that produces a final
-//    binary (the editor, an example) this also copies the runtime DLLs next to
-//    the .exe and links the NGX import lib; for the runtime rlib's own test
-//    binaries only the NGX link is needed (no DLL copy), selected with
-//    `SdkOptions { bundle_dlls: false }`.
+//    `ngx_sdk_bundled`, `dxc_bundled`). For a package that produces final
+//    binaries this also copies the runtime DLLs next to the .exe and links the
+//    NGX import lib; for a package that produces only an rlib and its own test
+//    binaries just the NGX link is needed. Which of the two, and where the
+//    binaries land, is `BinaryTargets`.
 //
 // The public entry points emit `cargo::` directives on stdout, which Cargo
 // attributes to the build script of whichever package called in. That is what
 // lets an example binary's build script pick up the same NGX link and DLL
-// bundling the editor's does, without duplicating any of this logic.
+// bundling the CLI's does, without duplicating any of this logic.
 //
 // This file is the thin environment-reading layer: it snapshots everything the
 // setup needs from the process environment into an `SdkEnv` and prints the
 // directives. The probe/copy/directive logic itself lives in the `sdks`
 // module, which never touches the environment or stdout.
+
+#[cfg(feature = "fetch")]
+pub mod fetch;
 
 use std::path::{Path, PathBuf};
 
@@ -53,13 +56,45 @@ impl Backend {
     }
 }
 
-// Options for the SDK setup. `bundle_dlls` distinguishes a package that produces
-// a final binary (true: copy runtime DLLs next to the .exe, emit the Agility
-// linker exports) from the runtime rlib's own test binaries (false: link the
-// NGX import lib and emit the gating cfgs, but place no DLLs).
-#[derive(Clone, Copy, Debug)]
-pub struct SdkOptions {
-    pub bundle_dlls: bool,
+// Which of the calling package's targets are the final binaries the graphics
+// SDKs serve. Cargo scopes a linker argument by target kind and places each kind
+// in its own directory, so this picks both the `cargo::rustc-link-arg-*` key the
+// Agility exports go out under and the directory the runtime DLLs are copied
+// into -- which has to be the one holding the .exe, since that is where Windows
+// looks for them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryTargets {
+    // The package links no binary of its own. Its test and bench executables
+    // still resolve the NGX symbols through the plain `rustc-link-arg`, but
+    // nothing is placed beside them.
+    None,
+    // `src/main.rs` and `src/bin/`, which land in `<target>/<profile>/`.
+    Bins,
+    // `examples/`, which land in `<target>/<profile>/examples/`.
+    Examples,
+}
+
+impl BinaryTargets {
+    pub(crate) fn bundles(self) -> bool {
+        self != BinaryTargets::None
+    }
+
+    // The `cargo::rustc-link-arg-*` key covering these targets. Cargo rejects
+    // `rustc-link-arg-bins` outright from a package with no bin target, and has
+    // no per-example form at all, so an argument emitted for `Examples` reaches
+    // every example the package builds.
+    pub(crate) fn link_arg_key(self) -> Option<&'static str> {
+        match self {
+            BinaryTargets::None => None,
+            BinaryTargets::Bins => Some("cargo::rustc-link-arg-bins"),
+            BinaryTargets::Examples => Some("cargo::rustc-link-arg-examples"),
+        }
+    }
+
+    // Subdirectory of `<target>/<profile>/` Cargo writes these binaries to.
+    pub(crate) fn exe_subdir(self) -> Option<&'static str> {
+        matches!(self, BinaryTargets::Examples).then_some("examples")
+    }
 }
 
 // Resolve the backend from the target OS and whether the `vulkan` feature is on.
@@ -101,9 +136,9 @@ pub fn emit_backend_cfg() -> Backend {
 
 // Set up the optional graphics SDKs for the given backend. On a non-Windows
 // target (or the Metal backend) this is a no-op: none of these SDKs apply.
-pub fn setup_graphics_sdks(backend: Backend, opts: SdkOptions) {
+pub fn setup_graphics_sdks(backend: Backend, targets: BinaryTargets) {
     let env = sdk_env_from_cargo();
-    for line in sdks::graphics_sdk_directives(backend, opts, &env) {
+    for line in sdks::graphics_sdk_directives(backend, targets, &env) {
         println!("{line}");
     }
 }
@@ -262,9 +297,13 @@ mod tests {
         // Metal never has SDKs to set up, and the Vulkan arm is gated on a
         // Windows target OS (CARGO_CFG_TARGET_OS is unset outside build
         // scripts), so neither requires any SDK to be present.
-        for bundle_dlls in [false, true] {
-            setup_graphics_sdks(Backend::Metal, SdkOptions { bundle_dlls });
-            setup_graphics_sdks(Backend::Vk, SdkOptions { bundle_dlls });
+        for targets in [
+            BinaryTargets::None,
+            BinaryTargets::Bins,
+            BinaryTargets::Examples,
+        ] {
+            setup_graphics_sdks(Backend::Metal, targets);
+            setup_graphics_sdks(Backend::Vk, targets);
         }
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();

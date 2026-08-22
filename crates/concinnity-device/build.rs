@@ -9,14 +9,14 @@
 // 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
 //    This crate produces only an rlib (consumed by the client) plus its own test
 //    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
-//    to whichever package owns the final artifact): SdkOptions { bundle_dlls: false }.
+//    to whichever package owns the final artifact): BinaryTargets::None.
 //
 // 3. Derive the hash of the shader-compile sources that `shader_cache` folds
 //    into every artifact key (see `emit_shader_compile_source_hash`).
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{
-    Backend, SdkOptions, SlangLibSpec, SlangShaders, emit_backend_cfg, emit_check_cfgs,
+    Backend, BinaryTargets, SlangLibSpec, SlangShaders, emit_backend_cfg, emit_check_cfgs,
     hash_sources, precompile_metal_shaders, setup_graphics_sdks,
 };
 use std::path::PathBuf;
@@ -706,7 +706,7 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    setup_graphics_sdks(backend, BinaryTargets::None);
     if backend == Backend::Metal {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");

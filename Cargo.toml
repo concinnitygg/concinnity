@@ -5,7 +5,6 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-autoexamples = false
 autobenches = false
 autotests = false
 autobins = false
@@ -15,8 +14,8 @@ name = "concinnity"
 path = "src/lib.rs"
 
 [features]
-default = ["world"]
-world = ["dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
+default = ["cook"]
+cook = ["dep:concinnity-cook", "dep:concinnity-world", "dep:concinnity-shader"]
 vulkan = ["concinnity-engine/vulkan", "concinnity-shader?/vulkan"]
 
 [dependencies]
@@ -26,6 +25,9 @@ concinnity-store = { path = "crates/concinnity-store" }
 concinnity-cook = { path = "crates/concinnity-cook", optional = true }
 concinnity-world = { path = "crates/concinnity-world", optional = true }
 concinnity-shader = { path = "crates/concinnity-shader", optional = true }
+
+[dev-dependencies]
+concinnity-toolchain = { path = "crates/concinnity-toolchain", features = ["fetch"] }
 
 [build-dependencies]
 concinnity-toolchain = { path = "crates/concinnity-toolchain" }
@@ -37,7 +39,6 @@ workspace = true
 resolver = "2"
 members = [
     "crates/*",
-    "examples/*",
     "benches",
 ]
 
@@ -50,7 +51,7 @@ default-members = [
 undocumented_unsafe_blocks = "warn"
 
 [workspace.package]
-version = "0.18.45"
+version = "0.18.46"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

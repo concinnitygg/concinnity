@@ -14,7 +14,7 @@ config, and a stat HUD.
 ## Running
 
 ```
-cargo run -p bistro --release
+cargo run --example bistro --release
 ```
 
 The first run downloads the Bistro asset pack (~833 MB) into

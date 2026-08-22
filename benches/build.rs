@@ -6,13 +6,13 @@
 // per-package and does not propagate from concinnity-device, so without the
 // NGX import-lib link here the bench executables fail to resolve the DLSS
 // symbols whenever the SDK cfgs are on. The benches never start a real GPU
-// backend, so no runtime DLLs are bundled (`bundle_dlls: false`), matching
+// backend, so no runtime DLLs are bundled (`BinaryTargets::None`), matching
 // the concinnity-engine rationale.
 
-use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    setup_graphics_sdks(backend, BinaryTargets::None);
 }

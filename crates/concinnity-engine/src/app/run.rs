@@ -50,9 +50,6 @@ pub fn init_logging() {
         .with(fmt)
         .with(crate::crash::RingLayer)
         .try_init();
-
-    // After the subscriber is up, so the warning is visible when it fires.
-    crate::heap::verify_installed();
 }
 
 // Whether the runtime overlaps simulation and rendering on separate threads
@@ -143,6 +140,9 @@ pub fn run_from(state_dir: &Path) -> std::io::Result<()> {
 // world, or CTRL+C is received. External callers reach this through
 // `App::run` / `App::run_with`.
 pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> std::io::Result<()> {
+    // A host that installed its own subscriber keeps it (`try_init` no-ops),
+    // so an embedded app gets logs without wiring any up itself.
+    init_logging();
     tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&app);
 

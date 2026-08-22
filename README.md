@@ -15,38 +15,31 @@ declaratively through a static set of assets compiled into binary blobs. There
 are no scripting languages (yet); behavior emerges entirely from asset
 composition.
 
+```rust
+use concinnity::assets::{GraphicsConfig, TextLabel};
+use concinnity::{App, World};
+
+fn main() -> std::io::Result<()> {
+    let mut world = World::new();
+    world.add_component(GraphicsConfig::default());
+    world.add_component(TextLabel {
+        content: "Hello, world!".to_string(),
+        ..Default::default()
+    });
+
+    App::from_world(world).run()
+}
+```
+
+Check out the [Asset Documentation](docs/assets/index.md) for all
+supported asset types and fields.
+
 ## Installation
 
 This project is in **early development** and no releases are available yet.
-You can install it manually from this repo:
 
-```sh
-cargo install --path crates/concinnity-cli
-```
-
-See [building.md](docs/development/building.md) for
-more build options.
-
-## Quick Start
-
-Since this project is in early development and CLI commands are bound to change,
-there currently isn't any CLI documentation. Run `concinnity help` for a list of
-supported commands.
-
-Check out the [asset documentation](docs/assets/index.md) for all
-supported asset types and fields.
-
-This project currently has one example, which uses the
-[Amazon Lumberyard Bistro](examples/bistro/README.md) assets and can be run
-with `cargo`:
-
-```sh
-cargo run -p bistro --release
-```
-
-## Crates
-
-See [crates/README.md](crates/README.md) for details.
+The [Building Guide](docs/development/building.md) covers how to manually
+build the project.
 
 ## License
 

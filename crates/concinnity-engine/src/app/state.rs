@@ -51,6 +51,13 @@ impl App {
         }
     }
 
+    /// An app holding an already-built world, ready to start or run.
+    pub fn from_world(world: World) -> Self {
+        let mut app = Self::new();
+        app.load_world(world);
+        app
+    }
+
     // load assets and blob payload data from the primary blob and
     // populate the world. Replaces any previously loaded world
     pub fn load_blob(&mut self) -> Result<(), CnResult> {
@@ -295,6 +302,23 @@ mod tests {
             .memory_budget()
             .expect("memory budget published");
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
+    }
+
+    // from_world hands the app a world that is already populated, in the
+    // Created state so it can be started straight away.
+    #[test]
+    fn from_world_adopts_the_world_ready_to_start() {
+        let mut world = World::new();
+        world.add_component(Application {
+            limits: AppLimits {
+                max_memory_mb: 128,
+                job_threads: 1,
+            },
+        });
+
+        let mut app = App::from_world(world);
+        assert!(app.world().query::<Application>().next().is_some());
+        assert_eq!(app.start(), Ok(()), "an adopted world starts");
     }
 
     // The token handed to new_with_token is the same cancellation source

@@ -6,14 +6,14 @@
 // module gates on it, as do the editor / debug modules.
 //
 // This crate is a library, not a final binary, so it does NOT bundle the
-// graphics-SDK runtime DLLs next to an artifact or emit the Agility bin exports
-// (`bundle_dlls: false`); those belong to whichever package owns the final
-// executable (concinnity-cli, concinnity-runtime, the examples).
+// graphics-SDK runtime DLLs next to an artifact or emit the Agility linker
+// exports (`BinaryTargets::None`); those belong to whichever package owns the
+// final executable (concinnity-cli, concinnity-runtime, the examples).
 
-use concinnity_toolchain::{SdkOptions, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
+use concinnity_toolchain::{BinaryTargets, emit_backend_cfg, emit_check_cfgs, setup_graphics_sdks};
 
 fn main() {
     emit_check_cfgs();
     let backend = emit_backend_cfg();
-    setup_graphics_sdks(backend, SdkOptions { bundle_dlls: false });
+    setup_graphics_sdks(backend, BinaryTargets::None);
 }
