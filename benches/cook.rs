@@ -79,14 +79,17 @@ fn main() {
             mesh_bounds: result.mesh_bounds,
         };
         let payload = result.payloads.first().map(Vec::as_slice).unwrap_or(&[]);
-        let image = encode_cnb(&meta, payload).expect("blob encodes");
+        let image = encode_cnb(concinnity_core::SCHEMA_HASH, &meta, payload).expect("blob encodes");
 
         bench.run(&format!("cook/blob_encode/{label}"), n as u64, || {
-            encode_cnb(&meta, payload).expect("blob encodes").len()
+            encode_cnb(concinnity_core::SCHEMA_HASH, &meta, payload)
+                .expect("blob encodes")
+                .len()
         });
 
         bench.run(&format!("cook/blob_parse/{label}"), n as u64, || {
-            let (meta, payload_start) = parse_cnb(&image).expect("blob parses");
+            let (meta, payload_start) =
+                parse_cnb(concinnity_core::SCHEMA_HASH, &image).expect("blob parses");
             (meta.defs.len(), payload_start)
         });
     }

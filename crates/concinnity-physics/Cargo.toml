@@ -4,20 +4,28 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Physics system for the Concinnity engine, over rapier3d"
+keywords = ["gamedev", "physics", "concinnity"]
+categories = ["game-engines", "simulation"]
+include = [
+    "/src",
+]
 
 [lib]
 name = "concinnity_physics"
 
 [dependencies]
-concinnity-core = { path = "../concinnity-core" }
-concinnity-cpu = { path = "../concinnity-cpu" }
+concinnity-core = { workspace = true }
+concinnity-cpu = { workspace = true }
 
 rapier3d = { version = "0.32", features = ["parallel"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
-concinnity-store = { path = "../concinnity-store" }
+concinnity-store = { workspace = true }
 
 [lints]
 workspace = true

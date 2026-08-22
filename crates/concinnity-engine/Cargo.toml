@@ -4,7 +4,17 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Runtime engine for Concinnity: ECS schedule, graphics, spawn, streaming"
+keywords = ["gamedev", "graphics", "engine", "concinnity"]
+categories = ["game-engines", "rendering::engine"]
+include = [
+    "/src",
+    "/build.rs",
+    "/tests",
+]
 
 [lib]
 name = "concinnity_engine"
@@ -30,14 +40,14 @@ vulkan = [
 alloc-detail = ["concinnity-memory/detail"]
 
 [dependencies]
-concinnity-core = { path = "../concinnity-core" }
-concinnity-cpu = { path = "../concinnity-cpu" }
-concinnity-store = { path = "../concinnity-store" }
-concinnity-render = { path = "../concinnity-render" }
-concinnity-device = { path = "../concinnity-device" }
-concinnity-physics = { path = "../concinnity-physics" }
-concinnity-audio = { path = "../concinnity-audio" }
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-core = { workspace = true }
+concinnity-cpu = { workspace = true }
+concinnity-store = { workspace = true }
+concinnity-render = { workspace = true }
+concinnity-device = { workspace = true }
+concinnity-physics = { workspace = true }
+concinnity-audio = { workspace = true }
+concinnity-memory = { workspace = true }
 
 ciborium = "0.2"
 gilrs = "0.11.2"
@@ -76,11 +86,11 @@ windows = { version = "0.61", features = [
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3.25.0"
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-memory = { workspace = true }
 
 [build-dependencies]
-concinnity-toolchain = { path = "../concinnity-toolchain" }
-concinnity-font = { path = "../concinnity-font" }
+concinnity-toolchain = { workspace = true }
+concinnity-font = { workspace = true }
 
 [lints]
 workspace = true

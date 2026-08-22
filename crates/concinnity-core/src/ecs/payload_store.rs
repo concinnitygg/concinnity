@@ -24,4 +24,33 @@ pub trait PayloadStore {
     /// Whether the payloads are backed by files still on disk, so a released
     /// payload can be re-read on demand rather than kept RAM-resident.
     fn disk_backed(&self) -> bool;
+
+    /// Release every resident section at once, returning the bytes freed.
+    /// `World::start` calls this after init: systems read compiled payloads
+    /// only while initing and cache what they keep, so nothing consults the
+    /// store again. A store with nothing resident frees nothing.
+    fn release_all_resident(&mut self) -> usize {
+        0
+    }
+}
+
+/// A payload store holding nothing: every read errors and every release is a
+/// no-op. What a [`World`](crate::ecs::World) built without a blob runs on --
+/// unit tests, and worlds assembled entirely from runtime-only components.
+pub struct NoPayloads;
+
+impl PayloadStore for NoPayloads {
+    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnResult> {
+        tracing::error!(
+            "NoPayloads: world has no compiled payloads, cannot read blob {}",
+            locator.blob_index
+        );
+        Err(CnResult::FileIo)
+    }
+
+    fn release(&mut self, _blob_index: u32) {}
+
+    fn disk_backed(&self) -> bool {
+        false
+    }
 }

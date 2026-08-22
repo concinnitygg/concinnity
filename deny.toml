@@ -49,10 +49,6 @@ confidence-threshold = 0.8
 # The windows-* and rand/getrandom ecosystems legitimately resolve to several
 # versions at once, so duplicate versions are a warning, not a hard error.
 multiple-versions = "warn"
-# No registry dependency may use a "*" version requirement. Internal workspace
-# crates depend on each other by `path` without a version, which counts as a
-# wildcard; allow-wildcard-paths exempts those because every crate that carries
-# such a path dependency is marked `publish = false`.
 wildcards = "deny"
 allow-wildcard-paths = true
 

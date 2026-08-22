@@ -57,6 +57,7 @@ impl Key<'_> {
     fn digest(&self) -> String {
         let mut h = Sha256::new();
         h.update(SHADER_COMPILE_SOURCE_HASH.to_le_bytes());
+        h.update(concinnity_slang::SOURCE_HASH.to_le_bytes());
         for part in [self.compiler, self.source, self.entry, self.target] {
             h.update((part.len() as u64).to_le_bytes());
             h.update(part.as_bytes());

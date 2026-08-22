@@ -4,7 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Build-time shader compilers for the Concinnity engine backends"
+keywords = ["gamedev", "shader", "concinnity"]
+categories = ["game-engines", "rendering::graphics-api"]
+include = [
+    "/src",
+    "/build.rs",
+]
 
 [lib]
 name = "concinnity_shader"
@@ -14,8 +23,8 @@ path = "src/lib.rs"
 vulkan = ["dep:shaderc", "concinnity-device/vulkan"]
 
 [dependencies]
-concinnity-cook = { path = "../concinnity-cook" }
-concinnity-device = { path = "../concinnity-device" }
+concinnity-cook = { workspace = true }
+concinnity-device = { workspace = true }
 
 tracing = "0.1.44"
 
@@ -43,7 +52,7 @@ shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"
 tempfile = "3.25.0"
 
 [build-dependencies]
-concinnity-toolchain = { path = "../concinnity-toolchain" }
+concinnity-toolchain = { workspace = true }
 
 [lints]
 workspace = true

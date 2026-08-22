@@ -4,6 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Entity/archetype storage backing the Concinnity ECS"
+keywords = ["gamedev", "ecs", "concinnity"]
+categories = ["game-engines", "data-structures", "no-std"]
+include = [
+    "/src",
+    "/tests",
+]
 
 [lib]
 name = "concinnity_eas"

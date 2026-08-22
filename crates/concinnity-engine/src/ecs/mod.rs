@@ -1,9 +1,11 @@
 //! Client-side ecs runtime. The renderer-free metadata, asset registry,
-//! registration macros, asset-construction API, and `PipelineContext` all live
-//! in concinnity-core; this module re-exports them under the historical
-//! `crate::ecs::*` paths and adds the runtime behavior half: the `System`
-//! behavior trait, `StepResult`, the `SystemAsset` value enum (generated from
-//! `System` in `registry`), the unified `Asset` handle, and the `World`.
+//! registration macros, asset-construction API, `PipelineContext`, and the
+//! `World`'s data half all live in concinnity-core; this module re-exports them
+//! under the historical `crate::ecs::*` paths and adds the runtime behavior
+//! half: the `System` behavior trait, `StepResult`, the `SystemAsset` value
+//! enum (generated from `System` in `registry`), the unified `Asset` handle,
+//! and the `World` that carries the constructed systems and their schedule over
+//! that data.
 //!
 //! TO ADD A NEW COMPONENT: register it in concinnity-core's `ecs::registry`
 //! (`define_components!`). TO ADD A NEW SYSTEM: implement the `System` behavior
@@ -27,8 +29,8 @@ pub use concinnity_core::ecs::{
     Access, Arena, AudioClipHandle, BlobAssetDef, ColumnTicks, Component, ComponentAsset,
     ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, EventCursor, EventStore,
     Events, FontHandle, FrameContext, FrameVec, MAX_CHANGE_AGE, MaterialHandle, MeshBoundsRecord,
-    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, SkinnedMeshHandle,
-    TextureHandle, Tick,
+    MeshHandle, PayloadLocator, PipelineContext, Resources, SceneGroup, ScratchStats,
+    SkinnedMeshHandle, TextureHandle, Tick,
 };
 
 // The name interner keeps a per-thread table, so it lives in concinnity-cpu;
@@ -50,8 +52,6 @@ pub use concinnity_core::ecs::{
 // The `SystemAsset` value enum and the `SYSTEMS` schedule manifest are
 // generated client-side from the system table (see `registry`).
 pub use registry::{SYSTEMS, SystemAsset};
-
-use concinnity_memory::MemTag;
 
 use crate::blob::BlobData;
 use crate::gfx::profile::FrameProfile;
@@ -314,45 +314,17 @@ macro_rules! define_systems {
     };
 }
 
-/// What one frame's scratch reserve cost and whether it held. A non-zero
-/// `overflows` means some frame fell back to the heap, so `peak` understates
-/// what the frame actually wanted.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ScratchStats {
-    /// The reserve's size in bytes.
-    pub capacity: usize,
-    /// The most bytes any frame took from it.
-    pub peak: usize,
-    /// Requests the reserve declined, sending the caller to the heap.
-    pub overflows: u64,
-}
-
-// The per-frame scratch reserve. An engine constant rather than an authored
-// field: a schema field would be blob churn for a knob nobody should have to
-// set, and `World::step` reports any frame that outgrows it.
-//
-// A frame's draw scales with the runtime requests it drains: 2,000 visibility
-// requests in one frame measured 24 KiB, so this holds on the order of 87,000.
-// `cn debug send '{"cmd":"memory"}'` reports the live peak against it.
-const FRAME_SCRATCH_BYTES: usize = 1 << 20;
-
-/// A world: its component storage, its systems, and the blob they load from.
+/// A world: its data, the systems built to run over it, and their schedule.
+///
+/// The data half -- components, resources, events, compiled payloads, the frame
+/// profile, and the frame scratch -- is `concinnity_core::ecs::World`, which
+/// needs no operating system and can be built from anywhere the asset
+/// vocabulary reaches. This adds what runs over it: the constructed
+/// `SystemAsset`s, the executable schedule derived from their declared access,
+/// and `start` / `step`.
 pub struct World {
-    components: ComponentStorage,
+    data: concinnity_core::ecs::World,
     systems: Vec<SystemAsset>,
-    blob: BlobData,
-    profile: FrameProfile,
-    // Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot
-    // GraphicsSystem publishes) and the event queues.
-    resources: Resources,
-    // Per-frame scratch, reset at the top of every `step`. Owned here because
-    // `reset` needs `&mut`, which is what proves no system still holds an
-    // allocation from the frame just finished.
-    scratch: Arena,
-    // Requests the scratch reserve could not satisfy, over the world's whole
-    // life. The arena's own counter is cleared each frame once reported, so
-    // this is what survives to say the reserve wants raising.
-    scratch_overflows: u64,
     // Set once `build_internal_systems` has run, so a second `start()` on the
     // same world does not append the internal systems twice.
     internal_systems_built: bool,
@@ -373,7 +345,7 @@ const _: () = {
 impl std::fmt::Debug for World {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("World")
-            .field("components", &self.components.len())
+            .field("components", &self.data.component_count())
             .field("systems", &self.systems.len())
             .finish()
     }
@@ -385,61 +357,57 @@ impl Default for World {
     }
 }
 
+impl From<concinnity_core::ecs::World> for World {
+    fn from(data: concinnity_core::ecs::World) -> Self {
+        Self {
+            data,
+            systems: Vec::new(),
+            internal_systems_built: false,
+            schedule: None,
+        }
+    }
+}
+
 impl World {
     /// An empty world, for contexts that have no blob data (e.g. unit tests,
     /// or worlds built entirely from runtime-only assets).
     pub fn new() -> Self {
-        Self::from_blob(BlobData::empty())
+        concinnity_core::ecs::World::new().into()
     }
 
     /// A world backed by a compiled blob.
     pub fn from_blob(blob: BlobData) -> Self {
-        Self {
-            components: ComponentStorage::default(),
-            systems: Vec::new(),
-            blob,
-            profile: FrameProfile::default(),
-            resources: Resources::new(),
-            scratch: Arena::tagged(FRAME_SCRATCH_BYTES, MemTag::Scratch),
-            scratch_overflows: 0,
-            internal_systems_built: false,
-            schedule: None,
-        }
+        concinnity_core::ecs::World::from_payloads(Box::new(blob)).into()
     }
 
     /// Pre-size the component columns from the blob manifest's per-type record
     /// counts, so the bulk `add` loop that follows never reallocates mid-push.
     pub fn reserve_components(&mut self, counts: &[(u8, u32)]) {
-        for &(discriminant, count) in counts {
-            self.components.reserve(
-                concinnity_core::ecs::ComponentId::new(discriminant),
-                count as usize,
-            );
-        }
+        self.data.reserve_components(counts);
     }
 
     /// Add a component loaded from a blob def, returning its minted entity so
     /// the loaders can index it by name. Systems are not added this way: they
     /// are internal and constructed by `build_internal_systems`.
     pub fn add(&mut self, component: ComponentAsset) -> Entity {
-        self.components.push(component)
+        self.data.add(component)
     }
 
     /// Add one component to the world.
     pub fn add_component<C: Into<ComponentAsset>>(&mut self, c: C) {
-        self.components.push(c.into());
+        self.data.add_component(c);
     }
 
     /// Remove and drop every component of type C. Used by `cn editor` to suppress
     /// the world's baked-in `DebugHud` before start, since the editor HUD's own
     /// F1 toggle replaces it.
     pub fn remove_all<C: ComponentSlot>(&mut self) {
-        let _ = self.components.drain::<C>();
+        self.data.remove_all::<C>();
     }
 
     /// Whether the world holds no components.
     pub fn is_empty(&self) -> bool {
-        self.components.is_empty() && self.systems.is_empty()
+        self.data.is_empty() && self.systems.is_empty()
     }
 
     // Whether this world drives the renderer. True when it declares a
@@ -470,7 +438,7 @@ impl World {
 
     /// Components across every typed column.
     pub fn component_count(&self) -> usize {
-        self.components.len()
+        self.data.component_count()
     }
 
     /// Systems built for this world.
@@ -481,7 +449,7 @@ impl World {
     /// Iterate every stored component of a given type. Mirrors
     /// `PipelineContext::query`; useful in tests that hold a `World` directly.
     pub fn query<C: ComponentSlot>(&self) -> std::slice::Iter<'_, C> {
-        C::slot(&self.components).iter()
+        self.data.query::<C>()
     }
 
     /// Mutable iteration over all components of type C. Mirror of
@@ -490,7 +458,7 @@ impl World {
     /// drive, which applies hot-reload skeleton-shape changes to the ECS-owned
     /// `SkeletonPose` components from outside the system step.
     pub fn query_mut<C: ComponentSlot>(&mut self) -> std::slice::IterMut<'_, C> {
-        self.components.values_mut::<C>().iter_mut()
+        self.data.query_mut::<C>()
     }
 
     /// Push a runtime-produced component into the matching typed slot,
@@ -498,35 +466,35 @@ impl World {
     /// the `DebugHook::tick` drive to insert `Prop`s added by a world.jsonl
     /// hot-reload so subsequent systems see them.
     pub fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
-        self.components.push_typed(c)
+        self.data.push(c)
     }
 
     /// Borrow one entity's component, for code holding a `World` directly.
     /// Mirror of `PipelineContext::get`; the editor's gizmo drive reads the
     /// selected entity's transforms through this.
     pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
-        self.components.get::<C>(entity)
+        self.data.get::<C>(entity)
     }
 
     /// Mutably borrow one entity's component. Mirror of
     /// `PipelineContext::get_mut`; the editor's gizmo drag moves the selected
     /// entity's `Transform` through this.
     pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
-        self.components.get_mut::<C>(entity)
+        self.data.get_mut::<C>(entity)
     }
 
     /// Add a component to an existing entity. Mirror of
     /// `PipelineContext::insert`; the editor's billboard drive seeds a
     /// `Transform` onto non-rendering entities through this.
     pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
-        self.components.insert_typed(entity, c);
+        self.data.insert(entity, c);
     }
 
     /// Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
     /// guards name-index resolves against entities despawned by the start-time
     /// drains (Window, GraphicsConfig, Scene, ...).
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.components.is_alive(entity)
+        self.data.is_alive(entity)
     }
 
     /// Read-only join over two component types, for code holding a `World`
@@ -535,26 +503,20 @@ impl World {
     pub fn join2<A: ComponentSlot, B: ComponentSlot>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> {
-        self.components.join2::<A, B>()
+        self.data.join2::<A, B>()
     }
 
     /// Borrow the event queue for event type E, if any have been sent. Mirror of
     /// `PipelineContext::events`, for code holding a `World` directly (tests).
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
-        self.resources.get::<EventStore>()?.get::<E>()
+        self.data.events::<E>()
     }
 
     /// Mutably borrow (creating if absent) the event queue for event type E.
     /// Mirror of `PipelineContext::events_mut`, for code holding a `World`
     /// directly: tests, and the editor's debug-driven command injection.
     pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
-        if !self.resources.contains::<EventStore>() {
-            self.resources.insert(EventStore::new());
-        }
-        self.resources
-            .get_mut::<EventStore>()
-            .expect("EventStore was just inserted")
-            .get_mut_or_create::<E>()
+        self.data.events_mut::<E>()
     }
 
     /// The world's systems, in schedule order.
@@ -568,8 +530,7 @@ impl World {
     /// step, which takes the state out. Read by the `cn debug` server's
     /// `streaming` command and the editor's Health panel.
     pub fn streaming_stats(&self) -> Option<crate::gfx::streaming_system::StreamingStats> {
-        self.resources
-            .get::<crate::gfx::streaming_system::StreamingState>()
+        self.resource::<crate::gfx::streaming_system::StreamingState>()
             .map(|s| s.streaming_stats())
     }
 
@@ -579,8 +540,7 @@ impl World {
     /// Read by the `cn debug` server's `streaming` command; unused from the
     /// client itself.
     pub fn streaming_pressure(&self) -> Option<crate::gfx::streaming_system::StreamingPressure> {
-        self.resources
-            .get::<crate::gfx::streaming_system::StreamingPressure>()
+        self.resource::<crate::gfx::streaming_system::StreamingPressure>()
             .copied()
     }
 
@@ -588,8 +548,7 @@ impl World {
     /// back-off valve. `None` until the session settles enough for a baseline,
     /// and for the same reasons `streaming_pressure` is absent.
     pub fn memory_drift(&self) -> Option<crate::app::mem_drift::MemoryDrift> {
-        self.resources
-            .get::<crate::app::mem_drift::MemoryDrift>()
+        self.resource::<crate::app::mem_drift::MemoryDrift>()
             .copied()
     }
 
@@ -597,25 +556,19 @@ impl World {
     /// init. `None` before init runs, and `GpuProfile::UNKNOWN` when the backend
     /// could not classify the device.
     pub fn gpu_profile(&self) -> Option<crate::gfx::backend::GpuProfile> {
-        self.resources
-            .get::<crate::gfx::backend::GpuProfile>()
-            .copied()
+        self.resource::<crate::gfx::backend::GpuProfile>().copied()
     }
 
     /// The process thread + memory budgets App published at start. `None` before
     /// `App::start` installs them. Read by the `cn debug` server's `budget`
     /// command; unused from the client itself.
     pub fn thread_budget(&self) -> Option<crate::app::budget::ThreadBudget> {
-        self.resources
-            .get::<crate::app::budget::ThreadBudget>()
-            .copied()
+        self.resource::<crate::app::budget::ThreadBudget>().copied()
     }
 
     /// The world's memory budget, once `start` has published one.
     pub fn memory_budget(&self) -> Option<crate::app::budget::MemoryBudget> {
-        self.resources
-            .get::<crate::app::budget::MemoryBudget>()
-            .copied()
+        self.resource::<crate::app::budget::MemoryBudget>().copied()
     }
 
     /// Take the live render backend out of this world's parked slot, leaving
@@ -625,7 +578,9 @@ impl World {
     /// when the world never built a backend (or it was already yielded).
     ///
     pub fn take_render_backend(&mut self) -> Option<Box<dyn crate::gfx::backend::RenderBackend>> {
-        ActiveRenderBackend::take(&mut self.resources)
+        self.data
+            .resource_mut::<ActiveRenderBackend>()
+            .and_then(|slot| slot.0.take())
     }
 
     /// Disjoint mutable borrows of the system list and the parked render
@@ -641,8 +596,8 @@ impl World {
         Option<&mut (dyn crate::gfx::backend::RenderBackend + 'static)>,
     ) {
         let backend = self
-            .resources
-            .get_mut::<ActiveRenderBackend>()
+            .data
+            .resource_mut::<ActiveRenderBackend>()
             .and_then(|slot| slot.0.as_deref_mut());
         (&mut self.systems, backend)
     }
@@ -652,7 +607,7 @@ impl World {
     /// before a later system step (e.g. physics-body reaping).
     #[cfg(test)]
     pub fn despawn(&mut self, entity: Entity) {
-        self.components.despawn(entity);
+        self.data.despawn(entity);
     }
 
     /// Seed (or replace) a singleton resource that persists across steps. The
@@ -660,21 +615,21 @@ impl World {
     /// stands in for the render-block-published resources (e.g. OverlaySystem's
     /// `MenuActive`) in system tests that drive a later system directly.
     pub fn insert_resource<T: std::any::Any + Send>(&mut self, value: T) {
-        self.resources.insert(value);
+        self.data.insert_resource(value);
     }
 
     /// Borrow a published singleton resource. The App-level frame pacer reads
     /// the pacing state through this before each step; system tests use it for
     /// assertions (e.g. the `OpenDropdown` UiInputSystem publishes each step).
     pub fn resource<T: std::any::Any>(&self) -> Option<&T> {
-        self.resources.get::<T>()
+        self.data.resource::<T>()
     }
 
     /// Withdraw a published singleton resource. Presence-keyed protocols (the
     /// `cn editor` drive's `TraceRequest`) turn off by removing their resource,
     /// so the reading system pays nothing beyond noticing the absence.
     pub fn remove_resource<T: std::any::Any>(&mut self) -> Option<T> {
-        self.resources.remove::<T>()
+        self.data.remove_resource::<T>()
     }
 
     /// Mutable view of the active systems. Mirror of `systems()`; lets the
@@ -688,19 +643,13 @@ impl World {
     /// How many components of each type the world holds, one entry per
     /// populated type. Systems are internal and never counted here.
     pub fn component_census(&self) -> Vec<(u8, u32)> {
-        self.components.component_census()
+        self.data.component_census()
     }
 
     /// Build the world's internal systems and run their `init`.
     pub fn start(&mut self) -> Result<(), CnResult> {
         self.build_internal_systems();
-        let mut ctx = PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: crate::ecs::FrameContext::new(&self.scratch),
-        };
+        let mut ctx = self.data.context();
         // Give each loaded Prop's entity its per-instance components before
         // systems init, draining the Prop itself: the decomposed components are
         // the only path from here on.
@@ -714,7 +663,7 @@ impl World {
         // blobs the GraphicsSystem init sweep held back for their later
         // consumers, and every blob in a world with no GraphicsSystem to run
         // that sweep at all.
-        let freed = self.blob.release_all_resident();
+        let freed = self.data.release_payloads();
         if freed >= 1024 * 1024 {
             tracing::info!(
                 "World: freed {} MiB of resident blob payloads after init",
@@ -727,13 +676,7 @@ impl World {
         // Pre-create the event queues declared systems can touch, so their
         // `events_mut` never grows the store's map mid-tick.
         if !schedule.is_empty() {
-            if !self.resources.contains::<EventStore>() {
-                self.resources.insert(EventStore::new());
-            }
-            let store = self
-                .resources
-                .get_mut::<EventStore>()
-                .expect("EventStore was just inserted");
+            let store = self.data.event_store();
             for i in 0..schedule.len() {
                 access_ids::ensure_event_queues(store, schedule.access(i));
             }
@@ -782,18 +725,7 @@ impl World {
     /// Per-frame profiling data: system CPU timings and render-backend stats
     /// from the most recently completed frame.
     pub fn profile(&self) -> &FrameProfile {
-        &self.profile
-    }
-
-    // Advance every event queue once per frame, before systems run, so each
-    // queue's two-frame retention holds for readers that run after the writer.
-    // The `EventStore` owns every queue `events_mut` ever created (on `World`
-    // or `PipelineContext`), so no per-type rotation list exists to fall out
-    // of sync.
-    fn update_events(&mut self) {
-        if let Some(store) = self.resources.get_mut::<EventStore>() {
-            store.update_all();
-        }
+        self.data.profile()
     }
 
     /// Tick -- systems run in order, Done systems are removed.
@@ -808,18 +740,14 @@ impl World {
         let frame_alloc_start = concinnity_memory::alloc_count();
         // Rotate the profiler's system-timing buffers so the frame that just
         // finished becomes the readable snapshot for this frame's readers.
-        self.profile.begin_frame();
-        self.update_events();
-        // Hand the whole frame's scratch back before anything runs. `&mut self`
-        // here is the proof that no allocation from the last frame survives.
-        self.scratch.reset();
-        let mut ctx = PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: crate::ecs::FrameContext::new(&self.scratch),
-        };
+        self.data.profile_mut().begin_frame();
+        // Advance every event queue once per frame, before systems run, so each
+        // queue's two-frame retention holds for readers that run after the
+        // writer.
+        self.data.update_events();
+        // Hand the whole frame's scratch back before anything runs.
+        self.data.reset_scratch();
+        let mut ctx = self.data.context();
         let mut i = 0;
         let mut removed_any = false;
         while i < self.systems.len() {
@@ -859,7 +787,8 @@ impl World {
         self.report_scratch_overflow();
         #[cfg(debug_assertions)]
         if let (Some(start), Some(end)) = (frame_alloc_start, concinnity_memory::alloc_count()) {
-            self.profile
+            self.data
+                .profile_mut()
                 .set_frame_allocs(end.saturating_sub(start).min(u32::MAX as u64) as u32);
         }
         if self.systems.is_empty() {
@@ -875,27 +804,22 @@ impl World {
     // declined request, and only while the count is climbing, so a world that
     // is permanently too small does not fill the log.
     fn report_scratch_overflow(&mut self) {
-        let overflows = self.scratch.overflows();
+        let overflows = self.data.take_scratch_overflows();
         if overflows == 0 {
             return;
         }
-        self.scratch.clear_overflows();
-        self.scratch_overflows = self.scratch_overflows.saturating_add(overflows as u64);
+        let stats = self.data.scratch_stats();
         tracing::warn!(
             "frame scratch overflowed {overflows} time(s): reserve {} KiB, peak {} KiB",
-            self.scratch.capacity() / 1024,
-            self.scratch.peak() / 1024,
+            stats.capacity / 1024,
+            stats.peak / 1024,
         );
     }
 
     /// What the frame scratch cost and whether it was big enough, for the
     /// `memory` query and the Health panel. `peak` is what sizes the reserve.
     pub fn scratch_stats(&self) -> ScratchStats {
-        ScratchStats {
-            capacity: self.scratch.capacity(),
-            peak: self.scratch.peak(),
-            overflows: self.scratch_overflows,
-        }
+        self.data.scratch_stats()
     }
 }
 

@@ -17,6 +17,8 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
+
 mod handle;
 mod id;
 mod locator;

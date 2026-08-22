@@ -4,7 +4,17 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Asset reference for the Concinnity engine, extracted at build time and embedded"
+keywords = ["gamedev", "documentation", "concinnity"]
+categories = ["game-engines", "no-std"]
+include = [
+    "/src",
+    "/build.rs",
+    "/build",
+]
 build = "build.rs"
 
 [lib]
@@ -14,7 +24,7 @@ name = "concinnity_docs"
 
 [build-dependencies]
 syn = { version = "2", features = ["full", "parsing"] }
-concinnity-world = { path = "../concinnity-world" }
+concinnity-world = { workspace = true }
 
 [lints]
 workspace = true

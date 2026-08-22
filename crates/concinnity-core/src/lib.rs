@@ -21,6 +21,40 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+include!(concat!(env!("OUT_DIR"), "/component_schema_hash.rs"));
+
+/// Hash of the postcard-visible schema this build was compiled against, stamped
+/// into every blob header. A blob whose stored hash differs was written by a
+/// different engine schema and fails the load check instead of mis-decoding.
+///
+/// Mixed from the three crates that own a piece of that schema: the authored
+/// asset types, this crate's divergent runtime structs and component registry
+/// (whose list order is the tag), and the blob container's record shapes. No
+/// manually maintained version number, and no crate reaching into another's
+/// directory to compute it.
+pub const SCHEMA_HASH: u32 = mix(&[
+    concinnity_asset::SOURCE_HASH,
+    COMPONENT_SCHEMA_HASH,
+    concinnity_blob::RECORD_SCHEMA_HASH,
+]);
+
+// FNV-1a over the parts, order-significant.
+const fn mix(parts: &[u32]) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut i = 0;
+    while i < parts.len() {
+        let bytes = parts[i].to_le_bytes();
+        let mut b = 0;
+        while b < bytes.len() {
+            hash ^= bytes[b] as u32;
+            hash = hash.wrapping_mul(0x0100_0193);
+            b += 1;
+        }
+        i += 1;
+    }
+    hash
+}
+
 pub mod assets;
 pub mod ecs;
 pub mod gfx;

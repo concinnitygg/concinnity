@@ -4,6 +4,15 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Allocation layer for Concinnity: tracking allocator, tagged budgets, arenas, pools"
+keywords = ["gamedev", "allocator", "concinnity"]
+categories = ["game-engines", "memory-management", "no-std"]
+include = [
+    "/src",
+]
 
 [lib]
 name = "concinnity_memory"

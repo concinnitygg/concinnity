@@ -688,6 +688,11 @@ const SLANG_GLASS_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 // A host toolchain upgrade (a new Xcode, a new Windows SDK) changes no source
 // here and so is not covered: deleting the cache directory remains the way to
 // force a full recompile.
+//
+// The slangc invocation is the tenth participant and lives in another crate, so
+// it arrives as `concinnity_slang::SOURCE_HASH` (folded in by `shader_cache`)
+// rather than being read out of that crate's directory: a registry checkout of
+// this crate has no sibling copy to read.
 const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/shader_cache.rs",
     "src/slang_source.rs",
@@ -698,7 +703,6 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
     "src/metal/slang_shaders.rs",
     "src/vulkan/pipeline.rs",
     "src/vulkan/slang_builtins.rs",
-    "../concinnity-slang/src/lib.rs",
 ];
 
 fn main() {

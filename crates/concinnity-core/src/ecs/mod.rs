@@ -8,9 +8,12 @@
 //! metadata consts.
 //!
 //! The `System` behavior trait + its `StepResult` are here too (renderer-free:
-//! they name only `PipelineContext`). The rest of the runtime half (the `World`,
-//! the value enums (`ComponentAsset` / `SystemAsset`), and the registry macros)
-//! lives in the client crate's `ecs` module, which re-exports everything here
+//! they name only `PipelineContext`), as is the `World`'s data half (`world`):
+//! the components, resources, events, payloads, profile, and frame scratch a
+//! tick reads and writes, with nothing that runs. What runs over that data --
+//! the constructed systems, their schedule, and `start` / `step` -- lives in the
+//! client crate's `ecs` module alongside the value enums (`ComponentAsset` /
+//! `SystemAsset`) and the registry macros, which re-exports everything here
 //! under the historical `crate::ecs::*` paths.
 
 use alloc::vec::Vec;
@@ -22,6 +25,7 @@ mod payload_store;
 mod protocol;
 mod registry;
 mod system;
+mod world;
 
 // Per-frame facilities carried on `PipelineContext`. Re-exported by the client
 // `ecs` module under the historical `crate::ecs::*` paths, like the rest.
@@ -92,8 +96,13 @@ fn note_resource<T: 'static>(write: bool) {
 }
 
 // The payload-access seam systems reach through: keeps the ECS mechanism free
-// of blob file I/O (`crate::blob::BlobData` is the runtime implementor).
-pub use payload_store::PayloadStore;
+// of blob file I/O (concinnity-store's `BlobData` is the runtime implementor).
+pub use payload_store::{NoPayloads, PayloadStore};
+
+// The world's data half: the five things a `PipelineContext` borrows, owned in
+// one place. The engine's `World` owns one of these and adds the systems that
+// run over it.
+pub use world::{ScratchStats, World};
 
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::profile::FrameProfile;

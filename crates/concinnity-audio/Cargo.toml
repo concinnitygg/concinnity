@@ -4,20 +4,28 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Audio system for the Concinnity engine"
+keywords = ["gamedev", "audio", "concinnity"]
+categories = ["game-engines", "multimedia::audio"]
+include = [
+    "/src",
+]
 
 [lib]
 name = "concinnity_audio"
 
 [dependencies]
-concinnity-core = { path = "../concinnity-core" }
+concinnity-core = { workspace = true }
 
 kira = "0.12"
 mint = "0.5"
 tracing = "0.1.44"
 
 [dev-dependencies]
-concinnity-store = { path = "../concinnity-store" }
+concinnity-store = { workspace = true }
 
 [lints]
 workspace = true

@@ -4,14 +4,22 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Build-time glyph atlas rasterizer for the Concinnity engine"
+keywords = ["gamedev", "font", "text", "concinnity"]
+categories = ["game-engines", "rendering"]
+include = [
+    "/src",
+]
 
 [lib]
 name = "concinnity_font"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-cpu = { path = "../concinnity-cpu" }
+concinnity-cpu = { workspace = true }
 
 fontdue = "0.9"
 

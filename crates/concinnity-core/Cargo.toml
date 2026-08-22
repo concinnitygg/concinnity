@@ -4,7 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Runtime vocabulary for the Concinnity engine: GPU layouts, ECS components, registry"
+keywords = ["gamedev", "graphics", "ecs", "concinnity"]
+categories = ["game-engines", "no-std"]
+include = [
+    "/src",
+    "/build.rs",
+]
 
 [lib]
 name = "concinnity_core"
@@ -19,10 +28,10 @@ path = "src/lib.rs"
 vulkan = []
 
 [dependencies]
-concinnity-asset = { path = "../concinnity-asset" }
-concinnity-blob = { path = "../concinnity-blob" }
-concinnity-eas = { path = "../concinnity-eas" }
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-asset = { workspace = true }
+concinnity-blob = { workspace = true }
+concinnity-eas = { workspace = true }
+concinnity-memory = { workspace = true }
 
 bytemuck = { version = "1", default-features = false, features = ["derive"] }
 libm = "0.2"
@@ -30,6 +39,9 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 thiserror = { version = "2.0.18", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
+
+[build-dependencies]
+concinnity-toolchain = { workspace = true }
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }

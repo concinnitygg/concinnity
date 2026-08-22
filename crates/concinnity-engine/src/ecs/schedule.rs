@@ -158,8 +158,7 @@ pub(crate) fn physics(world: &World) -> Option<SystemAsset> {
         // (the CharacterRig itself is published later, by GraphicsSystem
         // init, so gate on the baked resource data).
         || world
-            .resources
-            .get::<crate::resource::SkinnedMeshTable>()
+            .resource::<crate::resource::SkinnedMeshTable>()
             .is_some_and(|t| t.has_capsule());
     if !needs {
         return None;

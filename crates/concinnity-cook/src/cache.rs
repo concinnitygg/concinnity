@@ -162,9 +162,10 @@ fn key_from_parts(
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(COMPILE_SOURCE_HASH.to_le_bytes());
+    hasher.update(concinnity_cpu::BUILD_SOURCE_HASH.to_le_bytes());
     // The baked records inside a payload encode against the asset schema, and a
     // schema field can change those bytes for args that hash identically.
-    hasher.update(concinnity_blob::SCHEMA_HASH.to_le_bytes());
+    hasher.update(concinnity_core::SCHEMA_HASH.to_le_bytes());
     hasher.update([discriminant]);
 
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();

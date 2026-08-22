@@ -200,12 +200,17 @@ impl concinnity_core::ecs::PayloadStore for BlobData {
     fn disk_backed(&self) -> bool {
         BlobData::disk_backed(self)
     }
+
+    fn release_all_resident(&mut self) -> usize {
+        BlobData::release_all_resident(self)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_blob::{BlobMeta, encode_cnb};
+    use concinnity_core::SCHEMA_HASH;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
         PayloadLocator {
@@ -235,7 +240,7 @@ mod tests {
     fn read_lazily_loads_an_unloaded_overflow_blob() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("1").to_string_lossy().into_owned();
-        let image = encode_cnb(&BlobMeta::default(), b"hello world").unwrap();
+        let image = encode_cnb(SCHEMA_HASH, &BlobMeta::default(), b"hello world").unwrap();
         std::fs::write(&path, image).expect("write blob");
 
         let mut bd = BlobData::from_blob_files(Vec::new(), vec![path]);

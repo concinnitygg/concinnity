@@ -4,7 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "GPU-free render preparation for the Concinnity engine"
+keywords = ["gamedev", "graphics", "rendering", "concinnity"]
+categories = ["game-engines", "rendering"]
+include = [
+    "/src",
+    "/build.rs",
+]
 
 [lib]
 name = "concinnity_render"
@@ -21,11 +30,11 @@ vulkan = ["concinnity-cpu/vulkan"]
 [dependencies]
 # The renderer-free foundation: GPU data layouts, CPU-side render math, asset
 # data types, and the runtime-usable build helpers (environment-map baking).
-concinnity-core = { path = "../concinnity-core" }
-concinnity-cpu = { path = "../concinnity-cpu" }
+concinnity-core = { workspace = true }
+concinnity-cpu = { workspace = true }
 # Arena scratch for the per-frame streaming plan, and the tag vocabulary it
 # accounts under. `no_std` like this module, so the boundary above holds.
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-memory = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 rayon = "1"

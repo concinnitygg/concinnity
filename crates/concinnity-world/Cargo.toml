@@ -4,7 +4,15 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Authored world source, args schema, validation, and spec builders for Concinnity"
+keywords = ["gamedev", "assets", "concinnity"]
+categories = ["game-engines", "development-tools::build-utils"]
+include = [
+    "/src",
+]
 
 # The build-side world front half: the authored world model (world.jsonl
 # parse/write, WorldJsonlAsset), the authoring type vocabulary (ComponentType,
@@ -19,10 +27,10 @@ name = "concinnity_world"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-core = { path = "../concinnity-core" }
+concinnity-core = { workspace = true }
 # Only for the build-time name interner (`ecs::asset_id`), which is std-bound.
-concinnity-cpu = { path = "../concinnity-cpu" }
-concinnity-store = { path = "../concinnity-store" }
+concinnity-cpu = { workspace = true }
+concinnity-store = { workspace = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

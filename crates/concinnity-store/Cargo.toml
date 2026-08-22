@@ -4,15 +4,23 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "On-disk state tree for Concinnity: paths, source lookup, blob reads"
+keywords = ["gamedev", "assets", "concinnity"]
+categories = ["game-engines", "filesystem"]
+include = [
+    "/src",
+]
 
 [lib]
 name = "concinnity_store"
 path = "src/lib.rs"
 
 [dependencies]
-concinnity-core = { path = "../concinnity-core" }
-concinnity-blob = { path = "../concinnity-blob" }
+concinnity-core = { workspace = true }
+concinnity-blob = { workspace = true }
 
 tracing = "0.1.44"
 

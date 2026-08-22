@@ -155,8 +155,9 @@ pub fn setup_graphics_sdks(backend: Backend, targets: BinaryTargets) {
 /// code producing its stored bytes evicts entries whose other inputs did not
 /// move. See `source_hash` for the shape of the guarantee.
 pub fn hash_sources(roots: &[PathBuf]) -> u32 {
-    let workspace = workspace_root().expect("build script runs inside the workspace");
-    let workspace = workspace.canonicalize().unwrap_or(workspace);
+    let package =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script runs under cargo"));
+    let package = package.canonicalize().unwrap_or(package);
     let mut named = Vec::new();
     for root in roots {
         // Directory-level rerun directives catch added and removed files.
@@ -166,7 +167,7 @@ pub fn hash_sources(roots: &[PathBuf]) -> u32 {
         named.extend(
             files
                 .into_iter()
-                .map(|file| (source_hash::relative_name(&workspace, &file), file)),
+                .map(|file| (source_hash::relative_name(&package, &file), file)),
         );
     }
     source_hash::hash_named(&mut named)

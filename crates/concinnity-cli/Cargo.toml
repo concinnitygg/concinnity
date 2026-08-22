@@ -4,7 +4,18 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Command-line tool for the Concinnity engine: build, run, add, export, debug"
+keywords = ["gamedev", "cli", "concinnity"]
+categories = ["game-engines", "command-line-utilities"]
+include = [
+    "/src",
+    "/build.rs",
+    "/assets",
+    "/tests",
+]
 
 # The `concinnity` dev CLI binary: the clap command tree + dispatch and the
 # subcommand implementations, over the dev-session entry points concinnity-editor
@@ -26,13 +37,13 @@ vulkan = [
 ]
 
 [dependencies]
-concinnity-editor = { path = "../concinnity-editor" }
-concinnity-cook = { path = "../concinnity-cook" }
-concinnity-shader = { path = "../concinnity-shader" }
-concinnity-engine = { path = "../concinnity-engine", features = ["alloc-detail"] }
-concinnity-memory = { path = "../concinnity-memory" }
-concinnity-world = { path = "../concinnity-world" }
-concinnity-docs = { path = "../concinnity-docs" }
+concinnity-editor = { workspace = true }
+concinnity-cook = { workspace = true }
+concinnity-shader = { workspace = true }
+concinnity-engine = { workspace = true, features = ["alloc-detail"] }
+concinnity-memory = { workspace = true }
+concinnity-world = { workspace = true }
+concinnity-docs = { workspace = true }
 
 clap = { version = "4", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -74,7 +85,7 @@ ash = { version = "0.38", optional = true }
 shaderc = { version = "0.10.1", optional = true, features = ["build-from-source"] }
 
 [build-dependencies]
-concinnity-toolchain = { path = "../concinnity-toolchain" }
+concinnity-toolchain = { workspace = true }
 
 [lints]
 workspace = true

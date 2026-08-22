@@ -4,15 +4,18 @@
 
 use crate::error::BlobError;
 use crate::schema::BlobMeta;
-use crate::{BLOB_MAGIC, HEADER_SIZE, SCHEMA_HASH};
+use crate::{BLOB_MAGIC, HEADER_SIZE};
 
 /// Parse a blob image's header and metadata block. Returns the metadata and the
 /// offset at which the payload section begins.
-pub fn parse_cnb(data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
+///
+/// `schema_hash` is what the header must carry for the image to be readable by
+/// this build; runtime callers pass `concinnity_core::SCHEMA_HASH`.
+pub fn parse_cnb(schema_hash: u32, data: &[u8]) -> Result<(BlobMeta, usize), BlobError> {
     let meta_len = parse_header(data)? as usize;
 
     let stored = le_u32(data, 4).ok_or(BlobError::TooShort)?;
-    if stored != SCHEMA_HASH {
+    if stored != schema_hash {
         return Err(BlobError::SchemaMismatch(stored));
     }
 
@@ -86,6 +89,10 @@ mod tests {
     use alloc::vec::Vec;
     use concinnity_asset::PayloadLocator;
 
+    // Any value both sides agree on exercises the header check; the real
+    // mix is concinnity-core's, which this crate sits below.
+    const TEST_SCHEMA_HASH: u32 = 0x1234_5678;
+
     fn def(discriminant: u8, args_bytes: Vec<u8>) -> BlobAssetDef {
         BlobAssetDef {
             name: None,
@@ -122,9 +129,9 @@ mod tests {
     fn encode_round_trips_defs_resources_and_payload() {
         let m = meta();
         let payload = [0xAA, 0xBB, 0xCC];
-        let image = encode_cnb(&m, &payload).unwrap();
+        let image = encode_cnb(TEST_SCHEMA_HASH, &m, &payload).unwrap();
 
-        let (got, payload_start) = parse_cnb(&image).expect("parse");
+        let (got, payload_start) = parse_cnb(TEST_SCHEMA_HASH, &image).expect("parse");
         assert_eq!(got, m);
         assert_eq!(&image[payload_start..], &payload);
         assert_eq!(
@@ -136,8 +143,8 @@ mod tests {
 
     #[test]
     fn encode_with_no_metadata_and_no_payload_is_parseable() {
-        let image = encode_cnb(&BlobMeta::default(), &[]).unwrap();
-        let (m, payload_start) = parse_cnb(&image).expect("parse");
+        let image = encode_cnb(TEST_SCHEMA_HASH, &BlobMeta::default(), &[]).unwrap();
+        let (m, payload_start) = parse_cnb(TEST_SCHEMA_HASH, &image).expect("parse");
         assert!(m.defs.is_empty());
         assert!(m.resources.is_empty());
         assert_eq!(image.len(), payload_start);
@@ -146,11 +153,11 @@ mod tests {
 
     #[test]
     fn encode_emits_magic_and_schema_hash_header() {
-        let image = encode_cnb(&BlobMeta::default(), &[1]).unwrap();
+        let image = encode_cnb(TEST_SCHEMA_HASH, &BlobMeta::default(), &[1]).unwrap();
         assert_eq!(&image[0..4], &BLOB_MAGIC);
         assert_eq!(
             u32::from_le_bytes(image[4..8].try_into().unwrap()),
-            SCHEMA_HASH
+            TEST_SCHEMA_HASH
         );
         let meta_len = u64::from_le_bytes(image[8..16].try_into().unwrap()) as usize;
         assert_eq!(image.len(), HEADER_SIZE + meta_len + 1);
@@ -158,23 +165,29 @@ mod tests {
 
     #[test]
     fn parse_rejects_short_bad_magic_and_schema_mismatch() {
-        assert_eq!(parse_cnb(&[0u8; HEADER_SIZE - 1]), Err(BlobError::TooShort));
-        assert_eq!(parse_cnb(&[0u8; HEADER_SIZE]), Err(BlobError::BadMagic));
+        assert_eq!(
+            parse_cnb(TEST_SCHEMA_HASH, &[0u8; HEADER_SIZE - 1]),
+            Err(BlobError::TooShort)
+        );
+        assert_eq!(
+            parse_cnb(TEST_SCHEMA_HASH, &[0u8; HEADER_SIZE]),
+            Err(BlobError::BadMagic)
+        );
 
-        let mut mismatched = encode_cnb(&BlobMeta::default(), &[]).unwrap();
-        let stored = SCHEMA_HASH.wrapping_add(1);
+        let mut mismatched = encode_cnb(TEST_SCHEMA_HASH, &BlobMeta::default(), &[]).unwrap();
+        let stored = TEST_SCHEMA_HASH.wrapping_add(1);
         mismatched[4..8].copy_from_slice(&stored.to_le_bytes());
         assert_eq!(
-            parse_cnb(&mismatched),
+            parse_cnb(TEST_SCHEMA_HASH, &mismatched),
             Err(BlobError::SchemaMismatch(stored))
         );
     }
 
     #[test]
     fn parse_rejects_a_truncated_meta_section() {
-        let image = encode_cnb(&meta(), &[]).unwrap();
+        let image = encode_cnb(TEST_SCHEMA_HASH, &meta(), &[]).unwrap();
         assert_eq!(
-            parse_cnb(&image[..image.len() - 1]),
+            parse_cnb(TEST_SCHEMA_HASH, &image[..image.len() - 1]),
             Err(BlobError::TruncatedMeta)
         );
     }
@@ -182,7 +195,10 @@ mod tests {
     #[test]
     fn parse_rejects_a_non_blob_image() {
         let garbage = b"this is not a blob file at all";
-        assert_eq!(parse_cnb(garbage), Err(BlobError::BadMagic));
+        assert_eq!(
+            parse_cnb(TEST_SCHEMA_HASH, garbage),
+            Err(BlobError::BadMagic)
+        );
         assert_eq!(
             parse_payload_section_start(garbage),
             Err(BlobError::BadMagic)
@@ -205,7 +221,7 @@ mod tests {
     // section read must not depend on a valid magic.
     #[test]
     fn payload_section_ignores_magic() {
-        let mut image = encode_cnb(&BlobMeta::default(), b"overflow").unwrap();
+        let mut image = encode_cnb(TEST_SCHEMA_HASH, &BlobMeta::default(), b"overflow").unwrap();
         image[0..4].copy_from_slice(b"XXXX");
         assert_eq!(payload_section(&image), b"overflow");
     }

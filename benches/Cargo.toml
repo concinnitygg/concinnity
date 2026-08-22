@@ -12,18 +12,19 @@ doctest = false
 bench = false
 
 [build-dependencies]
-concinnity-toolchain = { path = "../crates/concinnity-toolchain" }
+concinnity-toolchain = { workspace = true }
 
 [dependencies]
-concinnity-asset = { path = "../crates/concinnity-asset" }
-concinnity-blob = { path = "../crates/concinnity-blob" }
-concinnity-cook = { path = "../crates/concinnity-cook" }
-concinnity-cpu = { path = "../crates/concinnity-cpu" }
-concinnity-eas = { path = "../crates/concinnity-eas" }
-concinnity-engine = { path = "../crates/concinnity-engine" }
-concinnity-memory = { path = "../crates/concinnity-memory" }
-concinnity-physics = { path = "../crates/concinnity-physics" }
-concinnity-render = { path = "../crates/concinnity-render" }
+concinnity-asset = { workspace = true }
+concinnity-blob = { workspace = true }
+concinnity-cook = { workspace = true }
+concinnity-core = { workspace = true }
+concinnity-cpu = { workspace = true }
+concinnity-eas = { workspace = true }
+concinnity-engine = { workspace = true }
+concinnity-memory = { workspace = true }
+concinnity-physics = { workspace = true }
+concinnity-render = { workspace = true }
 
 [[bench]]
 name = "anim"

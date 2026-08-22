@@ -23,6 +23,8 @@
 //! renderer falls back to compiling at startup, which then needs slangc at
 //! runtime and reports a clear error when it is absent or too old.
 
+include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;

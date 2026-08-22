@@ -22,6 +22,8 @@
 #![warn(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+include!(concat!(env!("OUT_DIR"), "/build_source_hash.rs"));
+
 pub mod build;
 pub mod decode;
 pub mod ecs;

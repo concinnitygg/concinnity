@@ -60,8 +60,9 @@ pub use concinnity_asset::{AssetId, PayloadLocator};
 
 /// The four magic bytes every `.cnb` blob starts with.
 pub const BLOB_MAGIC: [u8; 4] = *b"CNB\0";
-// SCHEMA_HASH: derived by build.rs from the postcard-visible schema sources,
-// so any change to them is caught by the load check.
+// RECORD_SCHEMA_HASH: derived by build.rs from this crate's record shapes. It
+// is one part of the hash a header carries; concinnity-core mixes it with the
+// two schema halves it can see and hands the result to `encode_cnb`.
 include!(concat!(env!("OUT_DIR"), "/schema_hash.rs"));
 /// Fixed blob header size: magic (4) + schema hash (4) + `meta_len` (8).
 pub const HEADER_SIZE: usize = 16; // magic(4) + schema hash(4) + meta_len(8)

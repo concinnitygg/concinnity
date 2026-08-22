@@ -31,6 +31,14 @@
 //! The default build is the runtime alone: the world loop, the renderer, and
 //! the asset vocabulary above, which is all the example needs.
 //!
+//! `std` is that runtime, and it is on by default. Turning it off leaves the
+//! asset vocabulary and a [`World`] to build with it, so a `no_std` crate can
+//! assemble world content where no runtime exists. What it drops is everything
+//! that runs: there is no `App`, no `cook`, and no `install_global_allocator`,
+//! and a [`World`] carries components and resources but no systems, `start`, or
+//! `step`. `concinnity_engine::ecs::World` is [`From`] the one built here, so
+//! handing the content to a runtime elsewhere is one conversion.
+//!
 //! `cook` adds the `cook` module, which compiles authored assets into a
 //! runnable [`World`] in process. It pulls in the asset importers (glTF, FBX,
 //! textures, fonts), so a shipped application that plays an already-compiled
@@ -39,9 +47,24 @@
 //! `vulkan` selects the Vulkan backend where the platform default is Metal or
 //! DirectX.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+// The test harness is a std program whichever tier is built, so the `no_std`
+// build still gets one.
+#[cfg(all(test, not(feature = "std")))]
+extern crate std;
+
+#[cfg(feature = "std")]
 pub use concinnity_engine::App;
+#[cfg(feature = "std")]
 pub use concinnity_engine::ecs::World;
+#[cfg(feature = "std")]
 pub use concinnity_memory::install_global_allocator;
+
+// Without the runtime there is nothing to run a world, so the world is its data
+// half alone -- the same components and resources, minus the systems.
+#[cfg(not(feature = "std"))]
+pub use concinnity_core::ecs::World;
 
 /// The runtime asset vocabulary (`Application`, `Camera3D`, `Room`,
 /// `DirectionalLight`, ...), each addable to a [`World`] as a component.
@@ -52,7 +75,7 @@ pub mod assets {
     // (`SpotLightGeometry`, `PostProcessResolve`, ...), none of which an
     // application authoring assets has any use for. `asset_exports` checks the
     // list stays complete.
-    pub use concinnity_engine::assets::{
+    pub use concinnity_core::assets::{
         AaMode, Animation, AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph,
         AnimationIkChain, AnimationParam, AnimationParams, AnimationState, AnimationTrack,
         AnimationTransition, AppLimits, Application, ApplicationArgs, AudioBus, AudioClip,
@@ -95,21 +118,59 @@ mod asset_exports;
 
 #[cfg(test)]
 mod tests {
+    use super::World;
     use super::assets::TextLabel;
-    use super::{App, World};
+
+    // The starter world's first two lines, on whichever tier is built. Without
+    // `std` this is the whole of what the facade offers, so it is also the
+    // check that a world is constructible with no runtime behind it.
+    #[test]
+    fn a_world_holds_the_components_added_to_it() {
+        let mut world = World::new();
+        world.add_component(TextLabel {
+            content: "Hello, world!".into(),
+            ..Default::default()
+        });
+
+        assert_eq!(world.component_count(), 1);
+        assert_eq!(
+            world.query::<TextLabel>().next().unwrap().content,
+            "Hello, world!"
+        );
+    }
 
     // The documented headless case: the same starter world without a
     // GraphicsConfig, which is what lets a test or a simulation-only tool
     // drive a world with no window.
+    #[cfg(feature = "std")]
     #[test]
     fn a_world_without_graphics_starts_headless() {
         let mut world = World::new();
         world.add_component(TextLabel {
-            content: "Hello, world!".to_string(),
+            content: "Hello, world!".into(),
             ..Default::default()
         });
 
-        let mut app = App::from_world(world);
+        let mut app = super::App::from_world(world);
         assert_eq!(app.start(), Ok(()));
+    }
+
+    // The tier handoff: a world built where no runtime exists becomes the
+    // engine's world by conversion, with its content intact.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_data_only_world_converts_into_the_engines_world() {
+        let mut data = concinnity_core::ecs::World::new();
+        data.add_component(TextLabel {
+            content: "carried over".into(),
+            ..Default::default()
+        });
+
+        let world: World = data.into();
+        assert_eq!(world.component_count(), 1);
+        assert_eq!(
+            world.query::<TextLabel>().next().unwrap().content,
+            "carried over"
+        );
     }
 }

@@ -44,13 +44,15 @@ pub(crate) fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-// Workspace-relative name with normalized separators, so a rename or a move
-// changes the hash and platforms agree on it. `workspace` must already be
-// canonicalized.
-pub(crate) fn relative_name(workspace: &Path, file: &Path) -> String {
+// Package-relative name with normalized separators, so a rename or a move
+// changes the hash and platforms agree on it. Relative to the package rather
+// than the workspace so a crate hashes the same bytes when it is built from a
+// registry checkout, where no workspace manifest exists above it. `package`
+// must already be canonicalized.
+pub(crate) fn relative_name(package: &Path, file: &Path) -> String {
     let canon = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     canon
-        .strip_prefix(workspace)
+        .strip_prefix(package)
         .unwrap_or(&canon)
         .to_string_lossy()
         .replace('\\', "/")
@@ -172,16 +174,31 @@ mod tests {
     }
 
     #[test]
-    fn names_are_workspace_relative_with_forward_slashes() {
+    fn names_are_package_relative_with_forward_slashes() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().canonicalize().unwrap();
-        let nested = workspace.join("crates").join("thing").join("src");
+        let package = dir.path().canonicalize().unwrap();
+        let nested = package.join("src").join("gfx");
         std::fs::create_dir_all(&nested).unwrap();
         let file = nested.join("lib.rs");
         std::fs::write(&file, b"").unwrap();
-        assert_eq!(
-            relative_name(&workspace, &file),
-            "crates/thing/src/lib.rs".to_string()
-        );
+        assert_eq!(relative_name(&package, &file), "src/gfx/lib.rs".to_string());
+    }
+
+    // A package built from a registry checkout sits under a different parent
+    // and has no workspace manifest above it, so the name must not depend on
+    // where the package itself lives.
+    #[test]
+    fn names_do_not_depend_on_the_package_location() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let mut names = Vec::new();
+        for dir in [&a, &b] {
+            let root = dir.path().canonicalize().unwrap();
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            let file = root.join("src").join("lib.rs");
+            std::fs::write(&file, b"").unwrap();
+            names.push(relative_name(&root, &file));
+        }
+        assert_eq!(names[0], names[1]);
     }
 }

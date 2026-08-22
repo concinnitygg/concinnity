@@ -4,7 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "In-engine world editor for Concinnity: live preview, panels, hot-reload"
+keywords = ["gamedev", "editor", "concinnity"]
+categories = ["game-engines", "development-tools"]
+include = [
+    "/src",
+    "/build.rs",
+]
 
 [lib]
 name = "concinnity_editor"
@@ -22,15 +31,15 @@ vulkan = [
 ]
 
 [dependencies]
-concinnity-engine = { path = "../concinnity-engine" }
-concinnity-device = { path = "../concinnity-device" }
-concinnity-cook = { path = "../concinnity-cook" }
-concinnity-world = { path = "../concinnity-world" }
-concinnity-shader = { path = "../concinnity-shader" }
-concinnity-core = { path = "../concinnity-core" }
-concinnity-cpu = { path = "../concinnity-cpu" }
-concinnity-store = { path = "../concinnity-store" }
-concinnity-memory = { path = "../concinnity-memory" }
+concinnity-engine = { workspace = true }
+concinnity-device = { workspace = true }
+concinnity-cook = { workspace = true }
+concinnity-world = { workspace = true }
+concinnity-shader = { workspace = true }
+concinnity-core = { workspace = true }
+concinnity-cpu = { workspace = true }
+concinnity-store = { workspace = true }
+concinnity-memory = { workspace = true }
 
 argon2 = "0.5"
 async-stream = "0.3.6"
@@ -65,7 +74,7 @@ ureq = { version = "3.2.0", features = ["json"] }
 tempfile = "3.25.0"
 
 [build-dependencies]
-concinnity-toolchain = { path = "../concinnity-toolchain" }
+concinnity-toolchain = { workspace = true }
 
 [lints]
 workspace = true

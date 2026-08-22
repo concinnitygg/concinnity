@@ -4,7 +4,15 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Build-script support for Concinnity: backend cfg resolution and graphics SDK setup"
+keywords = ["gamedev", "build-dependencies", "concinnity"]
+categories = ["game-engines", "development-tools::build-utils"]
+include = [
+    "/src",
+]
 
 # Build-script support: rendering-backend cfg resolution and graphics SDK
 # detection/bundling, shared by every package whose build script produces a
@@ -22,7 +30,7 @@ path = "src/lib.rs"
 fetch = ["dep:ureq", "dep:zip"]
 
 [dependencies]
-concinnity-slang = { path = "../concinnity-slang" }
+concinnity-slang = { workspace = true }
 ureq = { version = "3.2.0", optional = true }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
