@@ -64,7 +64,6 @@ impl Default for VoxelWorld {
 
 // These accessors feed the Metal chunk-streaming path for now
 // (Vulkan / DirectX catch-up is a follow-up).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl VoxelWorld {
     /// Blocks per chunk, each axis floored at 1 so a chunk is never degenerate.
     pub fn chunk_blocks(&self) -> [u32; 3] {

@@ -116,7 +116,6 @@ fn resolve(type_id: TypeId) -> Option<ComponentId> {
 // Build a component mask from registered component types.
 macro_rules! component_mask {
     ( $( $ty:ty ),* $(,)? ) => {{
-        #[allow(unused_mut)]
         let mut m = $crate::ecs::ComponentMask::EMPTY;
         $( m.insert($crate::ecs::ComponentId::new(
             <$ty as $crate::ecs::ComponentSlot>::DISCRIMINANT,
@@ -130,7 +129,6 @@ macro_rules! component_mask {
 // world start, not silently at runtime.
 macro_rules! resource_mask {
     ( $( $ty:ty ),* $(,)? ) => {{
-        #[allow(unused_mut)]
         let mut m = $crate::ecs::ComponentMask::EMPTY;
         $( m.insert(
             $crate::ecs::access_ids::id_of::<$ty>()

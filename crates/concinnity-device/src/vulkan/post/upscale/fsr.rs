@@ -24,8 +24,10 @@
 // render-resolution motion + depth targets. Projection jitter is still applied,
 // but per FSR's `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock
 // Halton sequence (FSR's jitter is tuned to its temporal kernel).
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
+#![expect(
+    non_camel_case_types,
+    reason = "inline FFX bindings keep the SDK's own C type names"
+)]
 
 use std::cell::Cell;
 use std::ffi::c_void;

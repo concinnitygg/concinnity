@@ -8,7 +8,6 @@
 //! The tables are written as raw little-endian f32, not as Rust source: a static
 //! array of 24k float literals takes rustc tens of seconds to compile, while
 //! `include_bytes!` of the same data is free.
-#![allow(dead_code)]
 
 include!("src/ltc/fit.rs");
 

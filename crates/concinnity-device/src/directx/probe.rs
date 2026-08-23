@@ -68,9 +68,15 @@ const PROBE_FACE_COUNT: usize = 6;
 // sampled only by the specular reflection term. The SRV into the probe cube array
 // is written when the array is bound to the shaders.
 pub(in crate::directx) struct ProbeCube {
-    #[allow(dead_code)] // bound to the forward shader (next slice)
+    #[expect(
+        dead_code,
+        reason = "held to keep the prefilter cube resident; the array SRV is what the shaders bind"
+    )]
     pub(in crate::directx) prefilter: PooledTexture,
-    #[allow(dead_code)] // bound to the forward shader (next slice)
+    #[expect(
+        dead_code,
+        reason = "carried alongside the cube for the array SRV write; not read per frame"
+    )]
     pub(in crate::directx) mip_count: u32,
 }
 

@@ -35,12 +35,18 @@ impl Registration {
         self.origin == AssetOrigin::External
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "origin predicate exercised by this crate's tests")
+    )]
     pub(crate) fn serializable(&self) -> bool {
         self.origin != AssetOrigin::RuntimeOnly
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "origin predicate exercised by this crate's tests")
+    )]
     pub(crate) fn runtime_present(&self) -> bool {
         self.origin != AssetOrigin::BuildOnly
     }
@@ -164,7 +170,7 @@ macro_rules! define_component_type {
     ( $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? ) => {
         // One variant per registered component type, named for that type.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "one variant per registered component type, named for that type")]
         pub enum ComponentType {
             $( $variant ),+
         }
@@ -182,7 +188,6 @@ macro_rules! define_component_type {
                     $( Self::$variant => crate::ecs::ComponentTag::$variant as u8 ),+
                 }
             }
-            #[allow(dead_code)]
             /// The type carrying a blob discriminant, or `None` if unknown.
             pub fn from_discriminant(val: u8) -> Option<Self> {
                 $( if val == crate::ecs::ComponentTag::$variant as u8 { return Some(Self::$variant); } )+
@@ -200,7 +205,6 @@ macro_rules! define_component_type {
             /// component itself for pass-through types, the `args:` override
             /// for the divergent ones. The docs pipeline renders that struct's
             /// fields as the asset's parameters.
-            #[allow(dead_code)]
             pub fn args_struct_name(self) -> &'static str {
                 match self {
                     $( Self::$variant => __meta_args_name!($variant; $($meta)*) ),+
@@ -337,7 +341,6 @@ macro_rules! define_component_type {
                     $( Self::$variant => __meta_renders!($($meta)*) ),+
                 }
             }
-            #[allow(dead_code)]
             /// Whether a world may declare this type directly.
             pub fn addable(self) -> bool {
                 self.registration().addable()

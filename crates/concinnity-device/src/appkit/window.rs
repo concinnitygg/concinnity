@@ -73,9 +73,13 @@ pub(crate) struct AppKitWindow {
     // mode. Retained here because NSWindow holds its delegate as a zeroing weak
     // reference, so dropping this would detach the delegate; the field is never
     // read directly (the delegate communicates through `fullscreen`).
-    #[allow(
-        dead_code,
-        reason = "retained only to keep NSWindow's weak delegate reference alive"
+    #[cfg_attr(
+        not(backend_metal),
+        expect(
+            dead_code,
+            reason = "retained only to keep NSWindow's weak delegate reference alive; \
+                      the Vulkan path builds no delegate"
+        )
     )]
     window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
     // Holds the display to the user's chosen mode while the window is in

@@ -22,10 +22,6 @@ use super::texture::{create_buffer, one_shot_submit, transition_barrier};
 // below (`read_typed_vec` / `write_upload_buffer`) are walked through these
 // suppressed-but-live-root methods, so they need no attribute of their own.
 // See the note on the analogous block in [directx/decal.rs].
-#[allow(
-    dead_code,
-    reason = "cn-debug-only hot-reload surface; dead from the FFI lib crate's roots, live in the concinnity binary"
-)]
 impl DxContext {
     // Rebuild the shared static-mesh vertex + index buffers, swapping in
     // fresh geometry for the draws named in `changes`. Driven by asset

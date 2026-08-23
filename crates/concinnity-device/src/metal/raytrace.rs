@@ -338,9 +338,15 @@ struct RtUpdateScratch {
 // handles (and thus the GPU allocations) valid until `RetirePool` drops them,
 // once the fence guarantees no in-flight trace can still reference them.
 struct RetiredRt {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the acceleration structures stay valid until RetirePool drops them"
+    )]
     structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the backing buffers stay valid until RetirePool drops them"
+    )]
     buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 

@@ -78,7 +78,7 @@ macro_rules! define_resource_asset_type {
     ( $( $variant:ident => $ty:path { resource: $kind:ident $($meta:tt)* } ),+ $(,)? ) => {
         // One variant per resource asset type, named for that type.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "one variant per resource asset type, named for that type")]
         pub enum ResourceAssetType {
             $( $variant ),+
         }

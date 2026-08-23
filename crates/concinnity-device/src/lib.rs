@@ -11,9 +11,12 @@
 // data layouts and render math (concinnity-core), the CPU kernels over them
 // (concinnity-cpu), and the render-prep modules (concinnity-render). Each
 // backend consumes a different subset and one backend compiles per build, so a
-// portion of these re-exports is unused on any given build - allow it
+// portion of these re-exports is unused on any given build - suppress it
 // crate-wide rather than gate every item per backend.
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "one backend compiles per build, so each consumes only a subset of these re-exports"
+)]
 pub(crate) mod gfx {
     pub(crate) use concinnity_core::gfx::lod_select as lod;
     pub(crate) use concinnity_core::gfx::{

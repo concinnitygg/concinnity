@@ -59,11 +59,17 @@ const SHADER_EXTENSIONS: &[&str] = &["vert", "frag", "comp", "slang"];
 pub(crate) struct WatcherHandle {
     // notify keeps its own listener thread alive for as long as the handle
     // exists; we never read this field after construction.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
+    )]
     watcher: notify::RecommendedWatcher,
     // The shader source directory the watcher is observing. Kept for
     // diagnostics: log lines reference it on init.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "kept for diagnostics; log lines reference it on init"
+    )]
     watched_dir: PathBuf,
 }
 
@@ -611,7 +617,6 @@ impl VkContext {
     // Reached only through the bin's `cn debug` runtime-mutation path (dead
     // from the FFI lib crate's roots, live in the concinnity binary), like the
     // other runtime-mutation methods on `VkContext`.
-    #[allow(dead_code)]
     pub(crate) fn update_world_shader_pipelines(
         &mut self,
         vert_bytes: Option<&[u8]>,

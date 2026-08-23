@@ -1296,7 +1296,6 @@ impl RaymarchResources {
     // the cube-less shadow-caster view sets are left untouched. Reached only
     // through the bin's `cn debug` env-map hot-reload path (dead in the FFI
     // lib, live in the bin).
-    #[allow(dead_code)]
     pub(in crate::vulkan) fn rewire_ibl_cubes(
         &self,
         device: &VkDevice,

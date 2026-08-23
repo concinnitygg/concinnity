@@ -60,11 +60,17 @@ macro_rules! rebuild_if_live {
 pub(crate) struct WatcherHandle {
     // We don't read `_watcher` after construction; notify keeps its own
     // listener thread for as long as the handle is alive.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
+    )]
     watcher: notify::RecommendedWatcher,
     // The shader source directory the watcher is observing. Kept for
     // diagnostics: log lines reference it on init.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "kept for diagnostics; log lines reference it on init"
+    )]
     watched_dir: PathBuf,
 }
 

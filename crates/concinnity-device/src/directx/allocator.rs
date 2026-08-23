@@ -192,9 +192,15 @@ fn round_up(value: u64, granularity: u64) -> u64 {
 // A one-shot list submitted by the allocator itself, held until the GPU has
 // provably retired it. Never read; dropping the entry releases the handles.
 struct ParkedList {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held until the GPU retires the list; dropping the entry releases the handle"
+    )]
     allocator: ID3D12CommandAllocator,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held until the GPU retires the list; dropping the entry releases the handle"
+    )]
     cmd: ID3D12GraphicsCommandList,
     retire_at: u64,
 }
@@ -285,7 +291,10 @@ pub(super) struct PooledBuffer {
     // A placed resource does not keep its heap alive, and D3D12 requires the
     // heap to outlive it. Held rather than relied on through the lease so a
     // bare `ID3D12Resource` cloned out of this cannot outlive its memory.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "a placed resource does not keep its heap alive, so the heap is held to outlive it"
+    )]
     heap: ID3D12Heap,
     _lease: Rc<Lease>,
 }
@@ -310,7 +319,10 @@ impl AsRef<ID3D12Resource> for PooledBuffer {
 #[derive(Clone)]
 pub(super) struct PooledTexture {
     resource: ID3D12Resource,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "a placed resource does not keep its heap alive, so the heap is held to outlive it"
+    )]
     heap: ID3D12Heap,
     _lease: Rc<Lease>,
 }

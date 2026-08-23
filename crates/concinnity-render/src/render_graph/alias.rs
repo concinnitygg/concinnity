@@ -80,14 +80,23 @@ pub(crate) struct AliasPlan {
     // resource the planner does not place (imported, buffer, or a transient
     // with no texture desc). Measured output: the executor consumes `slots`,
     // this module's tests assert the rest.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "measured output asserted by this module's tests")
+    )]
     pub assignment: Vec<Option<usize>>,
     // Total bytes the slots occupy (the aliased footprint).
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "measured output asserted by this module's tests")
+    )]
     pub aliased_bytes: u64,
     // Total bytes the same resources would occupy with no aliasing (one
     // allocation each).
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "measured output asserted by this module's tests")
+    )]
     pub unaliased_bytes: u64,
 }
 

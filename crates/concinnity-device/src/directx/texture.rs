@@ -14,7 +14,6 @@ use super::com;
 // A D3D12 texture plus the descriptors it binds through. `R` is how the texture
 // is held: pooled textures carry their placement lease, while the GPU-written
 // depth arrays that stay committed carry a bare resource.
-#[allow(dead_code)]
 pub(super) struct GpuResource<R = PooledTexture> {
     pub resource: R,
     // CPU descriptor handle for the SRV (zero/invalid for buffers that don't need one).
@@ -236,13 +235,25 @@ pub(super) fn upload_buffer_padded(
 // upload's submission). The handles are held only so dropping the entry
 // releases them (COM refcounts), hence never read.
 pub(super) struct StreamedUploadRetire {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held only so dropping the entry releases the COM reference"
+    )]
     pub texture: PooledTexture,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held only so dropping the entry releases the COM reference"
+    )]
     pub upload: PooledBuffer,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held only so dropping the entry releases the COM reference"
+    )]
     pub allocator: ID3D12CommandAllocator,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held only so dropping the entry releases the COM reference"
+    )]
     pub cmd: ID3D12GraphicsCommandList,
     pub retire_at: u64,
 }
@@ -1258,7 +1269,6 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
 // The `irradiance` / `prefilter` fields hold the COM resources alive while
 // their SRVs are referenced via the shader-visible descriptor heap; the SRV
 // GPU handles are read by `draw.rs`, not the GpuResource itself.
-#[allow(dead_code)]
 pub(super) struct EnvironmentMapTextures {
     pub irradiance: GpuResource,
     pub prefilter: GpuResource,
@@ -1346,7 +1356,10 @@ pub(super) fn create_fallback_cubemap(
 // Upload a six-face HDR cubemap from a CubemapTexture payload. `bytes` is the
 // raw RGBA32F face-major data emitted by build/cubemap.rs::compile_cubemap_payload:
 // 6 * face_size² * 16 bytes in face order +X, -X, +Y, -Y, +Z, -Z. Single-mip.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "cubemap upload path lands with the DirectX probe capture; no caller yet"
+)]
 pub(super) fn upload_cubemap(
     alloc: &DeviceAllocator,
     face_size: u32,

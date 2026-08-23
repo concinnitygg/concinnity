@@ -21,12 +21,18 @@
 // declares them as exported symbols alongside `#[unsafe(no_mangle)]`.
 #[unsafe(no_mangle)]
 #[used]
-#[allow(unreachable_pub)]
+#[expect(
+    unreachable_pub,
+    reason = "the pub visibility is what exports the symbol; nothing in the crate names it"
+)]
 pub static D3D12SDKVersion: u32 = 619;
 
 #[unsafe(no_mangle)]
 #[used]
-#[allow(unreachable_pub)]
+#[expect(
+    unreachable_pub,
+    reason = "the pub visibility is what exports the symbol; nothing in the crate names it"
+)]
 pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
 
 #[cfg(test)]

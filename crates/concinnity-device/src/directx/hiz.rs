@@ -57,7 +57,6 @@ pub(super) struct HiZResources {
     // kernel reads it via `Texture2D<float>.Load(int3(x, y, mip))`. Held
     // only to keep the resource alive; the per-mip CPU UAV handles below
     // reference it.
-    #[allow(dead_code)]
     pub(super) texture: ID3D12Resource,
     pub(super) width: u32,
     pub(super) height: u32,
@@ -76,7 +75,10 @@ pub(super) struct HiZResources {
     // t0 (the main-depth SRV the decal/fog passes also share). The CPU
     // handle is captured at init so a future resize can rewrite it in
     // place without rebinding the cull root signature.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "captured at init so a resize can rewrite the depth SRV without rebinding the cull root signature"
+    )]
     pub(super) depth_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(super) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     // Per-mip UAV CPU/GPU descriptor pairs. Length = `mip_count`.

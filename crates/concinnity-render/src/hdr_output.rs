@@ -14,14 +14,12 @@
 // above that mean the panel can drive luminance past the SDR reference white,
 // so 1.0 + epsilon is the minimum useful HDR signal. Most HDR400 displays
 // report 2.0+; HDR1000 displays report 8.0+.
-#[allow(dead_code)] // referenced by HdrOutputMode::resolve; Metal + DirectX consumers.
 pub(crate) const HDR_MAX_EDR_FLOOR: f32 = 1.001;
 
 /// HDR encoding the composite shader emits on the EDR path. Drives both
 /// the swapchain colour-space choice (CAMetalLayer on Metal,
 /// `SetColorSpace1` on DirectX) and the shader's per-pixel encode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Metal + DirectX consumers; Vulkan stays on scRGB-linear.
 pub enum HdrEncoding {
     /// Pass linear extended-range values through. Swapchain colour space is
     /// `kCGColorSpaceExtendedLinearDisplayP3`; the OS compositor handles the
@@ -42,7 +40,6 @@ pub enum HdrEncoding {
 /// encoding flag and falls back to SDR on a panel that reports no EDR
 /// headroom.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // Metal + DirectX consumers; Vulkan partial (no PQ encode).
 pub enum HdrOutputMode {
     /// Tone-map + gamma-encode the HDR scene into the standard BGRA8Unorm
     /// swapchain. FXAA + ColorLut run.
@@ -65,7 +62,6 @@ pub enum HdrOutputMode {
     },
 }
 
-#[allow(dead_code)] // see HdrOutputMode: Metal + DirectX consumers.
 impl HdrOutputMode {
     /// Build the mode from the world's authored request and the platform's
     /// measured EDR multiplier. The asset toggle is the gate: even on a

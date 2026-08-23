@@ -15,14 +15,26 @@ pub(crate) struct ExecSchedule {
     // Wave membership: indices into the world's system list, grouped by
     // level, members in table order within each wave. Derived and asserted by
     // this module's tests; `World::step` still walks systems in table order,
-    // so nothing reads it yet. Drop the allow once the step walks waves.
-    #[allow(dead_code)]
+    // so nothing reads it yet.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by this module's tests until `World::step` walks waves"
+        )
+    )]
     waves: Vec<Vec<usize>>,
     accesses: Vec<Access>,
 }
 
 impl ExecSchedule {
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by this module's tests until `World::step` walks waves"
+        )
+    )]
     pub(crate) fn waves(&self) -> &[Vec<usize>] {
         &self.waves
     }

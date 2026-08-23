@@ -221,7 +221,6 @@ impl PassTimingResources {
 
     // Attach a single-encoder compute pass to its start + end slot pair.
     // Mirrors [`attach_render`] for `MTLComputePassDescriptor`.
-    #[allow(dead_code)] // Wiring lands incrementally.
     pub(super) fn attach_compute(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);

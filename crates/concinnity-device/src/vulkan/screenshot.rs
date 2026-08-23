@@ -27,9 +27,8 @@ use crate::gfx::image_decode::{self, PixelLayout};
 impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
-    // so the backend forwarder is unambiguous; `#[allow(dead_code)]` because it
-    // is reached only through the `RenderBackend` vtable (bin-only `cn debug`).
-    #[allow(dead_code)]
+    // so the backend forwarder is unambiguous. Reached through the
+    // `RenderBackend` vtable (bin-only `cn debug`).
     pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
         let Some(image_index) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());

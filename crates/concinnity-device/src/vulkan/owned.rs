@@ -388,14 +388,6 @@ macro_rules! owned_handle {
                     device: None,
                 }
             }
-
-            // Not every family has a caller for this: the macro gives all seven
-            // the same surface, and only the ones a pass rebuilds in place
-            // (framebuffers) ask whether the slot is filled.
-            #[allow(dead_code)]
-            pub(in crate::vulkan) fn is_null(&self) -> bool {
-                self.device.is_none()
-            }
         }
 
         impl Default for $name {
@@ -432,6 +424,14 @@ owned_handle!(OwnedDescriptorPool, vk::DescriptorPool, DescriptorPool);
 owned_handle!(OwnedRenderPass, vk::RenderPass, RenderPass);
 owned_handle!(OwnedFramebuffer, vk::Framebuffer, Framebuffer);
 owned_handle!(OwnedSampler, vk::Sampler, Sampler);
+
+impl OwnedFramebuffer {
+    // Whether the slot is still the inert placeholder. Only the families a pass
+    // rebuilds in place ask this, so it is not part of the shared surface.
+    pub(in crate::vulkan) fn is_null(&self) -> bool {
+        self.device.is_none()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -507,7 +507,6 @@ mod tests {
     #[test]
     fn a_null_wrapper_owns_nothing() {
         let p = OwnedPipeline::null();
-        assert!(p.is_null());
         assert_eq!(p.handle(), vk::Pipeline::null());
         // Dropping it must not need a device, which is the whole point of the
         // placeholder: a pass struct can hold one before its device exists and

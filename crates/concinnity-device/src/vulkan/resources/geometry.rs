@@ -10,7 +10,7 @@ use ash::vk;
 use crate::gfx::mesh_payload::Vertex;
 
 use super::super::context::*;
-use super::super::texture::{self};
+use super::super::texture;
 
 impl VkContext {
     // Copy `data` into a sub-region of a DEVICE_LOCAL geometry buffer.
@@ -156,7 +156,6 @@ impl VkContext {
     // region we're about to overwrite. Mirrors
     // `DxContext::update_mesh_geometry`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,

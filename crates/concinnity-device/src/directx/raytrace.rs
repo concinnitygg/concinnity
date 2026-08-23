@@ -588,7 +588,10 @@ struct RetiredBlas {
     free_at: u64,
     // Never read: held only so its COM references (the orphaned BLAS + build
     // scratch) stay alive until this entry is dropped, once `free_at` passes.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the orphaned BLAS and scratch stay alive until free_at passes"
+    )]
     resources: Vec<ID3D12Resource>,
 }
 

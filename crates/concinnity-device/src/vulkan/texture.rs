@@ -1508,7 +1508,10 @@ fn create_cube_image(
 // Upload a six-face HDR cubemap from a `CubemapTexture` payload. RGBA32F,
 // 6 * face_size * face_size * 16 bytes in face-major order
 // (+X, -X, +Y, -Y, +Z, -Z). Single-mip.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "cubemap upload path lands with the Vulkan probe capture; no caller yet"
+)]
 pub(super) fn upload_cubemap(
     ctx: &GpuUploadContext,
     face_size: u32,
@@ -1566,7 +1569,6 @@ pub(super) fn upload_environment_map(
 // prefilter chain from `reflection_probe::build_probe_payload`). The returned
 // `GpuImage` carries a `CUBE` view spanning every mip, sampled through the
 // shared `cube_sampler`. Mirrors `directx::texture::upload_probe_prefilter_cube`.
-#[allow(dead_code)] // installed by the probe capture pass (next slice).
 pub(super) fn upload_probe_prefilter_cube(
     ctx: &GpuUploadContext,
     prefilter_face: u32,

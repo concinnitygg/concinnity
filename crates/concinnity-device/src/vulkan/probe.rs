@@ -1605,7 +1605,6 @@ fn write_storage(
 // `reflection_probe::build_probe_payload`, which wants each as
 // `face_size * face_size` RGBA f32 in row-major order. Mirrors the decode half of
 // `directx/probe.rs::read_face_rgba_f32`.
-#[allow(dead_code)] // consumed by the probe capture-pass readback (next slice).
 fn decode_probe_face_rgba16f(raw: &[u8], face_size: u32) -> Vec<f32> {
     let texels = (face_size as usize) * (face_size as usize);
     let mut out = vec![0.0f32; texels * 4];

@@ -493,7 +493,6 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) velocity: ID3D12Resource,
     pub(in crate::directx) velocity_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) velocity_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    #[allow(dead_code)]
     pub(in crate::directx) depth: ID3D12Resource,
     pub(in crate::directx) depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 

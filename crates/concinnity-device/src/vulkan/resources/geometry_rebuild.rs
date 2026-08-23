@@ -44,7 +44,6 @@ impl VkContext {
     // Mirrors `DxContext::rebuild_static_geometry`. Reached only through the
     // bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in the
     // bin).
-    #[allow(dead_code)]
     pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<DrawGeometryUpdate>,
@@ -285,7 +284,6 @@ impl VkContext {
     // this call. Mirrors `DxContext::rebuild_skinned_geometry`. Reached only
     // through the bin's `cn debug` runtime-mutation path (dead in the FFI lib,
     // live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
@@ -496,7 +494,6 @@ impl VkContext {
 // and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
 // buffer's stride exactly. Only reached through the (bin-only) geometry-rebuild
 // path, so dead in the FFI lib.
-#[allow(dead_code)]
 fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Result<Vec<T>, String> {
     if bytes == 0 {
         return Ok(Vec::new());

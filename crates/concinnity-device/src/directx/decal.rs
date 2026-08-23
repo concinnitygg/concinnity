@@ -275,10 +275,16 @@ pub(in crate::directx) struct DecalResources {
 
     // Resources held to keep the GPU memory alive while the views below
     // reference them; the encoder binds through the views.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the GPU memory alive; the encoder binds through vertex_buffer_view"
+    )]
     pub(in crate::directx) vertex_buffer: PooledBuffer,
     pub(in crate::directx) vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the GPU memory alive; the encoder binds through index_buffer_view"
+    )]
     pub(in crate::directx) index_buffer: PooledBuffer,
     pub(in crate::directx) index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 
@@ -643,10 +649,6 @@ impl DxContext {
 // an `expect` would be unfulfilled. Suppressing the methods also marks them live
 // roots, so the freelist / SRV-slot fields they touch stay un-flagged on their
 // own.
-#[allow(
-    dead_code,
-    reason = "cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots, live in the concinnity binary"
-)]
 impl DxContext {
     // Append a runtime decal. Writes the per-decal albedo SRV into the
     // reserved heap region; the encoder reads it next frame. Reuses

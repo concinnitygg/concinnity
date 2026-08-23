@@ -31,9 +31,8 @@ use super::texture::{create_buffer, one_shot_submit, transition_barrier};
 impl DxContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
-    // so the backend forwarder is unambiguous; `#[allow(dead_code)]` because it
-    // is reached only through the `RenderBackend` vtable (bin-only `cn debug`).
-    #[allow(dead_code)]
+    // so the backend forwarder is unambiguous. Reached through the
+    // `RenderBackend` vtable (bin-only `cn debug`).
     pub(crate) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());
@@ -177,7 +176,13 @@ impl DxContext {
 // The capture path sizes its readback from `GetCopyableFootprints` (which also
 // folds in the 256-byte row alignment), so this helper only documents +
 // asserts the format-to-texel-size mapping under test.
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the capture path sizes its readback from GetCopyableFootprints; this only asserts the mapping under test"
+    )
+)]
 fn swapchain_bytes_per_pixel(format: DXGI_FORMAT) -> u32 {
     match format {
         DXGI_FORMAT_R16G16B16A16_FLOAT => 8,

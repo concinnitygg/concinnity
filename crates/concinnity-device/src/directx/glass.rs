@@ -46,14 +46,23 @@ pub(in crate::directx) use concinnity_render::uniforms::TransparentView;
 // uniform CBV. The quad is pre-transformed at build time and the params never
 // change at runtime, so there is no per-frame work beyond projection.
 struct GlassPanelRecord {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the GPU memory alive; the encoder binds through vertex_buffer_view"
+    )]
     vertex_buffer: PooledBuffer,
     vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the GPU memory alive; the encoder binds through index_buffer_view"
+    )]
     index_buffer: PooledBuffer,
     index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     index_count: u32,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the GPU memory alive; the encoder binds through params_cbuffer_gva"
+    )]
     params_cbuffer: PooledBuffer,
     params_cbuffer_gva: u64,
     visible: bool,

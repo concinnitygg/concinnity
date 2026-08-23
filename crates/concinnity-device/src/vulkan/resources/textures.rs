@@ -344,7 +344,6 @@ impl VkContext {
     // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
@@ -397,7 +396,6 @@ impl VkContext {
     // `DxContext::update_environment_map`. Reached
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
@@ -494,9 +492,7 @@ impl VkContext {
 // Set-0 binding indices for the IBL cubemaps. Must match the bindings the
 // init path writes in `vulkan/init.rs` when wiring `global_sets`. Kept as
 // documentation of that layout; `init.rs` writes the literals directly.
-#[allow(dead_code)]
 const IRRADIANCE_CUBE_BINDING: u32 = 4;
-#[allow(dead_code)]
 const PREFILTER_CUBE_BINDING: u32 = 5;
 
 impl VkContext {
@@ -514,7 +510,6 @@ impl VkContext {
     // rewires above can find it. Mirrors
     // `DxContext::clone_static_draw_object`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,

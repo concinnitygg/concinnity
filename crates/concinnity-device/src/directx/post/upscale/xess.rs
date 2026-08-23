@@ -8,7 +8,10 @@
 // caller falls through to the next backend / native rendering. The FFI
 // bindings are inline (small, concentrated API), validated against XeSS SDK
 // 3.0.1 by the size/offset asserts in the tests.
-#![allow(non_camel_case_types)]
+#![expect(
+    non_camel_case_types,
+    reason = "inline XeSS bindings keep the SDK's own C type names"
+)]
 
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -108,7 +111,10 @@ type PfnXessSetVelocityScale =
     unsafe extern "C" fn(ctx: xess_context_handle_t, x: f32, y: f32) -> i32;
 
 struct XessApi {
-    #[allow(dead_code)] // Held to keep the DLL loaded for the context's lifetime.
+    #[expect(
+        dead_code,
+        reason = "held to keep the DLL loaded for the context's lifetime"
+    )]
     module: HMODULE,
     create_context: PfnXessD3D12CreateContext,
     build_pipelines: PfnXessD3D12BuildPipelines,

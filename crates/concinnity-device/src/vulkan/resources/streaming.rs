@@ -12,7 +12,7 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::*;
 
 use super::super::context::*;
-use super::super::texture::{self};
+use super::super::texture;
 use super::alloc_descriptor_sets;
 
 impl VkContext {

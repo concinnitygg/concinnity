@@ -26,7 +26,7 @@ include = [
 ]
 
 [workspace.package]
-version = "0.18.51"
+version = "0.18.52"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
@@ -120,6 +120,10 @@ concinnity-world = { path = "crates/concinnity-world", version = "0.18" }
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
+# Suppressions state why, and stop compiling once they stop being needed:
+# `expect` reports an allowance the code has outgrown, `allow` never does.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 # Placeholders and debugging leftovers, none of which currently exist.
 todo = "warn"
 unimplemented = "warn"

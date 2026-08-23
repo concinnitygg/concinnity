@@ -35,10 +35,8 @@ pub use concinnity_render::{
 pub(crate) use concinnity_render::{
     call_buffer, chunk_window, cursor, display_mode, keymap, lights, sprite, text,
 };
-// Seeded / driven by the client's GraphicsSystem on Metal today; the other
-// backends' probe + planar ports have not landed, so unused off macOS.
+// Seeded / driven by the client's GraphicsSystem.
 pub use concinnity_render::draw_slot;
-#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub(crate) use concinnity_render::{planar_reflection, reflection_probe};
 // Consumed by the runtime-spawn unit tests, which drive the template seams
 // with a bare pool instead of the RenderSlots resource.

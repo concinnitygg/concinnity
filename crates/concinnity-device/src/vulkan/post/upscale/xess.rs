@@ -17,7 +17,10 @@
 // SDK 3.0.1 (`inc/xess/{xess.h,xess_vk.h}`) by the size/offset asserts in the
 // tests. `XESS_PACK_B()` is `pack(8)`, a no-op on x86_64 where every field is
 // already <= 8-aligned, so `#[repr(C)]` matches byte-for-byte.
-#![allow(non_camel_case_types)]
+#![expect(
+    non_camel_case_types,
+    reason = "inline XeSS bindings keep the SDK's own C type names"
+)]
 
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};

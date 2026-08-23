@@ -258,10 +258,19 @@ macro_rules! define_systems {
         } ),* $(,)? ) => {
         /// Variant sizes follow the behavior types; boxing them would only move
         /// the per-system state behind a pointer for no real gain here.
-        #[allow(clippy::large_enum_variant)]
+        // Gated on where the lint actually fires: the gap between the two
+        // largest variants clears the threshold on macOS but not on Windows or
+        // Linux, and the test build's variant set narrows it either way.
+        #[cfg_attr(
+            all(not(test), target_os = "macos"),
+            expect(
+                clippy::large_enum_variant,
+                reason = "boxing would only move the per-system state behind a pointer"
+            )
+        )]
         #[derive(Debug)]
         // One variant per registered system, named for that system.
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "one variant per registered system, named for that system")]
         pub enum SystemAsset {
             $( $variant($behavior), )*
         }
@@ -413,18 +422,7 @@ impl World {
     // Whether this world drives the renderer. True when it declares a
     // `GraphicsConfig` (pre-`start`) or has a constructed `GraphicsSystem`
     // (post-`start`, after the config component has been drained), so callers
-    // can decide on the render loop / Metal activation regardless of timing.
-    // Used only on the macOS NSApp-activation path in `app::run` (and in the
-    // tests below), so it has no caller on other platforms in a non-test build.
-    // Genuinely platform-conditional (unlike the dyn-dispatch dead-code blind
-    // spots in the DX backend), so gate the allow on the same condition.
-    #[cfg_attr(
-        not(target_os = "macos"),
-        allow(
-            dead_code,
-            reason = "used only on the macOS render-activation path in app::run, plus tests"
-        )
-    )]
+    // can decide on the render loop regardless of timing.
     /// Whether the world needs a renderer.
     pub fn renders(&self) -> bool {
         self.query::<crate::assets::GraphicsConfig>()

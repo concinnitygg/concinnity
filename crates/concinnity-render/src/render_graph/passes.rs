@@ -232,7 +232,6 @@ pub enum PassId {
 impl PassId {
     /// Stable display name, looked up in [`PASS_NAMES`]. `'static` since
     /// the table is `const`.
-    #[allow(dead_code)] // Used by per-backend executor + debug formatting.
     pub fn name(self) -> &'static str {
         PASS_NAMES[self as usize]
     }

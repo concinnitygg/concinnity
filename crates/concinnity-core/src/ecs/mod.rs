@@ -502,7 +502,7 @@ macro_rules! __define_asset_kind {
         // wraps, so the list itself is the documentation.
         /// A loaded component of any registered type.
         #[derive(Debug)]
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "one variant per component type, each named for the component it wraps")]
         pub enum $asset_enum {
             $( $variant($ty) ),+
         }
@@ -535,7 +535,7 @@ macro_rules! define_components {
         // One variant per component type, named for that component.
         #[repr(u8)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "one variant per component type, named for that component")]
         pub enum ComponentTag {
             $( $variant ),+
         }

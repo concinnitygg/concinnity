@@ -106,14 +106,23 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     // Per-volume cbuffer (CPU-visible upload heap, mapped once at
     // build time, never modified: the asset's centre / extent / params
     // are static).
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "mapped once at build time and never re-read; the encoder binds volume_cbuffer_gva"
+    )]
     volume_cbuffer: PooledBuffer,
     pub(in crate::directx) volume_cbuffer_gva: u64,
     pub(in crate::directx) visible: bool,
     pub(in crate::directx) cast_shadows: bool,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "preserved for a future runtime re-place; the encoder reads the cbuffer copy"
+    )]
     pub(in crate::directx) world_centre: [f32; 3],
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "preserved for a future runtime re-place; the encoder reads the cbuffer copy"
+    )]
     pub(in crate::directx) world_extent: [f32; 3],
 }
 
@@ -130,9 +139,15 @@ pub(in crate::directx) struct RaymarchResources {
     // Shared unit-cube proxy geometry (vertices in ±1; the vertex
     // shader scales by `vol_extent`). Held only to keep the resources
     // resident; the encoder binds them through the `_view` siblings.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the cube geometry resident; the encoder binds cube_vbv"
+    )]
     cube_vb: PooledBuffer,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the cube geometry resident; the encoder binds cube_ibv"
+    )]
     cube_ib: PooledBuffer,
     cube_vbv: D3D12_VERTEX_BUFFER_VIEW,
     cube_ibv: D3D12_INDEX_BUFFER_VIEW,
@@ -147,7 +162,10 @@ pub(in crate::directx) struct RaymarchResources {
     // (below) before the first frame. Lives in case a future per-volume
     // "no refraction needed" opt-out wants to re-point the slot at a
     // constant tap.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "holds the scene_color slot open during init; the live SRV is re-pointed before the first frame"
+    )]
     scene_color_fallback: PooledTexture,
     // Pre-raymarch HDR scene snapshot. At the top of `encode_raymarch`
     // we `CopyResource` from `hdr_resolve` (or `hdr_color` when MSAA

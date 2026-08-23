@@ -329,9 +329,14 @@ impl PooledImage {
 
     // A pointer to this image's own bytes, or null when its memory type is not
     // host-visible. Only meaningful for LINEAR-tiled images; nothing pools one
-    // yet, so this is exercised by the unit tests alone. Remove the allow with
-    // its first live caller.
-    #[allow(dead_code)]
+    // yet, so this is exercised by the unit tests alone.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "nothing pools a LINEAR-tiled image yet; tests alone read it"
+        )
+    )]
     pub(super) fn mapped_ptr(&self) -> *mut u8 {
         self.mapped
     }
@@ -356,8 +361,14 @@ impl PooledImage {
     }
 
     // Exercised by the unit tests; no live caller branches on an image's null
-    // state yet. Remove the allow with the first one.
-    #[allow(dead_code)]
+    // state yet.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no live caller branches on an image's null state yet"
+        )
+    )]
     pub(super) fn is_null(&self) -> bool {
         self.image == vk::Image::null()
     }

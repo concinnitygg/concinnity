@@ -13,7 +13,6 @@
 // "evaluate on a command list" model). The bindings are inline `extern "C"`
 // (linked from the static lib), validated against NGX SDK 1.5.0 by the
 // constant asserts in the tests.
-#![allow(non_snake_case)]
 
 use std::ffi::c_void;
 use std::ptr;

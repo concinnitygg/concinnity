@@ -30,9 +30,7 @@ pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 // `world.jsonl` hot-reload churn that adds 129+ new Props referencing
 // existing meshes; the call returns an error past that. Mirrors
 // `directx::context::MAX_CLONE_DRAWS`. Used by `clone_static_draw_object`,
-// which is reached only through the bin's `cn debug` runtime-mutation path
-// (dead in the FFI lib, live in the bin) -- hence the allow, matching DirectX.
-#[allow(dead_code)]
+// which is reached through the bin's `cn debug` runtime-mutation path.
 pub(super) const MAX_CLONE_DRAWS: usize = 128;
 
 // MAX_BLOOM_MIPS now lives in `crate::vulkan::post::bloom` (re-exported as
@@ -744,7 +742,10 @@ pub(super) struct AutoExposureState {
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
+    )]
     pub watcher: Option<crate::vulkan::hot_reload::WatcherHandle>,
 }
 
@@ -924,7 +925,6 @@ pub(super) struct ProbeState {
     // once after construction via `set_reflection_probes`. The cube capture that
     // bakes one prefiltered cube per placement runs across later frames; held
     // here so that capture can walk them.
-    #[allow(dead_code)] // consumed by the probe capture pass (next slice).
     pub placements: Vec<crate::gfx::reflection_probe::ProbePlacement>,
     // The probe set (count + per-probe parallax boxes) bound to the forward /
     // SSR / RT shaders. `EMPTY` (count 0 = sky reflection) until the staggered
@@ -1937,7 +1937,10 @@ impl VkContext {
 
     // Symmetric with `capture_cursor`; reached only through `set_camera_capture`
     // today, kept public so the cursor API stays complete.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "symmetric with capture_cursor; reached only through set_camera_capture today"
+    )]
     pub(crate) fn release_cursor(&mut self) {
         self.window_mut().release_cursor();
     }

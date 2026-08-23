@@ -80,7 +80,10 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Pool size in bytes. Kept around so a future hot-reload that
     // resizes a live emitter's pool can reuse the descriptor write
     // helper (`write_compute_set`) with the new range.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "kept so a pool-resizing hot reload can reuse write_compute_set with the new range"
+    )]
     pub pool_bytes: u64,
     // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
     // each frame via `vkCmdUpdateBuffer`; decremented by the compute
@@ -1233,7 +1236,6 @@ impl VkContext {
     // for in-flight buffer references, so we must drain the queue before
     // freeing the backing memory. Reached only through the bin's `cn debug`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
-    #[allow(dead_code)]
     pub(in crate::vulkan) fn remove_particle_emitter(
         &mut self,
         emitter_id: usize,

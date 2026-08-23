@@ -1042,7 +1042,10 @@ impl GbufferResources {
     // binds the `GpuImage` (image + view) directly from `depth_images`, so this
     // view-only accessor is part of the symmetric reader API but currently
     // unused; kept for parity with the other channel accessors.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "part of the symmetric channel-accessor API; FSR binds the GpuImage directly"
+    )]
     pub(in crate::vulkan) fn depth_view(&self, frame: usize) -> vk::ImageView {
         self.depth_images[frame].view
     }

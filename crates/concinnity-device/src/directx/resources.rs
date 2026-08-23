@@ -510,10 +510,6 @@ impl DxContext {
     // guarantees no in-flight command list still references the old texture
     // (or the now-stale SRV) before it is overwritten and dropped. Mirrors
     // `MtlContext::update_color_lut`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
         let srv_cpu = self.color_lut.srv_cpu;
@@ -534,10 +530,6 @@ impl DxContext {
     // no in-flight command list still references the old cubes (or the
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
         let view = crate::build::environment_map::deserialise(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
@@ -595,10 +587,6 @@ impl DxContext {
     // so the legacy main pass + `rewrite_albedo_slot` /
     // `rewrite_normal_slot` can find it. Mirrors
     // `MtlContext::clone_static_draw_object`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
@@ -890,10 +878,6 @@ impl DxContext {
     // folded into each `write_geometry_region` call (the whole-resource
     // COPY_DEST transition needs no in-flight command list referencing the
     // buffer). Mirrors `MtlContext::update_mesh_geometry`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: usize,
@@ -1666,10 +1650,6 @@ impl DxContext {
     // changes resize the per-slot joint-matrix buffers via
     // `update_skinned_skeleton`. Pipelines stay untouched.
     // Mirrors `MtlContext::update_skinned_mesh_geometry`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
@@ -1769,10 +1749,6 @@ impl DxContext {
     // length retain the init identity seed (or stale prior data) for one
     // post-reload frame and then catch up. Mirrors
     // `MtlContext::update_skinned_skeleton`.
-    #[allow(
-        dead_code,
-        reason = "cn-debug-only mutation/hot-reload; dead from the FFI lib crate's roots, live in the binary; see directx/decal.rs"
-    )]
     pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,
@@ -2017,10 +1993,6 @@ impl DxContext {
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/particle.rs].
-#[allow(
-    dead_code,
-    reason = "cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots, live in the concinnity binary"
-)]
 impl DxContext {
     // Rebuild the world-driven graphics pipelines from freshly compiled
     // Shader stage bytes and hot-swap them, for the live-reload path

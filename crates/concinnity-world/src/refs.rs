@@ -1,5 +1,5 @@
 //! Asset reference-graph extraction: the names an asset references, from the
-//! same two sources the cross-reference validator resolves — the registries'
+//! same two sources the cross-reference validator resolves -- the registries'
 //! flat `refs:` metadata and the structured `CrossReferenced` impls. Their
 //! union is the complete reference set by construction (a hand impl never
 //! re-checks a registry-declared field), so consumers (scene partitioning,

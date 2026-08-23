@@ -44,7 +44,10 @@ pub(super) struct TransientResourcePool {
     // One heap per slot. Held only to keep the heaps alive: a placed resource
     // does not keep its heap alive (D3D12 requires the heap to outlive the
     // resource), so the pool must retain them. Never read after construction.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "a placed resource does not keep its heap alive, so the pool retains the heaps"
+    )]
     heaps: Vec<ID3D12Heap>,
     resources: Vec<PlacedResource>,
     // For each member of a shared (multi-member) slot, its cyclic predecessor:

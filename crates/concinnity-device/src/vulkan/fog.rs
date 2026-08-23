@@ -906,10 +906,8 @@ impl VkContext {
     //
     // Named distinctly from the `RenderBackend::update_fog_settings` trait
     // method so the backend forwarder's `self.apply_fog_settings(...)` is
-    // unambiguous. `#[allow(dead_code)]`: reached only through the
-    // `RenderBackend` vtable (the bin's `cn debug` world.jsonl hot-reload), so
-    // it is dead in the FFI lib but live in the bin.
-    #[allow(dead_code)]
+    // unambiguous. Reached through the `RenderBackend` vtable (the bin's
+    // `cn debug` world.jsonl hot-reload).
     pub(in crate::vulkan) fn apply_fog_settings(
         &mut self,
         settings: Option<crate::gfx::volumetric_fog::FogSettings>,

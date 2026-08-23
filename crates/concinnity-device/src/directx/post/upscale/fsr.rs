@@ -23,8 +23,10 @@
 // motion + depth targets. Projection jitter is still applied, but per FSR's
 // `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock Halton
 // sequence (FSR's jitter sequence is tuned to its temporal kernel).
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
+#![expect(
+    non_camel_case_types,
+    reason = "inline FFX bindings keep the SDK's own C type names"
+)]
 
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -261,7 +263,10 @@ type PfnFfxConfigure =
     unsafe extern "C" fn(context: *mut ffxContext, desc: *const ffxApiHeader) -> ffxReturnCode_t;
 
 struct FfxApi {
-    #[allow(dead_code)] // Held to keep the DLL loaded for the context's lifetime.
+    #[expect(
+        dead_code,
+        reason = "held to keep the DLL loaded for the context's lifetime"
+    )]
     module: HMODULE,
     create_context: PfnFfxCreateContext,
     destroy_context: PfnFfxDestroyContext,

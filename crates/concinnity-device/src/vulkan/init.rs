@@ -298,10 +298,9 @@ impl VkContext {
                 }
 
                 let layer_names_raw: Vec<*const c_char> = if validation {
+                    // Leaked: the instance borrows the name for its whole lifetime.
                     let layer = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-                    let ptr = layer.as_ptr();
-                    std::mem::forget(layer);
-                    vec![ptr]
+                    vec![layer.into_raw().cast_const()]
                 } else {
                     vec![]
                 };

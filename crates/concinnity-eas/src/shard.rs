@@ -51,7 +51,6 @@ pub trait ShardColumn<S>: Sized + 'static {
 // The scheduler does not split storage yet: `World::step` walks systems in
 // table order, so nothing outside this module's tests builds a shard. Drop the
 // allows once the step runs a wave per shard.
-#[allow(dead_code)]
 pub(crate) struct Shard<'a, S> {
     storage: NonNull<S>,
     access: Access,
@@ -63,7 +62,10 @@ pub(crate) struct Shard<'a, S> {
 // bounded at the accessors below.
 unsafe impl<S: Send> Send for Shard<'_, S> {}
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the scheduler does not split storage yet, so only this module's tests build a shard"
+)]
 impl<S> Shard<'_, S> {
     pub(crate) fn access(&self) -> Access {
         self.access
@@ -101,7 +103,13 @@ impl<S> Shard<'_, S> {
 // Split one storage into disjoint concurrent views, one per access
 // declaration. Panics when any pair conflicts or any declaration is
 // exclusive: that is a scheduler bug, and continuing would be unsound.
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the scheduler does not split storage yet, so only this module's tests call it"
+    )
+)]
 pub(crate) fn split_shards<'a, S>(storage: &'a mut S, accesses: &[Access]) -> Vec<Shard<'a, S>> {
     for (i, a) in accesses.iter().enumerate() {
         assert!(!a.is_exclusive(), "exclusive access cannot share a split");
@@ -127,7 +135,10 @@ pub(crate) fn split_shards<'a, S>(storage: &'a mut S, accesses: &[Access]) -> Ve
 mod tests {
     // The generated test storage exposes the full storage surface; these
     // tests exercise only the shard-relevant slice of it.
-    #![allow(dead_code)]
+    #![expect(
+        dead_code,
+        reason = "the generated test storage exposes the full surface; these tests use only the shard-relevant slice"
+    )]
 
     use super::*;
     use crate::mask::ComponentMask;

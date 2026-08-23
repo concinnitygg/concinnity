@@ -294,7 +294,6 @@ impl VkContext {
     // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
     // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
-    #[allow(dead_code)]
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
@@ -379,7 +378,6 @@ impl VkContext {
     // at that size). Driven by asset hot-reload. Mirrors
     // `DxContext::update_skinned_skeleton`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn update_skinned_skeleton(
         &mut self,
         skinned_index: usize,

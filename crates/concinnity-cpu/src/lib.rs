@@ -20,7 +20,13 @@
 // genuinely cannot fail use `expect` with the invariant named; tests unwrap
 // freely.
 #![warn(clippy::unwrap_used)]
-#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::unwrap_used,
+        reason = "tests unwrap freely; the crate-wide warn covers non-test code"
+    )
+)]
 
 include!(concat!(env!("OUT_DIR"), "/build_source_hash.rs"));
 

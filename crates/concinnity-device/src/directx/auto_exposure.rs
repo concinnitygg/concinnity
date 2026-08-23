@@ -65,7 +65,6 @@ pub(super) struct AutoExposureResources {
     // `InterlockedAdd`s into it; the average kernel reads and clears each bin.
     // Held only to keep the resource alive; the GVA is read directly through
     // `histogram.GetGPUVirtualAddress()` at encode time.
-    #[allow(dead_code)]
     histogram: ID3D12Resource,
     // Single f32 (UNORDERED_ACCESS, DEFAULT heap) the average kernel writes
     // the weighted-average log-luminance into.
@@ -75,7 +74,6 @@ pub(super) struct AutoExposureResources {
     // frame's command list copies `output_buf` into the matching slot; at the
     // top of a later frame (after the fence wait gates this slot's previous
     // use) the CPU reads its pointer for the EMA update.
-    #[allow(dead_code)]
     readback_bufs: Vec<PooledBuffer>,
     readback_ptrs: Vec<*const f32>,
 }

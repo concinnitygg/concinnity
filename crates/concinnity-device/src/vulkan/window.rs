@@ -16,9 +16,7 @@ use crate::assets::{InputKey, WindowMode};
 use crate::gfx::display_mode::DisplayMode;
 use crate::gfx::keymap::KeyMap;
 
-// The previously-duplicated InputState collapsed into the shared
-// crate::gfx::input::RenderInput; this alias keeps the historical name.
-pub use crate::gfx::input::RenderInput as InputState;
+use super::input::InputState;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
@@ -132,8 +130,8 @@ fn apply_binding(input: &mut InputState, km: KeyMap, key: InputKey, pressed: boo
 // Map a GLFW key to a canonical `InputKey`, or `None` for a key the engine does not
 // bind (function keys, Escape, Ctrl/Alt, keypad, etc.). Left/Right Shift both map
 // to `InputKey::Shift`: GLFW delivers them as ordinary key events.
-fn key_from_glfw(key: glfw::InputKey) -> Option<InputKey> {
-    use glfw::InputKey as G;
+fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
+    use glfw::Key as G;
     Some(match key {
         G::A => InputKey::A,
         G::B => InputKey::B,
@@ -542,7 +540,7 @@ impl GlfwWindow {
     }
 
     // Drain all pending GLFW events, update input state, and return true if
-    // the window should close. InputKey state is tracked as a running bitmask;
+    // the window should close. Key state is tracked as a running bitmask;
     // cursor deltas are accumulated so no delta is lost between poll calls.
     pub(crate) fn poll(&mut self) -> bool {
         self.glfw.poll_events();
@@ -553,7 +551,7 @@ impl GlfwWindow {
                 glfw::WindowEvent::Close => {
                     should_close = true;
                 }
-                glfw::WindowEvent::InputKey(glfw::InputKey::Escape, _, glfw::Action::Press, _) => {
+                glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) => {
                     // In menu mode (a MainMenu over a captured camera) Escape
                     // always pulses so UiInputSystem can toggle the menu and
                     // GraphicsSystem drives capture from there. Otherwise a
@@ -570,17 +568,17 @@ impl GlfwWindow {
                         self.cursor_captured = false;
                     }
                 }
-                glfw::WindowEvent::InputKey(glfw::InputKey::F1, _, glfw::Action::Press, _) => {
+                glfw::WindowEvent::Key(glfw::Key::F1, _, glfw::Action::Press, _) => {
                     // F1 toggles the in-engine profiler HUD. Pulse-only
                     // (cleared by `take_input`).
                     self.input.hud_toggle = true;
                 }
-                glfw::WindowEvent::InputKey(key, _, action, _) => {
+                glfw::WindowEvent::Key(key, _, action, _) => {
                     // Held Alt modifier (the editor's Alt+drag orbit). GLFW
                     // delivers both Alt keys as ordinary key events and
                     // `key_from_glfw` maps neither, so track it here rather than
                     // through the key map.
-                    if matches!(key, glfw::InputKey::LeftAlt | glfw::InputKey::RightAlt)
+                    if matches!(key, glfw::Key::LeftAlt | glfw::Key::RightAlt)
                         && action != glfw::Action::Repeat
                     {
                         self.input.alt = action == glfw::Action::Press;
@@ -678,7 +676,7 @@ impl GlfwWindow {
 
     // Return a snapshot of the current input state. Held-key flags
     // (forward/backward/left/right/sprint) and the absolute cursor position
-    // persist -- they only change on a GLFW InputKey/CursorPos event, and GLFW
+    // persist -- they only change on a GLFW Key/CursorPos event, and GLFW
     // sends no events for a key that is simply held down (the first repeat
     // event lags the press by ~0.5 s). Resetting them here, as a blanket
     // `mem::take` once did, dropped held movement between events and made
@@ -775,7 +773,7 @@ mod tests {
         // Backspace and forward-delete decode so text fields can edit; they ride
         // `captured_key`, not `typed_char` (mirrors metal / win32). Printable
         // glyphs arrive separately via WindowEvent::Char.
-        use glfw::InputKey as G;
+        use glfw::Key as G;
         assert_eq!(key_from_glfw(G::Backspace), Some(InputKey::Backspace));
         assert_eq!(key_from_glfw(G::Delete), Some(InputKey::Delete));
         assert_eq!(key_from_glfw(G::Left), Some(InputKey::Left));

@@ -43,7 +43,7 @@ macro_rules! define_component_storage {
         //
         // `unreachable_pub`: the expansion is `pub` because the lib that expands
         // it re-exports the storage; in-crate test expansions are not.
-        #[allow(non_snake_case, unreachable_pub)]
+        #[expect(non_snake_case, unreachable_pub, reason = "field columns take the caller's idents, and the expansion is pub only where the lib re-exports it")]
         #[derive(Default, Debug)]
         pub struct $storage {
             $(
@@ -55,7 +55,7 @@ macro_rules! define_component_storage {
             join: $crate::JoinIndex,
         }
 
-        #[allow(unreachable_pub)]
+        #[expect(unreachable_pub, reason = "the expansion is pub because the lib that expands it re-exports the storage")]
         impl $storage {
             /// Push a statically-typed component into its column, minting a fresh
             /// Entity for the new row and recording it in the join index.
@@ -303,7 +303,7 @@ macro_rules! define_component_storage {
         /// and `DISCRIMINANT` is its stable id, used as its `ComponentId` in the
         /// join index. `'static`: components own their data, and the generic ops
         /// hand out borrows of (and owned vectors of) the type.
-        #[allow(unreachable_pub)]
+        #[expect(unreachable_pub, reason = "the expansion is pub because the lib that expands it re-exports the storage")]
         pub trait $slot: Sized + 'static {
             /// The component type's stable id, used as its `ComponentId`.
             const DISCRIMINANT: u8;
@@ -349,21 +349,33 @@ mod tests {
     // emitted by the macro, which would put a suppression in every consumer's
     // expansion. (The engine's own `ComponentStorage` is public API, so the
     // lint never reaches it either way.)
-    #![allow(dead_code)]
+    #![expect(
+        dead_code,
+        reason = "TestStorage is module-private, so dead_code fires on whichever generated methods these tests skip"
+    )]
 
     use std::vec::Vec;
     // `pub` so the generated `pub` columns don't expose a more-private type
     // (the real engine's component types are `pub`, so this never bites there).
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
-    #[allow(unreachable_pub)]
+    #[expect(
+        unreachable_pub,
+        reason = "pub so the generated pub columns do not expose a more-private type"
+    )]
     pub struct Position(u32);
 
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
-    #[allow(unreachable_pub)]
+    #[expect(
+        unreachable_pub,
+        reason = "pub so the generated pub columns do not expose a more-private type"
+    )]
     pub struct Velocity(i32);
 
     #[derive(Default, Debug, PartialEq, Clone, Copy)]
-    #[allow(unreachable_pub)]
+    #[expect(
+        unreachable_pub,
+        reason = "pub so the generated pub columns do not expose a more-private type"
+    )]
     pub struct Tag;
 
     define_component_storage! {

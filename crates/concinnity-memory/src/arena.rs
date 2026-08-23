@@ -47,7 +47,10 @@ pub struct Arena {
 // allocations never overlap (the cursor only moves forward) and the memory
 // cannot be reclaimed while one is borrowed (`reset` takes `&mut self`). The
 // lint is right about the general case and wrong about this one.
-#[allow(clippy::mut_from_ref)]
+#[expect(
+    clippy::mut_from_ref,
+    reason = "allocations never overlap and reset takes &mut self, so the general-case lint does not apply"
+)]
 impl Arena {
     /// Reserve `bytes` up front. The buffer is taken from the global allocator
     /// once and held until the arena drops; nothing here allocates again.

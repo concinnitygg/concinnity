@@ -27,7 +27,7 @@ macro_rules! define_buttons {
         )]
         // Each variant is one button name; the vocabulary is described above
         // rather than restated per variant.
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "each variant is one button name; the vocabulary is documented on the enum")]
         pub enum GamepadButton {
             $($variant),*
         }

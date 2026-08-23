@@ -167,7 +167,6 @@ pub(crate) struct AssetHotReloadState {
     pub pending_skeleton_updates: Vec<PendingSkeletonUpdate>,
     // Watcher kept alive purely for its drop semantics; events are delivered
     // via the closure registered at construction.
-    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
 }
 

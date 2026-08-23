@@ -69,7 +69,6 @@ fn face_view(eye: [f32; 3], r: [f32; 3], u: [f32; 3], f: [f32; 3]) -> [[f32; 4];
 }
 
 /// The view-projection for cube face `face` (0..6) captured from `eye`.
-#[allow(dead_code)]
 pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     let view = face_view(eye, b[0], b[1], b[2]);
@@ -80,7 +79,6 @@ pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> 
 /// main pass needs both the combined view-projection (vertex clip transform) and
 /// the bare view matrix (some shaders reconstruct view-space data), so the probe
 /// capture builds a `ViewUniforms` from this plus `face_view_projection`.
-#[allow(dead_code)]
 pub fn face_view_matrix(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     face_view(eye, b[0], b[1], b[2])
@@ -808,7 +806,6 @@ fn seed_grid_probes(
 /// Union the world-space AABBs of every scene object into one bounds, skipping
 /// any box with a non-finite corner (a degenerate / sentinel AABB). Returns
 /// `None` for an empty scene. The probe eye is then `probe_eye_point` of this.
-#[allow(dead_code)]
 pub fn fold_world_bounds(
     boxes: impl IntoIterator<Item = ([f32; 3], [f32; 3])>,
 ) -> Option<([f32; 3], [f32; 3])> {
@@ -836,7 +833,6 @@ pub fn fold_world_bounds(
 /// prefilter mip chain. Reuses the exact build-time convolutions (including the
 /// firefly clamp), so a scene-captured probe and an imported HDR produce
 /// byte-compatible payloads that flow through the same `upload_environment_map`.
-#[allow(dead_code)]
 pub fn build_probe_payload(
     faces: &[Vec<f32>; 6],
     face_size: u32,
@@ -874,7 +870,6 @@ pub fn build_probe_payload(
 // point until box parallax correction lands). Kept pure so an authored probe
 // position can later replace this heuristic. `aabb_min`/`aabb_max` are the world
 // bounds; +Y is up.
-#[allow(dead_code)]
 pub(crate) fn probe_eye_point(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> [f32; 3] {
     const EYE_HEIGHT: f32 = 1.7;
     let cx = 0.5 * (aabb_min[0] + aabb_max[0]);

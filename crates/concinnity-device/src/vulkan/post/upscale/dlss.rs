@@ -19,7 +19,6 @@
 // auto-exposure flag the D3D12 path uses. The scene is un-exposed pre-upscale
 // (exposure + tonemap run after the upscale), so 1.0 is the identity value.
 // Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
-#![allow(non_snake_case)]
 
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};

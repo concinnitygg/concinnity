@@ -934,10 +934,6 @@ impl DxContext {
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/decal.rs].
-#[allow(
-    dead_code,
-    reason = "cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots, live in the concinnity binary"
-)]
 impl DxContext {
     // Append a runtime emitter. Builds the particle pipelines + per-frame
     // uniform rings on first use (matching the init-time path) so a world

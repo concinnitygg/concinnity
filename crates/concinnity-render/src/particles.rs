@@ -59,7 +59,6 @@ pub struct ParticleEmitterRecord {
     pub color_end: [f32; 4],
 }
 
-#[allow(dead_code)] // Metal-only particle pipeline consumer; DirectX / Vulkan don't draw particles yet.
 impl ParticleEmitterRecord {
     /// Conservative world-space AABB enclosing every particle this emitter
     /// could spawn over its full lifetime. Used by the per-frame frustum-cull
@@ -210,14 +209,12 @@ fn sanitised_color(c: [f32; 4]) -> [f32; 4] {
 /// each frame. Fractional carry-over keeps low spawn rates honest even when
 /// the frame-time is below the per-particle interval.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)] // Metal-only particle runtime; DirectX / Vulkan ignore.
 pub struct ParticleSpawnState {
     /// Fractional particles owed by this emitter, carried forward across
     /// frames. Cleared by `take_budget` after harvesting the integer part.
     pub accumulator: f32,
 }
 
-#[allow(dead_code)] // see ParticleSpawnState: Metal-only consumer.
 impl ParticleSpawnState {
     /// Add this frame's spawn allotment and pop off the integer part. Returns
     /// `0` when the emitter is paused (`spawn_rate <= 0`).

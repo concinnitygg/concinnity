@@ -94,7 +94,6 @@ pub struct ChunkMesh<'a> {
 /// buffer; draws not named here keep their current geometry, copied byte-for-
 /// byte from the live buffers. `indices` are mesh-relative (0-based); the
 /// backend rebases them onto whatever new vertex region the draw lands in.
-#[allow(dead_code)] // consumed by Metal's rebuild_static_geometry; no-op on DirectX / Vulkan.
 pub struct DrawGeometryUpdate {
     /// The draw slot whose geometry is replaced.
     pub draw_idx: usize,
@@ -116,7 +115,6 @@ pub struct DrawGeometryUpdate {
 /// current geometry, copied byte-for-byte from the live buffers and re-based
 /// onto whatever new vertex region they land in. `indices` are mesh-relative
 /// (0-based); the backend rebases them onto the new vertex region.
-#[allow(dead_code)] // consumed by Metal's rebuild_skinned_geometry; no-op on DirectX / Vulkan.
 pub struct SkinnedDrawGeometryUpdate {
     /// The skinned slot whose geometry is replaced.
     pub skinned_index: usize,
@@ -135,7 +133,6 @@ pub struct SkinnedDrawGeometryUpdate {
 /// rebuild may have shifted every slot's `vertex_base`.
 /// Constructed only by the `cn debug` binary's skinned-rebuild reload pass;
 /// reads as dead under `cargo check --lib`.
-#[allow(dead_code)]
 pub struct SkinnedSlotLayout {
     /// The skinned slot this layout describes.
     pub skinned_index: usize,
@@ -155,7 +152,6 @@ pub struct SkinnedSlotLayout {
 /// feature is off and its passes / resources should be torn down; `Some` means it
 /// is on and its resources should exist. A backend without a live-rebuild path
 /// ignores this (the choice still persists and applies at the next launch).
-#[allow(dead_code)] // fields read only by Metal's apply_quality_settings.
 pub struct QualitySettings {
     /// Temporal anti-aliasing on/off (the `Taa` anti-aliasing mode). The backend
     /// additionally suppresses TAA while temporal upscaling is active (the scaler
@@ -379,7 +375,6 @@ pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
 /// no call site under `cargo check --lib`. Allow dead code at the trait level
 /// rather than annotating each; the required interface methods are never
 /// subject to the lint, so this only covers the binary-driven provided methods.
-#[allow(dead_code)]
 pub trait RenderBackend: SceneControl + Send {
     /// Window / input lifecycle.
     fn window_closed(&mut self) -> bool;

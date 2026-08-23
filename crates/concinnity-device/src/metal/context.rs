@@ -398,7 +398,10 @@ pub(super) struct HotReloadState {
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     // Held purely for lifetime: dropping it stops the watcher, which pushes
     // events into `reload_pending` directly rather than being read from here.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the watcher thread stays alive; events arrive through reload_pending"
+    )]
     pub watcher: Option<crate::metal::hot_reload::WatcherHandle>,
 }
 

@@ -180,9 +180,7 @@ pub(super) struct SkinnedState {
     pub shadow_root_sig: Option<ID3D12RootSignature>,
     // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
     // through `vertex_buffer_view` / `index_buffer_view`.
-    #[allow(dead_code)]
     pub vertex_buffer: Option<PooledBuffer>,
-    #[allow(dead_code)]
     pub index_buffer: Option<PooledBuffer>,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
@@ -348,7 +346,10 @@ pub(super) struct CullState {
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
+    )]
     pub watcher: Option<crate::directx::hot_reload::WatcherHandle>,
 }
 
@@ -403,7 +404,10 @@ pub(super) struct HdrState {
 // DirectX even when SSR is on (no shared-G-buffer shortcut here).
 pub(super) struct SsaoState {
     pub resources: Option<SsaoResources>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the fallback texture resident; the pass binds white_srv_gpu"
+    )]
     pub white: PooledTexture,
     pub white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
@@ -582,9 +586,15 @@ impl SpotShadowState {
 // area light declared -- the shader simply never samples them.
 pub(super) struct AreaLightState {
     pub buffer: PooledBuffer,
-    #[allow(dead_code)] // owns the resources the LTC table descriptors point at
+    #[expect(
+        dead_code,
+        reason = "owns the resource the LTC table descriptors point at"
+    )]
     pub ltc_matrix: GpuResource,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "owns the resource the LTC table descriptors point at"
+    )]
     pub ltc_magnitude: GpuResource,
     // Base of the 2-descriptor LTC table (matrix, then magnitude).
     pub ltc_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -769,7 +779,10 @@ pub(super) struct DxDescriptors {
     pub normal_map_textures: Vec<PooledTexture>,
     // Held only to keep the text-atlas textures resident; the SRV handles
     // below are what the text pass actually binds.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the text atlases resident; the pass binds the SRV handles"
+    )]
     pub text_atlas_textures: Vec<GpuResource>,
     pub text_atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
 }
@@ -829,7 +842,6 @@ pub(super) struct DrawState {
     // it stays 0 (and `cull_count()` excludes the reserved tail) when no skinned
     // mesh loads.
     pub n_skinned: usize,
-    #[allow(dead_code)]
     pub n_clusters: usize,
 }
 
@@ -868,7 +880,6 @@ pub(super) struct ProbeState {
     // Per-frame probe set (parallax boxes + live count) bound to the forward /
     // SSR / RT shaders. `EMPTY` until a bake installs a cube; distinct from
     // `env_map` so the skybox + diffuse irradiance keep the sky.
-    #[allow(dead_code)] // bound to the forward shader (next slice)
     pub set: concinnity_render::uniforms::ProbeSet,
     // The probe whose six cube faces are currently rendering on the GPU (one at a
     // time, spread one face per frame). Owns the reserved-ring-slot capture
@@ -952,9 +963,11 @@ pub(super) struct Extents {
 // resources themselves are never read back.
 pub(super) struct DepthState {
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    #[allow(dead_code)]
     pub resource: ID3D12Resource,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "held to keep the DSV heap resident; the pass binds through dsv"
+    )]
     pub heap: ID3D12DescriptorHeap,
 }
 
@@ -2145,7 +2158,10 @@ impl DxContext {
         self.win_mut().recapture_on_click = true;
     }
 
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "symmetric with capture_cursor; no DirectX caller yet, kept so the cursor API stays complete"
+    )]
     pub(crate) fn release_cursor(&mut self) {
         do_release_cursor(self.win_mut());
     }

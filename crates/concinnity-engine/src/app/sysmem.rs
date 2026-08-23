@@ -46,7 +46,10 @@ mod imp {
     // `libc` deprecates its mach bindings in favor of the `mach2` crate;
     // `mach_task_self_` is a stable fundamental symbol, so we keep the direct
     // libc use rather than pull in another dependency for one static.
-    #[allow(deprecated)]
+    #[expect(
+        deprecated,
+        reason = "mach_task_self_ is a stable fundamental symbol, kept over pulling in mach2 for one static"
+    )]
     pub(super) fn process_resident_bytes() -> Option<u64> {
         // SAFETY: `mach_task_basic_info` is a plain C struct of integer
         // fields, so all-zero is a valid inhabitant.

@@ -74,7 +74,10 @@ impl Win32Window {
 
     // Symmetric with `capture_cursor`; reached only through
     // `set_camera_capture` today, kept so the cursor API stays complete.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "symmetric with capture_cursor; reached only through set_camera_capture today"
+    )]
     pub(crate) fn release_cursor(&mut self) {
         do_release_cursor(&mut self.win_state);
     }

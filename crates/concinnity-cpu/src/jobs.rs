@@ -45,7 +45,6 @@ impl JobPool {
     }
 
     /// Number of worker threads in this pool.
-    #[allow(dead_code)]
     pub fn thread_count(&self) -> usize {
         self.pool.current_num_threads()
     }
@@ -75,7 +74,6 @@ impl JobPool {
     ///
     /// Used by the DirectX / Metal parallel command-buffer recording; the Vulkan
     /// backend records single-threaded, so it is unused under `backend_vk`.
-    #[allow(dead_code)]
     pub fn install<R, F>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,

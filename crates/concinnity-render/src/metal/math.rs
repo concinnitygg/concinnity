@@ -40,7 +40,6 @@ pub const IDENTITY4: [[f32; 4]; 4] = [
 /// a singular input (determinant ≈ 0). Used per-frame by the decal pass to
 /// invert the view-projection so the shader can reconstruct world position
 /// from depth. Column-major storage: `result[col][row]`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn mat4_inverse(m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
     // Read the input as a flat row-major slice for the standard cofactor
     // layout; then re-emit it in the engine's column-major arr[col][row] form.

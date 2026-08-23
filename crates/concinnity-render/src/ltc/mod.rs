@@ -17,7 +17,13 @@
 
 // The fitter runs from build.rs, which `include!`s the file; the lib compiles
 // it too but reads only `LTC_LUT_SIZE`.
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the lib reads only LTC_LUT_SIZE; build.rs and this crate's tests drive the fitter"
+    )
+)]
 pub(crate) mod fit;
 // The CPU twin of the shader's polygon integral, kept so the closed form can
 // be checked against brute-force Monte Carlo. Nothing else calls it.

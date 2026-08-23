@@ -12,7 +12,13 @@
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
 #![warn(clippy::unwrap_used)]
-#![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::unwrap_used,
+        reason = "tests unwrap freely; the crate-wide warn covers non-test code"
+    )
+)]
 
 pub(crate) use concinnity_core::{assets, result};
 pub(crate) use concinnity_cpu::gfx;

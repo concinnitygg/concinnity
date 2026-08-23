@@ -11,7 +11,10 @@
 //!     pass order, transient resource lifetimes, and per-pass barriers,
 //!   * surface a `CompiledGraph` the per-backend executor consumes.
 
-#![allow(unused_imports)]
+#![expect(
+    unused_imports,
+    reason = "the submodules re-export a shared vocabulary that no single consumer names in full"
+)]
 
 mod alias;
 mod builder;

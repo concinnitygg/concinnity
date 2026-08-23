@@ -5,9 +5,12 @@
 // this struct exists for future input-state captures.
 
 // Unreferenced until a stateful controller replaces Camera3DSystem's stateless
-// drive; the allows go away with the first construction site. The module is
-// `pub(crate)`, so these are genuinely unreachable rather than public API.
-#[allow(dead_code)]
+// drive; the suppressions go away with the first construction site. The module
+// is `pub(crate)`, so these are genuinely unreachable rather than public API.
+#[expect(
+    dead_code,
+    reason = "unreferenced until a stateful controller replaces Camera3DSystem's stateless drive"
+)]
 pub(crate) struct FpsController {
     // Movement speed in world units per second.
     pub move_speed: f32,
@@ -23,8 +26,11 @@ pub(crate) struct FpsController {
 }
 
 impl FpsController {
-    #[allow(dead_code)]
-    pub fn new(move_speed: f32, mouse_sensitivity: f32, player_radius: f32) -> Self {
+    #[expect(
+        dead_code,
+        reason = "unreferenced until a stateful controller replaces Camera3DSystem's stateless drive"
+    )]
+    pub(crate) fn new(move_speed: f32, mouse_sensitivity: f32, player_radius: f32) -> Self {
         Self {
             move_speed,
             mouse_sensitivity,

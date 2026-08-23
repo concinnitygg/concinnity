@@ -83,7 +83,6 @@ impl FogSettings {
     /// and `sun_color` are the first directional light's direction (toward
     /// the light) and `intensity * colour`. `viewport` is the HDR resolve
     /// target's pixel dimensions.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn params(
         &self,
         inv_vp: [[f32; 4]; 4],

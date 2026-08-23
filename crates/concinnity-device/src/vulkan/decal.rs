@@ -926,7 +926,6 @@ impl VkContext {
     // Tombstone a runtime decal slot. The id becomes invalid; the next
     // `add_decal` may reuse it. Reached only through the bin's `cn debug`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
-    #[allow(dead_code)]
     pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
         let slot = self
             .decal
@@ -1024,5 +1023,4 @@ impl VkContext {
 
 // Re-export GpuImage so the textures module compiles cleanly when the
 // decal module is the only consumer of a few of its helpers.
-#[allow(dead_code)]
 type _Marker = GpuImage;

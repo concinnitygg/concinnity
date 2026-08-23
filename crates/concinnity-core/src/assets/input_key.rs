@@ -30,7 +30,7 @@ macro_rules! define_keys {
         )]
         // Each variant is one key name; the vocabulary is described above
         // rather than restated per variant.
-        #[allow(missing_docs)]
+        #[expect(missing_docs, reason = "each variant is one key name; the vocabulary is documented on the enum")]
         pub enum InputKey {
             $($variant),*
         }
