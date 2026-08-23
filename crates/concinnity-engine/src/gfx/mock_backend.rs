@@ -396,7 +396,7 @@ impl RenderBackend for MockBackend {
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        _indices: &[u16],
+        _indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         _vert_bytes: &[u8],
         _frag_bytes: &[u8],

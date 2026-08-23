@@ -12,6 +12,9 @@
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
+- [CharacterModel](CharacterModel.md) - A character body that conforms to a [CharacterSchema](CharacterSchema.md).
+- [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
+- [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [SkinnedMesh](SkinnedMesh.md).
 - [ColorLut](ColorLut.md) - A 3D colour-grading lookup table applied as a final post-process step. The build bakes the source into a colour cube; the graded result is blended over the image by [PostProcessConfig](PostProcessConfig.md)'s `lut_strength`.
 - [CubemapTexture](CubemapTexture.md) - A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
 - [DebugHud](DebugHud.md) - Requests the developer debug HUD: a set of [TextLabel](TextLabel.md) chips with diagnostic readouts, anchored to the top-right of the window and toggled with F1 (hidden by default).
@@ -97,23 +100,32 @@
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
 - [IndirectLighting](IndirectLighting.md) - Indirect-diffuse lighting source for `PostProcessConfig.indirect_lighting`. `Ibl` is the image-based-lighting-only ambient term the renderer has always used; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
+- [JointProportion](JointProportion.md) - One joint's proportion change.
 - [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
+- [KeyPolarity](KeyPolarity.md) - Whether a shape key is one target or a `+` / `-` pair.
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
 - [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [MainMenu](MainMenu.md).
 - [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
 - [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. Names in `albedo` / `normal_map` are unresolved [Texture](Texture.md) references, resolved on the expanded Material.
+- [PanelSection](PanelSection.md) - One panel section: a caption over the rows of the listed regions.
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are unresolved references to other assets, resolved when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
+- [ProportionGroup](ProportionGroup.md) - A proportion slider: one value in `[-1, 1]` written as a scale and / or length change on every listed joint.
 - [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
 - [Rolloff](Rolloff.md) - How an [AudioEmitter](AudioEmitter.md)'s volume falls with distance.
+- [SchemaJoint](SchemaJoint.md) - One joint the schema expects in a conforming skeleton.
+- [SchemaKey](SchemaKey.md) - One shape key the schema knows, authored on the source or synthesized.
+- [SchemaRegion](SchemaRegion.md) - A named group of joints. A vertex belongs to a region by the skin weight it gives the region's joints.
 - [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [ScrollPanel](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [ScrollPanel](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [MainMenu](MainMenu.md)'s `"settings"` item builds.
 - [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
+- [ShapePreset](ShapePreset.md) - A named slider vector the panel offers as a button.
+- [ShapeSlider](ShapeSlider.md) - One named shape value in `[-1, 1]`.
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / colour / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalised at build time.
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
@@ -130,6 +142,8 @@
 - [StorySpeaker](StorySpeaker.md) - A resolved speaker attribution on a [StoryPage](StoryPage.md).
 - [StoryStage](StoryStage.md) - The stage dressing current at a page or choice menu: the backdrop and the character portraits standing on stage.
 - [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.
+- [SynthParams](SynthParams.md) - Generator parameters for a synthesized target. Each generator reads the fields it needs and ignores the rest.
+- [SynthesizedTarget](SynthesizedTarget.md) - A morph target the build generates from the mesh instead of reading from the source.
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [TextLabel](TextLabel.md) relative to its `x`.
 - [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.

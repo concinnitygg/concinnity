@@ -435,7 +435,7 @@ impl RtReflectionsResources {
                     vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     vk::ShaderStageFlags::FRAGMENT,
                 ),
-                // 9/10: the deformed (posed) skinned vertex buffer + the u16
+                // 9/10: the deformed (posed) skinned vertex buffer + the
                 // skinned index buffer, for skinned hits. Both are re-pointed per
                 // frame by `wire_dynamic` (the deformed buffer is fresh per
                 // rebuild); a dummy SSBO binds when there is no skinned geometry.

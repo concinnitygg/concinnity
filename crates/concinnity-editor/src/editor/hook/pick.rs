@@ -54,7 +54,7 @@ impl EditorHook {
                 return;
             };
             if self.selection.toggle(name.clone()) {
-                self.focus_ui_on(&name, world);
+                self.select_in_viewport(&name, world);
             } else {
                 self.follow_active(world);
             }
@@ -84,12 +84,22 @@ impl EditorHook {
             return;
         };
         self.selection.replace(name.clone());
-        self.focus_ui_on(&name, world);
+        self.select_in_viewport(&name, world);
     }
 
-    // Open the picked asset for editing, with the assets UI up so the form is
-    // visible and the tree row reveals itself. A build-generated asset opens the
-    // same form seeded from what the expansion produced, so confirming it
+    // Bring the UI along with a viewport selection without opening anything:
+    // an already-open edit form retargets to the pick and an open Assets tree
+    // reveals its row, but a closed form stays closed so clicking around the
+    // scene never spawns panels.
+    pub(super) fn select_in_viewport(&mut self, name: &str, world: &mut World) {
+        self.follow_active(world);
+        self.reveal_in_tree(name, world);
+    }
+
+    // Open the named asset for editing, with the assets UI up so the form is
+    // visible and the tree row reveals itself (a deliberate "open" from the
+    // palette, not a viewport click). A build-generated asset opens the same
+    // form seeded from what the expansion produced, so confirming it
     // promotes the asset to an authored line.
     pub(super) fn focus_ui_on(&mut self, name: &str, world: &mut World) {
         self.panel_open = true;

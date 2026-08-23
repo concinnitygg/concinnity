@@ -17,7 +17,7 @@
 //
 // Mirrors `directx/raytrace.rs` (DXR inline ray tracing). Skinned geometry is
 // added per frame (`rebuild_skinned`): a compute pass deforms each skinned
-// object's bind-pose vertices into a model-space buffer, one u16-indexed BLAS
+// object's bind-pose vertices into a model-space buffer, one BLAS
 // per skinned object is built or updated over it, and the TLAS + geometry table
 // are rebuilt over the persistent static/cluster BLAS plus the skinned tail.
 //
@@ -254,7 +254,7 @@ pub(super) struct SkinnedRtInputs<'a> {
     // The shared bind-pose skinned vertex buffer (`SkinnedVertex`, 80-byte
     // stride) the skin kernel reads, bound as the compute set's binding 0.
     pub vertex_buffer: vk::Buffer,
-    // The shared u16 skinned index buffer the skinned BLAS + reflection trace
+    // The shared skinned index buffer the skinned BLAS + reflection trace
     // address the deformed buffer with. Its device address is the BLAS index
     // input; the buffer handle is the trace's SSBO.
     pub index_buffer: vk::Buffer,
@@ -585,7 +585,7 @@ pub(super) struct RtAccelData {
     // skinned rebuild so the trace's skinned-verts SSBO always binds a valid
     // resource. Never read again; held so it outlives that binding.
     _deformed_dummy: DeviceBuffer,
-    // The shared u16 skinned index buffer (the BLAS index input + the trace's
+    // The shared skinned index buffer (the BLAS index input + the trace's
     // SSBO). A dummy `vk::Buffer::null()`-backed handle when there is no skinned
     // geometry; the post pass binds a dummy SSBO in that case.
     skinned_indices: vk::Buffer,
@@ -624,7 +624,7 @@ impl RtAccelData {
         self.live_deformed
     }
 
-    // The shared u16 skinned index buffer (bound as the RT pass's skinned-index
+    // The shared skinned index buffer (bound as the RT pass's skinned-index
     // SSBO). `vk::Buffer::null()` when there is no skinned geometry; the post
     // pass substitutes a dummy SSBO so the binding is always live.
     pub(super) fn skinned_indices(&self) -> vk::Buffer {
@@ -660,11 +660,11 @@ fn blas_geometry(p: &BlasParams, index_address: u64) -> vk::AccelerationStructur
         .flags(vk::GeometryFlagsKHR::OPAQUE)
 }
 
-// Same as `blas_geometry` but over a u16 index buffer + the deformed (posed)
-// skinned vertex buffer. The skinned BLAS bakes absolute u16 indices into the
-// deformed buffer (base vertex folded to 0), so `vertex_address` is the deformed
-// buffer's base address and `index_address` is the u16 index buffer offset for
-// this object. Same 56-byte vertex stride as the static path.
+// Same as `blas_geometry` but over the skinned index buffer + the deformed
+// (posed) skinned vertex buffer. The skinned BLAS bakes absolute indices into
+// the deformed buffer (base vertex folded to 0), so `vertex_address` is the
+// deformed buffer's base address and `index_address` is the index buffer offset
+// for this object. Same 56-byte vertex stride as the static path.
 fn skinned_blas_geometry(
     p: &BlasParams,
     index_address: u64,
@@ -676,7 +676,7 @@ fn skinned_blas_geometry(
         })
         .vertex_stride(VERTEX_STRIDE)
         .max_vertex(p.max_vertex)
-        .index_type(vk::IndexType::UINT16)
+        .index_type(vk::IndexType::UINT32)
         .index_data(vk::DeviceOrHostAddressConstKHR {
             device_address: index_address,
         });
@@ -956,11 +956,11 @@ pub(super) fn build_skin_pipeline(
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info);
     let pipeline = pipeline.map_err(|e| format!("create rt skin pipeline: {e}"))?;
 
-    // Sized to one `MorphDelta` (two packed float3s) so even a stray read of
-    // slot 0 stays in bounds; `target_count == 0` keeps it unread.
+    // Sized to one `MorphEntry` so even a stray read of slot 0 stays in
+    // bounds; `target_count == 0` keeps it unread.
     let morph_dummy_pooled = alloc
         .create_buffer(
-            24,
+            28,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )
@@ -2074,7 +2074,7 @@ impl RtAccelData {
     // Per-frame skinned update, recorded onto `cmd` (the frame's "start" command
     // buffer, which supports compute dispatch + AS builds). Keeps the persistent
     // static + cluster BLAS, re-skins this frame's pose into the deformed buffer,
-    // builds or updates one u16 BLAS per skinned object over it, and rebuilds the
+    // builds or updates one BLAS per skinned object over it, and rebuilds the
     // TLAS + geometry table over the static BLAS plus those skinned instances.
     //
     // Every buffer and structure it writes belongs to `skinned_ring[frame_idx]`
@@ -2143,7 +2143,7 @@ impl RtAccelData {
         let pipeline_layout = skin.pipeline_layout.handle();
 
         // Deformed-vertex buffer: the skin pass writes posed `Vertex`s here,
-        // mirroring the skinned VB's indexing so the u16 index buffer addresses it
+        // mirroring the skinned VB's indexing so the index buffer addresses it
         // directly. Sized to the highest vertex the skinned objects reach. Owned by
         // this slot, rebuilt in place and grown only when a later frame outgrows it.
         let deformed_extent: u64 = skinned_objects
@@ -2269,7 +2269,7 @@ impl RtAccelData {
                 continue;
             }
             let params = SkinParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: 0,
@@ -2331,7 +2331,7 @@ impl RtAccelData {
             );
         }
 
-        // Stage 2: one u16 BLAS per skinned object over the deformed buffer.
+        // Stage 2: one BLAS per skinned object over the deformed buffer.
         let skinned_idx_addr = buffer_address(device, skinned.index_buffer);
         let max_vertex = deformed_extent.saturating_sub(1) as u32;
         skinned_params.clear();
@@ -2341,8 +2341,8 @@ impl RtAccelData {
             skinned_params.push(BlasParams {
                 vertex_address: deformed.address,
                 max_vertex,
-                // u16 indices = 2 bytes each.
-                index_byte_offset: obj.index_offset as u32 * 2,
+                // u32 indices = 4 bytes each.
+                index_byte_offset: obj.index_offset as u32 * 4,
                 primitive_count: (obj.index_count / 3) as u32,
             });
             shapes.push(SkinnedShape {
@@ -2976,7 +2976,7 @@ impl super::context::VkContext {
             .enumerate()
         {
             let params = SkinParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: self

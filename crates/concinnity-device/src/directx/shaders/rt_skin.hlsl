@@ -6,7 +6,7 @@
 // per-object joint palette and writes posed (model-space) plain `Vertex`s into
 // a shared deformed buffer, which the RT acceleration-structure build then
 // traces. One dispatch per skinned object over its vertex range; the deformed
-// buffer mirrors the skinned vertex buffer's indexing so the existing (u16)
+// buffer mirrors the skinned vertex buffer's indexing so the existing
 // skinned index buffer addresses it directly. Ports src/metal/shaders/rt_skin.metal.
 
 // b0: which slice of the shared buffers this dispatch deforms. Matches the
@@ -34,16 +34,24 @@ StructuredBuffer<ColMat4> palette : register(t1);
 // u0: deformed (posed) vertices in the static 56-byte `Vertex` layout
 // (gfx::mesh_payload::Vertex): pos@0, normal@12, tangent@24, color@36, uv@48.
 RWByteAddressBuffer dst : register(u0);
-// t2: dense target-major morph deltas (gfx::mesh_payload::MorphDelta, 24-byte
-// stride: position@0, normal@12), indexed by this object's local vertex index.
-// Dummy-bound (target_count == 0) when the object has no morph targets.
-ByteAddressBuffer morph_deltas : register(t2);
+// t2: packed sparse morph buffer (PayloadMorphs::packed_words): `vertex_count
+// + 1` uint entry offsets, then at a 16-byte-aligned word the 28-byte
+// gfx::mesh_payload::MorphEntry list (uint target@0, position@4, normal@16).
+// Vertex-major: offsets[v]..offsets[v+1] are the entries that move local
+// vertex v. Dummy-bound (target_count == 0) when the object has no targets.
+ByteAddressBuffer morph_data : register(t2);
 // t3: one f32 morph weight per target. Dummy-bound when target_count == 0.
 ByteAddressBuffer morph_weights : register(t3);
 
 static const uint SKINNED_VERTEX_STRIDE = 80;
 static const uint VERTEX_STRIDE = 56;
-static const uint MORPH_DELTA_STRIDE = 24;
+static const uint MORPH_ENTRY_STRIDE = 28;
+
+// Byte offset of the entry list: the offsets table rounded up to 16 bytes.
+uint morph_entry_byte_base(uint count)
+{
+    return ((count + 1u + 3u) & ~3u) * 4u;
+}
 
 // Two u16 joint indices are packed into each 32-bit word the index pair lives
 // in; `joints[4]` occupies the 8 bytes at offset 56. Load the two words and
@@ -71,15 +79,21 @@ void rt_skin(uint3 gid : SV_DispatchThreadID)
     uint2  jw      = load_joints(sbase);
     float4 weights = asfloat(src.Load4(sbase + 64));
 
-    // Morph deltas apply in bind space, before the skin matrix; the deltas
-    // buffer is target-major and indexed by this object's LOCAL vertex index.
-    for (uint t = 0; t < target_count; ++t)
+    // Morph deltas apply in bind space, before the skin matrix. The sparse
+    // buffer is vertex-major: walk only the entries touching this object's
+    // LOCAL vertex index.
+    if (target_count != 0u)
     {
-        float w = asfloat(morph_weights.Load(t * 4));
-        if (abs(w) < 1e-5) continue;
-        uint dbase = (t * vertex_count + gid.x) * MORPH_DELTA_STRIDE;
-        pos    += w * asfloat(morph_deltas.Load3(dbase + 0));
-        normal += w * asfloat(morph_deltas.Load3(dbase + 12));
+        uint first = morph_data.Load(gid.x * 4);
+        uint end   = morph_data.Load(gid.x * 4 + 4);
+        uint ebase = morph_entry_byte_base(vertex_count);
+        for (uint e = first; e < end; ++e)
+        {
+            uint dbase = ebase + e * MORPH_ENTRY_STRIDE;
+            float w = asfloat(morph_weights.Load(morph_data.Load(dbase) * 4));
+            pos    += w * asfloat(morph_data.Load3(dbase + 4));
+            normal += w * asfloat(morph_data.Load3(dbase + 16));
+        }
     }
     normal = normalize(normal);
 

@@ -1159,7 +1159,7 @@ mod tests {
         fn upload_skinned(
             &mut self,
             _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
-            _indices: &[u16],
+            _indices: &[u32],
             _draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
             _vert_bytes: &[u8],
             _frag_bytes: &[u8],

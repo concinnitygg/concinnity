@@ -17,8 +17,8 @@
 pub(crate) use concinnity_core::gfx::chunk_coord;
 pub use concinnity_core::gfx::lod_select as lod;
 pub use concinnity_core::gfx::{
-    camera, frustum, profile, render_types, root_motion, rt_reflections, ssao, ssgi, ssr,
-    view_modes,
+    camera, frustum, morph_weights, pose_scratch, profile, proportions, render_types, root_motion,
+    rt_reflections, ssao, ssgi, ssr, view_modes,
 };
 pub use concinnity_cpu::gfx::{
     anim_graph, auto_exposure, ik, lines, mesh_payload, mesh_seed, skinning,
@@ -61,6 +61,9 @@ pub(crate) mod draw_list;
 /// The renderer driver. An internal system (not a declarable asset), constructed
 /// by `World::start` when the world declares a `GraphicsConfig`.
 pub mod graphics_system;
+/// Live re-resolution of a `CharacterShape` against a running world's poses,
+/// for an editor previewing slider edits without a rebuild.
+pub mod shape_preview;
 pub(crate) mod transform_propagation;
 // Per-frame input sampling + FrameInput publish. Internal system, constructed
 // alongside GraphicsSystem (same gate) and scheduled immediately after it.

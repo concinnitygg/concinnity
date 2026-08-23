@@ -16,6 +16,7 @@ mod commands;
 mod flat;
 mod graph;
 mod ik;
+mod morph;
 mod root;
 #[cfg(test)]
 mod tests;
@@ -423,6 +424,8 @@ impl System for AnimationSystem {
                 scratch,
                 joint_matrices,
                 morph_weights,
+                morph_base,
+                proportions,
                 updated,
                 ..
             } = pose;
@@ -464,48 +467,17 @@ impl System for AnimationSystem {
             {
                 ik::apply_chains(skeleton, scratch, &g.chains, frame);
             }
+            // The shape's proportion layer re-shapes the posed locals; the
+            // inverse bind matrices stay as authored.
+            proportions.apply(&mut scratch.locals);
             skeleton.skinning_matrices_into(&scratch.locals, joint_matrices);
             *updated = true;
 
-            // Morph weights follow the same flat blend as the pose; clips
-            // without a morph track do not dilute the result. Graph-driven
-            // targets do not sample morph tracks.
+            // Morph weights follow the same flat blend as the pose, added onto
+            // the shape's base layer. Graph-driven targets do not sample
+            // morph tracks.
             if let TargetMode::Flat(flat) = &state.mode {
-                let acc = &mut scratch.morph;
-                acc.clear();
-                let mut weight_sum = 0.0f32;
-                for (i, entry) in state.clips.iter().enumerate() {
-                    if entry.clip.morph_keys.is_empty() {
-                        continue;
-                    }
-                    let w = if state.clips.len() == 1 {
-                        1.0
-                    } else {
-                        flat.current_weights.get(i).copied().unwrap_or(0.0)
-                    };
-                    if w <= 0.0 {
-                        continue;
-                    }
-                    entry.clip.sample_morph_weights_into(
-                        t,
-                        entry.clip.looping,
-                        &mut scratch.weights,
-                    );
-                    if acc.len() < scratch.weights.len() {
-                        acc.resize(scratch.weights.len(), 0.0);
-                    }
-                    for (a, s) in acc.iter_mut().zip(scratch.weights.iter()) {
-                        *a += s * w;
-                    }
-                    weight_sum += w;
-                }
-                if weight_sum > 0.0 {
-                    for a in acc.iter_mut() {
-                        *a /= weight_sum;
-                    }
-                    morph_weights.clear();
-                    morph_weights.extend_from_slice(acc);
-                }
+                morph::update_weights(&state.clips, flat, t, morph_base, scratch, morph_weights);
             }
         });
 

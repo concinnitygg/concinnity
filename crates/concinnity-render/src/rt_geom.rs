@@ -18,19 +18,11 @@ use crate::render_types::{
 // shader.
 pub(crate) const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 
-/// Bytes to allocate for the shared u16 skinned index buffer holding
-/// `index_count` indices. The ray-traced hit path addresses that buffer as packed
-/// u32 words (two indices each), so an allocation sized to an odd index count
-/// leaves the final word's upper half past the end and the load that fetches the
-/// last index straddles the allocation. Every backend needs the same rounding:
-/// Metal rejects the binding outright, Vulkan's storage-buffer range may return
-/// zero for a straddling load under robust access, and DirectX's root SRV is
-/// unbounded and simply reads whatever follows. Never zero: no backend accepts a
-/// zero-length buffer.
+/// Bytes to allocate for the shared u32 skinned index buffer holding
+/// `index_count` indices. One index per word, so the only rounding left is the
+/// floor: no backend accepts a zero-length buffer.
 pub fn skinned_index_buffer_bytes(index_count: usize) -> usize {
-    (index_count * std::mem::size_of::<u16>())
-        .next_multiple_of(4)
-        .max(4)
+    (index_count * std::mem::size_of::<u32>()).max(4)
 }
 
 /// How the scene acceleration structure is kept current when props move. Selected
@@ -166,22 +158,16 @@ pub fn models_dirty(cached: &[[[f32; 4]; 4]], current: &[[[f32; 4]; 4]]) -> bool
 mod tests {
     use super::*;
 
-    // A triangle list has `3 * tris` u16 indices, so an odd triangle count
-    // leaves a half word at the end. The allocation must still cover the whole
-    // word the trace loads to reach that last index.
+    // One u32 index per word, and never a zero-length allocation.
     #[test]
-    fn skinned_index_buffer_rounds_up_to_whole_words() {
+    fn skinned_index_buffer_holds_one_word_per_index() {
         assert_eq!(skinned_index_buffer_bytes(0), 4);
         assert_eq!(skinned_index_buffer_bytes(1), 4);
-        assert_eq!(skinned_index_buffer_bytes(2), 4);
-        // One triangle: the last index sits in the low half of word 1, whose
-        // upper half is past the 6 bytes the indices themselves occupy.
-        assert_eq!(skinned_index_buffer_bytes(3), 8);
-        assert_eq!(skinned_index_buffer_bytes(4), 8);
+        assert_eq!(skinned_index_buffer_bytes(3), 12);
         for count in 0..64usize {
             let bytes = skinned_index_buffer_bytes(count);
             assert!(
-                bytes >= count * 2,
+                bytes >= count * 4,
                 "{count}: {bytes} cannot hold the indices"
             );
             assert_eq!(bytes % 4, 0, "{count}: {bytes} is not whole words");

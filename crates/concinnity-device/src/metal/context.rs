@@ -132,7 +132,7 @@ pub(super) struct DrawState {
     // VS draw). When > 0, each skinned object is one extra `GpuObjectData`
     // record after the static + instance records, so `cull_count()` extends to
     // `objects.len() + draw.n_instances + draw.n_skinned` and the skinned tail draws the
-    // compute-deformed geometry through the skinned u16 index buffer.
+    // compute-deformed geometry through the skinned index buffer.
     pub n_skinned: usize,
 }
 
@@ -829,7 +829,7 @@ impl DrawRecordCounts {
     }
 
     // Command slots holding the folded skinned tail, which draws compute-deformed
-    // vertices through the skinned u16 index buffer. `None` when nothing is folded.
+    // vertices through the skinned index buffer. `None` when nothing is folded.
     pub(super) fn skinned_tail(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.total > self.skinned_base).then(|| block + self.skinned_base..block + self.total)
     }
@@ -876,7 +876,7 @@ impl MtlContext {
 
     // Index in the unified cull list where the folded skinned records begin
     // (static objects + instances precede them). The cull kernel draws records
-    // at or past this through the skinned u16 index buffer (the skinned tail),
+    // at or past this through the skinned index buffer (the skinned tail),
     // and the main pass binds the deformed vertex buffer for that range. Equals
     // `cull_count()` when no skinned mesh is folded.
     pub(super) fn skinned_record_base(&self) -> usize {
@@ -884,7 +884,7 @@ impl MtlContext {
     }
 
     // The buffer to bind at the cull kernel's skinned-index slot (buffer 6):
-    // the skinned u16 index buffer when a SkinnedMesh has uploaded, else the
+    // the skinned index buffer when a SkinnedMesh has uploaded, else the
     // static index buffer as a harmless placeholder. The kernel only reads it
     // for records at/after `skinned_base`, which equals `cull_count()` (so the
     // skinned branch never fires) whenever the skinned buffer is absent; Metal

@@ -26,7 +26,7 @@ include = [
 ]
 
 [workspace.package]
-version = "0.18.53"
+version = "0.18.54"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
@@ -77,6 +77,11 @@ required-features = ["std"]
 [[example]]
 name = "bistro"
 path = "examples/bistro/main.rs"
+required-features = ["cook"]
+
+[[example]]
+name = "customize_character"
+path = "examples/customize_character/main.rs"
 required-features = ["cook"]
 
 [lints]

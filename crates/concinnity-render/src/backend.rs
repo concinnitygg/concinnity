@@ -137,7 +137,7 @@ pub struct SkinnedSlotLayout {
     /// The skinned slot this layout describes.
     pub skinned_index: usize,
     /// First vertex of the slot's region in the shared skinned buffer.
-    pub vertex_base: u16,
+    pub vertex_base: u32,
     /// Vertices in the slot's region.
     pub vertex_count: usize,
     /// Indices in the slot's region.
@@ -410,7 +410,7 @@ pub trait RenderBackend: SceneControl + Send {
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        indices: &[u16],
+        indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         vert_bytes: &[u8],
         frag_bytes: &[u8],
@@ -811,7 +811,7 @@ pub trait RenderBackend: SceneControl + Send {
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
-        vertex_base: u16,
+        vertex_base: u32,
         verts: &[SkinnedVertex],
         idxs: &[u16],
     ) -> Result<(), String> {
@@ -1131,7 +1131,7 @@ pub(crate) mod test_stub {
         fn upload_skinned(
             &mut self,
             _vertices: &[SkinnedVertex],
-            _indices: &[u16],
+            _indices: &[u32],
             _draw_objects: Vec<SkinnedDrawObject>,
             _vert_bytes: &[u8],
             _frag_bytes: &[u8],

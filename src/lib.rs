@@ -58,6 +58,11 @@ extern crate std;
 pub use concinnity_engine::App;
 #[cfg(feature = "std")]
 pub use concinnity_engine::ecs::World;
+/// Where the engine reads and writes its state tree (`data/`, `saves/`,
+/// `settings`, the build caches). A host anchors it before it compiles or
+/// runs anything; unanchored, it hangs off the current directory.
+#[cfg(feature = "std")]
+pub use concinnity_engine::paths;
 #[cfg(feature = "std")]
 pub use concinnity_memory::install_global_allocator;
 
@@ -82,27 +87,29 @@ pub mod assets {
         AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
         BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery, BehaviorSource,
         BlockType, BodyDynamics, Camera3D, Camera3DArgs, CameraController, CameraProbe, CameraShot,
-        CharacterCapsule, CharacterRig, Children, Collider, ColorLut, ContactEvent,
-        ControlsCommand, CubemapTexture, CueKind, DebugHud, Decal, DespawnRequest,
-        DirectionalLight, EngineDefaults, EntityTarget, EnvironmentMap, File, FileArgs, FileKind,
-        FollowController, FollowDrive, Font, FpsCounter, FrameInput, GamepadAction, GamepadButton,
-        GamepadMap, GlassPanel, GlobalTransform, GraphicsConfig, GroundProbe, GroundProbes, Held,
-        Hidden, HitRegion, IndirectLighting, InputKey, InstanceTransform, InstancedProp,
-        InteractEvent, Interactable, Justify, KeyBinding, Keyframe, LabelBox, LabelPlacement,
-        LayoutContainer, LayoutRow, Lifetime, LightRig, LoadingOverlay, MainMenu, MainMenuItem,
-        Material, MaterialPalette, Mesh, MeshRenderer, Model, ModelRenderer, MorphDelta, MorphKey,
-        NavDirection, OptionSelect, PaletteEntry, Panel, Parent, ParticleEmitter, PhysicsConfig,
-        PhysicsJoint, PhysicsJointKind, Pickup, PlayCue, PointLight, PostProcessConfig, Prefab,
-        PrefabEntry, PrefabKind, ProceduralMesh, Prop, PropBody, PropCollider, RectAreaLight,
-        ReflectionBlurResolution, ReflectionProbe, RenderHandle, ReparentRequest, RigidBody,
-        Rolloff, Room, RoomArgs, RootMotionEvent, Scene, SceneCommand, SceneImport, SceneMember,
-        Screen, ScreenCommand, ScreenInput, ScreenShown, ScrollGroup, ScrollPanel, ScrollRow,
-        SdfVolume, SettingCommand, SettingOp, SettingsProfile, Shader, ShaderKind, ShaderPayload,
-        ShadowUpdate, SkeletonJoint, SkeletonPose, SkinnedMesh, SkinnedVertexData, Slider,
-        SpawnRequest, Spawner, SpawnerArgs, SpotLight, Sprite, SpriteFit, SsgiResolution,
-        StageSource, StatHud, Story, StoryChoice, StoryCommand, StoryCompareOp, StoryCondition,
-        StoryGate, StoryImage, StoryImport, StoryNode, StoryOp, StoryPage, StoryPlayback,
-        StoryReload, StoryScaffold, StorySpeaker, StoryStage, StreamingConfig, SubMeshRef,
+        CharacterCapsule, CharacterModel, CharacterRig, CharacterSchema, CharacterShape, Children,
+        Collider, ColorLut, ContactEvent, ControlsCommand, CubemapTexture, CueKind, DebugHud,
+        Decal, DespawnRequest, DirectionalLight, EngineDefaults, EntityTarget, EnvironmentMap,
+        File, FileArgs, FileKind, FollowController, FollowDrive, Font, FpsCounter, FrameInput,
+        GamepadAction, GamepadButton, GamepadMap, GlassPanel, GlobalTransform, GraphicsConfig,
+        GroundProbe, GroundProbes, Held, Hidden, HitRegion, IndirectLighting, InputKey,
+        InstanceTransform, InstancedProp, InteractEvent, Interactable, JointProportion, Justify,
+        KeyBinding, KeyPolarity, Keyframe, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
+        Lifetime, LightRig, LoadingOverlay, MainMenu, MainMenuItem, Material, MaterialPalette,
+        Mesh, MeshRenderer, Model, ModelRenderer, MorphDelta, MorphKey, NavDirection, OptionSelect,
+        PaletteEntry, Panel, PanelSection, Parent, ParticleEmitter, PhysicsConfig, PhysicsJoint,
+        PhysicsJointKind, Pickup, PlayCue, PointLight, PostProcessConfig, Prefab, PrefabEntry,
+        PrefabKind, ProceduralMesh, Prop, PropBody, PropCollider, ProportionGroup, RectAreaLight,
+        ReflectionBlurResolution, ReflectionProbe, RenderHandle, ReparentRequest, ResolvedSliders,
+        RigidBody, Rolloff, Room, RoomArgs, RootMotionEvent, Scene, SceneCommand, SceneImport,
+        SceneMember, SchemaJoint, SchemaKey, SchemaRegion, Screen, ScreenCommand, ScreenInput,
+        ScreenShown, ScrollGroup, ScrollPanel, ScrollRow, SdfVolume, SettingCommand, SettingOp,
+        SettingsProfile, Shader, ShaderKind, ShaderPayload, ShadowUpdate, ShapePreset, ShapeSlider,
+        SkeletonJoint, SkeletonPose, SkinnedMesh, SkinnedVertexData, Slider, SpawnRequest, Spawner,
+        SpawnerArgs, SpotLight, Sprite, SpriteFit, SsgiResolution, StageSource, StatHud, Story,
+        StoryChoice, StoryCommand, StoryCompareOp, StoryCondition, StoryGate, StoryImage,
+        StoryImport, StoryNode, StoryOp, StoryPage, StoryPlayback, StoryReload, StoryScaffold,
+        StorySpeaker, StoryStage, StreamingConfig, SubMeshRef, SynthParams, SynthesizedTarget,
         TextAlign, TextInput, TextLabel, Texture, Transform, TriggerFilter, TriggerVolume,
         UpscaleQuality, UpscalerBackend, VariableDecl, Variables, VertexData, VisibilityRequest,
         VolumeEvent, VolumetricFog, VoxelChunk, VoxelWorld, WaterSurface, WaterWave, Window,

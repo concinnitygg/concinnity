@@ -294,32 +294,30 @@ pub(crate) fn compile_mesh_from_vertex_data(
     crate::gfx::mesh_payload::serialise(&verts5, indices)
 }
 
-// Compile a skinned mesh payload with optional LOD alternates. `lod_levels`
-// includes LOD0 (so `1` emits no alternates); `lod_distances` may be empty
-// (use a doubling cascade derived from the bounding sphere) or must hold
-// exactly `lod_levels - 1` thresholds. Decimation is QEM half-edge collapse
-// against the LOD0 vertex set, mirroring the static [`build_lod_alternates`]
-// path.
+// The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
+// `1` emits no alternates) and `distances` may be empty (a doubling cascade
+// derived from the bounding sphere) or must hold one threshold per
+// alternate.
+pub(crate) struct SkinnedLods<'a> {
+    pub levels: u32,
+    pub distances: &'a [f32],
+}
+
+// Compile a skinned mesh payload with optional LOD alternates. Decimation is
+// QEM half-edge collapse against the LOD0 vertex set, mirroring the static
+// [`build_lod_alternates`] path.
 pub(crate) fn compile_skinned_mesh_payload_with_lods(
     vertex_data: &[crate::assets::SkinnedVertexData],
     indices: &[u16],
     skeleton: &[crate::assets::SkeletonJoint],
     morph_target_names: &[String],
     morph_deltas: &[crate::assets::MorphDelta],
-    lod_levels: u32,
-    lod_distances: &[f32],
+    lods: &SkinnedLods,
 ) -> Result<Vec<u8>, String> {
+    let lod_levels = lods.levels.clamp(1, 8);
+    let lod_distances = lods.distances;
     if vertex_data.is_empty() {
         return Err("SkinnedMesh requires at least one vertex".to_string());
-    }
-    if morph_deltas.len() != morph_target_names.len() * vertex_data.len() {
-        return Err(format!(
-            "SkinnedMesh morph_deltas has {} entries; {} target(s) x {} vertices requires {}",
-            morph_deltas.len(),
-            morph_target_names.len(),
-            vertex_data.len(),
-            morph_target_names.len() * vertex_data.len(),
-        ));
     }
     let tris = indices.len() / 3;
     for t in 0..tris {
@@ -424,16 +422,19 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         Vec::new()
     };
 
-    let morphs = crate::gfx::mesh_payload::PayloadMorphs {
-        names: morph_target_names.to_vec(),
-        deltas: morph_deltas
-            .iter()
-            .map(|d| crate::gfx::mesh_payload::MorphDelta {
-                position: d.position,
-                normal: d.normal,
-            })
-            .collect(),
-    };
+    let dense: Vec<crate::gfx::mesh_payload::MorphDelta> = morph_deltas
+        .iter()
+        .map(|d| crate::gfx::mesh_payload::MorphDelta {
+            position: d.position,
+            normal: d.normal,
+        })
+        .collect();
+    let morphs = crate::gfx::mesh_payload::PayloadMorphs::from_dense(
+        morph_target_names.to_vec(),
+        vertex_data.len(),
+        &dense,
+    )
+    .map_err(|e| format!("SkinnedMesh {e}"))?;
 
     Ok(crate::gfx::mesh_payload::serialise_skinned_with_lods(
         &skinned,
@@ -1226,8 +1227,10 @@ mod tests {
             &[joint("root")],
             &[],
             &[],
-            1,
-            &[],
+            &SkinnedLods {
+                levels: 1,
+                distances: &[],
+            },
         )
         .unwrap();
         let p = deserialise_skinned_with_lods(&payload).unwrap();
@@ -1246,8 +1249,18 @@ mod tests {
     #[test]
     fn skinned_mesh_rejects_empty_and_out_of_range_input() {
         assert!(
-            compile_skinned_mesh_payload_with_lods(&[], &[], &[joint("root")], &[], &[], 1, &[])
-                .is_err()
+            compile_skinned_mesh_payload_with_lods(
+                &[],
+                &[],
+                &[joint("root")],
+                &[],
+                &[],
+                &SkinnedLods {
+                    levels: 1,
+                    distances: &[],
+                },
+            )
+            .is_err()
         );
         let tri = [
             skinned_vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
@@ -1260,8 +1273,10 @@ mod tests {
             &[joint("root")],
             &[],
             &[],
-            1,
-            &[],
+            &SkinnedLods {
+                levels: 1,
+                distances: &[],
+            },
         )
         .unwrap_err();
         assert!(err.contains("out of range"), "error was: {err}");
@@ -1272,8 +1287,10 @@ mod tests {
             &[joint("root")],
             &[],
             &[],
-            3,
-            &[5.0],
+            &SkinnedLods {
+                levels: 3,
+                distances: &[5.0],
+            },
         )
         .unwrap_err();
         assert!(err.contains("lod_distances"), "error was: {err}");
@@ -1308,8 +1325,10 @@ mod tests {
             &[joint("root")],
             &[],
             &[],
-            2,
-            &[12.0],
+            &SkinnedLods {
+                levels: 2,
+                distances: &[12.0],
+            },
         )
         .unwrap();
         let p = deserialise_skinned_with_lods(&payload).unwrap();
@@ -1334,8 +1353,10 @@ mod tests {
             &[joint("root")],
             &["smile".to_string()],
             &[morph_delta([0.1, 0.0, 0.0])],
-            1,
-            &[],
+            &SkinnedLods {
+                levels: 1,
+                distances: &[],
+            },
         )
         .unwrap_err();
         assert!(
@@ -1362,16 +1383,20 @@ mod tests {
             &[joint("root")],
             &["smile".to_string()],
             &deltas,
-            1,
-            &[],
+            &SkinnedLods {
+                levels: 1,
+                distances: &[],
+            },
         )
         .unwrap();
         let p = deserialise_skinned_with_lods(&payload).unwrap();
         assert_eq!(p.morphs.names, vec!["smile".to_string()]);
-        assert_eq!(p.morphs.deltas.len(), 3);
-        assert_eq!(p.morphs.deltas[0].position, [0.5, 0.0, 0.0]);
-        assert_eq!(p.morphs.deltas[2].position, [0.0, 0.0, 0.5]);
-        assert_eq!(p.morphs.deltas[1].normal, [0.0, 1.0, 0.0]);
+        assert_eq!(p.morphs.entries.len(), 3);
+        let dense = p.morphs.to_dense();
+        assert_eq!(dense.len(), 3);
+        assert_eq!(dense[0].position, [0.5, 0.0, 0.0]);
+        assert_eq!(dense[2].position, [0.0, 0.0, 0.5]);
+        assert_eq!(dense[1].normal, [0.0, 1.0, 0.0]);
     }
 
     #[test]
@@ -1406,8 +1431,10 @@ mod tests {
             &[joint("root")],
             &[],
             &[],
-            3,
-            &[],
+            &SkinnedLods {
+                levels: 3,
+                distances: &[],
+            },
         )
         .unwrap();
         let lods = deserialise_skinned_with_lods(&payload).unwrap().lods;
@@ -1425,9 +1452,18 @@ mod tests {
             skinned_vertex([0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
         ];
         // No triangles to decimate, so the alternate list stays empty.
-        let payload =
-            compile_skinned_mesh_payload_with_lods(&tri, &[], &[joint("root")], &[], &[], 3, &[])
-                .unwrap();
+        let payload = compile_skinned_mesh_payload_with_lods(
+            &tri,
+            &[],
+            &[joint("root")],
+            &[],
+            &[],
+            &SkinnedLods {
+                levels: 3,
+                distances: &[],
+            },
+        )
+        .unwrap();
         assert!(
             deserialise_skinned_with_lods(&payload)
                 .unwrap()

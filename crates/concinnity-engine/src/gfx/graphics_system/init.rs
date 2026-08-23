@@ -56,8 +56,12 @@ struct SkinnedSkeletonEntry {
     name_id: AssetId,
     template_index: usize,
     skeleton: skinning::Skeleton,
+    morph_names: Vec<String>,
     model: [[f32; 4]; 4],
     capsule: Option<crate::assets::CharacterCapsule>,
+    // The authored placement and local bounds, for the editor's pick index.
+    transform: crate::assets::Transform,
+    local_bounds: ([f32; 3], [f32; 3]),
 }
 
 // Assembled skinned-mesh GPU inputs from `assemble_skinned_meshes`: the shared
@@ -67,7 +71,9 @@ struct SkinnedSkeletonEntry {
 // source map.
 struct SkinnedMeshAssembly {
     vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex>,
-    indices: Vec<u16>,
+    // Absolute indices into the shared skinned vertex buffer, so u32 rather
+    // than the per-mesh u16 the payload carries.
+    indices: Vec<u32>,
     draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject>,
     skeletons: Vec<SkinnedSkeletonEntry>,
     pool_reservations: Vec<(usize, usize)>,
@@ -1006,6 +1012,12 @@ impl GraphicsSystem {
         ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex(
             skinned_geometry.iter().map(|g| g.mesh.skin_index).collect(),
         ));
+        ctx.insert_resource(crate::gfx::shape_preview::SkinnedMeshMorphNames(
+            skinned_geometry
+                .iter()
+                .map(|g| g.morphs.names.clone())
+                .collect(),
+        ));
         Some((skinned_geometry, skinned_blob_indices))
     }
 
@@ -1022,7 +1034,7 @@ impl GraphicsSystem {
         capture_sources: bool,
     ) -> Option<SkinnedMeshAssembly> {
         let mut skinned_vertices: Vec<crate::gfx::mesh_payload::SkinnedVertex> = Vec::new();
-        let mut skinned_indices: Vec<u16> = Vec::new();
+        let mut skinned_indices: Vec<u32> = Vec::new();
         let mut skinned_draw_objects: Vec<crate::gfx::render_types::SkinnedDrawObject> = Vec::new();
         // One entry per authored skinned mesh: its handle, interned name id,
         // the skinned index of its (visible) template draw object, and its
@@ -1075,10 +1087,10 @@ impl GraphicsSystem {
                 mat_entry.uniforms,
             );
 
-            let base = skinned_vertices.len() as u16;
+            let base = skinned_vertices.len() as u32;
             let index_offset = skinned_indices.len();
             skinned_vertices.extend_from_slice(verts);
-            skinned_indices.extend(idxs.iter().map(|i| i + base));
+            skinned_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
 
             // LOD alternates share this slot's vertex region. The runtime
             // skinned IB is u16, so each alternate's mesh-relative indices
@@ -1146,25 +1158,10 @@ impl GraphicsSystem {
             // other's pose. A runtime skinned spawn reveals one of these without
             // growing any GPU buffer; a despawn returns it to the pool.
             for _ in 0..sm.max_instances {
-                // The shared skinned index buffer is u16, so a copy's vertex
-                // region must fit there. Stop reserving (and warn) once the next
-                // copy would overflow rather than truncating into a neighbour.
-                let copy_base_usize = skinned_vertices.len();
-                if copy_base_usize + verts.len() > u16::MAX as usize + 1 {
-                    let reserved = skinned_draw_objects.len() - skinned_index - 1;
-                    tracing::warn!(
-                        "GraphicsSystem: SkinnedMesh '{}' reserved {} of {} requested instances; \
-                         the u16-indexed skinned vertex buffer is full",
-                        name_id,
-                        reserved,
-                        sm.max_instances
-                    );
-                    break;
-                }
-                let copy_base = copy_base_usize as u16;
+                let copy_base = skinned_vertices.len() as u32;
                 let copy_index_offset = skinned_indices.len();
                 skinned_vertices.extend_from_slice(verts);
-                skinned_indices.extend(idxs.iter().map(|i| i + copy_base));
+                skinned_indices.extend(idxs.iter().map(|i| u32::from(*i) + copy_base));
                 let copy_lods = crate::gfx::draw_list::append_lod_slices(
                     &mut skinned_indices,
                     lod_alts,
@@ -1196,8 +1193,15 @@ impl GraphicsSystem {
                 name_id: *name_id,
                 template_index: skinned_index,
                 skeleton,
+                morph_names: morphs.names.clone(),
                 model: sm.model_matrix(),
                 capsule: sm.capsule.clone(),
+                transform: crate::assets::Transform {
+                    position: sm.position,
+                    rotation_deg: sm.rotation_deg,
+                    scale: sm.scale,
+                },
+                local_bounds: (local_bb_min, local_bb_max),
             });
         }
 
@@ -2980,20 +2984,47 @@ impl GraphicsSystem {
                 // skinned instance pool (`RenderSlots`), published below.
             }
             let skinned_count = skinned_skeletons.len();
+            let shapes = super::character_shape::collect(ctx);
+            let want_pick = ctx.resource::<crate::ecs::PickIndex>().is_some();
             for SkinnedSkeletonEntry {
                 handle,
                 name_id,
                 template_index,
                 skeleton,
+                morph_names,
                 model,
                 capsule,
+                transform,
+                local_bounds,
             } in skinned_skeletons
             {
+                let layers = shapes
+                    .get(&handle)
+                    .map(|shape| super::character_shape::resolve(shape, &skeleton, &morph_names));
+                let capsule = capsule.map(|c| match &layers {
+                    Some(l) => {
+                        super::character_shape::proportioned_capsule(&c, &skeleton, &l.proportions)
+                    }
+                    None => (c.half_height, c.radius),
+                });
                 let entity = ctx.components.spawn();
                 ctx.insert(
                     entity,
-                    crate::assets::SkeletonPose::new(handle, template_index, skeleton),
+                    super::character_shape::seed_pose(handle, template_index, skeleton, layers),
                 );
+                // Under the editor the template is pickable and movable like a
+                // prop: its Transform drives the per-frame skinned model push
+                // and its bounds join the pick index.
+                if want_pick {
+                    ctx.insert(entity, transform);
+                    ctx.insert(entity, crate::assets::GlobalTransform(model));
+                    self.pick_candidates.push(super::PickCandidate {
+                        asset_id: name_id,
+                        entity,
+                        local_min: local_bounds.0,
+                        local_max: local_bounds.1,
+                    });
+                }
                 // Register the template under its mesh name so a runtime
                 // SpawnRequest can resolve it to this entity, the same way the
                 // static spawn path resolves a named placement. The spawn then
@@ -3004,13 +3035,13 @@ impl GraphicsSystem {
                 // A mesh with a capsule gets a character rig: PhysicsSystem
                 // (init runs later this tick) creates the kinematic capsule
                 // from it, and the render transform follows it each frame.
-                if let Some(capsule) = capsule {
+                if let Some((half_height, radius)) = capsule {
                     ctx.push(crate::assets::CharacterRig::new(
                         handle,
                         template_index,
                         model,
-                        capsule.half_height.max(0.05),
-                        capsule.radius.max(0.05),
+                        half_height.max(0.05),
+                        radius.max(0.05),
                     ));
                 }
             }

@@ -345,12 +345,20 @@ struct SkinnedVertex {
     float4  weights [[attribute(6)]];
 };
 
-// Morph-target delta (matches gfx::mesh_payload::MorphDelta, 24-byte stride)
+// Sparse morph entry (matches gfx::mesh_payload::MorphEntry, 28-byte stride)
 // and the per-draw morph parameters bound at buffer(10) for the skinned VS.
-struct VsMorphDelta {
+// buffer(9) is the packed morph buffer (PayloadMorphs::packed_words):
+// `vertex_count + 1` uint entry offsets, then the entries at a 16-byte-aligned
+// word.
+struct VsMorphEntry {
+    uint          target;
     packed_float3 position;
     packed_float3 normal;
 };
+
+inline uint vs_morph_entry_word_base(uint vertex_count) {
+    return (vertex_count + 1u + 3u) & ~3u;
+}
 
 struct VsMorphParams {
     uint  vertex_base;   // this object's first vertex in the shared buffer
@@ -366,20 +374,28 @@ vertex VertexOut vertex_main_skinned(
     constant ViewUniforms  &view     [[buffer(0)]],
     constant ModelUniforms &model_u  [[buffer(2)]],
     constant float4x4      *joints   [[buffer(8)]],
-    device const VsMorphDelta *deltas [[buffer(9)]],
+    device const uint      *morphs   [[buffer(9)]],
     constant VsMorphParams &morph    [[buffer(10)]]
 ) {
-    // Morph deltas apply in bind space before the skin matrix; the deltas
-    // buffer is target-major and indexed by the object-local vertex index.
+    // Morph deltas apply in bind space before the skin matrix. The sparse
+    // buffer is vertex-major: walk only the entries touching this object-local
+    // vertex index.
     float3 pos = in.pos;
     float3 nrm = in.normal;
     uint local = vid - morph.vertex_base;
-    for (uint t = 0; t < morph.target_count; ++t) {
-        float w = morph.weights[t];
-        if (fabs(w) < 1e-5) continue;
-        VsMorphDelta d = deltas[t * morph.vertex_count + local];
-        pos += w * float3(d.position);
-        nrm += w * float3(d.normal);
+    if (morph.target_count != 0u) {
+        uint first = morphs[local];
+        uint end   = morphs[local + 1u];
+        device const VsMorphEntry *entries =
+            (device const VsMorphEntry *)(morphs + vs_morph_entry_word_base(morph.vertex_count));
+        for (uint e = first; e < end; ++e) {
+            VsMorphEntry d = entries[e];
+            // Targets past the inline weight array (MAX_MORPH_TARGETS) have no
+            // weight on this path.
+            float w = d.target < 64u ? morph.weights[d.target] : 0.0;
+            pos += w * float3(d.position);
+            nrm += w * float3(d.normal);
+        }
     }
 
     // Linear blend skinning: weighted sum of the bound joints' matrices.

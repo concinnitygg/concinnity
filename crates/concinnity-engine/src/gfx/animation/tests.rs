@@ -692,3 +692,78 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
         .unwrap();
     assert_eq!(matrices, 1, "the weighted blend produced a pose");
 }
+
+// A pose's static morph base layer composes with a clip's morph track: the
+// clip weights are added onto the base and clamped, and a clip without a
+// morph track leaves the base layer uploaded as-is.
+#[test]
+fn morph_base_layer_composes_with_clip_morph_tracks() {
+    use crate::assets::MorphKey;
+    use crate::gfx::proportions::ProportionLayer;
+
+    let target = SkinnedMeshHandle(intern("morph_base_pose").0);
+    let mut world = World::new();
+    let mut a = flat_clip("mb_clip", target);
+    a.morph_track = vec![
+        MorphKey {
+            time: 0.0,
+            weights: vec![0.3, 0.9],
+        },
+        MorphKey {
+            time: 1.0,
+            weights: vec![0.3, 0.9],
+        },
+    ];
+    world.add_component(a);
+    world.add_component(
+        single_joint_pose(target).with_shape(vec![0.5, 0.5], ProportionLayer::default()),
+    );
+    world.start().unwrap();
+    world.step();
+    let weights = world
+        .query::<crate::assets::SkeletonPose>()
+        .next()
+        .map(|p| p.morph_weights.clone())
+        .unwrap();
+    assert!((weights[0] - 0.8).abs() < 1e-5, "{weights:?}");
+    assert_eq!(weights[1], 1.0, "base + clip clamps at 1");
+
+    // Without a morph track, the base layer stays in place.
+    let target = SkinnedMeshHandle(intern("morph_base_only").0);
+    let mut world = World::new();
+    world.add_component(flat_clip("mb_plain", target));
+    world.add_component(
+        single_joint_pose(target).with_shape(vec![0.25], ProportionLayer::default()),
+    );
+    world.start().unwrap();
+    world.step();
+    let pose = world.query::<crate::assets::SkeletonPose>().next().unwrap();
+    assert_eq!(pose.morph_weights, [0.25]);
+    assert!(pose.updated);
+}
+
+// The proportion layer re-shapes every sampled pose: a scaled root shows up in
+// the skinning matrix the clip writes each frame.
+#[test]
+fn proportions_apply_to_the_sampled_pose() {
+    use crate::assets::JointProportion;
+    use crate::gfx::proportions::ProportionLayer;
+
+    let target = SkinnedMeshHandle(intern("proportioned_pose").0);
+    let mut world = World::new();
+    world.add_component(flat_clip("pp_clip", target));
+    let pose = single_joint_pose(target);
+    let layer = ProportionLayer::resolve(
+        &pose.skeleton,
+        &[JointProportion {
+            joint: "root".into(),
+            scale: 3.0,
+            length: 0.0,
+        }],
+    );
+    world.add_component(pose.with_shape(Vec::new(), layer));
+    world.start().unwrap();
+    world.step();
+    let pose = world.query::<crate::assets::SkeletonPose>().next().unwrap();
+    assert_eq!(pose.joint_matrices[0][0][0], 3.0);
+}

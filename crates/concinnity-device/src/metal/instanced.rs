@@ -234,7 +234,7 @@ impl MtlContext {
         draws
     }
 
-    // Draw the visible skinned meshes, one indexed (u16) draw each. Owns the
+    // Draw the visible skinned meshes, one indexed draw each. Owns the
     // `skinned_draw_objects` iteration, the `obj.visible` filter, the
     // skinned-camera-distance LOD pick, and the indexed draw into `sib` (the
     // shared skinned index buffer). `per_draw` receives the object's index `i`
@@ -264,14 +264,14 @@ impl MtlContext {
             per_draw(enc, obj, i);
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
-            let index_byte_offset = index_offset * std::mem::size_of::<u16>();
+            let index_byte_offset = index_offset * std::mem::size_of::<u32>();
             // SAFETY: the index range comes from `active_lod` on this object's own slice of the
             // bound skinned index buffer `sib`.
             unsafe {
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                     MTLPrimitiveType::Triangle,
                     index_count,
-                    MTLIndexType::UInt16,
+                    MTLIndexType::UInt32,
                     sib,
                     index_byte_offset,
                 );

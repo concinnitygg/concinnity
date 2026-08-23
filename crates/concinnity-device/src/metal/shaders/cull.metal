@@ -50,7 +50,7 @@ struct CullUniforms {
     uint          hiz_enabled;
     // Index into the unified cull list where the skinned records begin
     // (= static + instances). Records at or past this index draw the deformed
-    // skinned geometry through the u16 `skinned_index_buf`; earlier records use
+    // skinned geometry through the `skinned_index_buf`; earlier records use
     // the static u32 `index_buf`. Equals `object_count` when no skinned mesh is
     // folded, so the skinned branch is then never taken. (Metal bakes the index
     // buffer into each indirect command, so unlike DX/VK the kernel must pick it
@@ -201,7 +201,7 @@ kernel void cull_encode(
     const device uint      *index_buf   [[buffer(3)]],
     device ICBContainer    *icb_c       [[buffer(4)]],
     device uint            *cull_status [[buffer(5)]],
-    const device ushort    *skinned_index_buf [[buffer(6)]],
+    const device uint      *skinned_index_buf [[buffer(6)]],
     texture2d<float, access::read> hiz_tex [[texture(0)]],
     uint                    tid         [[thread_position_in_grid]]
 ) {
@@ -245,7 +245,7 @@ kernel void cull_encode(
             continue;
         }
         // Skinned records (tid >= skinned_base) draw the compute-deformed
-        // geometry through the u16 skinned index buffer; everything else uses
+        // geometry through the skinned index buffer; everything else uses
         // the static u32 index buffer. The index buffer is part of the
         // indirect command on Metal, so it is selected here rather than bound
         // per draw range like DX/VK.
@@ -286,7 +286,7 @@ kernel void cull_encode_phase2(
     const device uint      *index_buf   [[buffer(3)]],
     device ICBContainer    *icb_c       [[buffer(4)]],
     device uint            *cull_status [[buffer(5)]],
-    const device ushort    *skinned_index_buf [[buffer(6)]],
+    const device uint      *skinned_index_buf [[buffer(6)]],
     texture2d<float, access::read> hiz_tex [[texture(0)]],
     uint                    tid         [[thread_position_in_grid]]
 ) {
@@ -345,14 +345,14 @@ kernel void cull_encode_phase2(
 // `cull_status` is written: shadow runs single-pass, and the shared status
 // buffer belongs to the main two-pass occlusion path. The `skinned_base`
 // index-buffer branch is identical to `cull_encode` (the shadow ICB must bake
-// the u16 skinned IB for the deformed tail just like the main ICB).
+// the skinned IB for the deformed tail just like the main ICB).
 kernel void cull_encode_shadow(
     constant GpuObjectData *objects     [[buffer(0)]],
     constant GpuDrawArgs   *draw_args   [[buffer(1)]],
     constant CullUniforms  &cull        [[buffer(2)]],
     const device uint      *index_buf   [[buffer(3)]],
     device ICBContainer    *icb_c       [[buffer(4)]],
-    const device ushort    *skinned_index_buf [[buffer(6)]],
+    const device uint      *skinned_index_buf [[buffer(6)]],
     uint                    tid         [[thread_position_in_grid]]
 ) {
     if (tid >= cull.object_count) {

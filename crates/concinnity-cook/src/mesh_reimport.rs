@@ -6,7 +6,8 @@
 //! drives them.
 
 use crate::geometry::{
-    compile_mesh_payload, compile_skinned_mesh_payload_with_lods, payload_joints_to_defs,
+    SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
+    payload_joints_to_defs,
 };
 use concinnity_cpu::gfx::mesh_payload::{deserialise_skinned, deserialise_with_lods};
 
@@ -66,6 +67,40 @@ pub fn decode_mesh_from_parsed_glb(
     deserialise_with_lods(&payload)
 }
 
+/// A skinned mesh re-imported to its inline (authored) form: the fields the
+/// glTF path fills on a `SkinnedMesh` asset, before payload compilation.
+pub struct InlineSkinnedImport {
+    /// Skinned vertices in import order.
+    pub vertices: Vec<crate::assets::SkinnedVertexData>,
+    /// Triangle indices into `vertices`.
+    pub indices: Vec<u16>,
+    /// Bind-pose skeleton, parents before children.
+    pub skeleton: Vec<concinnity_core::assets::SkeletonJoint>,
+    /// Morph-target names, in target order.
+    pub morph_target_names: Vec<String>,
+    /// Dense target-major morph deltas (`t * vertices.len() + v`).
+    pub morph_deltas: Vec<crate::assets::MorphDelta>,
+}
+
+/// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document into its
+/// inline asset form, morph targets included and nothing compiled. The
+/// editor's glTF-export round-trip check reads an exported `.glb` back through
+/// this so the comparison sees exactly what the build pipeline would import.
+pub fn decode_skinned_inline_from_parsed_glb(
+    doc: &crate::gltf_source::GltfDoc,
+    source: &str,
+    skin_index: u32,
+) -> Result<InlineSkinnedImport, String> {
+    let imported = crate::glb::import_skinned_from_doc(doc, source, skin_index)?;
+    Ok(InlineSkinnedImport {
+        vertices: imported.vertices,
+        indices: imported.indices,
+        skeleton: imported.skeleton,
+        morph_target_names: imported.morph_target_names,
+        morph_deltas: imported.morph_deltas,
+    })
+}
+
 /// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document the same
 /// way the build pipeline does at compile time, returning the runtime
 /// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
@@ -90,8 +125,10 @@ pub fn decode_skinned_from_parsed_glb(
         &imported.skeleton,
         &imported.morph_target_names,
         &imported.morph_deltas,
-        1,
-        &[],
+        &SkinnedLods {
+            levels: 1,
+            distances: &[],
+        },
     )?;
     let (verts, idxs, payload_joints) = deserialise_skinned(&payload)?;
     let skeleton = payload_joints_to_defs(payload_joints);
@@ -145,6 +182,20 @@ mod tests {
         assert_eq!(vertices[0].joints, [1, 1, 1, 1]);
         assert_eq!(vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(vertices[0].normal, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn decode_skinned_inline_keeps_the_authored_form() {
+        let doc = parse(&skinned_glb());
+        let m = decode_skinned_inline_from_parsed_glb(&doc, "s.glb", 0).expect("decode");
+        assert_eq!(m.vertices.len(), 3);
+        assert_eq!(m.indices, vec![0, 1, 2]);
+        // Joint bindings are remapped into parents-before-children order, but
+        // nothing is compiled: no normals are involved and the fixture's
+        // morph-free mesh reports empty targets.
+        assert_eq!(m.skeleton[0].name, "root");
+        assert_eq!(m.vertices[0].joints, [1, 1, 1, 1]);
+        assert!(m.morph_target_names.is_empty() && m.morph_deltas.is_empty());
     }
 
     #[test]

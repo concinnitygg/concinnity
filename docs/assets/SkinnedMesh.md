@@ -15,6 +15,18 @@ binary `.fbx` file. The import fills the mesh, the skeleton bind pose,
 and (for glTF) any morph targets; animations are imported separately by
 [Animation](Animation.md) assets referencing the same file.
 
+The `customize_character` example ships a neutral unclothed body
+(`base_humanoid.glb`, about 19k vertices, A-pose bind) with a 25-joint
+skeleton (`root`, `hips`, `spine`, `chest`,
+`upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
+`hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
+suffix), the morph targets a [CharacterShape](CharacterShape.md) slider set
+names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
+`belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
+`chin+/-`), and a rotation-only `idle` clip an Animation can import from
+the same file; a [CharacterModel](CharacterModel.md) is the usual way to
+declare it.
+
 The `skeleton` (joint hierarchy and bind pose) is provided as an arg
 (authored inline alongside `vertices`/`indices`, or filled in from the
 imported `.glb`) and is baked into the mesh at build time.
@@ -24,7 +36,7 @@ supply them.
 
 ## Parameters
 
-- `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
+- `source`: A string. Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
 - `skin_index`: An integer. Which skinned mesh of `source` to import, in file declaration order (default 0). A character split into several meshes bound to one skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each naming its own index.
 - `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list.
 - `indices`: An array of integers. Triangle index list.

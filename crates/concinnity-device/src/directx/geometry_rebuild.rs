@@ -8,7 +8,7 @@
 // the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::LodSlice;
@@ -377,7 +377,7 @@ impl DxContext {
     // `SkinnedSlotLayout` per slot (in `skinned_index` order) so the
     // asset-hot-reload caller can refresh its `SkinnedMeshSourceEntry`s.
     //
-    // The skinned IB stays `DXGI_FORMAT_R16_UINT`; the skinned pipelines,
+    // The skinned IB stays `DXGI_FORMAT_R32_UINT`; the skinned pipelines,
     // shadow / velocity / SSAO / SSR variants, and per-slot metadata
     // (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
     // are untouched. Skeleton-shape changes (joint-count mismatch) route
@@ -446,62 +446,33 @@ impl DxContext {
         })?;
 
         // Skinned VB stride is `size_of::<SkinnedVertex>()`; skinned IB is
-        // `u16` (matches the format set in `upload_skinned`).
+        // `u32` (matches the format set in `upload_skinned`).
         let old_v_count = (old_v_bytes as usize) / std::mem::size_of::<SkinnedVertex>();
-        let old_i_count = (old_i_bytes as usize) / std::mem::size_of::<u16>();
+        let old_i_count = (old_i_bytes as usize) / std::mem::size_of::<u32>();
         let old_vertices: Vec<SkinnedVertex> = read_typed_vec(&v_readback, old_v_count)?;
-        let old_indices: Vec<u16> = read_typed_vec(&i_readback, old_i_count)?;
+        let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
         // Walk every skinned slot, appending new or unchanged-and-rebased
         // geometry into the fresh CPU buffers.
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
-        let mut new_indices: Vec<u16> = Vec::new();
+        let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<crate::gfx::backend::SkinnedSlotLayout> =
             Vec::with_capacity(self.skinned.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
-        let mut new_per_slot: Vec<(usize, u16, usize, usize, usize)> =
+        let mut new_per_slot: Vec<(usize, u32, usize, usize, usize)> =
             Vec::with_capacity(self.skinned.draw_objects.len());
 
         for (skinned_index, obj) in self.skinned.draw_objects.iter().enumerate() {
-            let new_v_base_usize = new_vertices.len();
-            let new_v_base: u16 = match u16::try_from(new_v_base_usize) {
-                Ok(v) => v,
-                Err(_) => {
-                    return Err(format!(
-                        "rebuild_skinned_geometry: post-rebuild vertex base {} for \
-                         slot {} overflows u16 (skinned IB is u16)",
-                        new_v_base_usize, skinned_index
-                    ));
-                }
-            };
+            let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
 
             if let Some(change) = change_map.remove(&skinned_index) {
                 let new_v_count = change.vertices.len();
                 let new_i_count = change.indices.len();
-                // Each mesh-relative index must stay in u16 after rebase.
-                let last_base_for_overflow = new_v_count
-                    .checked_sub(1)
-                    .and_then(|max_local| u16::try_from(max_local).ok())
-                    .unwrap_or(0);
-                if new_v_base.checked_add(last_base_for_overflow).is_none() {
-                    return Err(format!(
-                        "rebuild_skinned_geometry: vertex region for slot {} \
-                         would push max absolute index past u16",
-                        skinned_index
-                    ));
-                }
                 new_vertices.extend_from_slice(&change.vertices);
                 for &local in &change.indices {
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: index rebase by {} for slot \
-                             {} overflows u16",
-                            new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(u32::from(local) + new_v_base);
                 }
                 layouts.push(crate::gfx::backend::SkinnedSlotLayout {
                     skinned_index,
@@ -545,25 +516,17 @@ impl DxContext {
                     ));
                 }
                 let old_base = obj.vertex_base;
-                // `idx - old_base + new_v_base`: both subtraction and
-                // addition are bounded by the slot's vertex_count, which we
-                // just placed at new_v_base.
+                // `idx - old_base + new_v_base`: the subtraction is still
+                // checked because a stale index below the slot's own base
+                // means the readback and the draw objects disagree.
                 for &abs in &old_indices[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
                         format!(
-                            "rebuild_skinned_geometry: stale index {} below \
-                             vertex_base {} on slot {}",
-                            abs, old_base, skinned_index
+                            "rebuild_skinned_geometry: stale index {abs} below \
+                             vertex_base {old_base} on slot {skinned_index}"
                         )
                     })?;
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: rebasing index {} onto \
-                             vertex_base {} overflows u16 on slot {}",
-                            local, new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(local + new_v_base);
                 }
                 layouts.push(crate::gfx::backend::SkinnedSlotLayout {
                     skinned_index,
@@ -664,7 +627,7 @@ impl DxContext {
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_bytes as u32,
-            Format: DXGI_FORMAT_R16_UINT,
+            Format: DXGI_FORMAT_R32_UINT,
         };
         self.skinned.vertex_buffer = Some(new_vbuf);
         self.skinned.index_buffer = Some(new_ibuf);

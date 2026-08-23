@@ -541,7 +541,7 @@ impl VkContext {
         // Skinned meshes main pass. When the GPU-driven bindless fold is active,
         // skinned objects ride the same cull buffers as static + instances and are
         // drawn (as rigid deformed geometry) by a 2nd `cmd_draw_indexed_indirect`
-        // over this frame's deformed-vertex buffer + the skinned u16 index buffer,
+        // over this frame's deformed-vertex buffer + the skinned index buffer,
         // reading the cull-written indirect buffer from `skinned_record_base()`. The
         // `encode_skin` compute pass (Cull graph arm) has already posed the deformed
         // buffer. Otherwise the legacy per-draw skinned pass runs (custom-shader
@@ -573,7 +573,7 @@ impl VkContext {
                         &[],
                     );
                     // Bind the deformed verts (base_vertex = 0, global skinned
-                    // indexing) + the skinned u16 IB.
+                    // indexing) + the skinned IB.
                     device.cmd_bind_vertex_buffers(
                         cmd,
                         0,
@@ -584,7 +584,7 @@ impl VkContext {
                         cmd,
                         self.skinned.index_buffer.buffer(),
                         0,
-                        vk::IndexType::UINT16,
+                        vk::IndexType::UINT32,
                     );
                     // Indirect draw #2: the skinned tail
                     // `[skinned_record_base(), cull_count())`, byte-offset into the
@@ -624,7 +624,7 @@ impl VkContext {
                     &[],
                 );
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
-                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT16);
+                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
             }
             for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
                 if !obj.visible {
@@ -842,7 +842,7 @@ impl VkContext {
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
-                    vk::IndexType::UINT16,
+                    vk::IndexType::UINT32,
                 );
                 device.cmd_draw_indexed_indirect(
                     cmd,

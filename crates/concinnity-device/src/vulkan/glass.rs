@@ -178,7 +178,7 @@ fn compile_glass_rt_shaders(
 
 // The glass RT descriptor set (set 3): RtParams UBO (0), scene TLAS (1), the
 // per-instance geometry table (2), the shared static verts (3) + u32 indices (4),
-// and the deformed skinned verts (5) + u16 skinned indices (6). Mirrors
+// and the deformed skinned verts (5) + skinned indices (6). Mirrors
 // `post::rt_reflections`'s set 0, minus the fullscreen pass's screen-space scene /
 // gbuffer / roughness inputs (glass traces off the pane surface point).
 fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {

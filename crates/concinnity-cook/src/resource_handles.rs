@@ -97,6 +97,13 @@ impl ResourceAssetCompile for ResourceAssetType {
                 {
                     files.extend(crate::gltf_source::referenced_files(&src));
                 }
+                // A character model reads its source file.
+                if let Some(arg) = args.get("character_model").and_then(|v| {
+                    serde_json::from_value::<crate::character::import::CharacterModelArg>(v.clone())
+                        .ok()
+                }) {
+                    files.extend(arg.source_files());
+                }
                 files
             }
             // A Font keys its TTF source under `path`, not `source`.
@@ -159,15 +166,16 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
         })?,
         None => Vec::new(),
     };
-    let lod_levels = mesh.lod_levels.clamp(1, 8);
     crate::geometry::compile_skinned_mesh_payload_with_lods(
         &mesh.vertices,
         &mesh.indices,
         &skeleton,
         &mesh.morph_target_names,
         &mesh.morph_deltas,
-        lod_levels,
-        &mesh.lod_distances,
+        &crate::geometry::SkinnedLods {
+            levels: mesh.lod_levels,
+            distances: &mesh.lod_distances,
+        },
     )
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }

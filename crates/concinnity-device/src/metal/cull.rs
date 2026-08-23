@@ -446,7 +446,7 @@ impl MtlContext {
             args.extend_from_slice(&self.instanced.draw_args);
         }
         // Skinned draw args: one per skinned object, the active-LOD
-        // slice into the skinned u16 index buffer with base_vertex 0 (the
+        // slice into the skinned index buffer with base_vertex 0 (the
         // deformed buffer mirrors global skinned indexing). Cullable + gated on
         // obj.visible; rebuilt every frame (pose-driven LOD + visibility). The
         // cull kernel routes records at/after `skinned_record_base()` through the
@@ -665,7 +665,7 @@ impl MtlContext {
         // unconditionally; the main cull's status is read by phase 2 under
         // two-pass occlusion, the mirror cull's shared scratch is never read.
         enc.set_buffer(status, 0, 5);
-        // Skinned u16 index buffer at buffer(6): the kernel bakes it into the
+        // Skinned index buffer at buffer(6): the kernel bakes it into the
         // indirect command for records at/after `skinned_base`. Bound
         // unconditionally (Metal requires a buffer the kernel references to be
         // bound even under a never-taken branch); the static index buffer is a
@@ -781,7 +781,7 @@ impl MtlContext {
         enc.set_buffer(&self.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         enc.set_buffer(status, 0, 5);
-        // Skinned u16 index buffer at buffer(6); see encode_cull. Phase 2
+        // Skinned index buffer at buffer(6); see encode_cull. Phase 2
         // of two-pass occlusion re-tests the same records, so the skinned
         // tail is handled here too.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
@@ -866,7 +866,7 @@ impl MtlContext {
         enc.set_buffer(draw_args_buffer, 0, 1);
         enc.set_buffer(&self.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
-        // Skinned u16 index buffer at buffer(6); the kernel bakes it into the
+        // Skinned index buffer at buffer(6); the kernel bakes it into the
         // skinned-tail commands exactly like the main cull.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
         // The kernel writes draw commands into the shadow ICB through the

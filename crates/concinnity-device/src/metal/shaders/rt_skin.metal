@@ -7,7 +7,7 @@ using namespace metal;
 // palette and writes posed (model-space) plain `Vertex`s into a shared deformed
 // buffer, which the RT acceleration-structure build then traces. One dispatch
 // per skinned object over its vertex range; the deformed buffer mirrors the
-// skinned vertex buffer's indexing so the existing (u16) skinned index buffer
+// skinned vertex buffer's indexing so the existing skinned index buffer
 // addresses it directly.
 
 // Matches gfx::mesh_payload::SkinnedVertex (repr(C), 80-byte stride). Packed
@@ -32,12 +32,20 @@ struct VtxOut {
     packed_float2 uv;       // 48  (..56)
 };
 
-// Matches gfx::mesh_payload::MorphDelta (repr(C), 24-byte stride): a
-// bind-space position + normal offset, scaled by the target's weight.
-struct MorphDelta {
-    packed_float3 position; // 0
-    packed_float3 normal;   // 12 (..24)
+// Matches gfx::mesh_payload::MorphEntry (repr(C), 28-byte stride): one sparse
+// morph delta naming its target, a bind-space position + normal offset scaled
+// by that target's weight.
+struct MorphEntry {
+    uint          target;   // 0
+    packed_float3 position; // 4
+    packed_float3 normal;   // 16 (..28)
 };
+
+// The packed morph buffer (PayloadMorphs::packed_words): `vertex_count + 1`
+// uint entry offsets, then the MorphEntry list at a 16-byte-aligned word.
+inline uint morph_entry_word_base(uint vertex_count) {
+    return (vertex_count + 1u + 3u) & ~3u;
+}
 
 // buffer(3): which slice of the shared buffers this dispatch deforms.
 struct SkinParams {
@@ -52,7 +60,7 @@ kernel void rt_skin(
     device VtxOut*             dst     [[buffer(1)]],
     constant float4x4*         palette [[buffer(2)]],
     constant SkinParams&       p       [[buffer(3)]],
-    device const MorphDelta*   deltas  [[buffer(4)]],
+    device const uint*         morphs  [[buffer(4)]],
     constant float*            mweights [[buffer(5)]],
     uint                       gid     [[thread_position_in_grid]]
 ) {
@@ -60,16 +68,22 @@ kernel void rt_skin(
     uint idx = p.vertex_base + gid;
     SkinnedVtxIn v = src[idx];
 
-    // Morph deltas apply in bind space, before the skin matrix; the deltas
-    // buffer is target-major and indexed by this object's LOCAL vertex index.
+    // Morph deltas apply in bind space, before the skin matrix. The sparse
+    // buffer is vertex-major: this thread walks only the entries that touch
+    // its own LOCAL vertex index.
     float3 pos = float3(v.pos);
     float3 nrm = float3(v.normal);
-    for (uint t = 0; t < p.target_count; ++t) {
-        float w = mweights[t];
-        if (fabs(w) < 1e-5) continue;
-        MorphDelta d = deltas[t * p.vertex_count + gid];
-        pos += w * float3(d.position);
-        nrm += w * float3(d.normal);
+    if (p.target_count != 0u) {
+        uint first = morphs[gid];
+        uint end   = morphs[gid + 1u];
+        device const MorphEntry* entries =
+            (device const MorphEntry*)(morphs + morph_entry_word_base(p.vertex_count));
+        for (uint e = first; e < end; ++e) {
+            MorphEntry d = entries[e];
+            float w = mweights[d.target];
+            pos += w * float3(d.position);
+            nrm += w * float3(d.normal);
+        }
     }
     nrm = normalize(nrm);
 

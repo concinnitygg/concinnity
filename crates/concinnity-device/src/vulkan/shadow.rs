@@ -251,7 +251,7 @@ impl VkContext {
                 self.inc_draw_calls(1);
             }
 
-            // Skinned tail against the deformed VB + skinned u16 IB.
+            // Skinned tail against the deformed VB + skinned IB.
             if self.draw.n_skinned > 0
                 && let Some(deformed) = self.skinned.deformed.get(frame_idx)
             {
@@ -265,7 +265,7 @@ impl VkContext {
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
-                    vk::IndexType::UINT16,
+                    vk::IndexType::UINT32,
                 );
                 device.cmd_draw_indexed_indirect(
                     cmd,
@@ -506,7 +506,7 @@ impl VkContext {
                     &[],
                 );
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
-                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT16);
+                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
                 for (i, obj) in self.skinned.draw_objects.iter().enumerate() {
                     if !obj.visible {
                         continue;

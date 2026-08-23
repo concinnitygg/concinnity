@@ -14,6 +14,7 @@ pub use concinnity_world::world::{
 
 pub(crate) mod application;
 pub(crate) mod camera_shot;
+pub(crate) mod character_model;
 pub(crate) mod companion;
 pub(crate) mod companion_specs;
 pub(crate) mod defaults;

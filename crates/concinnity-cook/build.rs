@@ -17,11 +17,11 @@ use std::path::PathBuf;
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let hash = concinnity_toolchain::hash_sources(&[manifest.join("src")]);
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("compile_source_hash.rs");
+    let hash = concinnity_toolchain::hash_sources(&[manifest.join("src")]);
     std::fs::write(
-        &out,
+        out.join("compile_source_hash.rs"),
         format!("const COMPILE_SOURCE_HASH: u32 = {hash:#010x};\n"),
     )
     .expect("write compile_source_hash.rs");

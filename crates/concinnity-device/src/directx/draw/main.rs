@@ -617,7 +617,7 @@ impl DxContext {
         // Skinned meshes main pass. When the GPU-driven bindless fold is active,
         // skinned objects ride the same cull buffers as static + instances and are
         // drawn (as rigid deformed geometry) by a 2nd `ExecuteIndirect` over this
-        // frame's deformed-vertex buffer + the skinned u16 index buffer, reading
+        // frame's deformed-vertex buffer + the skinned index buffer, reading
         // the cull-written indirect buffer from `skinned_record_base()`. The
         // `encode_skin` compute pass (Cull graph arm) has already posed the
         // deformed buffer and left it in VERTEX_AND_CONSTANT_BUFFER. Otherwise the
@@ -642,7 +642,7 @@ impl DxContext {
                     cmd.IASetPrimitiveTopology(
                         windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
                     );
-                    // Bind the deformed verts + skinned u16 IB; the records carry
+                    // Bind the deformed verts + skinned IB; the records carry
                     // base_vertex = 0 (the deformed buffer mirrors global skinned
                     // indexing) and index offsets into the skinned IB.
                     cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));

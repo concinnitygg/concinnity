@@ -61,6 +61,8 @@ pub(crate) mod audio_clip;
 pub(crate) mod bcn;
 pub mod blob;
 pub mod cache;
+pub mod character;
+pub(crate) mod character_shape;
 pub mod check;
 pub mod color_lut;
 pub mod cubemap;

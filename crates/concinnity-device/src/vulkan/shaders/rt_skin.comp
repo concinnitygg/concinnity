@@ -6,7 +6,7 @@
 // per-object joint palette and writes posed (model-space) plain `Vertex`s into
 // a shared deformed buffer, which the RT acceleration-structure build then
 // traces. One dispatch per skinned object over its vertex range; the deformed
-// buffer mirrors the skinned vertex buffer's indexing so the existing (u16)
+// buffer mirrors the skinned vertex buffer's indexing so the existing
 // skinned index buffer addresses it directly. Ports directx/shaders/rt_skin.hlsl
 // / metal/shaders/rt_skin.metal.
 
@@ -25,10 +25,12 @@ layout(set = 0, binding = 1, std430) readonly buffer Palette { mat4 joints[]; } 
 // (gfx::mesh_payload::Vertex): pos@0, normal@12, tangent@24, color@36, uv@48.
 // 56 bytes = 14 floats per vertex.
 layout(set = 0, binding = 2, std430) writeonly buffer DstVerts { float dst[]; };
-// Dense target-major morph deltas (gfx::mesh_payload::MorphDelta, 24 B: position@0,
-// normal@12), indexed by this object's local vertex index. 24 B = 6 floats per
-// delta. Dummy-bound (target_count == 0) when the object has no morph targets.
-layout(set = 0, binding = 3, std430) readonly buffer MorphDeltas { float deltas[]; };
+// Packed sparse morph buffer (PayloadMorphs::packed_words): `vertex_count + 1`
+// uint entry offsets, then at a 16-byte-aligned word the 28-byte
+// gfx::mesh_payload::MorphEntry list (uint target@0, position@4, normal@16 =
+// 7 words each). Vertex-major: offsets[v]..offsets[v+1] are the entries that
+// move local vertex v. Dummy-bound (target_count == 0) without morph targets.
+layout(set = 0, binding = 3, std430) readonly buffer MorphData { uint morphs[]; };
 // One f32 morph weight per target. Dummy-bound when target_count == 0.
 layout(set = 0, binding = 4, std430) readonly buffer MorphWeights { float weights[]; };
 
@@ -44,11 +46,21 @@ layout(push_constant) uniform SkinParams {
 // Words per vertex in each buffer (SkinnedVertex = 80 B / 4, Vertex = 56 B / 4).
 const uint SKINNED_WORDS = 20u;
 const uint VERTEX_WORDS  = 14u;
-// Floats per morph delta (24 B / 4).
-const uint MORPH_WORDS   = 6u;
+// Words per morph entry (28 B / 4).
+const uint MORPH_WORDS   = 7u;
 
 vec3 src_vec3(uint base, uint w) {
     return vec3(src[base + w], src[base + w + 1u], src[base + w + 2u]);
+}
+
+vec3 morph_vec3(uint base) {
+    return vec3(uintBitsToFloat(morphs[base]), uintBitsToFloat(morphs[base + 1u]),
+                uintBitsToFloat(morphs[base + 2u]));
+}
+
+// First word of the entry list: the offsets table rounded up to 16 bytes.
+uint morph_entry_word_base(uint vertex_count) {
+    return (vertex_count + 1u + 3u) & ~3u;
 }
 
 void main() {
@@ -63,14 +75,19 @@ void main() {
     vec3 color   = src_vec3(sbase, 9u);
     vec2 uv      = vec2(src[sbase + 12u], src[sbase + 13u]);
 
-    // Morph deltas apply in bind space, before the skin matrix; the deltas
-    // buffer is target-major and indexed by this object's LOCAL vertex index.
-    for (uint t = 0u; t < pc.target_count; ++t) {
-        float w = weights[t];
-        if (abs(w) < 1e-5) continue;
-        uint dbase = (t * pc.vertex_count + gid) * MORPH_WORDS;
-        pos    += w * vec3(deltas[dbase + 0u], deltas[dbase + 1u], deltas[dbase + 2u]);
-        normal += w * vec3(deltas[dbase + 3u], deltas[dbase + 4u], deltas[dbase + 5u]);
+    // Morph deltas apply in bind space, before the skin matrix. The sparse
+    // buffer is vertex-major: walk only the entries touching this object's
+    // LOCAL vertex index.
+    if (pc.target_count != 0u) {
+        uint first = morphs[gid];
+        uint end   = morphs[gid + 1u];
+        uint ebase = morph_entry_word_base(pc.vertex_count);
+        for (uint e = first; e < end; ++e) {
+            uint dbase = ebase + e * MORPH_WORDS;
+            float w = weights[morphs[dbase]];
+            pos    += w * morph_vec3(dbase + 1u);
+            normal += w * morph_vec3(dbase + 4u);
+        }
     }
     normal = normalize(normal);
 

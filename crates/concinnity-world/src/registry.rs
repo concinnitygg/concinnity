@@ -415,9 +415,47 @@ pub fn asset_line<T: Authored>(name: &str, value: &T) -> std::io::Result<String>
     Ok(out)
 }
 
+/// Write a reference into an already-serialized asset line: `field` is set to
+/// the asset name `target`, the form the compile resolves to a handle. A
+/// typed authored value cannot carry the name itself (a reference field holds
+/// the resolved handle), so a builder names it after the fact.
+pub fn set_reference(line: &str, field: &str, target: &str) -> std::io::Result<String> {
+    let bad = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
+    let mut value: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| bad(format!("asset line: {e}")))?;
+    value
+        .get_mut("args")
+        .and_then(|args| args.as_object_mut())
+        .ok_or_else(|| bad(format!("asset line has no args to hold '{field}'")))?
+        .insert(
+            field.to_string(),
+            serde_json::Value::String(target.to_string()),
+        );
+    let mut out = serde_json::to_string(&value).map_err(|e| bad(e.to_string()))?;
+    out.push('\n');
+    Ok(out)
+}
+
 #[cfg(test)]
 mod authored_tests {
     use super::*;
+
+    #[test]
+    fn set_reference_names_a_field_the_typed_value_cannot_carry() {
+        let line = asset_line("hero_shape", &crate::assets::CharacterShape::default())
+            .expect("serializes");
+        let patched = set_reference(&line, "target", "hero").expect("patched");
+        assert!(patched.ends_with('\n'));
+        let value: serde_json::Value = serde_json::from_str(&patched).expect("parses");
+        assert_eq!(value["args"]["target"], "hero");
+        assert_eq!(value["name"], "hero_shape");
+        assert_eq!(value["type"], "CharacterShape");
+        // A line that is not an asset declaration is refused, not mangled.
+        let err = set_reference("7", "target", "hero").expect_err("not an asset line");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let err = set_reference(r#"{"name":"x"}"#, "target", "hero").expect_err("no args");
+        assert!(err.to_string().contains("no args"), "{err}");
+    }
 
     // The three shapes the generation has to cover: an args-schema override, a
     // pass-through component, and a resource asset.

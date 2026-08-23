@@ -151,9 +151,6 @@ pub fn build_sprite_calls_into(
         let border = (s.border_width * scale).min(w / 2.0).min(h / 2.0);
         let (mut vertices, mut indices) = out.geometry();
         if border > 0.5 && s.border_color[3] > 0.0 {
-            // Border stroke: an outer rounded rect in the border colour, with the
-            // tinted fill inset by the stroke width drawn on top so a ring of the
-            // border colour is left showing around it.
             let [br, bg, bb, ba] = s.border_color;
             let border_v = |x: f32, y: f32, alpha: f32| TextVertex {
                 pos: [x, y],
@@ -161,22 +158,39 @@ pub fn build_sprite_calls_into(
                 color: [br, bg, bb],
                 mode: 0.0,
             };
-            rect_geometry(
-                &mut vertices,
-                &mut indices,
-                [x0, y0, x1, y1],
-                radius,
-                ba,
-                border_v,
-            );
-            rect_geometry(
-                &mut vertices,
-                &mut indices,
-                [x0 + border, y0 + border, x1 - border, y1 - border],
-                (radius - border).max(0.0),
-                a,
-                v,
-            );
+            if a <= 0.0 {
+                // A transparent fill cannot cover an outer quad (blending
+                // leaves the border colour showing through), so an outline
+                // is four edge strips with nothing inside.
+                ring_geometry(
+                    &mut vertices,
+                    &mut indices,
+                    [x0, y0, x1, y1],
+                    border,
+                    ba,
+                    border_v,
+                );
+            } else {
+                // Border stroke: an outer rounded rect in the border colour,
+                // with the tinted fill inset by the stroke width drawn on top
+                // so a ring of the border colour is left showing around it.
+                rect_geometry(
+                    &mut vertices,
+                    &mut indices,
+                    [x0, y0, x1, y1],
+                    radius,
+                    ba,
+                    border_v,
+                );
+                rect_geometry(
+                    &mut vertices,
+                    &mut indices,
+                    [x0 + border, y0 + border, x1 - border, y1 - border],
+                    (radius - border).max(0.0),
+                    a,
+                    v,
+                );
+            }
         } else {
             rect_geometry(&mut vertices, &mut indices, [x0, y0, x1, y1], radius, a, v);
         }
@@ -216,6 +230,29 @@ fn rect_geometry(
             v(x0, y1, alpha),
         ]);
         indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
+    }
+}
+
+// Append a hollow rectangle as four edge strips `width` wide inside `rect`
+// (`[x0, y0, x1, y1]`): the top and bottom span the full width, the sides
+// fill the gap between them.
+fn ring_geometry(
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u16>,
+    rect: [f32; 4],
+    width: f32,
+    alpha: f32,
+    mut v: impl FnMut(f32, f32, f32) -> TextVertex,
+) {
+    let [x0, y0, x1, y1] = rect;
+    let strips = [
+        [x0, y0, x1, y0 + width],
+        [x0, y1 - width, x1, y1],
+        [x0, y0 + width, x0 + width, y1 - width],
+        [x1 - width, y0 + width, x1, y1 - width],
+    ];
+    for strip in strips {
+        rect_geometry(vertices, indices, strip, 0.0, alpha, &mut v);
     }
 }
 
@@ -381,8 +418,49 @@ mod tests {
             &no_layers(),
         );
         assert_eq!(calls.len(), 1, "the border ring draws");
-        // Border stroke geometry: the outer border rect plus the inset fill.
-        assert!(calls[0].vertices.len() > 4);
+        // Four edge strips, every vertex in the border colour at full alpha:
+        // nothing is drawn inside the ring, so the object shows through.
+        let verts = &calls[0].vertices;
+        assert_eq!(verts.len(), 16);
+        assert!(
+            verts
+                .iter()
+                .all(|v| v.color == [0.2, 0.4, 0.9] && v.uv == [-1.0, 1.0])
+        );
+        let inside = |x: f32, y: f32| {
+            calls[0].indices.chunks(3).any(|t| {
+                let p: Vec<[f32; 2]> = t.iter().map(|&i| verts[i as usize].pos).collect();
+                point_in_triangle([x, y], p[0], p[1], p[2])
+            })
+        };
+        assert!(inside(50.0, 1.0), "the top strip covers the edge");
+        assert!(inside(1.0, 25.0), "the left strip covers the edge");
+        assert!(!inside(50.0, 25.0), "the interior is empty");
+
+        // An opaque fill keeps the inset-fill stroke (rounded borders rely
+        // on it).
+        let mut panel = sprite(0.0, 0.0, 100.0, 50.0, [0.1, 0.1, 0.1, 1.0]);
+        panel.border_width = 2.0;
+        panel.border_color = [0.2, 0.4, 0.9, 1.0];
+        let calls = build_sprite_calls(
+            std::slice::from_ref(&panel),
+            Some(0),
+            &no_slots(),
+            [0.0, 0.0],
+            &no_clips(),
+            &no_layers(),
+        );
+        assert_eq!(calls[0].vertices.len(), 8);
+    }
+
+    fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
+        let sign = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+            (p[0] - r[0]) * (q[1] - r[1]) - (q[0] - r[0]) * (p[1] - r[1])
+        };
+        let (d1, d2, d3) = (sign(p, a, b), sign(p, b, c), sign(p, c, a));
+        let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+        let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+        !(neg && pos)
     }
 
     #[test]

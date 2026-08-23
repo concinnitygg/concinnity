@@ -154,6 +154,7 @@ impl EditorHook {
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;
+        self.shape_drag = None;
         self.content_drag = None;
         self.create_menu = None;
         // The Lighting panel's text controls hold committed values; re-seed so

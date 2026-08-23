@@ -722,7 +722,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         fn upload_skinned(
             &mut self,
             _: &[crate::gfx::mesh_payload::SkinnedVertex],
-            _: &[u16],
+            _: &[u32],
             _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
             _: &[u8],
             _: &[u8],
@@ -837,7 +837,7 @@ struct RecordingBackend {
     lod_counts: std::collections::HashMap<usize, Vec<usize>>,
     // Layouts `rebuild_skinned_geometry` hands back on success, stored as
     // (skinned_index, vertex_base, vertex_count, index_count).
-    skinned_layouts: Vec<(usize, u16, usize, usize)>,
+    skinned_layouts: Vec<(usize, u32, usize, usize)>,
     fail_texture_updates: bool,
     fail_lut_updates: bool,
     fail_mesh_updates: bool,
@@ -874,7 +874,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn upload_skinned(
         &mut self,
         _: &[crate::gfx::mesh_payload::SkinnedVertex],
-        _: &[u16],
+        _: &[u32],
         _: Vec<crate::gfx::render_types::SkinnedDrawObject>,
         _: &[u8],
         _: &[u8],
@@ -972,7 +972,7 @@ impl crate::gfx::backend::RenderBackend for RecordingBackend {
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
-        _: u16,
+        _: u32,
         _: &[crate::gfx::mesh_payload::SkinnedVertex],
         _: &[u16],
     ) -> Result<(), String> {

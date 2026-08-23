@@ -66,7 +66,7 @@ fn compile_rt_shaders(hot_reload: bool) -> Result<RtShaders, String> {
 // ray tracing supports for the acceleration structure too); five descriptor tables
 // for the textures: scene t4, gbuffer normal+depth t5, roughness t6, prefilter cube
 // t7, and the unbounded bindless pool at (t0, space1); and two more root SRVs t8/t9
-// (deformed skinned verts / u16 skinned indices, for skinned hits). Three static
+// (deformed skinned verts / skinned indices, for skinned hits). Three static
 // samplers: linear-clamp s0, cube linear-clamp s1, linear-repeat s2.
 fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
     let table_range = |reg: u32| D3D12_DESCRIPTOR_RANGE {
@@ -143,7 +143,7 @@ fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature
         table(&cube_range),       // [8] t7 prefilter cube
         table(&pool_range),       // [9] t0,space1 bindless pool
         root_srv(8),              // [10] t8 deformed skinned verts (raw)
-        root_srv(9),              // [11] t9 skinned u16 indices (raw)
+        root_srv(9),              // [11] t9 skinned indices (raw)
         table(&probe_cube_range), // [12] t10.. reflection-probe cube array
         root_cbv(4),              // [13] b4 ProbeSet
     ];
@@ -550,7 +550,7 @@ impl DxContext {
                 );
             }
             // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
-            // the u16 skinned index buffer the trace fetches a skinned hit from.
+            // the skinned index buffer the trace fetches a skinned hit from.
             // Both return a valid 1-element dummy GVA when there is no skinned
             // geometry, so the binding is always live.
             cmd.SetGraphicsRootShaderResourceView(10, accel.deformed_verts_gva());

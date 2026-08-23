@@ -210,7 +210,7 @@ impl MtlContext {
         // which trace a reflection ray. These share one argument layout, so bind
         // the inputs once here (the non-RT glass / water pipelines ignore these
         // otherwise-free fragment slots): RT params @0, the shared scene geometry
-        // @1..3, the TLAS @4, the skinned deformed-vertex / u16 index buffers
+        // @1..3, the TLAS @4, the skinned deformed-vertex / index buffers
         // @8..9, and -- in a bindless world -- the bindless texture pool @10 for
         // the textured variants (the main pass's pool index 7 is the ProbeSet
         // here). The TLAS references each BLAS indirectly, so the BLASes are not

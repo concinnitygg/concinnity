@@ -220,7 +220,7 @@ impl VkContext {
         }
 
         // Skinned objects: one record each in the reserved tail. The main pass's
-        // 2nd indirect draw binds the per-frame deformed VB + the skinned u16 IB,
+        // 2nd indirect draw binds the per-frame deformed VB + the skinned IB,
         // so `base_vertex = 0` (the deformed buffer mirrors global skinned indexing)
         // and the active-LOD slice is the element offset into the skinned IB.
         // Skinned objects carry a finite padded bind-pose AABB (`pack_skinned_record`),

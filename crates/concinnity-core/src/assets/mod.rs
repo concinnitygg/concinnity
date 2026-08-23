@@ -91,6 +91,7 @@ pub use concinnity_asset::AudioBus;
 pub use concinnity_asset::AudioClip;
 pub use concinnity_asset::BlockType;
 pub use concinnity_asset::CameraShot;
+pub use concinnity_asset::CharacterModel;
 pub use concinnity_asset::ColorLut;
 pub use concinnity_asset::CubemapTexture;
 pub use concinnity_asset::Decal;
@@ -148,6 +149,11 @@ pub use concinnity_asset::{Camera3DArgs, CameraController, FollowController, Fol
 pub use concinnity_asset::{
     CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
 };
+pub use concinnity_asset::{
+    CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
+    SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
+};
+pub use concinnity_asset::{CharacterShape, JointProportion, ResolvedSliders, ShapeSlider};
 pub use concinnity_asset::{FileArgs, FileKind};
 pub use concinnity_asset::{InstanceTransform, InstancedProp};
 pub use concinnity_asset::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
@@ -281,6 +287,9 @@ mod tests {
         exercise::<WaterSurface>();
         // More data-only components sharing the same shape.
         exercise::<Decal>();
+        exercise::<CharacterShape>();
+        exercise::<CharacterSchema>();
+        exercise::<CharacterModel>();
         exercise::<ParticleEmitter>();
         exercise::<VoxelWorld>();
         exercise::<VoxelChunk>();

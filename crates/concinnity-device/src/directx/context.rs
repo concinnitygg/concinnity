@@ -208,7 +208,8 @@ pub(super) struct SkinnedState {
     pub deformed_buffers: Vec<ID3D12Resource>,
     pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
     // Morph targets, parallel to `draw_objects`. `morph_delta_buffers[i]` is the
-    // per-mesh dense target-major `MorphDelta` buffer (instance copies share the
+    // per-mesh packed sparse morph buffer (`PayloadMorphs::packed_words`;
+    // instance copies share the
     // template's resource) or `None` for a mesh without morph targets;
     // `morph_target_counts[i]` is its target count (0 = none). `morph_weights[i]`
     // is the object's current weights (empty without morphs), rewritten by

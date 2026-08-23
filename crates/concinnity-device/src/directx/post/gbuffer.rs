@@ -1256,7 +1256,7 @@ impl DxContext {
         ));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
-        // deformed VB (slot 1) + the skinned u16 IB, then one `ExecuteIndirect`
+        // deformed VB (slot 1) + the skinned IB, then one `ExecuteIndirect`
         // over `[skinned_record_base(), cull_count())`. The records carry
         // base_vertex = 0 (global skinned indexing). When velocity is inactive the
         // previous deformed VB is the current one, so prev_pos == cur_pos and the

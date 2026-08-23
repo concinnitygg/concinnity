@@ -38,6 +38,7 @@ pub(crate) enum PanelKey {
     Behavior,
     Variables,
     Content,
+    CharacterShape,
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
@@ -46,7 +47,7 @@ pub(crate) enum PanelKey {
     Palette,
 }
 
-pub(crate) const PANEL_COUNT: usize = 15;
+pub(crate) const PANEL_COUNT: usize = 16;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -63,6 +64,7 @@ impl PanelKey {
         PanelKey::Behavior,
         PanelKey::Variables,
         PanelKey::Content,
+        PanelKey::CharacterShape,
         PanelKey::TemplateDetail,
         PanelKey::Palette,
     ];
@@ -105,6 +107,7 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // 0x6000 and 0x7000 belong to the create and Display menus
             // (allocated in their own modules).
             PanelKey::Palette => 0x8000,
+            PanelKey::CharacterShape => 0x9000,
         }
 }
 
@@ -206,6 +209,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::BehaviorPanel,
     &panels::VariablesPanel,
     &panels::ContentPanel,
+    &panels::CharacterShapePanel,
     &panels::TemplateDetailPanel,
     &panels::PalettePanel,
 ];
@@ -322,7 +326,8 @@ mod tests {
                 "Console",
                 "Behavior",
                 "Variables",
-                "Content"
+                "Content",
+                "Character Shape"
             ]
         );
     }

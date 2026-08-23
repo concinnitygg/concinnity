@@ -90,6 +90,18 @@ impl Default for SkeletonJoint {
 /// and (for glTF) any morph targets; animations are imported separately by
 /// [Animation](#animation) assets referencing the same file.
 ///
+/// The `customize_character` example ships a neutral unclothed body
+/// (`base_humanoid.glb`, about 19k vertices, A-pose bind) with a 25-joint
+/// skeleton (`root`, `hips`, `spine`, `chest`,
+/// `upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
+/// `hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
+/// suffix), the morph targets a [CharacterShape](#charactershape) slider set
+/// names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
+/// `belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
+/// `chin+/-`), and a rotation-only `idle` clip an Animation can import from
+/// the same file; a [CharacterModel](#charactermodel) is the usual way to
+/// declare it.
+///
 /// The `skeleton` (joint hierarchy and bind pose) is provided as an arg
 /// (authored inline alongside `vertices`/`indices`, or filled in from the
 /// imported `.glb`) and is baked into the mesh at build time.
@@ -110,9 +122,9 @@ pub struct SkinnedMesh {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
-    /// Optional path to a `.glb` file. When set, the build imports
-    /// `vertices` / `indices` / `skeleton` from it; an inline-authored mesh
-    /// leaves this empty.
+    /// Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the
+    /// build imports `vertices` / `indices` / `skeleton` from it; an
+    /// inline-authored mesh leaves this empty.
     pub source: String,
     /// Which skinned mesh of `source` to import, in file declaration order
     /// (default 0). A character split into several meshes bound to one

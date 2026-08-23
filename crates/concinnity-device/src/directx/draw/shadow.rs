@@ -247,7 +247,7 @@ impl DxContext {
         }
 
         // Skinned tail: a second `ExecuteIndirect` per cascade over the deformed
-        // VB + skinned u16 IB, reading each cascade region from `skinned_record_base()`
+        // VB + skinned IB, reading each cascade region from `skinned_record_base()`
         // on. No depth clear -- appends to the static depth via the LESS test.
         if self.draw.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)

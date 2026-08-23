@@ -228,6 +228,11 @@ impl EditorHook {
                 }
                 self.clamp_tree_scroll(world);
             }
+            PanelAction::RowExport => {
+                if let Some(name) = self.row_menu.take() {
+                    self.console_export(Some(&name), false);
+                }
+            }
             PanelAction::CloseOverlays => {
                 self.picker_open = false;
                 self.row_menu = None;

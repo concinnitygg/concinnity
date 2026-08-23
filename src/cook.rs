@@ -36,6 +36,19 @@
 //! }
 //! ```
 //!
+//! A field that references another asset holds a resolved handle rather than
+//! a name, so the name is given alongside the value with
+//! [`reference`](WorldBuilder::reference):
+//!
+//! ```no_run
+//! # use concinnity::assets::{Material, Prop};
+//! # use concinnity::cook;
+//! cook::world()
+//!     .add("stone", Material { roughness: 0.9, ..Default::default() })
+//!     .add("pillar", Prop::default())
+//!     .reference("material", "stone");
+//! ```
+//!
 //! Most assets are plain runtime components, so an asset needing no compile
 //! step can equally be added straight to a [`World`] with `add_component`.
 //! The cook is what a [`RoomArgs`](crate::assets::RoomArgs) needs: its
@@ -62,7 +75,7 @@ use concinnity_cook::{build_compiled, check::report_validation_errors, prepare_w
 use concinnity_engine::blob::BlobData;
 use concinnity_engine::ecs::{ComponentAsset, World};
 
-use concinnity_world::registry::asset_line;
+use concinnity_world::registry::{asset_line, set_reference};
 
 pub use concinnity_world::registry::Authored;
 
@@ -95,6 +108,44 @@ impl WorldBuilder {
                 self.lines.push(line);
                 self.declared.push((name, T::TYPE));
             }
+            Err(e) => {
+                self.error.get_or_insert(e);
+            }
+        }
+        self
+    }
+
+    /// Point a reference field of the asset just added at `target`, by name.
+    ///
+    /// A reference on an authored struct holds a resolved handle (a dense
+    /// index the compile assigns in declaration order), so the typed value
+    /// cannot carry the name it points at. This writes the name into the
+    /// pending declaration, where the compile resolves it exactly as it
+    /// resolves the same reference in a `world.jsonl`.
+    ///
+    /// ```no_run
+    /// # use concinnity::assets::{CharacterShape, ShapeSlider};
+    /// # use concinnity::cook;
+    /// cook::world()
+    ///     .add(
+    ///         "hero_shape",
+    ///         CharacterShape {
+    ///             sliders: vec![ShapeSlider { name: "weight".into(), value: 0.4 }],
+    ///             ..Default::default()
+    ///         },
+    ///     )
+    ///     .reference("target", "hero");
+    /// ```
+    pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
+        let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, msg);
+        let Some(line) = self.lines.pop() else {
+            self.error.get_or_insert(invalid(format!(
+                "reference(\"{field}\") before any asset was added"
+            )));
+            return self;
+        };
+        match set_reference(&line, field, &target.into()) {
+            Ok(patched) => self.lines.push(patched),
             Err(e) => {
                 self.error.get_or_insert(e);
             }
@@ -216,6 +267,57 @@ mod tests {
         // no authored scene.
         let world = world().compile().expect("an empty world compiles");
         assert!(world.query::<Camera3D>().next().is_none());
+    }
+
+    // A reference field holds a resolved handle, so the typed value cannot
+    // name what it points at; the builder names it and the compile resolves
+    // it exactly as it resolves a world.jsonl reference.
+    #[test]
+    fn a_named_reference_resolves_to_its_handle() {
+        use concinnity_engine::assets::{Material, ProceduralMesh, Prop};
+
+        let world = world()
+            .add(
+                "floor_mat",
+                Material {
+                    roughness: 0.8,
+                    ..Default::default()
+                },
+            )
+            .add(
+                "floor_mesh",
+                ProceduralMesh {
+                    generator: "plane".into(),
+                    half_width: 4.0,
+                    half_depth: 4.0,
+                    ..Default::default()
+                },
+            )
+            .add("floor", Prop::default())
+            .reference("mesh", "floor_mesh")
+            .reference("material", "floor_mat")
+            .compile()
+            .expect("a named reference compiles");
+
+        let prop = world
+            .query::<Prop>()
+            .next()
+            .expect("the prop compiled into a component");
+        // The handle types are not part of the public surface (a reference
+        // is only ever named), so compare the resolved indices.
+        assert_eq!(prop.mesh.map(|h| h.index()), Some(0));
+        assert_eq!(prop.material.map(|h| h.index()), Some(0));
+    }
+
+    // Naming a reference with nothing to attach it to is the caller's
+    // mistake, surfaced at compile rather than silently dropped.
+    #[test]
+    fn a_reference_before_any_asset_is_a_compile_error() {
+        let err = world()
+            .reference("target", "hero")
+            .compile()
+            .expect_err("nothing to reference");
+        assert!(err.to_string().contains("before any asset"), "{err}");
     }
 
     // `declared` reports names and types in declaration order, which is what

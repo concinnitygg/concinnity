@@ -23,7 +23,7 @@ impl VkContext {
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        indices: &[u16],
+        indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         frag_bytes: &[u8],
     ) -> Result<(), String> {
@@ -110,7 +110,7 @@ impl VkContext {
         // whether or not the device is RT-capable.
         //
         // The IB's extra flags are genuinely RT-only: it is the skinned BLAS
-        // index input (device-addressed) and the hit shader's u16 index SSBO,
+        // index input (device-addressed) and the hit shader's index SSBO,
         // and nothing outside the RT path binds it as a buffer. Added whenever
         // the device is RT-capable (not only when RT is on at launch) so a later
         // live toggle finds the skinned IB already usable, mirroring how the
@@ -129,9 +129,8 @@ impl VkContext {
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        // Whole u32 words: the ray-traced hit path binds this as a storage
-        // buffer of packed index words, and its descriptor takes the buffer's
-        // whole size, so a range short of a word makes that load out of range.
+        // Never zero-length: the ray-traced hit path binds this as a storage
+        // buffer of index words and its descriptor takes the whole size.
         let skinned_ibuf = self.alloc.create_buffer(
             crate::gfx::rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
@@ -266,8 +265,14 @@ impl VkContext {
         // their descriptor sets, and set `self.draw.n_skinned` (which engages the fold so
         // `cull_count()` reserves the skinned tail). A build failure leaves it 0 and
         // the legacy skinned main pass runs. Mirrors the DirectX `upload_skinned`.
+        //
+        // The gate counts the objects being uploaded here: `cull_count()` reads
+        // `draw.n_skinned`, which only `build_main_skin` sets, so consulting it
+        // alone would leave a world whose only geometry is skinned on the legacy
+        // pass forever -- and that pass does not morph (rt_skin.comp is the only
+        // Vulkan shader that reads morph targets).
         if self.cull.bindless_pipeline.is_some()
-            && self.cull_count() > 0
+            && self.cull_count() + self.skinned.draw_objects.len() > 0
             && let Err(e) = self.build_main_skin(vertices.len())
         {
             tracing::warn!(
@@ -289,15 +294,14 @@ impl VkContext {
     // existing region (size-changing reloads route through
     // `rebuild_skinned_geometry`). `vertex_base` is the slot's vertex
     // offset *in vertices*; `indices` are mesh-relative and get rebased
-    // by `vertex_base` before being written into the shared IB. Skinned
-    // IBs stay `R16_UINT` so the rebased indices must fit in u16.
+    // by `vertex_base` before being written into the shared IB.
     // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
     // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
-        vertex_base: u16,
+        vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
     ) -> Result<(), String> {
@@ -341,18 +345,11 @@ impl VkContext {
                 v_buf_len
             ));
         }
-        let i_byte_off = (obj.index_offset * std::mem::size_of::<u16>()) as u64;
-        let rebased: Vec<u16> = indices
+        let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
+        let rebased: Vec<u32> = indices
             .iter()
-            .map(|&i| i.checked_add(vertex_base))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                format!(
-                    "update_skinned_mesh_geometry: index rebase by {} overflows u16 \
-                     (skinned slot {})",
-                    vertex_base, skinned_index
-                )
-            })?;
+            .map(|&i| u32::from(i) + vertex_base)
+            .collect();
 
         self.wait_idle();
 
@@ -465,9 +462,9 @@ impl VkContext {
         }
     }
 
-    // Attach morph-target delta buffers to the skinned draw objects. `morphs[i]`
-    // pairs with draw object `i`; instance copies share their template's `Arc`,
-    // so each unique delta set becomes one device buffer. Allocates the per-frame
+    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned
+    // draw objects. `morphs[i]` pairs with draw object `i`; instance copies share
+    // their template's `Arc`, so each unique entry set becomes one device buffer. Allocates the per-frame
     // weight buffers (one f32 per target per object) and re-points the main fold's
     // skin descriptor-set morph bindings when any object carries morphs. Called
     // once after `upload_skinned`. Mirrors the DirectX `upload_skinned_morphs`.
@@ -493,7 +490,8 @@ impl VkContext {
             let (buf, count) = match by_source.get(&key) {
                 Some(e) => *e,
                 None => {
-                    let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
+                    let words = data.packed_words();
+                    let bytes: &[u8] = bytemuck::cast_slice(&words);
                     let pooled = self.alloc.create_buffer(
                         bytes.len().max(4) as u64,
                         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,

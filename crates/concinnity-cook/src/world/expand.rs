@@ -4,6 +4,7 @@
 
 use super::application::apply_application;
 use super::camera_shot::expand_camera_shots;
+use super::character_model::expand_character_models;
 use super::companion::inject_companions;
 use super::defaults::inject_engine_defaults;
 use super::light_rig::expand_light_rigs;
@@ -170,6 +171,9 @@ pub(crate) fn expand_world(assets: &mut Vec<serde_json::Value>) -> Result<Expand
     // injection so their TextLabels pull in GraphicsConfig + Font companions.
     expand_stories(assets)?;
     expand_camera_shots(assets);
+    // Character models become the skinned meshes they emit, under their own
+    // names, so every later pass (companions, references) sees a SkinnedMesh.
+    expand_character_models(assets)?;
     expand_light_rigs(assets);
     expand_material_palettes(assets);
     expand_prefabs(assets, &authored, &mut report)?;

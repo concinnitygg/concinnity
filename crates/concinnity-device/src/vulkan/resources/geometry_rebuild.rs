@@ -306,27 +306,20 @@ impl VkContext {
         let old_i_bytes = self.skinned.index_buffer_bytes;
         let old_vertices: Vec<SkinnedVertex> =
             readback_typed(self, self.skinned.vertex_buffer.buffer(), old_v_bytes)?;
-        let old_indices: Vec<u16> =
+        let old_indices: Vec<u32> =
             readback_typed(self, self.skinned.index_buffer.buffer(), old_i_bytes)?;
 
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
-        let mut new_indices: Vec<u16> = Vec::new();
+        let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<SkinnedSlotLayout> =
             Vec::with_capacity(self.skinned.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
-        let mut new_per_slot: Vec<(usize, u16, usize, usize, usize)> =
+        let mut new_per_slot: Vec<(usize, u32, usize, usize, usize)> =
             Vec::with_capacity(self.skinned.draw_objects.len());
 
         for (skinned_index, obj) in self.skinned.draw_objects.iter().enumerate() {
-            let new_v_base_usize = new_vertices.len();
-            let new_v_base: u16 = u16::try_from(new_v_base_usize).map_err(|_| {
-                format!(
-                    "rebuild_skinned_geometry: post-rebuild vertex base {} for slot \
-                     {} overflows u16 (skinned IB is u16)",
-                    new_v_base_usize, skinned_index
-                )
-            })?;
+            let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
 
             if let Some(change) = change_map.remove(&skinned_index) {
@@ -334,14 +327,7 @@ impl VkContext {
                 let new_i_count = change.indices.len();
                 new_vertices.extend_from_slice(&change.vertices);
                 for &local in &change.indices {
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: index rebase by {} for slot \
-                             {} overflows u16",
-                            new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(u32::from(local) + new_v_base);
                 }
                 layouts.push(SkinnedSlotLayout {
                     skinned_index,
@@ -388,19 +374,11 @@ impl VkContext {
                 for &abs in &old_indices[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
                         format!(
-                            "rebuild_skinned_geometry: stale index {} below \
-                             vertex_base {} on slot {}",
-                            abs, old_base, skinned_index
+                            "rebuild_skinned_geometry: stale index {abs} below \
+                             vertex_base {old_base} on slot {skinned_index}"
                         )
                     })?;
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: rebasing index {} onto \
-                             vertex_base {} overflows u16 on slot {}",
-                            local, new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(local + new_v_base);
                 }
                 layouts.push(SkinnedSlotLayout {
                     skinned_index,

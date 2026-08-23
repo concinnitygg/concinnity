@@ -212,7 +212,7 @@ impl MtlContext {
     // main pass's two-range split (`execute_bindless_static_icb`): one indirect
     // draw for the static + instance prefix (static VB bound at 1, static u32 IB
     // resident), then one for the folded skinned tail (deformed VB rebound at 1,
-    // skinned u16 IB resident). The depth-only bindless shadow VS reads each
+    // skinned IB resident). The depth-only bindless shadow VS reads each
     // record's model from the object buffer at vbuf 9 by `[[base_instance]]`.
     // Returns the indirect-draw count (1 or 2).
     fn encode_shadow_cascade_indirect(
@@ -272,7 +272,7 @@ impl MtlContext {
             draw_calls += 1;
         }
 
-        // Folded skinned tail: deformed VB at binding 1, skinned u16 IB resident.
+        // Folded skinned tail: deformed VB at binding 1, skinned IB resident.
         if let (Some(deformed), Some(tail)) = (deformed_skinned, counts.skinned_tail(cascade_off)) {
             enc.set_vertex_buffer(deformed, 0, 1);
             if let Some(skinned_ib) = self.skinned.index_buffer.as_ref() {
@@ -424,7 +424,7 @@ impl MtlContext {
             let model_uniforms = ModelUniforms { model: obj.model };
             let d = crate::gfx::lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
-            let index_byte_offset = index_offset * std::mem::size_of::<u16>();
+            let index_byte_offset = index_offset * std::mem::size_of::<u32>();
             enc.set_vertex_value(&model_uniforms, 2);
             enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
             // SAFETY: the index range is this object's own slice of the skinned index buffer.
@@ -432,7 +432,7 @@ impl MtlContext {
                 enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
                     MTLPrimitiveType::Triangle,
                     index_count,
-                    MTLIndexType::UInt16,
+                    MTLIndexType::UInt32,
                     sib,
                     index_byte_offset,
                 );

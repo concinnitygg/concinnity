@@ -280,7 +280,7 @@ pub(crate) struct RtAccelData {
     // the old through `retire_pool` (it cannot overwrite in place: a prior
     // frame's trace may still be reading it).
     pub deformed_verts: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // The shared u16 skinned index buffer, cloned here so the reflection kernel
+    // The shared skinned index buffer, cloned here so the reflection kernel
     // can bind it (buffer 6) for skinned hits. A 1-element dummy when there is
     // no skinned geometry.
     pub skinned_indices: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -359,7 +359,7 @@ pub(crate) struct SkinnedRtInputs<'a> {
     // Shared skinned vertex buffer (`SkinnedVertex`, 80-byte stride) the skin
     // kernel reads bind-pose vertices from.
     pub vertex_buffer: &'a Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Shared skinned index buffer (u16, absolute indices) the skinned BLAS and
+    // Shared skinned index buffer (absolute indices) the skinned BLAS and
     // the reflection kernel address the deformed buffer with. Cloned into
     // `RtAccelData` so the reflection encoder can bind it.
     pub index_buffer: &'a Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -452,9 +452,8 @@ pub(crate) fn pack_instance_transform(model: [[f32; 4]; 4]) -> MTLPackedFloat4x3
 // `vertexBufferOffset = base_vertex * stride` so a chunk with mesh-relative
 // indices and a non-zero base vertex still resolves; static geometry and
 // instanced clusters use base_vertex 0 (their indices are already absolute).
-// `index_type` selects the index width: the static / instanced buffers are
-// `UInt32`; the skinned index buffer (and the deformed-vertex buffer it
-// addresses) is `UInt16`. `usage` is `Refit` only for the skinned structures the
+// `index_type` selects the index width; every shared buffer is `UInt32`.
+// `usage` is `Refit` only for the skinned structures the
 // per-frame update re-fits in place; Metal requires it at build time for a later
 // refit to be legal, and it is left `None` everywhere else so the static
 // structures keep the better-optimised default tree.
@@ -766,7 +765,7 @@ fn encode_skin_object(
     // fold. `target_count == 0` leaves the morph slots unread, so a dummy binding
     // satisfies them.
     let params = SkinParams {
-        vertex_base: obj.vertex_base as u32,
+        vertex_base: obj.vertex_base,
         vertex_count: obj.vertex_count as u32,
         joint_count: joint_count as u32,
         target_count: 0,
@@ -841,7 +840,7 @@ impl crate::metal::context::MtlContext {
                 .unwrap_or(1);
             let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
             let params = SkinParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: joint_count as u32,
                 target_count: morph.map_or(0, |m| m.target_count),
@@ -858,8 +857,8 @@ impl crate::metal::context::MtlContext {
             cenc.set_buffer(deformed, 0, 1);
             cenc.set_buffer(joint_buf.as_ref(), 0, 2);
             cenc.set_value(&params, 3);
-            let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-            cenc.set_buffer(delta_buf, 0, 4);
+            let morph_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+            cenc.set_buffer(morph_buf, 0, 4);
             // SAFETY: the whole `weights` slice uploads from its first element's
             // address, so the pointer and length describe the same live slice.
             unsafe {
@@ -893,7 +892,7 @@ impl crate::metal::context::MtlContext {
 //
 // `skinned`, when present, adds skeletally-animated geometry: a compute pass
 // deforms each skinned object's vertices into a fresh model-space buffer, and
-// one (u16-indexed) BLAS per skinned object is built over that buffer. Because
+// one BLAS per skinned object is built over that buffer. Because
 // the pose changes every frame the whole structure is rebuilt per frame (the
 // caller forces this); fresh allocations keep it hazard-free.
 pub(crate) fn build_rt_accel(
@@ -963,7 +962,7 @@ pub(crate) fn build_rt_accel(
 
     // Deformed-vertex buffer for skinned geometry: the `rt_skin` kernel writes
     // posed model-space `Vertex`s here, mirroring the skinned vertex buffer's
-    // indexing so the u16 skinned index buffer addresses it directly. Sized to
+    // indexing so the skinned index buffer addresses it directly. Sized to
     // the highest vertex the skinned objects reach; a 1-vertex dummy when there
     // is no skinned geometry (so the encoder always has a buffer to bind).
     let deformed_extent: usize = skinned_objects
@@ -992,7 +991,7 @@ pub(crate) fn build_rt_accel(
             .newBufferWithLength_options(deformed_bytes, MTLResourceOptions::StorageModeShared)
             .ok_or("failed to allocate RT deformed-vertex buffer")?
     };
-    // The shared u16 skinned index buffer the kernel + skinned BLAS address; a
+    // The shared skinned index buffer the kernel + skinned BLAS address; a
     // dummy when there is no skinned geometry. The dummy is one u32 rather than
     // one u16 because the trace reads the buffer as packed u32 words (two
     // indices each) -- Metal API validation rejects a 2-byte buffer bound to a
@@ -1036,7 +1035,7 @@ pub(crate) fn build_rt_accel(
             MTLAccelerationStructureUsage::None,
         ));
     }
-    // Skinned BLAS trace the deformed buffer (absolute u16 indices, base_vertex
+    // Skinned BLAS trace the deformed buffer (absolute indices, base_vertex
     // 0). The buffer's contents are written by the compute pass on the same
     // command buffer below, before this BLAS builds.
     for &i in &skinned_objects {
@@ -1047,7 +1046,7 @@ pub(crate) fn build_rt_accel(
             0,
             obj.index_offset,
             obj.index_count,
-            MTLIndexType::UInt16,
+            MTLIndexType::UInt32,
             MTLAccelerationStructureUsage::Refit,
         ));
     }
@@ -1204,7 +1203,7 @@ pub(crate) fn build_rt_accel(
     }))
 }
 
-// Allocate one BLAS per skinned object over the deformed buffer (absolute u16
+// Allocate one BLAS per skinned object over the deformed buffer (absolute
 // indices, base_vertex 0), with the descriptors they were sized from and the
 // largest build scratch any of them needs. `Refit` usage is required at build
 // time for the per-frame in-place refit to be legal.
@@ -1224,7 +1223,7 @@ fn allocate_skinned_blas(
             0,
             shape.index_offset,
             shape.index_count,
-            MTLIndexType::UInt16,
+            MTLIndexType::UInt32,
             MTLAccelerationStructureUsage::Refit,
         );
         let sizes = device.accelerationStructureSizesWithDescriptor(&prim);

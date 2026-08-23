@@ -63,6 +63,8 @@ fn pose_world(count: usize) -> BenchWorld {
                 skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],
                 morph_weights: Vec::new(),
+                morph_base: Vec::new(),
+                proportions: Default::default(),
                 updated: true,
                 scratch: Default::default(),
             },

@@ -179,13 +179,13 @@ impl EditorHook {
         self.pick_last = None;
         if input.shift {
             if self.selection.toggle(name.clone()) {
-                self.focus_ui_on(&name, world);
+                self.select_in_viewport(&name, world);
             } else {
                 self.follow_active(world);
             }
         } else {
             self.selection.replace(name.clone());
-            self.focus_ui_on(&name, world);
+            self.select_in_viewport(&name, world);
         }
         true
     }

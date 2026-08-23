@@ -100,7 +100,7 @@ impl RenderBackend for DxContext {
         fn update_fog_settings(&mut self, settings: Option<crate::gfx::volumetric_fog::FogSettings>);
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[crate::gfx::mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
         fn update_world_shader_pipelines(&mut self, vert_bytes: Option<&[u8]>, frag_bytes: Option<&[u8]>, shadow_bytes: Option<&[u8]>, vert_instanced_bytes: Option<&[u8]>) -> Result<(), String>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u16, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[crate::gfx::mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<crate::gfx::backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<crate::gfx::backend::SkinnedSlotLayout>, String>;
         fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: crate::gfx::draw_slot::SlotAlloc) -> Result<(), String>;
@@ -201,7 +201,7 @@ impl RenderBackend for DxContext {
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        indices: &[u16],
+        indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         _vert_bytes: &[u8],
         frag_bytes: &[u8],

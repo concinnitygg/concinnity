@@ -375,8 +375,10 @@ impl GraphicsSystem {
         // untouched pose keeps its last upload, so an unanimated mesh uploads
         // its bind pose once and never again. Skipped while a menu is open:
         // animation is frozen, so nothing is flagged anyway and the skinned
-        // draw is skipped behind an opaque menu.
-        if !menu_active {
+        // draw is skipped behind an opaque menu. The editor's override keeps
+        // the world drawn, and its edits reseed poses and move templates, so
+        // the push runs there.
+        if !menu_active || menu_override.is_some() {
             for pose in ctx.query_mut::<crate::assets::SkeletonPose>() {
                 if !pose.updated {
                     continue;
@@ -805,6 +807,8 @@ mod tests {
             skeleton: crate::gfx::skinning::Skeleton::new(Vec::new()),
             joint_matrices: vec![translated(1.0); joints],
             morph_weights: Vec::new(),
+            morph_base: Vec::new(),
+            proportions: Default::default(),
             updated: true,
             scratch: Default::default(),
         }

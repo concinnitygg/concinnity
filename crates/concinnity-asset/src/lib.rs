@@ -58,6 +58,9 @@ mod behavior;
 mod block_type;
 mod camera3d;
 mod camera_shot;
+mod character_model;
+mod character_schema;
+mod character_shape;
 mod color_lut;
 mod cubemap_texture;
 mod debug_hud;
@@ -134,6 +137,12 @@ pub use behavior::{
 pub use block_type::BlockType;
 pub use camera_shot::CameraShot;
 pub use camera3d::{Camera3DArgs, CameraController, FollowController, FollowDrive};
+pub use character_model::CharacterModel;
+pub use character_schema::{
+    CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
+    SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
+};
+pub use character_shape::{CharacterShape, JointProportion, ResolvedSliders, ShapeSlider};
 pub use color_lut::ColorLut;
 pub use cubemap_texture::CubemapTexture;
 pub use debug_hud::DebugHud;

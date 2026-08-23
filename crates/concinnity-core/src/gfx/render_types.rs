@@ -1612,9 +1612,7 @@ pub struct SkinnedDrawObject {
     /// not consumed by the draw call itself, but the asset hot-reload's
     /// `rebuild_skinned_geometry` path needs to know each slot's vertex
     /// region to copy unchanged geometry across a size-changing rebuild.
-    /// Stored as u16 because the shared skinned index buffer is u16 and
-    /// every slot's `vertex_base` has to fit there.
-    pub vertex_base: u16,
+    pub vertex_base: u32,
     /// Number of vertices in this slot's region of the shared skinned
     /// vertex buffer.
     pub vertex_count: usize,

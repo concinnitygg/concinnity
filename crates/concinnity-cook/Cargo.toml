@@ -12,6 +12,7 @@ keywords = ["gamedev", "assets", "concinnity"]
 categories = ["game-engines", "development-tools::build-utils"]
 include = [
     "/src",
+    "/assets",
     "/build.rs",
 ]
 

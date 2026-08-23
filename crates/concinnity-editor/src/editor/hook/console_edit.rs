@@ -178,6 +178,9 @@ impl EditorHook {
                 self.console_sink.info(&format!("dropped {moved}"));
             }
             Ok(console::Command::Select(cmd)) => self.console_select(cmd, world),
+            Ok(console::Command::Export { name, bake }) => {
+                self.console_export(name.as_deref(), bake);
+            }
             Ok(console::Command::Help) => {
                 for l in console::help_lines() {
                     self.console_sink.info(&l);

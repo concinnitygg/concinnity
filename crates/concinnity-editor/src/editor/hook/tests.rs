@@ -6,6 +6,7 @@ use super::*;
 use crate::assets::{Sprite, TextInput, TextLabel};
 use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::path;
+use crate::editor::character_shape;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -3328,10 +3329,11 @@ fn drag_to(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
     h.tick(world);
 }
 
-// A click through the scene picks the nearest hit, brings up the assets UI,
-// and opens the edit form on the picked authored entry.
+// A click through the scene picks the nearest hit and nothing more: no
+// panel or form opens on a viewport click, so clicking around the scene never
+// spawns UI.
 #[test]
-fn viewport_click_picks_the_nearest_prop_and_opens_its_form() {
+fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
     crate::ecs::asset_id::reset_interner();
     let near = crate::ecs::asset_id::intern("box_near");
     let far = crate::ecs::asset_id::intern("box_far");
@@ -3350,11 +3352,18 @@ fn viewport_click_picks_the_nearest_prop_and_opens_its_form() {
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("box_near"), "nearest hit wins");
-    assert!(h.panel_open, "the assets UI comes up around the form");
+    assert!(!h.panel_open, "a viewport click opens no panel");
+    assert!(!h.form_open(), "a viewport click opens no form");
+
+    // An already-open form follows the pick instead.
+    h.open_asset_form("box_far", &mut world);
+    assert_eq!(h.form_target, FormTarget::Entry(1));
+    // Off the repeat-click slop, so this is a fresh pick and not a cycle.
+    click_at(&mut world, &mut h, [650.0, 370.0]);
     assert_eq!(
         h.form_target,
         FormTarget::Entry(0),
-        "the form targets the picked entry"
+        "the open form retargets to the picked entry"
     );
     assert_eq!(h.selected_type.as_deref(), Some("Sprite"));
 }
@@ -3434,12 +3443,8 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("some_generated_asset"));
-    assert!(h.panel_open, "the assets UI still comes up");
-    assert_eq!(
-        h.form_target,
-        FormTarget::New,
-        "nothing in the tree to seed a form from"
-    );
+    assert!(!h.panel_open, "no panel opens on a viewport click");
+    assert_eq!(h.form_target, FormTarget::New);
     assert!(!h.form_open());
 }
 
@@ -4459,11 +4464,7 @@ fn shift_click_toggles_selection_membership() {
         "shift-click adds the second box"
     );
     assert_eq!(h.selection.active(), Some("box_b"), "the newest is active");
-    assert_eq!(
-        h.form_target,
-        FormTarget::Entry(1),
-        "the form follows the active member"
-    );
+    assert!(!h.form_open(), "a closed form stays closed");
 
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
     assert_eq!(
@@ -4885,8 +4886,7 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
     // The light projects to the viewport center (camera at origin facing -Z).
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("lamp"), "the icon press selects");
-    assert!(h.panel_open, "the assets UI comes up around the form");
-    assert_eq!(h.selected_type.as_deref(), Some("PointLight"));
+    assert!(!h.panel_open && !h.form_open(), "an icon press opens no UI");
 
     // The seeded Transform mirrors the authored position, so the gizmo's
     // member resolve works on the light.
@@ -4999,7 +4999,9 @@ fn selected_trigger_volume_publishes_its_line_outline() {
         "no dotted outline segments show; only the icon chips do"
     );
 
-    // Clearing the selection leaves only the axes.
+    // Clearing the selection leaves only the axes (the button is released
+    // first, so the tick does not re-pick the icon under the cursor).
+    release_at(&mut world, &mut h, [640.0, 360.0]);
     h.selection.clear();
     h.tick(&mut world);
     let published = world.resource::<crate::ecs::WorldLines>().unwrap().0.len();
@@ -7627,4 +7629,334 @@ fn unapplied_markers_follow_edit_and_apply() {
     assert!(!h.story_touched, "an identical line is not an edit");
     let dirty_view = h.make_story_view([0.0, 0.0]);
     assert!(!dirty_view.dirty);
+}
+
+// CharacterShape panel
+
+fn shape_world_entries() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"name": "body", "type": "SkinnedMesh", "args": {
+            "morph_target_names": ["jaw+", "jaw-", "muscle"],
+            "skeleton": [{"name": "root", "parent": -1}, {"name": "thigh_l", "parent": 0}]
+        }}),
+        serde_json::json!({"name": "body_shape", "type": "CharacterShape", "args": {
+            "target": "body", "sliders": [{"name": "muscle", "value": 0.3}]
+        }}),
+    ]
+}
+
+// The full slider loop: select the mesh, press a slider, drag, release. No
+// rebuild is requested while the button is held (the preview re-resolves the
+// live pose instead); the release commits the value to the shape entry as
+// ONE undo step, and undo restores the pre-drag args.
+#[test]
+fn shape_slider_drag_commits_one_undo_step() {
+    use super::super::character_shape_panel as sp;
+    let mut world = World::new();
+    super::super::inject::editor_hud(&mut world);
+    let vp = [1280.0, 720.0];
+    set_input(
+        &mut world,
+        FrameInput {
+            viewport: vp,
+            ..Default::default()
+        },
+    );
+    let mut h = hook(shape_world_entries());
+    h.shape_open = true;
+    h.focus_panel(PanelKey::CharacterShape);
+    h.selection.set(vec!["body".to_string()]);
+    h.tick(&mut world);
+    let data = h.shape_data(&world);
+    assert_eq!(
+        data.binding.as_ref().and_then(|b| b.shape_idx),
+        Some(1),
+        "the selected mesh binds its shape"
+    );
+    let names: Vec<&str> = data
+        .derived
+        .sliders
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(names, ["jaw", "muscle", "leg_length"]);
+    let presets = data.presets.len();
+    assert!(
+        presets > 0,
+        "a plain SkinnedMesh gets the bundled humanoid schema"
+    );
+    assert_eq!(
+        h.shape_rows,
+        presets + 1 + 6,
+        "the preset rows, three headers + three sliders"
+    );
+
+    // The jaw slider follows the Face header, after the preset rows.
+    let jaw_row = presets + 2;
+    let o = h.origin(PanelKey::CharacterShape, vp);
+    let rect = sp::slider_rect(sp::row_rect(o, sp::SHAPE_W, jaw_row));
+    let bipolar = (-1.0, 1.0);
+    let y = rect[1] + rect[3] * 0.5;
+    let x_half = super::super::widget_slider::handle_x(rect, 0.5, bipolar);
+    click_at(&mut world, &mut h, [x_half, y]);
+    assert!(h.shape_drag.is_some(), "the press starts a drag");
+    assert!(
+        !h.dirty && !h.rebuild_preview,
+        "no entry change until release"
+    );
+    let data = h.shape_data(&world);
+    assert!(
+        (data.values[0] - 0.5).abs() < 1e-3,
+        "the working value follows"
+    );
+
+    let x_neg = super::super::widget_slider::handle_x(rect, -0.25, bipolar);
+    drag_to(&mut world, &mut h, [x_neg, y]);
+    assert!(!h.rebuild_preview, "dragging never rebuilds the preview");
+    assert!(!h.can_undo(), "nothing recorded mid-drag");
+
+    release_at(&mut world, &mut h, [x_neg, y]);
+    assert!(h.shape_drag.is_none(), "release ends the drag");
+    assert!(
+        h.dirty && h.rebuild_preview,
+        "the release is one committed edit"
+    );
+    let sliders = h.entries[1]["args"]["sliders"].as_array().unwrap().clone();
+    let jaw = sliders
+        .iter()
+        .find(|s| s["name"] == "jaw")
+        .expect("jaw written");
+    assert!((jaw["value"].as_f64().unwrap() + 0.25).abs() < 1e-6);
+    assert!(
+        sliders.iter().any(|s| s["name"] == "muscle"),
+        "the untouched slider rides along"
+    );
+    assert!(h.can_undo());
+
+    h.undo(&mut world);
+    assert!(!h.can_undo(), "the whole drag was one step");
+    let sliders = h.entries[1]["args"]["sliders"].as_array().unwrap();
+    assert_eq!(sliders.len(), 1);
+    assert_eq!(sliders[0]["name"], "muscle");
+}
+
+// A drag released where it started changes nothing and records no step; the
+// header buttons commit through the same path.
+#[test]
+fn shape_reset_and_randomize_commit_once_each() {
+    let mut world = World::new();
+    super::super::inject::editor_hud(&mut world);
+    let mut h = hook(shape_world_entries());
+    h.shape_open = true;
+    h.selection.set(vec!["body".to_string()]);
+    let data = h.shape_data(&world);
+    h.apply_shape_action(
+        super::super::character_shape_panel::ShapeAction::Randomize,
+        &data,
+        [0.0, 0.0],
+        &mut world,
+    );
+    assert!(h.can_undo());
+    let sliders = h.entries[1]["args"]["sliders"].as_array().unwrap();
+    for s in sliders {
+        let v = s["value"].as_f64().unwrap();
+        assert!(
+            v.abs() <= f64::from(character_shape::RANDOM_BAND) + 1e-6,
+            "{v}"
+        );
+    }
+    let legs = h.entries[1]["args"]["proportions"].as_array().unwrap();
+    assert!(
+        legs.iter().all(|p| p["joint"] == "thigh_l"),
+        "only the skeleton's joints are written: {legs:?}"
+    );
+    h.undo(&mut world);
+    assert!(!h.can_undo(), "randomize was one step");
+
+    // A history jump drops the selection; pick the mesh again.
+    h.selection.set(vec!["body".to_string()]);
+    let data = h.shape_data(&world);
+    h.apply_shape_action(
+        super::super::character_shape_panel::ShapeAction::Reset,
+        &data,
+        [0.0, 0.0],
+        &mut world,
+    );
+    assert!(
+        h.entries[1]["args"]["sliders"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "reset drops every slider"
+    );
+    h.undo(&mut world);
+    assert!(!h.can_undo(), "reset was one step");
+}
+
+// Selecting a mesh with no shape offers the add row, which creates one
+// targeting it; selecting the shape entry itself binds the same pair.
+#[test]
+fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
+    let mut world = World::new();
+    super::super::inject::editor_hud(&mut world);
+    let mut entries = shape_world_entries();
+    entries.pop();
+    let mut h = hook(entries);
+    h.shape_open = true;
+    h.selection.set(vec!["body".to_string()]);
+    let data = h.shape_data(&world);
+    assert_eq!(data.rows, [character_shape::Row::Add]);
+    h.apply_shape_action(
+        super::super::character_shape_panel::ShapeAction::Add,
+        &data,
+        [0.0, 0.0],
+        &mut world,
+    );
+    assert_eq!(h.entries.len(), 2);
+    assert_eq!(h.entries[1]["args"]["target"], "body");
+    let name = entry_name(&h.entries[1]).unwrap().to_string();
+    h.selection.set(vec![name]);
+    let data = h.shape_data(&world);
+    let b = data.binding.expect("a selected shape binds");
+    assert_eq!((b.mesh.as_str(), b.shape_idx), ("body", Some(1)));
+    // An unrelated selection shows the prompt.
+    h.selection.clear();
+    let data = h.shape_data(&world);
+    assert!(data.binding.is_none());
+    assert_eq!(data.status.as_deref(), Some("Select a SkinnedMesh"));
+}
+
+// A CharacterModel binds like a mesh, its panel follows the schema it names
+// (a CharacterSchema entry here, with its own sections, captions and
+// presets), and a preset button commits the preset's vector as one step.
+#[test]
+fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
+    let mut world = World::new();
+    super::super::inject::editor_hud(&mut world);
+    let entries = vec![
+        serde_json::json!({"name": "sk", "type": "CharacterSchema", "args": {
+            "joints": [{"name": "root"}, {"name": "tail", "parent": "root"}],
+            "keys": [{"name": "fluff", "caption": "Fluffiness", "region": "tail"}],
+            "regions": [{"name": "tail", "joints": ["tail"]}],
+            "proportion_groups": [{"name": "tail_length", "caption": "tail length",
+                "region": "tail", "joints": ["tail"], "length": 0.1}],
+            "panel": [{"caption": "Tail", "regions": ["tail"]}],
+            "presets": [{"name": "bushy", "sliders": [{"name": "fluff", "value": 0.9}],
+                "proportions": [{"joint": "tail", "length": 0.05}]}]
+        }}),
+        serde_json::json!({"name": "body", "type": "CharacterModel", "args": {
+            "schema": "sk", "sources": [{"source": "fox.glb"}]
+        }}),
+        serde_json::json!({"name": "body_shape", "type": "CharacterShape", "args": {
+            "target": "body", "sliders": [{"name": "nose", "value": 0.3}]
+        }}),
+    ];
+    let mut h = hook(entries);
+    h.shape_open = true;
+    h.selection.set(vec!["body".to_string()]);
+    // Nothing is inline on a model entry, so the rows are what the live
+    // world exposes; publish a pose-free target through the entry fallback
+    // by checking the schema half alone.
+    let schema = h.shape_schema("body");
+    assert_eq!(schema.panel[0].caption, "Tail");
+    assert_eq!(schema.presets[0].name, "bushy");
+    let rows = character_shape::derive_rows(
+        &schema,
+        &["fluff".to_string(), "nose".to_string()],
+        &["root".to_string(), "tail".to_string()],
+    );
+    assert_eq!(rows.sections, ["Tail", character_shape::OTHER_SECTION]);
+    assert_eq!(rows.sliders[0].caption, "Fluffiness");
+    assert_eq!(rows.sliders[1].name, "tail_length");
+    assert_eq!(rows.sliders[2].name, "nose");
+    assert_eq!(
+        rows.sliders[2].section, 1,
+        "an unknown key lands under Other"
+    );
+
+    let data = h.shape_data(&world);
+    let b = data.binding.as_ref().expect("a model binds");
+    assert_eq!((b.mesh.as_str(), b.shape_idx), ("body", Some(2)));
+    assert_eq!(data.preset_names, ["bushy"]);
+    assert_eq!(data.rows[0], character_shape::Row::PresetHeader);
+    assert_eq!(data.rows[1], character_shape::Row::Preset(0));
+    h.apply_shape_action(
+        super::super::character_shape_panel::ShapeAction::Preset(0),
+        &data,
+        [0.0, 0.0],
+        &mut world,
+    );
+    let args = &h.entries[2]["args"];
+    assert_eq!(args["sliders"][0]["name"], "fluff");
+    assert!((args["sliders"][0]["value"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+    assert_eq!(args["sliders"].as_array().unwrap().len(), 1);
+    assert_eq!(args["proportions"][0]["joint"], "tail");
+    assert!(h.can_undo());
+    h.undo(&mut world);
+    assert!(!h.can_undo(), "a preset is one step");
+    assert_eq!(h.entries[2]["args"]["sliders"][0]["name"], "nose");
+}
+
+// A skinned mesh is movable like a prop once the engine indexes it: the pick
+// selects it, the gizmo drag moves its live Transform, and the release
+// commits the SkinnedMesh entry's position as one undo step.
+#[test]
+fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
+    crate::ecs::asset_id::reset_interner();
+    let id = crate::ecs::asset_id::intern("body");
+    let start = [-6.11f32, -3.3, -5.0];
+    let mut world = pick_world(
+        [0.0; 3],
+        vec![(
+            id,
+            [start[0] - 1.0, start[1] - 1.0, start[2] - 1.0],
+            [start[0] + 1.0, start[1] + 1.0, start[2] + 1.0],
+        )],
+    );
+    let entity = world.push(crate::assets::Transform {
+        position: start,
+        rotation_deg: [0.0; 3],
+        scale: [1.0; 3],
+    });
+    let mut by_name = std::collections::BTreeMap::new();
+    by_name.insert(id, entity);
+    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    for s in super::super::gizmo::sprites() {
+        world.add_component(s);
+    }
+    let mut h = hook(vec![serde_json::json!({
+        "name": "body", "type": "SkinnedMesh",
+        "args": { "source": "hero.glb", "position": start }
+    })]);
+
+    click_at(&mut world, &mut h, [200.0, 600.0]);
+    assert_eq!(h.selection.active(), Some("body"));
+    assert!(!h.form_open(), "selecting the body opens no form");
+    let layout = h
+        .gizmo_layout(&world, [1280.0, 720.0])
+        .expect("a skinned mesh shows the gizmo");
+    click_at(&mut world, &mut h, layout.tips[0]);
+    assert!(h.gizmo_drag.is_some());
+    drag_to(
+        &mut world,
+        &mut h,
+        [layout.tips[0][0] + 50.0, layout.tips[0][1]],
+    );
+    let live = world
+        .get::<crate::assets::Transform>(entity)
+        .unwrap()
+        .position;
+    assert!(
+        live[0] > start[0] + 0.3,
+        "the live transform follows: {live:?}"
+    );
+    release_at(
+        &mut world,
+        &mut h,
+        [layout.tips[0][0] + 50.0, layout.tips[0][1]],
+    );
+    let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap();
+    assert!(committed > f64::from(start[0]) + 0.3, "{committed}");
+    h.undo(&mut world);
+    assert!(!h.can_undo(), "one step");
 }

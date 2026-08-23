@@ -14,6 +14,7 @@ pub mod lines;
 pub mod lod;
 pub mod mesh_payload;
 pub mod mesh_seed;
+pub mod morph_targets;
 pub mod pick;
 pub mod raster;
 pub mod skinning;

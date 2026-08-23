@@ -153,7 +153,7 @@ impl MtlContext {
         enc.set_fragment_buffer(self.index_buffer.as_ref(), 0, 2);
         enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, 3);
         enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
-        // Deformed (posed) skinned vertices + the u16 skinned index buffer
+        // Deformed (posed) skinned vertices + the skinned index buffer
         // the trace fetches for skinned hits. Always bound (1-element
         // dummies when the scene has no skinned geometry) so the shader's
         // bindings are satisfied even though the skinned branch is never

@@ -168,7 +168,7 @@ pub(super) fn upload_buffer(
 // As `upload_buffer`, with the destination grown to `size` bytes when that is
 // larger than the data. For a buffer a shader addresses in wider units than the
 // data's own element type, so its last load reaches past the data's end: the
-// skinned u16 index buffer, which the ray-traced hit path reads as packed u32
+// skinned index buffer, which the ray-traced hit path reads as packed u32
 // words. The pad is zeroed rather than left as whatever the upload heap held.
 pub(super) fn upload_buffer_padded(
     alloc: &DeviceAllocator,

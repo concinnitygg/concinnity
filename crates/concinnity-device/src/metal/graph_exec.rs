@@ -267,35 +267,43 @@ impl MtlContext {
                     let particle_ref = particle_frame.as_ref();
                     let first_error_ref = &first_error;
                     let worker_slots_ref = &worker_slots;
+                    // A rayon worker drains no autorelease pool of its own, so
+                    // without this one every autoreleased object the pass
+                    // encode creates (the command buffer and its encoders
+                    // among them) would be retained for the life of the
+                    // process.
                     scope.spawn(move |_| {
-                        let ctx = ctx_ref.as_ctx();
-                        let cmd_buf = match ctx.command_queue.commandBuffer() {
-                            Some(cb) => cb,
-                            None => {
-                                let mut e = first_error_ref.lock().unwrap();
-                                if e.is_none() {
-                                    *e = Some(
-                                        "graph executor: failed to mint per-pass cmd buf".into(),
-                                    );
+                        objc2::rc::autoreleasepool(|_| {
+                            let ctx = ctx_ref.as_ctx();
+                            let cmd_buf = match ctx.command_queue.commandBuffer() {
+                                Some(cb) => cb,
+                                None => {
+                                    let mut e = first_error_ref.lock().unwrap();
+                                    if e.is_none() {
+                                        *e = Some(
+                                            "graph executor: failed to mint per-pass cmd buf"
+                                                .into(),
+                                        );
+                                    }
+                                    return;
                                 }
-                                return;
-                            }
-                        };
-                        match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
-                            Ok(count) => {
-                                ctx.diagnostics
-                                    .draw_calls_accum
-                                    .fetch_add(count, Ordering::Relaxed);
-                                let mut lock = worker_slots_ref.lock().unwrap();
-                                lock[idx] = Some(SendableCmdBuf(cmd_buf));
-                            }
-                            Err(e) => {
-                                let mut lock = first_error_ref.lock().unwrap();
-                                if lock.is_none() {
-                                    *lock = Some(e);
+                            };
+                            match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
+                                Ok(count) => {
+                                    ctx.diagnostics
+                                        .draw_calls_accum
+                                        .fetch_add(count, Ordering::Relaxed);
+                                    let mut lock = worker_slots_ref.lock().unwrap();
+                                    lock[idx] = Some(SendableCmdBuf(cmd_buf));
+                                }
+                                Err(e) => {
+                                    let mut lock = first_error_ref.lock().unwrap();
+                                    if lock.is_none() {
+                                        *lock = Some(e);
+                                    }
                                 }
                             }
-                        }
+                        })
                     });
                 }
             });

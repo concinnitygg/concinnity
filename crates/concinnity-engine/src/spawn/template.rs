@@ -104,15 +104,14 @@ pub(super) fn spawn_skinned_from_template(
     lifetime: Option<f32>,
     mut acquire_slot: impl FnMut(usize, [[f32; 4]; 4]) -> Option<usize>,
 ) -> Option<Entity> {
-    let (mesh_id, template_index, skeleton) = ctx
-        .get::<SkeletonPose>(template)
-        .map(|p| (p.mesh_id, p.skinned_index, p.skeleton.clone()))?;
+    let template_pose = ctx.get::<SkeletonPose>(template)?;
     let model = transform.model_matrix();
-    let skinned_index = acquire_slot(template_index, model)?;
+    let skinned_index = acquire_slot(template_pose.skinned_index, model)?;
+    let pose = template_pose.clone_for_slot(skinned_index);
 
     let entity = ctx.components.spawn();
     ctx.insert(entity, transform);
-    ctx.insert(entity, SkeletonPose::new(mesh_id, skinned_index, skeleton));
+    ctx.insert(entity, pose);
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
     }

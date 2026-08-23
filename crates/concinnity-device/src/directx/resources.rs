@@ -1384,7 +1384,7 @@ impl DxContext {
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        indices: &[u16],
+        indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         frag_bytes: &[u8],
     ) -> Result<(), String> {
@@ -1443,14 +1443,13 @@ impl DxContext {
         // GENERIC_READ (rather than the narrower VERTEX_AND_CONSTANT_BUFFER /
         // INDEX_BUFFER) so these stay both vertex/index-bindable for the skinned
         // main + shadow passes AND shader-readable as raw root SRVs for the RT
-        // skin compute dispatch (bind-pose VB) and the RT reflection trace (u16
+        // skin compute dispatch (bind-pose VB) and the RT reflection trace (u32
         // IB). GENERIC_READ is a superset of both, so no per-frame transition on
         // these shared resources is needed.
         let skinned_vertex_buffer =
             upload_buffer(&self.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
-        // The allocation is rounded up to whole u32 words: the ray-traced hit
-        // path reads this buffer as packed words, so its load for the final
-        // index of an odd-length list reaches past the indices themselves.
+        // Never zero-length: the ray-traced hit path binds this buffer as a raw
+        // word array and no backend accepts a zero-length binding.
         let skinned_index_buffer = upload_buffer_padded(
             &self.alloc,
             idx_bytes,
@@ -1465,7 +1464,7 @@ impl DxContext {
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&skinned_index_buffer),
             SizeInBytes: idx_bytes.len() as u32,
-            Format: DXGI_FORMAT_R16_UINT,
+            Format: DXGI_FORMAT_R32_UINT,
         };
 
         // Per-(frame, object) joint-matrix upload buffers, each MAX_JOINTS
@@ -1566,7 +1565,15 @@ impl DxContext {
         // (e.g. DXC unavailable) leaves it 0 and the legacy skinned main pass runs.
         // The cull / object / draw-args / indirect buffers already reserved the
         // skinned tail at init via the threaded `n_skinned` capacity.
-        if self.cull.main_bindless_pso.is_some() && self.cull_count() > 0 {
+        //
+        // The gate counts the objects being uploaded here: `cull_count()` reads
+        // `draw.n_skinned`, which only the block below sets, so consulting it
+        // alone would leave a world whose only geometry is skinned on the legacy
+        // pass forever -- and that pass does not morph (rt_skin.hlsl is the only
+        // DirectX shader that reads morph targets).
+        if self.cull.main_bindless_pso.is_some()
+            && self.cull_count() + self.skinned.draw_objects.len() > 0
+        {
             let stride = std::mem::size_of::<Vertex>();
             let deformed_bytes = (vertices.len() * stride).max(stride) as u64;
             let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
@@ -1653,7 +1660,7 @@ impl DxContext {
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
-        vertex_base: u16,
+        vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
     ) -> Result<(), String> {
@@ -1699,18 +1706,11 @@ impl DxContext {
                 v_buf_len
             ));
         }
-        let i_byte_off = (obj.index_offset * std::mem::size_of::<u16>()) as u64;
-        let rebased: Vec<u16> = indices
+        let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
+        let rebased: Vec<u32> = indices
             .iter()
-            .map(|&i| i.checked_add(vertex_base))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                format!(
-                    "update_skinned_mesh_geometry: index rebase by {} overflows u16 \
-                     (skinned slot {})",
-                    vertex_base, skinned_index
-                )
-            })?;
+            .map(|&i| u32::from(i) + vertex_base)
+            .collect();
 
         self.wait_idle();
 
@@ -1852,9 +1852,9 @@ impl DxContext {
         com::gpu_va(&self.skinned.joint_buffers[frame_idx][i])
     }
 
-    // Attach morph-target delta buffers to the skinned draw objects. `morphs[i]`
-    // pairs with draw object `i`; instance copies share their template's `Arc`,
-    // so each unique delta set becomes one GPU buffer. Allocates the per-frame
+    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned
+    // draw objects. `morphs[i]` pairs with draw object `i`; instance copies share
+    // their template's `Arc`, so each unique entry set becomes one GPU buffer. Allocates the per-frame
     // weight upload buffers (one f32 per target per object) when any object
     // carries morphs. Called once after `upload_skinned`.
     pub(super) fn upload_skinned_morphs(
@@ -1881,7 +1881,8 @@ impl DxContext {
                     let (buf, count) = match by_source.get(&key) {
                         Some(entry) => entry.clone(),
                         None => {
-                            let bytes: &[u8] = bytemuck::cast_slice(&data.deltas);
+                            let words = data.packed_words();
+                            let bytes: &[u8] = bytemuck::cast_slice(&words);
                             let buf = upload_buffer(
                                 &self.alloc,
                                 bytes,

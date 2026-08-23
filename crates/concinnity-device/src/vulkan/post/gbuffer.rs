@@ -1500,7 +1500,7 @@ impl VkContext {
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sk_pso.handle());
                 device.cmd_bind_vertex_buffers(cmd, 0, std::slice::from_ref(&sk_vbuf), &[0]);
-                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT16);
+                device.cmd_bind_index_buffer(cmd, sk_ibuf, 0, vk::IndexType::UINT32);
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -1674,7 +1674,7 @@ impl VkContext {
         }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame
-        // deformed VB (binding 1) + the skinned u16 IB. Records carry base_vertex
+        // deformed VB (binding 1) + the skinned IB. Records carry base_vertex
         // = 0 (global skinned indexing). The previous deformed buffer is read only
         // once the ring is primed (a prior frame posed that slot); before then (or
         // when velocity is inactive) it is the current buffer, so prev_pos ==
@@ -1703,7 +1703,7 @@ impl VkContext {
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
-                    vk::IndexType::UINT16,
+                    vk::IndexType::UINT32,
                 );
                 device.cmd_draw_indexed_indirect(
                     cmd,

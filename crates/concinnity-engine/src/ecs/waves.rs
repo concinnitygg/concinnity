@@ -16,13 +16,6 @@ pub(crate) struct ExecSchedule {
     // level, members in table order within each wave. Derived and asserted by
     // this module's tests; `World::step` still walks systems in table order,
     // so nothing reads it yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by this module's tests until `World::step` walks waves"
-        )
-    )]
     waves: Vec<Vec<usize>>,
     accesses: Vec<Access>,
 }

@@ -542,7 +542,7 @@ impl MtlContext {
         }
 
         // Skinned tail: bind the deformed vertex buffer (inherited by the ICB
-        // commands) and make the skinned u16 index buffer resident (the cull
+        // commands) and make the skinned index buffer resident (the cull
         // kernel baked it into these commands). `deformed_skinned` is `Some`
         // exactly when the fold is active, which is also when the tail is
         // non-empty. Skinned draws always render under the world default shader,
@@ -844,13 +844,13 @@ impl MtlContext {
         let draw_calls = self.draw_skinned_objects(enc, &sib, cam_pos, |enc, obj, i| {
             let model_uniforms = ModelUniforms { model: obj.model };
             let slot = obj.texture_slot.min(last_tex);
-            // Morph bindings for the VS: the delta buffer at 9 and the
+            // Morph bindings for the VS: the packed morph buffer at 9 and the
             // per-draw params + weights at 10. Objects without morph targets
             // bind the shared VB as a dummy the shader never reads
             // (`target_count == 0`).
             let morph = self.skinned.morphs.get(i).and_then(|m| m.as_ref());
             let mut morph_params = crate::metal::uniforms::VsMorphParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 target_count: morph.map_or(0, |m| m.target_count),
                 _pad: 0,
@@ -863,8 +863,8 @@ impl MtlContext {
             }
             enc.set_vertex_value(&model_uniforms, 2);
             enc.set_vertex_buffer(&skinned_joint_bufs[i], 0, 8);
-            let delta_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
-            enc.set_vertex_buffer(delta_buf, 0, 9);
+            let morph_buf = morph.map_or(svb.as_ref(), |m| m.buffer.as_ref());
+            enc.set_vertex_buffer(morph_buf, 0, 9);
             enc.set_vertex_value(&morph_params, 10);
             enc.set_fragment_value(&obj.material, 3);
             enc.set_fragment_texture(self.textures[slot].as_ref(), 0);

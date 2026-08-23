@@ -30,7 +30,7 @@
 // target, so `rt_reflections.slang` reflects on Vulkan and DirectX only and
 // `RtParams` / `RtGeomEntry` have no check against the Metal RT sources. Vertex payloads are the other exclusion: slangc binds a vertex input by
 // attribute index, not byte offset, so `Vertex` / `SkinnedVertex` /
-// `MorphDelta` / `TextVertex` / `LineVertex` reflect no layout at all. The
+// `MorphEntry` / `TextVertex` / `LineVertex` reflect no layout at all. The
 // surviving asserts are listed in private/docs/shader-single-source.md.
 //
 // The runtime Metal reflection validator (concinnity-shader) stays as well: it

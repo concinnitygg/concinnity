@@ -360,7 +360,7 @@ impl DxContext {
         // Skinned objects: one record each in the reserved tail at
         // `[skinned_record_base(), cull_count())`. The main pass's 2nd
         // `ExecuteIndirect` draws them against the per-frame deformed-vertex
-        // buffer with the skinned u16 index buffer bound, so `base_vertex = 0`
+        // buffer with the skinned index buffer bound, so `base_vertex = 0`
         // and the active-LOD slice is the element offset into the skinned IB.
         // Active LOD is picked from the camera distance to the model translation.
         let base = self.skinned_record_base();

@@ -301,3 +301,82 @@ fn the_build_command_runs_on_a_worker_and_reports_back() {
         "the worker reported an outcome: {log}"
     );
 }
+
+// The prism world the export command tests drive: an inline two-joint skinned
+// mesh with one morph target and a live shape.
+fn export_entries() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"name":"prism","type":"SkinnedMesh","args":{
+            "vertices":[
+                {"pos":[0.0,0.0,0.0],"joints":[0,0,0,0],"weights":[1.0,0.0,0.0,0.0]},
+                {"pos":[1.0,0.0,0.0],"joints":[0,0,0,0],"weights":[1.0,0.0,0.0,0.0]},
+                {"pos":[0.0,1.0,0.0],"joints":[1,0,0,0],"weights":[1.0,0.0,0.0,0.0]}],
+            "indices":[0,1,2],
+            "skeleton":[{"name":"root","parent":-1},
+                        {"name":"tip","parent":0,"translation":[0.0,1.0,0.0]}],
+            "morph_target_names":["wide"],
+            "morph_deltas":[{"position":[1.0,0.0,0.0]},{"position":[1.0,0.0,0.0]},
+                            {"position":[1.0,0.0,0.0]}],
+            "scale":[1.0,1.0,1.0]}}),
+        serde_json::json!({"name":"shape","type":"CharacterShape","args":{
+            "target":"prism","sliders":[{"name":"wide","value":0.5}]}}),
+    ]
+}
+
+// /export with nothing selected and no name has nothing to act on.
+#[test]
+fn export_without_a_name_or_selection_reports_an_error() {
+    let mut h = hook(export_entries());
+    let mut world = console_world();
+    h.run_console_line(&mut world, "/export");
+
+    assert!(log_text(&h).contains("select a skinned mesh"));
+    assert!(
+        !h.console_build_running.load(Ordering::SeqCst),
+        "no worker was spawned"
+    );
+}
+
+// The one-cook-at-a-time guard also refuses an export mid-cook.
+#[test]
+fn an_export_is_refused_while_a_cook_runs() {
+    let mut h = hook(export_entries());
+    h.console_build_running.store(true, Ordering::SeqCst);
+
+    let mut world = console_world();
+    h.run_console_line(&mut world, "/export prism");
+
+    assert!(log_text(&h).contains("cook already running"));
+    assert!(h.console_build_running.load(Ordering::SeqCst));
+}
+
+// The export command hands off to a worker like the build command, resolves
+// the selection when no name is given, and writes `<name>.glb` beside the
+// world file.
+#[test]
+fn the_export_command_runs_on_a_worker_and_writes_the_file() {
+    let _guard = crate::test_support::lock();
+    isolate_state_dir();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let world_path = dir.path().join("world.jsonl");
+
+    let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), export_entries());
+    h.selection.set(vec!["prism".to_string()]);
+    let mut world = console_world();
+    h.run_console_line(&mut world, "/export");
+    assert!(log_text(&h).contains("export of 'prism' started"));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while h.console_build_running.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the export worker hung"
+        );
+        std::thread::yield_now();
+    }
+    let log = log_text(&h);
+    assert!(log.contains("Exported"), "{log}");
+    let out = dir.path().join("prism.glb");
+    let bytes = std::fs::read(&out).expect("the .glb landed beside the world file");
+    assert_eq!(&bytes[0..4], b"glTF");
+}

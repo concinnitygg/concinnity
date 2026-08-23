@@ -139,6 +139,8 @@ pub(crate) const DOT3: AssetId = AssetId(PANEL + 15);
 pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 16);
 pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 17);
 pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 18);
+pub(crate) const MENU_EXPORT_BG: AssetId = AssetId(PANEL + 19);
+pub(crate) const MENU_EXPORT_LABEL: AssetId = AssetId(PANEL + 20);
 
 pub(crate) fn row_bg(slot: usize) -> AssetId {
     AssetId(PANEL + 0x20 + slot as u32)
@@ -370,13 +372,22 @@ pub(crate) fn picker_option_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
 // editing whatever produced it) and gets no menu. Hide and lock have their own
 // row icons, and a row-body click already opens the edit form.
 //
-// Returns (background, delete row).
-fn menu_rects(o: [f32; 2], w: f32, slot: usize) -> ([f32; 4], [f32; 4]) {
+// Returns (background, delete row, export row). The export row exists only
+// for a skinned-mesh target; without it the background covers one row and the
+// export rect is empty.
+fn menu_rects(o: [f32; 2], w: f32, slot: usize, export: bool) -> ([f32; 4], [f32; 4], [f32; 4]) {
     let x = menu_left(o, w);
     let top = list_top(o) + slot as f32 * ROW_H + ROW_H;
-    let bg = [x, top, MENU_W, MENU_ROW_H];
+    let menu_rows = if export { 2.0 } else { 1.0 };
+    let bg = [x, top, MENU_W, MENU_ROW_H * menu_rows];
     let delete = [x, top, MENU_W, MENU_ROW_H];
-    (bg, delete)
+    let export_rect = [
+        x,
+        top + MENU_ROW_H,
+        MENU_W,
+        if export { MENU_ROW_H } else { 0.0 },
+    ];
+    (bg, delete, export_rect)
 }
 
 // The menu's left edge. Only the right-aligned type captions reach under it:
@@ -385,11 +396,11 @@ fn menu_left(o: [f32; 2], w: f32) -> f32 {
     o[0] + w - MENU_W - SCROLLBAR_W - 2.0
 }
 
-// The single body row the open menu covers, so its type caption can be blanked:
+// The body rows the open menu covers, so their type captions can be blanked:
 // all TextLabels draw after all Sprites, so the menu's opaque backing cannot
 // hide a caption underneath it -- only not drawing it can.
-fn menu_covered_slots(slot: usize, rows: usize) -> std::ops::Range<usize> {
-    (slot + 1)..(slot + 2).min(rows)
+fn menu_covered_slots(slot: usize, rows: usize, menu_rows: usize) -> std::ops::Range<usize> {
+    (slot + 1)..(slot + 1 + menu_rows).min(rows)
 }
 
 // A resolved panel click. Row picks carry the group and the index within it, so
@@ -415,6 +426,9 @@ pub(crate) enum PanelAction {
     OpenRowMenu(usize, usize),
     // The open row menu's Delete row.
     RowDelete,
+    // The open row menu's Export row (skinned meshes only): write the asset
+    // as .glb beside the project.
+    RowExport,
     // Dismiss any open overlay (picker / row menu) without picking.
     CloseOverlays,
     // A click inside the panel that hits no control (swallowed so it does not
@@ -456,15 +470,21 @@ impl PanelView<'_> {
     // The visible slot of the asset the open menu belongs to, when that asset is
     // still on screen and has a world.jsonl line to delete: an authored asset's
     // own line, or an overridden instance's patch line (deleting it reverts the
-    // instance to its template).
-    fn menu_target(&self, rows: usize) -> Option<usize> {
+    // instance to its template). The flag says whether the row is a skinned
+    // mesh the menu can also export as glTF.
+    fn menu_target(&self, rows: usize) -> Option<(usize, bool)> {
         let name = self.row_menu?;
-        (0..rows).find(|&slot| {
-            matches!(
-                self.rows.get(self.scroll + slot),
-                Some(TreeRow::Asset { name: n, badge, .. })
-                    if n == name && matches!(badge, Badge::Authored | Badge::Overridden)
-            )
+        (0..rows).find_map(|slot| match self.rows.get(self.scroll + slot) {
+            Some(TreeRow::Asset {
+                name: n,
+                asset_type,
+                badge,
+                ..
+            }) if n == name && matches!(badge, Badge::Authored | Badge::Overridden) => Some((
+                slot,
+                matches!(asset_type.as_str(), "SkinnedMesh" | "CharacterModel"),
+            )),
+            _ => None,
         })
     }
 }
@@ -483,13 +503,16 @@ pub(crate) fn hit_test(
 ) -> Option<PanelAction> {
     let w = s[0];
     let rows = visible_rows(s[1]);
-    // An open row menu is modal over the panel: its Delete row picks, anything
-    // else dismisses it.
+    // An open row menu is modal over the panel: its rows pick, anything else
+    // dismisses it.
     if view.row_menu.is_some() {
-        if let Some(slot) = view.menu_target(rows) {
-            let (_, delete) = menu_rects(o, w, slot);
+        if let Some((slot, export)) = view.menu_target(rows) {
+            let (_, delete, export_rect) = menu_rects(o, w, slot, export);
             if point_in(mx, my, delete) {
                 return Some(PanelAction::RowDelete);
+            }
+            if export && point_in(mx, my, export_rect) {
+                return Some(PanelAction::RowExport);
             }
         }
         return Some(PanelAction::CloseOverlays);
@@ -685,8 +708,8 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
             }
         }
     }
-    if let Some(slot) = view.menu_target(rows) {
-        layout_row_menu(world, view, o, w, rows, slot);
+    if let Some((slot, export)) = view.menu_target(rows) {
+        layout_row_menu(world, view, o, w, rows, slot, export);
     }
     layout_scrollbar(world, total, scroll, o, w, rows);
 }
@@ -982,13 +1005,14 @@ fn layout_row_menu(
     w: f32,
     rows: usize,
     slot: usize,
+    export: bool,
 ) {
-    let (bg, delete) = menu_rects(o, w, slot);
-    // Blank the type caption the menu floats over first: every TextLabel draws
-    // after every Sprite, so the opaque backing below cannot cover it. The names
+    let (bg, delete, export_rect) = menu_rects(o, w, slot, export);
+    // Blank the type captions the menu floats over first: every TextLabel draws
+    // after every Sprite, so the opaque backing below cannot cover them. The names
     // stay -- they sit well left of the menu, so hiding them would blank rows the
     // user can still see.
-    for covered in menu_covered_slots(slot, rows) {
+    for covered in menu_covered_slots(slot, rows, if export { 2 } else { 1 }) {
         widget::set_label_visible(world, type_label(covered), false);
     }
     if let Some(sprite) = widget::sprite_mut(world, MENU_BG) {
@@ -1010,6 +1034,16 @@ fn layout_row_menu(
         "Delete",
         DELETE_LABEL,
     );
+    if export {
+        place_menu_row(
+            world,
+            (MENU_EXPORT_BG, MENU_EXPORT_LABEL),
+            export_rect,
+            view.mouse,
+            "Export .glb",
+            LABEL,
+        );
+    }
 }
 
 fn place_menu_row(
@@ -1108,6 +1142,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
         DOT3,
         MENU_BG,
         MENU_DELETE_BG,
+        MENU_EXPORT_BG,
     ]);
     ids
 }
@@ -1128,6 +1163,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..ROW_POOL_MAX).map(type_label));
     ids.extend((0..ROW_POOL_MAX).map(picker_row_label));
     ids.push(MENU_DELETE_LABEL);
+    ids.push(MENU_EXPORT_LABEL);
     ids
 }
 
@@ -1647,7 +1683,7 @@ mod tests {
             row_menu: Some("cam"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, PANEL_W, 1);
+        let (_, delete, _) = menu_rects(o, PANEL_W, 1, false);
         assert_eq!(
             hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o, size()),
             Some(PanelAction::RowDelete)
@@ -1661,6 +1697,56 @@ mod tests {
         apply(&mut world, Some(&v), o, size());
         assert!(sprite(&world, MENU_BG).visible);
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
+    }
+
+    // A skinned-mesh row's menu grows an Export row under Delete; other types
+    // keep the single-row menu.
+    #[test]
+    fn the_row_menu_offers_export_only_for_skinned_meshes() {
+        let mut f = Fixture::new();
+        f.rows.push(TreeRow::Asset {
+            group: 0,
+            index: 2,
+            name: "body".to_string(),
+            asset_type: "SkinnedMesh".to_string(),
+            badge: Badge::Authored,
+        });
+        let o = test_origin();
+        let v = PanelView {
+            row_menu: Some("body"),
+            ..f.view()
+        };
+        let slot = f
+            .rows
+            .iter()
+            .position(|r| matches!(r, TreeRow::Asset { name, .. } if name == "body"))
+            .expect("body row present");
+        let (bg, _, export) = menu_rects(o, PANEL_W, slot, true);
+        assert_eq!(bg[3], MENU_ROW_H * 2.0, "two rows of menu backing");
+        assert_eq!(
+            hit_test(&v, export[0] + 5.0, export[1] + 5.0, o, size()),
+            Some(PanelAction::RowExport)
+        );
+        let mut world = injected_world();
+        apply(&mut world, Some(&v), o, size());
+        assert!(sprite(&world, MENU_EXPORT_BG).visible);
+        assert_eq!(label(&world, MENU_EXPORT_LABEL).content, "Export .glb");
+
+        // A non-mesh target keeps the one-row menu: the would-be export slot
+        // dismisses, and no export chrome draws.
+        let v = PanelView {
+            row_menu: Some("cam"),
+            ..f.view()
+        };
+        let (_, _, ghost) = menu_rects(o, PANEL_W, 1, true);
+        assert_eq!(
+            hit_test(&v, ghost[0] + 5.0, ghost[1] + 5.0, o, size()),
+            Some(PanelAction::CloseOverlays)
+        );
+        let mut world = injected_world();
+        apply(&mut world, Some(&v), o, size());
+        assert!(!sprite(&world, MENU_EXPORT_BG).visible);
+        assert!(!label(&world, MENU_EXPORT_LABEL).visible);
     }
 
     // Every TextLabel draws after every Sprite, so the menu's opaque backing
@@ -1724,7 +1810,7 @@ mod tests {
             row_menu: Some("not_listed"),
             ..f.view()
         };
-        let (_, delete) = menu_rects(o, PANEL_W, 1);
+        let (_, delete, _) = menu_rects(o, PANEL_W, 1, false);
         assert_eq!(
             hit_test(&v, delete[0] + 5.0, delete[1] + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
@@ -1914,6 +2000,7 @@ mod tests {
             // Defined by nested content / a source the scalar form can't supply, so
             // a blank instance is inert.
             "Animation",
+            "CharacterShape",
             "File",
             "LayoutContainer",
             "Model",

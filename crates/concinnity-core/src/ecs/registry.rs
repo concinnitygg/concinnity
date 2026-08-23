@@ -122,6 +122,9 @@ macro_rules! for_each_component {
             Hidden            => $crate::assets::Hidden { runtime },
             LoadingOverlay    => $crate::assets::LoadingOverlay { gen, external, singleton, renders, refs: [("screen", "Screen"), ("backdrop", "Sprite"), ("track", "Sprite"), ("fill", "Sprite"), ("label", "TextLabel")] },
             AudioOcclusionProbe => $crate::assets::AudioOcclusionProbe { runtime },
+            CharacterShape    => $crate::assets::CharacterShape { gen, external, id, refs: [("target", "SkinnedMesh")] },
+            CharacterSchema   => $crate::assets::CharacterSchema { gen, build_only },
+            CharacterModel    => $crate::assets::CharacterModel { gen, build_only },
         }
     };
 }

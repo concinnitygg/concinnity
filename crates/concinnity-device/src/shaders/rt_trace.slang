@@ -9,7 +9,7 @@
 // model or per pass:
 //   rt_params, scene_tlas, geom     - the bound params / TLAS / geometry table
 //   vert_float / svert_float        - one float of the static / deformed stream
-//   index_at / skinned_index_word   - one u32 index / one packed u16 pair
+//   index_at / skinned_index_word   - one u32 index of the static / skinned IB
 //   prefilter_level(dir, lod)       - the IBL prefilter cube at an explicit mip
 //   pool_sample_level0(idx, uv)     - the bindless pool at mip 0 (RT_TEXTURED)
 
@@ -18,7 +18,7 @@ static const float RT_F0 = 0.04;
 // Floats per `Vertex` (56-byte stride): position, normal, tangent, colour, uv.
 static const uint VERTEX_FLOATS = 14u;
 // Skinned objects flag bit 31 of `normal_index`; the trace then fetches the hit
-// triangle from the deformed-vertex / u16 skinned index buffers, which mirror
+// triangle from the deformed-vertex / skinned index buffers, which mirror
 // the static layout. The flag is masked off before the pool sample, so skinned
 // hits shade textured like static ones. Matches render_types::RT_SKINNED_FLAG.
 static const uint RT_SKINNED_FLAG = 0x80000000u;
@@ -57,11 +57,11 @@ float2 rt_skinned_uv(uint vi)
     return float2(svert_float(b + 12u), svert_float(b + 13u));
 }
 
-// One u16 index from the packed skinned index buffer (two per uint). The
-// skinned BLAS bakes absolute indices, so no base_vertex is added.
+// One index from the skinned index buffer. The skinned BLAS bakes absolute
+// indices, so no base_vertex is added.
 uint rt_skinned_index(uint o)
 {
-    return (skinned_index_word(o >> 1u) >> ((o & 1u) * 16u)) & 0xFFFFu;
+    return skinned_index_word(o);
 }
 
 // Decode a tangent-space normal map texel. Only X and Y are read; Z is

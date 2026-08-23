@@ -210,7 +210,8 @@ pub(super) struct VkSkinned {
     pub(super) skin: Option<super::raytrace::SkinPipeline>,
     pub(super) deformed: Vec<super::raytrace::DeviceBuffer>,
     // Morph targets, parallel to `draw_objects`. `morph_delta_unique` owns the
-    // per-mesh dense target-major `MorphDelta` device buffers (deduped by source
+    // per-mesh packed sparse morph device buffers (`PayloadMorphs::packed_words`,
+    // deduped by source
     // `Arc`); `morph_delta_buffers[i]` is object `i`'s handle into them (null =
     // morphless). `morph_target_counts[i]` is its target count (0 = none).
     // `morph_weights[i]` is the object's current weights (empty without morphs),

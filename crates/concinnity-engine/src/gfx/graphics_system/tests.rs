@@ -3665,14 +3665,28 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
         "a flagged pose is uploaded"
     );
 
-    // Freeze the world the way an open menu does: even a flagged pose waits.
+    // Behind a real menu (the overlay reports it active) even a flagged pose
+    // waits: the skinned draw is skipped behind it anyway.
     flag_pose(&mut world);
-    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    world.resources.insert(crate::ecs::ScreenStack {
+        pauses_world: true,
+        ..Default::default()
+    });
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
         !lock(&state).saw(&Call::UpdateSkinnedPose(0)),
         "pose uploads are skipped while a menu is open"
+    );
+
+    // The editor's freeze keeps the world drawn and reseeds poses live, so
+    // its override lets the flagged pose through.
+    world.resources.insert(crate::ecs::MenuOverride(Some(true)));
+    lock(&state).calls.clear();
+    step(&mut gs, &mut world);
+    assert!(
+        lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        "the editor override uploads a flagged pose"
     );
 }
 
@@ -4329,4 +4343,92 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
     let s = lock(&state);
     let model = s.models.get(&0).unwrap();
     assert_ne!(*model, COLLAPSED, "the real transform is pushed again");
+}
+
+// Under the editor a skinned mesh template is pickable and movable like a
+// prop: its pose entity carries the authored Transform, joins the pick index
+// with its world-space bounds, and a Transform edit reaches the backend as a
+// skinned model update the next step.
+#[test]
+fn skinned_mesh_joins_the_pick_index_when_opted_in() {
+    use crate::assets::SkinnedMesh;
+
+    const BODY: AssetId = AssetId(842);
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    push_skinned_mesh(
+        &mut b,
+        BODY,
+        SkinnedMesh {
+            asset_id: BODY,
+            material: Some(crate::ecs::MaterialHandle(0)),
+            position: [5.0, 0.0, 0.0],
+            ..Default::default()
+        },
+        4,
+    );
+    let mut world = b.build();
+    world.resources.insert(crate::ecs::PickIndex::default());
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    assert_eq!(gs.pick_candidates.len(), 2, "the prop and the skinned mesh");
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    let index = world
+        .resources
+        .get::<crate::ecs::PickIndex>()
+        .expect("step publishes the index");
+    let body = index
+        .entries
+        .iter()
+        .find(|e| e.asset_id == BODY)
+        .expect("the skinned mesh indexes");
+    assert!(body.bb_min[0] >= 5.0, "bounds follow the authored position");
+
+    // Move the template: the live Transform drives the skinned model push.
+    let entity = world
+        .ctx()
+        .join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+        .map(|(e, _, _)| e)
+        .next()
+        .expect("the template pose carries a Transform");
+    world
+        .ctx()
+        .get_mut::<crate::assets::Transform>(entity)
+        .unwrap()
+        .position = [7.0, 0.0, 0.0];
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+    assert!(
+        lock(&state)
+            .calls
+            .iter()
+            .any(|c| matches!(c, Call::UpdateSkinnedModel(0))),
+        "the moved template reaches the backend"
+    );
+    let index = world.resources.get::<crate::ecs::PickIndex>().unwrap();
+    let body = index.entries.iter().find(|e| e.asset_id == BODY).unwrap();
+    assert!(body.bb_min[0] >= 7.0, "the index follows the move");
+
+    // Not opted in: the template stays a bare pose.
+    let (_state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    push_skinned_mesh(
+        &mut b,
+        BODY,
+        SkinnedMesh {
+            asset_id: BODY,
+            ..Default::default()
+        },
+        4,
+    );
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    assert!(gs.pick_candidates.is_empty());
+    assert_eq!(
+        world
+            .ctx()
+            .join2::<crate::assets::SkeletonPose, crate::assets::Transform>()
+            .count(),
+        0
+    );
 }

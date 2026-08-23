@@ -458,7 +458,7 @@ impl MtlContext {
     // G-buffer pipeline. Mirrors `execute_bindless_static_icb`'s two-range split
     // -- the static + instance + chunk prefix `[0, skinned_record_base())` over
     // the static VB, then the folded skinned tail `[skinned_record_base(),
-    // cull_count())` over the deformed VB + skinned u16 IB -- but reuses the
+    // cull_count())` over the deformed VB + skinned IB -- but reuses the
     // PHASE-1 `cull.icb` (the pre-pass runs before Cull2/Main2, so phase-1
     // coverage is the natural source; the camera frustum is identical to the main
     // pass, so no extra cull dispatch is needed). The previous vertex position

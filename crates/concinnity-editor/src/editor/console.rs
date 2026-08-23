@@ -202,6 +202,12 @@ pub(crate) enum Command {
     Floor,
     // Grow the selection by relationship.
     Select(SelectCmd),
+    // Export a skinned mesh as .glb beside the project. No name: the selected
+    // entry. `bake` folds the current CharacterShape in instead of targets.
+    Export {
+        name: Option<String>,
+        bake: bool,
+    },
     Help,
 }
 
@@ -286,6 +292,12 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         usage: "/select origin | using <asset> | type <Type>",
         blurb: "select by relationship: shared origin, references, or type",
         parse: parse_select,
+    },
+    CommandSpec {
+        name: "export",
+        usage: "/export [name] [bake]",
+        blurb: "write a skinned mesh (or the selection) as .glb beside the project",
+        parse: parse_export,
     },
     CommandSpec {
         name: "help",
@@ -402,6 +414,21 @@ fn parse_select(rest: &str) -> Result<Command, String> {
         return Err(SELECT_USAGE.to_string());
     }
     Ok(Command::Select(cmd))
+}
+
+const EXPORT_USAGE: &str = "usage: /export [name] [bake]";
+
+fn parse_export(rest: &str) -> Result<Command, String> {
+    let mut name = None;
+    let mut bake = false;
+    for word in rest.split_whitespace() {
+        match word {
+            "bake" if !bake => bake = true,
+            _ if name.is_none() && !bake => name = Some(word.to_string()),
+            _ => return Err(EXPORT_USAGE.to_string()),
+        }
+    }
+    Ok(Command::Export { name, bake })
 }
 
 fn parse_help(rest: &str) -> Result<Command, String> {
@@ -609,6 +636,40 @@ mod tests {
         assert!(parse_command("/snap rot").is_err());
         assert!(parse_command("/snap move 0.5 1").is_err());
         assert!(parse_command("/snap sideways 3").is_err());
+    }
+
+    #[test]
+    fn export_parses_its_optional_name_and_bake_flag() {
+        assert_eq!(
+            parse_command("/export"),
+            Ok(Command::Export {
+                name: None,
+                bake: false
+            })
+        );
+        assert_eq!(
+            parse_command("/export body"),
+            Ok(Command::Export {
+                name: Some("body".to_string()),
+                bake: false
+            })
+        );
+        assert_eq!(
+            parse_command("/export body bake"),
+            Ok(Command::Export {
+                name: Some("body".to_string()),
+                bake: true
+            })
+        );
+        assert_eq!(
+            parse_command("/export bake"),
+            Ok(Command::Export {
+                name: None,
+                bake: true
+            })
+        );
+        assert!(parse_command("/export a b").is_err());
+        assert!(parse_command("/export bake body").is_err());
     }
 
     #[test]

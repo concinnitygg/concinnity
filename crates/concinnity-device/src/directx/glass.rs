@@ -490,7 +490,7 @@ fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<Glass
 //   [10] root SRV t6   index buffer (u32, raw)
 //   [11] root SRV t10  geometry table (structured)
 //   [12] root SRV t8   deformed skinned verts (raw)
-//   [13] root SRV t9   skinned u16 indices (raw)
+//   [13] root SRV t9   skinned indices (raw)
 //   [14] table  t0,sp1 bindless texture pool (textured PSO only)
 //   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp
 fn create_glass_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {

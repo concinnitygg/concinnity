@@ -178,6 +178,30 @@ pub struct PipelineResult {
     pub(crate) resource_locks: Vec<crate::blob::LockedResource>,
 }
 
+impl PipelineResult {
+    /// The compiled payload bytes of the resource of `kind` declared under
+    /// `name`, sliced out of the in-memory blob sections. `None` when no such
+    /// resource was compiled or it carries no payload. The editor's glTF
+    /// export reads a SkinnedMesh's composed geometry through this.
+    pub fn resource_payload(
+        &self,
+        kind: concinnity_blob::ResourceKind,
+        name: &str,
+    ) -> Option<&[u8]> {
+        let record = self
+            .resources
+            .iter()
+            .zip(self.resource_locks.iter())
+            .find(|(r, l)| r.resource_kind == kind as u8 && l.name == name)?
+            .0;
+        let loc = record.payload.as_ref()?;
+        let blob = self.payloads.get(loc.blob_index as usize)?;
+        let start = usize::try_from(loc.offset).ok()?;
+        let end = start.checked_add(usize::try_from(loc.len).ok()?)?;
+        blob.get(start..end)
+    }
+}
+
 /// Validate a single asset's type and generator without running the full build
 /// pipeline. Called by the server on each world_add so the LLM gets per-asset
 /// feedback without waiting for a WebSocket round-trip.
@@ -206,7 +230,14 @@ pub fn validate_asset(
     // functions before the runtime asset registry sees them.
     if matches!(
         type_norm.as_str(),
-        "environment" | "lightrig" | "materialpalette" | "camerashot" | "prefab" | "sceneimport"
+        "environment"
+            | "lightrig"
+            | "materialpalette"
+            | "camerashot"
+            | "prefab"
+            | "sceneimport"
+            | "characterschema"
+            | "charactermodel"
     ) {
         return Ok(());
     }
@@ -302,6 +333,10 @@ pub fn build_compiled_with_progress(
     desugar_fbx_meshes(&mut assets, &mesh_cache)?;
     desugar_animation_imports(&mut assets)?;
     desugar_root_motion(&mut assets)?;
+    crate::character_shape::warn_unresolved(&assets);
+    crate::character::bake::bake_shapes(&mut assets, |name| {
+        mesh_cache.get(name).and_then(|e| e.bytes.as_deref())
+    })?;
 
     // Intern every asset name to a dense AssetId in declaration order, then
     // resolve the scene-by-naming-convention references that the runtime can
@@ -572,7 +607,7 @@ fn probe_mesh_payload_cache(
             .and_then(|v| v.as_str())
             .map(|s| !s.is_empty())
             .unwrap_or(false);
-        if !has_source {
+        if !has_source && asset.args.get("character_model").is_none() {
             continue;
         }
 
@@ -592,7 +627,13 @@ fn probe_mesh_payload_cache(
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + rt.resource_kind() as u8;
         let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args));
-        let key = crate::cache::payload_key(discriminant, &asset.args, &ctx, &inputs);
+        // A shape baked into the mesh changes its payload as much as the
+        // source does, so its args join the key.
+        let keyed = match crate::character::bake::baking_shape_args(assets, &asset.name) {
+            Some(shape) => serde_json::json!({"mesh": asset.args, "baked_shape": shape}),
+            None => asset.args.clone(),
+        };
+        let key = crate::cache::payload_key(discriminant, &keyed, &ctx, &inputs);
         let bytes = crate::cache::load(&key);
         out.insert(asset.name.clone(), MeshCacheEntry { key, bytes });
     }
@@ -642,7 +683,10 @@ fn desugar_gltf_skinned_meshes(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if source.is_empty() || source.to_lowercase().ends_with(".fbx") {
+        let character_model = asset.args.get("character_model").cloned();
+        if character_model.is_none()
+            && (source.is_empty() || source.to_lowercase().ends_with(".fbx"))
+        {
             continue;
         }
         // Cache probe found a compiled payload for this asset, no need
@@ -656,13 +700,21 @@ fn desugar_gltf_skinned_meshes(
             continue;
         }
 
+        let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
         let imported =
-            crate::gltf::import_skinned_glb(&source, skin_index_arg(asset)).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': glTF import failed: {}", asset.name, e),
-                )
-            })?;
+            match character_model {
+                Some(arg) => {
+                    let arg: crate::character::import::CharacterModelArg =
+                        serde_json::from_value(arg).map_err(|e| {
+                            invalid(format!("Asset '{}': character_model: {e}", asset.name))
+                        })?;
+                    crate::character::import::import_model(&asset.name, &arg.schema, &arg.model)
+                        .map_err(invalid)?
+                }
+                None => crate::gltf::import_skinned_glb(&source, skin_index_arg(asset)).map_err(
+                    |e| invalid(format!("Asset '{}': glTF import failed: {}", asset.name, e)),
+                )?,
+            };
 
         let name = asset.name.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
@@ -707,10 +759,15 @@ fn desugar_gltf_skinned_meshes(
                 encode("morph_deltas", serde_json::to_value(&imported.morph_deltas))?,
             );
         }
+        obj.remove("character_model");
         tracing::info!(
             "Asset '{}': imported glTF '{}': {} vertices, {} indices, {} joints, {} morph target(s)",
             asset.name,
-            source,
+            if source.is_empty() {
+                "character model"
+            } else {
+                &source
+            },
             imported.vertices.len(),
             imported.indices.len(),
             imported.skeleton.len(),
@@ -1932,6 +1989,38 @@ mod tests {
         assert_eq!(baked.scene, Some(crate::ecs::asset_id::AssetId(1)));
     }
 
+    #[test]
+    fn resource_payload_slices_the_named_resource() {
+        let _guard = SHADER_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::shader::install_stub_toolchain();
+        let world = concat!(
+            r#"{"name":"prism","type":"SkinnedMesh","args":{"#,
+            r#""vertices":[{"pos":[0,0,0]},{"pos":[1,0,0]},{"pos":[0,1,0]}],"#,
+            r#""indices":[0,1,2],"skeleton":[{"name":"root","parent":-1}],"#,
+            r#""scale":[1,1,1]}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None).expect("build");
+        let bytes = result
+            .resource_payload(concinnity_blob::ResourceKind::SkinnedMesh, "prism")
+            .expect("named payload");
+        let payload =
+            concinnity_cpu::gfx::mesh_payload::deserialise_skinned_with_lods(bytes).unwrap();
+        assert_eq!(payload.vertices.len(), 3);
+        assert_eq!(payload.joints[0].name, "root");
+        // The wrong name or the wrong kind finds nothing.
+        assert!(
+            result
+                .resource_payload(concinnity_blob::ResourceKind::SkinnedMesh, "ghost")
+                .is_none()
+        );
+        assert!(
+            result
+                .resource_payload(concinnity_blob::ResourceKind::Texture, "prism")
+                .is_none()
+        );
+    }
+
     // A resource asset (here a Font) leaves no component def, so the lock
     // records it through `resource_locks` instead: name, kind, handle, args
     // hash, and the blob its payload landed in.
@@ -2361,7 +2450,14 @@ mod tests {
     fn validate_asset_accepts_build_time_expansion_types() {
         // Build-time types are expanded before the runtime registry sees
         // them, so they validate structurally regardless of args.
-        for ty in ["SceneImport", "Environment", "LightRig", "Prefab"] {
+        for ty in [
+            "SceneImport",
+            "Environment",
+            "LightRig",
+            "Prefab",
+            "CharacterSchema",
+            "CharacterModel",
+        ] {
             validate_asset(ty, "x", &serde_json::json!({}))
                 .unwrap_or_else(|e| panic!("{ty} should validate: {e}"));
         }

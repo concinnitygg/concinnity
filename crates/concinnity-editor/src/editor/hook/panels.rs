@@ -715,6 +715,92 @@ impl Panel for LightingPanel {
     }
 }
 
+pub(crate) struct CharacterShapePanel;
+
+impl Panel for CharacterShapePanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::CharacterShape
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Character Shape")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.shape_open
+    }
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shape_open = !hook.shape_open;
+        if hook.shape_open {
+            hook.shape_status = None;
+            hook.shape_scroll = 0;
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shape_open = false;
+    }
+    // The panel shows up to `DEFAULT_ROWS` rows by default and can be dragged
+    // taller to show every row; never taller than its content.
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        character_shape_panel::size(
+            hook.shape_rows
+                .clamp(1, character_shape_panel::DEFAULT_ROWS),
+        )
+    }
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        let rows = hook.shape_rows.clamp(1, character_shape_panel::MAX_ROWS);
+        [f32::INFINITY, character_shape_panel::size(rows)[1]]
+    }
+    fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
+        character_shape_panel::default_origin()
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        character_shape_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        character_shape_panel::all_label_ids()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::CharacterShape);
+        let data = hook.shape_data(world);
+        let action = {
+            let view = hook.make_shape_view(&data, [mx, my]);
+            character_shape_panel::hit_test(&view, mx, my, o, s)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_shape_action(a, &data, [mx, my], world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::CharacterShape);
+        character_shape_panel::cursor_over_rows(mx, my, o, s)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_shape(delta);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::CharacterShape);
+        let data = hook.shape_data(world);
+        let view = hook.make_shape_view(&data, mouse);
+        character_shape_panel::apply(world, Some(&view), o, s);
+    }
+    fn hide(&self, world: &mut World) {
+        character_shape_panel::apply(world, None, [0.0, 0.0], character_shape_panel::size(0));
+    }
+}
+
 pub(crate) struct StoryPanel;
 
 impl Panel for StoryPanel {

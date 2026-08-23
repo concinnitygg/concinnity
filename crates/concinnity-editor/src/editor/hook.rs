@@ -36,6 +36,7 @@
 use super::asset_tree::{self, TreeGroup, TreeRow};
 use super::axes;
 use super::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
+use super::character_shape_panel;
 use super::console::{self, ConsoleSink};
 use super::console_panel::{self, ConsoleAction, ConsoleView};
 use super::content_panel;
@@ -145,6 +146,17 @@ pub(crate) struct EditorHook {
     lighting_open: bool,
     lighting_focus: Option<usize>,
     lighting_status: Option<String>,
+    // The CharacterShape panel: shown state, the row window's scroll, the row
+    // count sampled once a frame (the rows come from the live world, which
+    // the panel sizing cannot reach), the last rejected commit, the seed
+    // counter behind Randomize, and a slider drag in flight
+    // (`hook/shape_drag.rs`).
+    shape_open: bool,
+    shape_scroll: usize,
+    shape_rows: usize,
+    shape_status: Option<String>,
+    shape_seed: u64,
+    shape_drag: Option<shape_drag::ShapeDrag>,
     // The Story panel: shown state, the loaded source's lines / edit line /
     // window scroll, whether the edit line holds keyboard focus, the source
     // path shown in the header, and the last parse / IO error. `story_blur`
@@ -566,6 +578,7 @@ mod drop_floor;
 mod duplicate;
 mod editing;
 mod edits;
+mod export_edit;
 mod fly;
 mod gizmo_drag;
 mod glide_drive;
@@ -582,6 +595,9 @@ mod palette_edit;
 mod pick;
 // Named to avoid colliding with the `use super::lighting` module import.
 mod lighting_edit;
+// Named to avoid colliding with the `use super::character_shape_panel` import.
+mod character_shape_edit;
+mod shape_drag;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
 mod notify_drive;
 pub(super) mod panels;
@@ -633,6 +649,12 @@ impl EditorHook {
             lighting_open: false,
             lighting_focus: None,
             lighting_status: None,
+            shape_open: false,
+            shape_scroll: 0,
+            shape_rows: 0,
+            shape_status: None,
+            shape_seed: 0,
+            shape_drag: None,
             story_open: false,
             story_lines: vec![String::new()],
             story_line: 0,
@@ -851,6 +873,7 @@ impl DebugHook for EditorHook {
         // narrow the palette by the same query.
         self.sample_behavior_filter(world);
         self.sample_palette_query(world);
+        self.sample_shape_rows(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -913,6 +936,11 @@ impl DebugHook for EditorHook {
                 if self.gizmo_drag.is_some() {
                     self.drive_gizmo_drag(input, vp, world);
                 }
+                // A shape slider drag likewise: follow + live preview,
+                // cancel, or commit once.
+                if self.shape_drag.is_some() {
+                    self.drive_shape_drag(input, world);
+                }
                 // An in-flight marquee likewise: follow, cancel, or select.
                 if self.marquee.is_some() {
                     self.drive_marquee(input, vp, world);
@@ -931,6 +959,7 @@ impl DebugHook for EditorHook {
                     && self.drag.is_none()
                     && self.resize.is_none()
                     && self.gizmo_drag.is_none()
+                    && self.shape_drag.is_none()
                     && self.marquee.is_none()
                     && self.content_drag.is_none()
                     && self.orbit.is_none()
@@ -953,6 +982,7 @@ impl DebugHook for EditorHook {
                     && self.drag.is_none()
                     && self.resize.is_none()
                     && self.gizmo_drag.is_none()
+                    && self.shape_drag.is_none()
                     && self.marquee.is_none()
                     && self.content_drag.is_none()
                     && self.orbit.is_none()
@@ -1021,6 +1051,7 @@ impl DebugHook for EditorHook {
                     && !self.sim.playing()
                     && !self.text_focus_active()
                     && self.gizmo_drag.is_none()
+                    && self.shape_drag.is_none()
                 {
                     match input.captured_key {
                         Some(crate::assets::InputKey::Z) => self.undo(world),

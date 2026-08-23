@@ -23,12 +23,11 @@ use crate::metal::math::IDENTITY4;
 use crate::metal::pipeline::{ns_str, stage_library};
 use crate::metal::post::build_gbuffer_prepass_pipeline;
 
-// Upload a u16 skinned index slice, with the allocation rounded up to a whole
-// number of 4-byte words by `skinned_index_buffer_bytes` (which carries the
-// reason, and which the DirectX and Vulkan hosts size the same buffer with).
+// Upload a skinned index slice, sized by `skinned_index_buffer_bytes` (which
+// the DirectX and Vulkan hosts size the same buffer with).
 fn upload_skinned_index_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
-    indices: &[u16],
+    indices: &[u32],
     label: &str,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
     let buffer = device
@@ -71,7 +70,7 @@ pub(crate) struct SkinnedState {
     // on a bindless world with static geometry.
     pub skin_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     // One deformed-vertex buffer per frame-in-flight (56-byte static `Vertex`
-    // layout, mirroring the skinned VB's global indexing so the u16 skinned
+    // layout, mirroring the skinned VB's global indexing so the skinned
     // index buffer addresses it directly with `base_vertex = 0`). The per-frame
     // skin compute writes this frame's slot; the main-pass skinned ICB tail
     // reads it. `StorageModeShared`, NOT Private: written and read in separate
@@ -92,7 +91,7 @@ pub(crate) struct SkinnedState {
     pub deformed_primed: std::sync::atomic::AtomicBool,
     // Per-object morph-target bindings, parallel to `draw_objects`; `None`
     // for a mesh without morph targets. Instance copies share their
-    // template's delta buffer.
+    // template's entry buffer.
     pub morphs: Vec<Option<MorphBinding>>,
     // Current morph weights per object, parallel to `draw_objects`; empty
     // for objects without morph targets. Rewritten each frame by
@@ -100,8 +99,9 @@ pub(crate) struct SkinnedState {
     pub morph_weights: Vec<Vec<f32>>,
 }
 
-// GPU-resident morph data for one skinned mesh: the dense target-major delta
-// buffer (24-byte `MorphDelta` stride) and its target count.
+// GPU-resident morph data for one skinned mesh: the packed sparse buffer
+// (`PayloadMorphs::packed_words`: per-vertex offsets, then 28-byte
+// `MorphEntry`s) and its target count.
 #[derive(Clone)]
 pub(crate) struct MorphBinding {
     pub buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
@@ -285,65 +285,34 @@ impl MtlContext {
             let ptr = v_buf.contents().as_ptr() as *const SkinnedVertex;
             std::slice::from_raw_parts(ptr, old_v_len)
         };
-        let old_i_len = i_buf.length() / std::mem::size_of::<u16>();
+        let old_i_len = i_buf.length() / std::mem::size_of::<u32>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_i_slice: &[u16] = unsafe {
-            let ptr = i_buf.contents().as_ptr() as *const u16;
+        let old_i_slice: &[u32] = unsafe {
+            let ptr = i_buf.contents().as_ptr() as *const u32;
             std::slice::from_raw_parts(ptr, old_i_len)
         };
 
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
-        let mut new_indices: Vec<u16> = Vec::new();
+        let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<crate::gfx::backend::SkinnedSlotLayout> =
             Vec::with_capacity(self.skinned.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
-        let mut new_per_slot: Vec<(usize, u16, usize, usize, usize)> =
+        let mut new_per_slot: Vec<(usize, u32, usize, usize, usize)> =
             Vec::with_capacity(self.skinned.draw_objects.len());
 
         for (skinned_index, obj) in self.skinned.draw_objects.iter().enumerate() {
-            let new_v_base_usize = new_vertices.len();
-            let new_v_base: u16 = match u16::try_from(new_v_base_usize) {
-                Ok(v) => v,
-                Err(_) => {
-                    return Err(format!(
-                        "rebuild_skinned_geometry: post-rebuild vertex base {} for \
-                         slot {} overflows u16 (skinned IB is u16)",
-                        new_v_base_usize, skinned_index
-                    ));
-                }
-            };
+            let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
 
             if let Some(change) = change_map.remove(&skinned_index) {
                 let new_v_count = change.vertices.len();
                 let new_i_count = change.indices.len();
-                // Each mesh-relative index must stay in u16 after rebase. The
-                // post-rebuild total vertex count also has to fit u16; the
-                // check above on new_v_base catches that boundary too.
-                let last_base_for_overflow = new_v_count
-                    .checked_sub(1)
-                    .and_then(|max_local| u16::try_from(max_local).ok())
-                    .unwrap_or(0);
-                if new_v_base.checked_add(last_base_for_overflow).is_none() {
-                    return Err(format!(
-                        "rebuild_skinned_geometry: vertex region for slot {} \
-                         would push max absolute index past u16",
-                        skinned_index
-                    ));
-                }
                 new_vertices.extend_from_slice(&change.vertices);
                 for &local in &change.indices {
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: index rebase by {} for slot \
-                             {} overflows u16",
-                            new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(u32::from(local) + new_v_base);
                 }
                 layouts.push(crate::gfx::backend::SkinnedSlotLayout {
                     skinned_index,
@@ -393,19 +362,11 @@ impl MtlContext {
                 for &abs in &old_i_slice[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
                         format!(
-                            "rebuild_skinned_geometry: stale index {} below \
-                             vertex_base {} on slot {}",
-                            abs, old_base, skinned_index
+                            "rebuild_skinned_geometry: stale index {abs} below \
+                             vertex_base {old_base} on slot {skinned_index}"
                         )
                     })?;
-                    let absolute = local.checked_add(new_v_base).ok_or_else(|| {
-                        format!(
-                            "rebuild_skinned_geometry: rebasing index {} onto \
-                             vertex_base {} overflows u16 on slot {}",
-                            local, new_v_base, skinned_index
-                        )
-                    })?;
-                    new_indices.push(absolute);
+                    new_indices.push(local + new_v_base);
                 }
                 layouts.push(crate::gfx::backend::SkinnedSlotLayout {
                     skinned_index,
@@ -496,7 +457,7 @@ impl MtlContext {
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: usize,
-        vertex_base: u16,
+        vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
     ) -> Result<(), String> {
@@ -541,18 +502,11 @@ impl MtlContext {
                 v_buf.length()
             ));
         }
-        let i_byte_off = obj.index_offset * std::mem::size_of::<u16>();
-        let rebased: Vec<u16> = indices
+        let i_byte_off = obj.index_offset * std::mem::size_of::<u32>();
+        let rebased: Vec<u32> = indices
             .iter()
-            .map(|&i| i.checked_add(vertex_base))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                format!(
-                    "update_skinned_mesh_geometry: index rebase by {} overflows u16 \
-                     (skinned slot {})",
-                    vertex_base, skinned_index
-                )
-            })?;
+            .map(|&i| u32::from(i) + vertex_base)
+            .collect();
         write_buffer_region(v_buf, v_byte_off, bytes_of_slice(vertices))?;
         write_buffer_region(i_buf, i_byte_off, bytes_of_slice(&rebased))?;
         Ok(())
@@ -573,7 +527,7 @@ impl MtlContext {
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
-        indices: &[u16],
+        indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
         vert_lib_bytes: &[u8],
         frag_lib_bytes: &[u8],
@@ -702,9 +656,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Upload morph-target delta buffers for the skinned draw objects.
+    // Upload morph-target entry buffers for the skinned draw objects.
     // `morphs[i]` pairs with draw object `i`; instance copies share their
-    // template's `Arc`, so each unique delta set becomes one GPU buffer.
+    // template's `Arc`, so each unique entry set becomes one GPU buffer.
     pub(crate) fn upload_skinned_morphs(
         &mut self,
         morphs: Vec<Option<std::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
@@ -722,20 +676,21 @@ impl MtlContext {
                     let entry = match by_source.get(&key) {
                         Some(b) => b.clone(),
                         None => {
-                            let bytes = bytes_of_slice(&data.deltas);
+                            let words = data.packed_words();
+                            let bytes = bytes_of_slice(&words);
                             // SAFETY: the pointer and length describe the live `bytes` allocation,
                             // and Metal copies those bytes into the new buffer before the call
                             // returns.
                             let buffer = unsafe {
                                 let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
-                                    .ok_or("morph delta slice is empty")?;
+                                    .ok_or("morph entry slice is empty")?;
                                 self.device
                                     .newBufferWithBytes_length_options(
                                         ptr,
                                         bytes.len(),
                                         MTLResourceOptions::StorageModeShared,
                                     )
-                                    .ok_or("failed to create morph delta buffer")?
+                                    .ok_or("failed to create morph entry buffer")?
                             };
                             let b = MorphBinding {
                                 buffer,

@@ -81,7 +81,7 @@ float3 prefilter_level(float3 dir, float lod)
 [[vk::binding(3, 0)]] StructuredBuffer<float> verts : register(t1);
 [[vk::binding(4, 0)]] StructuredBuffer<uint> indices : register(t2);
 // The deformed (posed) skinned vertex buffer, in the same 14-float layout the
-// skin kernel writes, + the u16 skinned index buffer (two indices per uint).
+// skin kernel writes, + the skinned index buffer (two indices per uint).
 // Both bind a 1-element dummy in a scene with no skinned geometry, so the
 // binding stays valid even though the skinned branch is never taken there.
 [[vk::binding(9, 0)]] StructuredBuffer<float> sverts : register(t5);

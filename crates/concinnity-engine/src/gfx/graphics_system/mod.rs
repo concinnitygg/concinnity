@@ -737,6 +737,7 @@ pub(crate) fn derive_quality_settings(
     }
 }
 
+pub(crate) mod character_shape;
 mod frame;
 pub(crate) mod frame_policy;
 mod helpers;

@@ -17,7 +17,7 @@
 //
 // Mirrors `metal/raytrace.rs`. Skinned geometry is added per frame
 // (`rebuild_skinned`): a compute pass deforms each skinned object's bind-pose
-// vertices into a model-space buffer, one u16-indexed BLAS per skinned object is
+// vertices into a model-space buffer, one BLAS per skinned object is
 // built or refit over it, and the TLAS + geometry table are rebuilt over the
 // persistent static/cluster BLAS plus the skinned tail.
 //
@@ -155,10 +155,10 @@ fn triangle_geometry(
 }
 
 // A triangle geometry descriptor over the deformed (posed) skinned vertex buffer
-// with an `R16_UINT` (u16) index buffer. The skinned BLAS bakes absolute u16
-// indices into the deformed buffer (base vertex folded to 0), so `vertex_start`
-// is the deformed buffer's base GVA and `index_start` is the u16 index buffer
-// offset for this object. Same 56-byte vertex stride as the static path.
+// with an `R32_UINT` index buffer. The skinned BLAS bakes absolute indices into
+// the deformed buffer (base vertex folded to 0), so `vertex_start` is the
+// deformed buffer's base GVA and `index_start` is the index buffer offset for
+// this object. Same 56-byte vertex stride as the static path.
 fn skinned_triangle_geometry(
     vertex_start: u64,
     vertex_count: u32,
@@ -171,7 +171,7 @@ fn skinned_triangle_geometry(
         Anonymous: D3D12_RAYTRACING_GEOMETRY_DESC_0 {
             Triangles: D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC {
                 Transform3x4: 0,
-                IndexFormat: DXGI_FORMAT_R16_UINT,
+                IndexFormat: DXGI_FORMAT_R32_UINT,
                 VertexFormat: DXGI_FORMAT_R32G32B32_FLOAT,
                 IndexCount: index_count,
                 VertexCount: vertex_count,
@@ -454,7 +454,7 @@ pub(super) struct SkinnedRtInputs<'a> {
     // GPU virtual address of the shared bind-pose skinned vertex buffer
     // (`SkinnedVertex`, 80-byte stride) the skin kernel reads.
     pub vertex_gva: u64,
-    // GPU virtual address of the shared u16 skinned index buffer the skinned BLAS
+    // GPU virtual address of the shared skinned index buffer the skinned BLAS
     // and the reflection trace address the deformed buffer with.
     pub index_gva: u64,
     // This frame's per-object joint palettes, parallel to `objects` (each is that
@@ -707,7 +707,7 @@ pub(super) struct RtAccelData {
     // valid. The skinned rebuild allocates a new one each frame and retires the
     // old (a prior frame's trace may still read it).
     deformed_verts: ID3D12Resource,
-    // GPU virtual address of the shared u16 skinned index buffer the skinned BLAS
+    // GPU virtual address of the shared skinned index buffer the skinned BLAS
     // + trace address the deformed buffer with. A dummy buffer's GVA when there
     // is no skinned geometry, so the t9 binding is always valid. Cloned here so
     // the trace encoder can bind it.
@@ -762,7 +762,7 @@ impl RtAccelData {
         com::gpu_va(&self.deformed_verts)
     }
 
-    // GPU virtual address of the u16 skinned index buffer (bound as the trace's
+    // GPU virtual address of the skinned index buffer (bound as the trace's
     // t9 root SRV). A valid 1-element dummy GVA when there is no skinned geometry.
     pub(super) fn skinned_index_gva(&self) -> u64 {
         com::gpu_va(&self.skinned_indices)
@@ -1589,7 +1589,7 @@ impl RtAccelData {
     // Per-frame skinned update, recorded onto `cmd` (the frame's "start" DIRECT
     // cmd list, which supports `Dispatch`). Keeps the persistent static + cluster
     // BLAS, re-skins this frame's pose into the deformed buffer, builds or refits
-    // one u16 BLAS per skinned object over it, and rebuilds the TLAS + geometry
+    // one BLAS per skinned object over it, and rebuilds the TLAS + geometry
     // table over the static head plus the skinned tail.
     //
     // The skinned BLAS carry `ALLOW_UPDATE` and are refit IN PLACE
@@ -1646,7 +1646,7 @@ impl RtAccelData {
 
         // Deformed-vertex buffer (default heap, ALLOW_UNORDERED_ACCESS): the skin
         // pass writes posed `Vertex`s here, mirroring the skinned vertex buffer's
-        // indexing so the u16 index buffer addresses it directly. Sized to the
+        // indexing so the index buffer addresses it directly. Sized to the
         // highest vertex the skinned objects reach, grown on demand. Created in
         // COMMON (D3D12 buffers always are); after its first rebuild it rests in
         // the combined shader-read state.
@@ -1721,7 +1721,7 @@ impl RtAccelData {
             // == 0` leaves t2/t3 unread, so a dummy binding (the vertex buffer)
             // satisfies the root SRVs.
             let params = SkinParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: 0,
@@ -1760,7 +1760,7 @@ impl RtAccelData {
             )]);
         }
 
-        // Stage 2: one u16 BLAS per skinned object over the deformed buffer, then
+        // Stage 2: one BLAS per skinned object over the deformed buffer, then
         // the TLAS over the static/cluster head + the skinned tail.
         let skinned_idx_gva = skinned.index_gva;
         skinned_geo.clear();
@@ -1770,7 +1770,7 @@ impl RtAccelData {
             skinned_geo.push(skinned_triangle_geometry(
                 deformed_gva,
                 deformed_extent as u32,
-                skinned_idx_gva + obj.index_offset as u64 * 2,
+                skinned_idx_gva + obj.index_offset as u64 * 4,
                 obj.index_count as u32,
             ));
             shapes.push(SkinnedShape {
@@ -1944,7 +1944,7 @@ impl super::context::DxContext {
     // instead of the RT ring's shader-read state, and is independent of RT (the
     // RT path keeps its own skin dispatch + ring, untouched). The deformed buffer
     // mirrors the skinned vertex buffer's global indexing, so the draws read it
-    // with `base_vertex = 0` and the skinned u16 index buffer unchanged.
+    // with `base_vertex = 0` and the skinned index buffer unchanged.
     pub(in crate::directx) fn encode_skin(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1983,7 +1983,7 @@ impl super::context::DxContext {
                 .copied()
                 .unwrap_or(0);
             let params = SkinParams {
-                vertex_base: obj.vertex_base as u32,
+                vertex_base: obj.vertex_base,
                 vertex_count: obj.vertex_count as u32,
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count,

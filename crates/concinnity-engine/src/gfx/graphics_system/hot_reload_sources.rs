@@ -257,7 +257,7 @@ pub struct SkinnedMeshSourceEntry {
     pub skinned_index: usize,
     /// Vertex offset (in vertex units, not bytes) into the shared skinned
     /// vertex buffer where this slot's geometry starts.
-    pub vertex_base: u16,
+    pub vertex_base: u32,
     /// Number of vertices in this slot. Used to reject size-changing
     /// reloads before pushing through to the backend.
     pub vertex_count: usize,
